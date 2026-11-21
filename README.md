@@ -40,7 +40,9 @@ Prebuilt binaries are published on the [**Releases**](https://github.com/SEANPNE
 - **Android (8.0+)**:
   - Download `MusicoAndroid-<version>-debug.apk` (directly sideloadable for personal testing) or `MusicoAndroid-<version>-release-unsigned.apk` (for custom signing).
 - **macOS (Catalyst)**:
-  - Download `Musico-<version>-macOS-Catalyst-unsigned.zip` (unzip and right-click → Open / self-sign locally, or build directly in Xcode).
+  - Download `Musico-<version>-macOS.dmg`, open it, and drag `Musico.app` to `Applications` (ad-hoc signed; right-click → Open on first launch if Gatekeeper prompts).
+- **iOS (17+)**:
+  - Download `Musico-<version>-iOS-unsigned.ipa` and sideload/re-sign with AltStore, SideStore, Sideloadly, or Xcode.
 
 ---
 
@@ -51,6 +53,7 @@ Requires Xcode (iOS 17+ SDK):
 ```bash
 cd Musico
 ./scripts/test.sh
+./scripts/build-release.sh   # outputs dist/Musico-*-macOS.dmg & dist/Musico-*-iOS-unsigned.ipa
 # Or open Musico.xcodeproj in Xcode
 ```
 

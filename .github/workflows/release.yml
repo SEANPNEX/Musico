@@ -124,7 +124,7 @@ jobs:
             MusicoWindows/dist/MusicoWindows-*-win-x64-Setup.exe
 
   build-apple:
-    name: Build macOS Catalyst App (Unsigned)
+    name: Build macOS DMG & iOS IPA
     runs-on: macos-15
     defaults:
       run:
@@ -132,25 +132,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Mac Catalyst Release app
+      - name: Build macOS DMG and unsigned iOS IPA
         run: |
           TAG="${{ inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
-          xcodebuild -project Musico.xcodeproj -scheme Musico \
-            -configuration Release \
-            -destination 'generic/platform=macOS,variant=Mac Catalyst' \
-            -derivedDataPath build/DerivedData \
-            CODE_SIGNING_ALLOWED=NO \
-            build
-          mkdir -p dist
-          ditto -c -k --sequesterRsrc --keepParent \
-            build/DerivedData/Build/Products/Release-maccatalyst/Musico.app \
-            "dist/Musico-${VERSION}-macOS-Catalyst-unsigned.zip"
+          chmod +x scripts/build-release.sh
+          ./scripts/build-release.sh "$VERSION"
 
       - uses: actions/upload-artifact@v4
         with:
           name: apple-release
-          path: Musico/dist/*.zip
+          path: |
+            Musico/dist/Musico-*-macOS.dmg
+            Musico/dist/Musico-*-iOS-unsigned.ipa
 
   publish-release:
     name: Publish GitHub Release
@@ -177,13 +171,14 @@ jobs:
           cat > ../release-notes.md <<EOF
           ## Musico ${TAG}
 
-          Unified release across **Windows 10/11**, **Android**, and **macOS Catalyst** (plus iOS/iPadOS source in \`Musico/\`).
+          Unified release across **Windows 10/11**, **Android**, **macOS**, and **iOS**.
 
           ### Downloads
           - **Windows 10/11 Installer**: \`MusicoWindows-${VERSION}-win-x64-Setup.exe\` (self-contained x64, Start Menu & uninstaller)
           - **Windows 10/11 Portable**: \`MusicoWindows-${VERSION}-win-x64-portable.zip\` (self-contained single-file EXE + \`portable.txt\` using \`.\Data\\\`)
           - **Android (API 26+)**: \`MusicoAndroid-${VERSION}-debug.apk\` (directly sideloadable) & \`MusicoAndroid-${VERSION}-release-unsigned.apk\`
-          - **macOS (Mac Catalyst)**: \`Musico-${VERSION}-macOS-Catalyst-unsigned.zip\`
+          - **macOS (Catalyst)**: \`Musico-${VERSION}-macOS.dmg\` (ad-hoc signed disk image with \`Applications\` drag-install shortcut)
+          - **iOS (17+)**: \`Musico-${VERSION}-iOS-unsigned.ipa\` (unsigned IPA for sideloading via AltStore, SideStore, Sideloadly, or Xcode)
 
           Checksums are included in \`SHA256SUMS.txt\`.
           EOF

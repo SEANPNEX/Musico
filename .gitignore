@@ -6,6 +6,7 @@ Thumbs.db
 
 # Xcode / Swift (Musico Apple)
 Musico/build/
+Musico/dist/
 DerivedData/
 xcuserdata/
 *.xcuserstate
