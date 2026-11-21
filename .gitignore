@@ -1,7 +1,7 @@
 # OS & Tooling
 .DS_Store
 Thumbs.db
-Library/
+/Library/
 .superpowers/
 
 # Xcode / Swift (Musico Apple)

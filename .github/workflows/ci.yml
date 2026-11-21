@@ -90,6 +90,7 @@ jobs:
       - name: Run iOS unit tests
         run: |
           set -o pipefail
+          mkdir -p build
           for attempt in 1 2 3; do
             if xcodebuild -project Musico.xcodeproj -scheme Musico \
               -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
