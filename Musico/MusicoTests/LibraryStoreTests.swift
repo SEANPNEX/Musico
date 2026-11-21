@@ -537,6 +537,91 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(relaunched.playlists.first?.trackIDs, [])
         XCTAssertFalse(relaunched.favourites.contains(song1.id))
     }
+
+    // MARK: - Subfolder Removal
+
+    func testRemoveSubfolderExcludesOnlyTargetedTreeAndPersistsAcrossRescanAndReload() async throws {
+        let picked = makeTempDir()
+        touch("A/one.mp3", in: picked)
+        touch("A/Deep/two.mp3", in: picked)
+        touch("AB/sibling.mp3", in: picked)
+        touch("root.mp3", in: picked)
+
+        let store = makeStore()
+        try await store.addRoot(url: picked)
+        let pickedRoot = try XCTUnwrap(store.roots.first { $0.kind == .picked })
+
+        let aOne = try XCTUnwrap(store.tracks.first { $0.relativePath == "A/one.mp3" })
+        let aDeep = try XCTUnwrap(store.tracks.first { $0.relativePath == "A/Deep/two.mp3" })
+        let ab = try XCTUnwrap(store.tracks.first { $0.relativePath == "AB/sibling.mp3" })
+        let playlistID = store.createPlaylist(name: "Sub Mix")
+        store.add([aOne.id, aDeep.id, ab.id], toPlaylist: playlistID)
+        store.toggleFavourite(aOne.id)
+        store.toggleFavourite(ab.id)
+
+        var removedCallbacks: Set<String> = []
+        store.onTracksRemoved = { removedCallbacks.formUnion($0) }
+
+        store.removeSubfolder(rootID: pickedRoot.id, path: "A")
+
+        // Disk files remain intact.
+        XCTAssertTrue(FileManager.default.fileExists(atPath: picked.appendingPathComponent("A/one.mp3").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: picked.appendingPathComponent("A/Deep/two.mp3").path))
+
+        XCTAssertEqual(Set(store.tracks.map(\.relativePath)), ["AB/sibling.mp3", "root.mp3"])
+        XCTAssertEqual(removedCallbacks, [aOne.id, aDeep.id])
+        XCTAssertEqual(store.playlists[0].trackIDs, [ab.id])
+        XCTAssertFalse(store.isFavourite(aOne.id))
+        XCTAssertTrue(store.isFavourite(ab.id))
+
+        // Rescan & fresh store reload keep "A" excluded.
+        await store.rescan()
+        XCTAssertEqual(Set(store.tracks.map(\.relativePath)), ["AB/sibling.mp3", "root.mp3"])
+
+        let reloaded = makeStore()
+        await reloaded.rescan()
+        XCTAssertEqual(Set(reloaded.tracks.map(\.relativePath)), ["AB/sibling.mp3", "root.mp3"])
+        XCTAssertEqual(reloaded.root(pickedRoot.id)?.normalizedExcludedPaths, ["A"])
+
+        // Restoring excluded subfolders brings A's tracks back on rescan.
+        await reloaded.restoreExcludedFolders(pickedRoot.id)
+        XCTAssertEqual(
+            Set(reloaded.tracks.map(\.relativePath)),
+            ["A/one.mp3", "A/Deep/two.mp3", "AB/sibling.mp3", "root.mp3"]
+        )
+        XCTAssertEqual(reloaded.root(pickedRoot.id)?.normalizedExcludedPaths, [])
+    }
+
+    func testRemovingAllSubfoldersAndParentPruningAndLegacyDecode() async throws {
+        let picked = makeTempDir()
+        touch("Group/Sub/one.mp3", in: picked)
+        touch("Group/two.mp3", in: picked)
+
+        let store = makeStore()
+        try await store.addRoot(url: picked)
+        let pickedRoot = try XCTUnwrap(store.roots.first { $0.kind == .picked })
+
+        store.removeSubfolder(rootID: pickedRoot.id, path: "Group/Sub")
+        XCTAssertEqual(store.tracks.map(\.relativePath), ["Group/two.mp3"])
+        XCTAssertEqual(store.root(pickedRoot.id)?.normalizedExcludedPaths, ["Group/Sub"])
+
+        // Excluding parent prunes deeper child exclusion and removes remaining track cleanly.
+        store.removeSubfolder(rootID: pickedRoot.id, path: "Group")
+        XCTAssertEqual(store.root(pickedRoot.id)?.normalizedExcludedPaths, ["Group"])
+        XCTAssertTrue(store.tracks.isEmpty)
+
+        // Picked root with 0 non-excluded tracks must stay empty on rescan.
+        await store.rescan()
+        XCTAssertTrue(store.tracks.isEmpty)
+
+        // Legacy LibraryRoot JSON without excludedPaths decodes cleanly.
+        let legacyJSON = """
+        {"id":"00000000-0000-0000-0000-000000000001","name":"Old","kind":"picked"}
+        """
+        let decoded = try JSONDecoder().decode(LibraryRoot.self, from: Data(legacyJSON.utf8))
+        XCTAssertEqual(decoded.normalizedExcludedPaths, [])
+        XCTAssertFalse(decoded.isExcluded("Any/song.mp3"))
+    }
 }
 
 private final class StubCloudFetcher: CloudPlaylistFetching, @unchecked Sendable {

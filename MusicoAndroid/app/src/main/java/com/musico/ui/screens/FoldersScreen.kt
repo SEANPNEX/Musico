@@ -35,6 +35,7 @@ import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.Restore
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -124,6 +125,7 @@ fun FoldersScreen(
     var currentFolder by remember { mutableStateOf<FolderRef?>(null) }
     var importError by remember { mutableStateOf<String?>(null) }
     var removingRoot by remember { mutableStateOf<LibraryRoot?>(null) }
+    var removingSubfolder by remember { mutableStateOf<FolderRef?>(null) }
     var showAddCloudDialog by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
     var detailMenuExpanded by remember { mutableStateOf(false) }
@@ -213,6 +215,9 @@ fun FoldersScreen(
                 val isRemovableRootDetail = activeRef.path.isEmpty() &&
                     currentRoot != null &&
                     currentRoot.kind != RootKind.APP_FOLDER
+                val hasExcluded = activeRef.path.isEmpty() &&
+                    (currentRoot?.excludedPaths?.isNotEmpty() == true)
+                val showDetailMenu = activeRef.path.isNotEmpty() || isRemovableRootDetail || hasExcluded
 
                 TopAppBar(
                     navigationIcon = {
@@ -245,7 +250,7 @@ fun FoldersScreen(
                         ) {
                             Icon(Icons.Rounded.Refresh, contentDescription = "Rescan")
                         }
-                        if (isRemovableRootDetail) {
+                        if (showDetailMenu) {
                             val rootForMenu = currentRoot
                             Box {
                                 IconButton(onClick = { detailMenuExpanded = true }) {
@@ -255,30 +260,59 @@ fun FoldersScreen(
                                     expanded = detailMenuExpanded,
                                     onDismissRequest = { detailMenuExpanded = false }
                                 ) {
-                                    if (rootForMenu.kind == RootKind.PICKED) {
+                                    if (activeRef.path.isNotEmpty()) {
                                         DropdownMenuItem(
-                                            text = { Text("Locate Again…") },
-                                            leadingIcon = { Icon(Icons.Rounded.Folder, contentDescription = null) },
+                                            text = { Text("Remove Folder") },
+                                            leadingIcon = {
+                                                Icon(
+                                                    Icons.Rounded.Delete,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.error
+                                                )
+                                            },
                                             onClick = {
                                                 detailMenuExpanded = false
-                                                launchRelocateFolder(rootForMenu.id)
+                                                removingSubfolder = activeRef
                                             }
                                         )
-                                    }
-                                    DropdownMenuItem(
-                                        text = { Text("Remove Folder") },
-                                        leadingIcon = {
-                                            Icon(
-                                                Icons.Rounded.Delete,
-                                                contentDescription = null,
-                                                tint = MaterialTheme.colorScheme.error
+                                    } else if (rootForMenu != null) {
+                                        if (rootForMenu.kind == RootKind.PICKED) {
+                                            DropdownMenuItem(
+                                                text = { Text("Locate Again…") },
+                                                leadingIcon = { Icon(Icons.Rounded.Folder, contentDescription = null) },
+                                                onClick = {
+                                                    detailMenuExpanded = false
+                                                    launchRelocateFolder(rootForMenu.id)
+                                                }
                                             )
-                                        },
-                                        onClick = {
-                                            detailMenuExpanded = false
-                                            removingRoot = rootForMenu
                                         }
-                                    )
+                                        if (rootForMenu.excludedPaths.isNotEmpty()) {
+                                            DropdownMenuItem(
+                                                text = { Text("Restore Removed Subfolders (${rootForMenu.excludedPaths.size})") },
+                                                leadingIcon = { Icon(Icons.Rounded.Restore, contentDescription = null) },
+                                                onClick = {
+                                                    detailMenuExpanded = false
+                                                    scope.launch { libraryStore.restoreExcludedFolders(rootForMenu.id) }
+                                                }
+                                            )
+                                        }
+                                        if (isRemovableRootDetail) {
+                                            DropdownMenuItem(
+                                                text = { Text("Remove Folder") },
+                                                leadingIcon = {
+                                                    Icon(
+                                                        Icons.Rounded.Delete,
+                                                        contentDescription = null,
+                                                        tint = MaterialTheme.colorScheme.error
+                                                    )
+                                                },
+                                                onClick = {
+                                                    detailMenuExpanded = false
+                                                    removingRoot = rootForMenu
+                                                }
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -322,6 +356,7 @@ fun FoldersScreen(
                         onOpenRoot = { rootId -> currentFolder = FolderRef(rootId, "") },
                         onRelocateRoot = ::launchRelocateFolder,
                         onRequestRemove = { removingRoot = it },
+                        onRestoreExcluded = { rootId -> scope.launch { libraryStore.restoreExcludedFolders(rootId) } },
                         onAddFolder = ::launchAddFolder,
                         onAddCloudFolder = { showAddCloudDialog = true }
                     )
@@ -336,7 +371,8 @@ fun FoldersScreen(
                         queues = queues,
                         activeQueue = activeQueue,
                         trackActions = trackActions,
-                        onNavigate = { nextRef -> currentFolder = nextRef }
+                        onNavigate = { nextRef -> currentFolder = nextRef },
+                        onRequestRemoveSubfolder = { removingSubfolder = it }
                     )
                 }
             }
@@ -370,6 +406,34 @@ fun FoldersScreen(
                 libraryStore.removeRoot(pendingRemove.id)
                 if (currentFolder?.rootId == pendingRemove.id) {
                     currentFolder = null
+                }
+            }
+        )
+    }
+
+    val pendingSubfolder = removingSubfolder
+    if (pendingSubfolder != null) {
+        val folderTitle = pendingSubfolder.path.substringAfterLast('/')
+        val parentIsCloud = libraryState.roots.firstOrNull { it.id == pendingSubfolder.rootId }?.kind?.isCloud == true
+        ConfirmDialog(
+            title = "Remove “$folderTitle” from your library?",
+            message = if (parentIsCloud) {
+                "Its songs leave your library, playlists and queues."
+            } else {
+                "Its songs leave your library, playlists and queues. The files themselves are not deleted."
+            },
+            confirmLabel = "Remove Folder",
+            onDismiss = { removingSubfolder = null },
+            onConfirm = {
+                libraryStore.removeSubfolder(pendingSubfolder.rootId, pendingSubfolder.path)
+                val open = currentFolder
+                if (open != null && open.rootId == pendingSubfolder.rootId &&
+                    (open.path == pendingSubfolder.path || open.path.startsWith("${pendingSubfolder.path}/"))
+                ) {
+                    currentFolder = FolderRef(
+                        pendingSubfolder.rootId,
+                        pendingSubfolder.path.substringBeforeLast('/', "")
+                    )
                 }
             }
         )
@@ -491,6 +555,7 @@ private fun FolderRootList(
     onOpenRoot: (String) -> Unit,
     onRelocateRoot: (String) -> Unit,
     onRequestRemove: (LibraryRoot) -> Unit,
+    onRestoreExcluded: (String) -> Unit,
     onAddFolder: () -> Unit,
     onAddCloudFolder: () -> Unit
 ) {
@@ -582,6 +647,7 @@ private fun FolderRootList(
                             trackActions = trackActions,
                             onOpen = { onOpenRoot(root.id) },
                             onRelocate = { onRelocateRoot(root.id) },
+                            onRestoreExcluded = { onRestoreExcluded(root.id) },
                             onRemove = { onRequestRemove(root) }
                         )
                     }
@@ -596,6 +662,7 @@ private fun FolderRootList(
                         trackActions = trackActions,
                         onOpen = { onOpenRoot(root.id) },
                         onRelocate = {},
+                        onRestoreExcluded = { onRestoreExcluded(root.id) },
                         onRemove = {}
                     )
                 }
@@ -657,6 +724,7 @@ private fun RootItemRow(
     trackActions: TrackActionState,
     onOpen: () -> Unit,
     onRelocate: () -> Unit,
+    onRestoreExcluded: () -> Unit,
     onRemove: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
@@ -734,6 +802,16 @@ private fun RootItemRow(
                                 }
                             )
                         }
+                        if (root.excludedPaths.isNotEmpty()) {
+                            DropdownMenuItem(
+                                text = { Text("Restore Removed Subfolders (${root.excludedPaths.size})") },
+                                leadingIcon = { Icon(Icons.Rounded.Restore, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onRestoreExcluded()
+                                }
+                            )
+                        }
                         if (isRemovable) {
                             DropdownMenuItem(
                                 text = { Text("Remove Folder") },
@@ -750,7 +828,7 @@ private fun RootItemRow(
                                 }
                             )
                         }
-                        if (isRemovable && rootTrackIds.isNotEmpty()) {
+                        if ((isRemovable || root.kind == RootKind.PICKED || root.excludedPaths.isNotEmpty()) && rootTrackIds.isNotEmpty()) {
                             HorizontalDivider()
                         }
                         if (rootTrackIds.isNotEmpty()) {
@@ -804,6 +882,7 @@ private fun RootItemRow(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FolderDetailContent(
     ref: FolderRef,
@@ -814,7 +893,8 @@ private fun FolderDetailContent(
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
-    onNavigate: (FolderRef) -> Unit
+    onNavigate: (FolderRef) -> Unit,
+    onRequestRemoveSubfolder: (FolderRef) -> Unit
 ) {
     val (subfolders, directTracks) = remember(libraryState.tracks, ref) {
         libraryStore.folderContents(ref.rootId, ref.path)
@@ -866,44 +946,89 @@ private fun FolderDetailContent(
 
         items(subfolders, key = { "dir:$it" }) { folderName ->
             val childPath = if (ref.path.isEmpty()) folderName else "${ref.path}/$folderName"
+            val childRef = FolderRef(ref.rootId, childPath)
             val childIds = remember(libraryState.tracks, ref.rootId, childPath) {
                 libraryStore.tracksUnder(ref.rootId, childPath).map { it.id }
             }
             var menuExpanded by remember { mutableStateOf(false) }
+            val dismissState = rememberSwipeToDismissBoxState(
+                confirmValueChange = { value ->
+                    if (value == SwipeToDismissBoxValue.EndToStart) {
+                        onRequestRemoveSubfolder(childRef)
+                    }
+                    false
+                }
+            )
 
-            ListItem(
-                modifier = Modifier
-                    .animateItem()
-                    .clickable { onNavigate(FolderRef(ref.rootId, childPath)) },
-                leadingContent = {
-                    Icon(
-                        imageVector = Icons.Rounded.Folder,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                },
-                headlineContent = { Text(folderName) },
-                supportingContent = { Text("${childIds.size} songs") },
-                trailingContent = {
-                    Box {
-                        IconButton(onClick = { menuExpanded = true }) {
-                            Icon(Icons.Rounded.MoreVert, contentDescription = "Folder options")
-                        }
-                        DropdownMenu(
-                            expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false }
+            Box(modifier = Modifier.animateItem()) {
+                SwipeToDismissBox(
+                    state = dismissState,
+                    enableDismissFromStartToEnd = false,
+                    backgroundContent = {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(horizontal = 20.dp),
+                            contentAlignment = Alignment.CenterEnd
                         ) {
-                            TrackMenuItems(
-                                ids = childIds,
-                                queues = queues,
-                                activeQueueId = activeQueue.id,
-                                actionState = trackActions,
-                                onDismiss = { menuExpanded = false }
+                            Icon(
+                                imageVector = Icons.Rounded.Delete,
+                                contentDescription = "Remove Folder",
+                                tint = MaterialTheme.colorScheme.error
                             )
                         }
                     }
+                ) {
+                    ListItem(
+                        modifier = Modifier.clickable { onNavigate(childRef) },
+                        leadingContent = {
+                            Icon(
+                                imageVector = Icons.Rounded.Folder,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        headlineContent = { Text(folderName) },
+                        supportingContent = { Text("${childIds.size} songs") },
+                        trailingContent = {
+                            Box {
+                                IconButton(onClick = { menuExpanded = true }) {
+                                    Icon(Icons.Rounded.MoreVert, contentDescription = "Folder options")
+                                }
+                                DropdownMenu(
+                                    expanded = menuExpanded,
+                                    onDismissRequest = { menuExpanded = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Remove Folder") },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Rounded.Delete,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.error
+                                            )
+                                        },
+                                        onClick = {
+                                            menuExpanded = false
+                                            onRequestRemoveSubfolder(childRef)
+                                        }
+                                    )
+                                    if (childIds.isNotEmpty()) {
+                                        HorizontalDivider()
+                                        TrackMenuItems(
+                                            ids = childIds,
+                                            queues = queues,
+                                            activeQueueId = activeQueue.id,
+                                            actionState = trackActions,
+                                            onDismiss = { menuExpanded = false }
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    )
                 }
-            )
+            }
         }
 
         itemsIndexed(directTracks, key = { _, t -> t.id }) { index, track ->

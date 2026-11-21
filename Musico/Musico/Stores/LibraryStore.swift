@@ -95,10 +95,13 @@ final class LibraryStore {
 
         let file = Persistence.load(LibraryFile.self, from: libraryURL)
         rereadAll = file != nil && file?.readerVersion != Self.readerVersion
+        let savedAppRoot = file?.roots.first { $0.kind == .appFolder }
         var loadedRoots = file?.roots.filter { $0.kind != .appFolder } ?? []
         appFolderRemoved = appFolderRemovable && file?.appFolderRemoved == true
         if !appFolderRemoved {
-            loadedRoots.insert(Self.appFolderRoot, at: 0)
+            var appRoot = Self.appFolderRoot
+            appRoot.excludedPaths = savedAppRoot?.excludedPaths
+            loadedRoots.insert(appRoot, at: 0)
             rootURLs[LibraryRoot.appFolderID] = documentsURL
         }
         roots = loadedRoots
@@ -248,6 +251,44 @@ final class LibraryStore {
         saveLibrary()
     }
 
+    /// Excludes a subfolder from the library without deleting files on disk.
+    func removeSubfolder(rootID: UUID, path: String) {
+        let norm = LibraryRoot.normalizeFolderPath(path)
+        guard !norm.isEmpty, let index = roots.firstIndex(where: { $0.id == rootID }) else { return }
+
+        let current = roots[index].normalizedExcludedPaths.map(LibraryRoot.normalizeFolderPath).filter { !$0.isEmpty }
+        let alreadyCovered = current.contains { ex in norm == ex || norm.hasPrefix(ex + "/") }
+        if !alreadyCovered {
+            var next = current.filter { ex in !(ex.hasPrefix(norm + "/")) }
+            next.append(norm)
+            next.sort()
+            roots[index].excludedPaths = next
+        }
+
+        let removed = Set(tracks.filter {
+            $0.rootID == rootID && LibraryRoot.folder(norm, contains: $0.relativePath)
+        }.map(\.id))
+        if !removed.isEmpty {
+            tracks.removeAll { removed.contains($0.id) }
+            forget(removed)
+        }
+        saveLibrary()
+        if !removed.isEmpty {
+            let keys = Set(tracks.compactMap(\.artworkKey))
+            let artwork = self.artwork
+            Task.detached(priority: .utility) { artwork.prune(keeping: keys) }
+        }
+    }
+
+    /// Clears excluded subfolders on a root and rescans so their songs return.
+    func restoreExcludedFolders(_ rootID: UUID) async {
+        guard let index = roots.firstIndex(where: { $0.id == rootID }),
+              !roots[index].normalizedExcludedPaths.isEmpty else { return }
+        roots[index].excludedPaths = nil
+        saveLibrary()
+        await rescan()
+    }
+
     /// Puts the built-in root back after the user removed it.
     func restoreAppFolder() async {
         guard appFolderRemoved else { return }
@@ -342,6 +383,7 @@ final class LibraryStore {
             let existing = Dictionary(existingTracks.map { ($0.relativePath, $0) }, uniquingKeysWith: { first, _ in first })
             var seen = Set<String>()
             for file in files {
+                if root.isExcluded(file.relativePath) { continue }
                 if file.isPlaceholder {
                     // Not downloaded from iCloud: keep a song we already know, ignore one we cannot read yet.
                     if let old = existing[file.relativePath], seen.insert(file.relativePath).inserted { kept.append(old) }
@@ -379,9 +421,12 @@ final class LibraryStore {
             }
         }
 
-        // A root removed while we were reading must not come back as orphans.
-        let rootIDs = Set(roots.map(\.id))
-        let final = kept.filter { rootIDs.contains($0.rootID) }
+        // A root or subfolder removed while we were reading must not come back as orphans.
+        let rootsByID = Dictionary(uniqueKeysWithValues: roots.map { ($0.id, $0) })
+        let final = kept.filter { track in
+            guard let activeRoot = rootsByID[track.rootID] else { return false }
+            return !activeRoot.isExcluded(track.relativePath)
+        }
         removed = removed.filter { id in !final.contains { $0.id == id } }
         if reread { rereadAll = false }
         if !pending.isEmpty || !removed.isEmpty || final.count != tracks.count || cloudChanged {
@@ -397,8 +442,11 @@ final class LibraryStore {
     }
 
     private func publish(_ list: [Track]) {
-        let rootIDs = Set(roots.map(\.id))
-        tracks = sortedByTitle(list.filter { rootIDs.contains($0.rootID) })
+        let rootsByID = Dictionary(uniqueKeysWithValues: roots.map { ($0.id, $0) })
+        tracks = sortedByTitle(list.filter { track in
+            guard let activeRoot = rootsByID[track.rootID] else { return false }
+            return !activeRoot.isExcluded(track.relativePath)
+        })
         saveLibrary()
     }
 
@@ -436,6 +484,7 @@ final class LibraryStore {
         var changed = false
 
         for item in items {
+            if root.isExcluded(item.relativePath) { continue }
             guard seen.insert(item.relativePath).inserted else { continue }
             if let old = existing[item.relativePath] {
                 let sameMetadata = old.title == item.title

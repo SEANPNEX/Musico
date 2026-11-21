@@ -27,6 +27,34 @@ struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
     var cookie: String? = nil
     var proxyURL: String? = nil
     var lastSynced: Date? = nil
+    var excludedPaths: [String]? = nil
+
+    var normalizedExcludedPaths: [String] { excludedPaths ?? [] }
+
+    static func normalizeFolderPath(_ path: String) -> String {
+        path
+            .replacingOccurrences(of: "\\", with: "/")
+            .precomposedStringWithCanonicalMapping
+            .trimmingCharacters(in: CharacterSet(charactersIn: "/").union(.whitespacesAndNewlines))
+    }
+
+    static func folder(_ folderPath: String, contains relativePath: String) -> Bool {
+        let normFolder = normalizeFolderPath(folderPath)
+        guard !normFolder.isEmpty else { return false }
+        let normRel = normalizeFolderPath(relativePath)
+        return normRel == normFolder || normRel.hasPrefix(normFolder + "/")
+    }
+
+    func isExcluded(_ relativePath: String) -> Bool {
+        let excluded = normalizedExcludedPaths
+        guard !excluded.isEmpty else { return false }
+        let normRel = Self.normalizeFolderPath(relativePath)
+        return excluded.contains { ex in
+            let normEx = Self.normalizeFolderPath(ex)
+            guard !normEx.isEmpty else { return false }
+            return normRel == normEx || normRel.hasPrefix(normEx + "/")
+        }
+    }
 }
 
 struct Track: Codable, Hashable, Identifiable, Sendable {

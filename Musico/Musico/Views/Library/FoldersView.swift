@@ -210,6 +210,12 @@ struct FoldersView: View {
                     showImporter = true
                 }
             }
+            if !root.normalizedExcludedPaths.isEmpty {
+                Button("Restore Removed Subfolders (\(root.normalizedExcludedPaths.count))",
+                       systemImage: "arrow.uturn.backward") {
+                    Task { await library.restoreExcludedFolders(root.id) }
+                }
+            }
             if removable {
                 Button("Remove Folder", systemImage: "trash", role: .destructive) { removing = root }
             }
@@ -300,12 +306,17 @@ struct FolderDetailView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(\.dismiss) private var dismiss
     @State private var confirmRemove = false
+    @State private var removingSubfolder: FolderRef?
 
     var body: some View {
         let root = library.root(ref.root)
         let contents = library.folderContents(root: ref.root, path: ref.path)
         let everything = library.tracks(under: ref.root, path: ref.path)
         let isRemovableRoot = ref.path.isEmpty && (root.map { library.isRemovable($0) } ?? false)
+        let canRemoveCurrentFolder = !ref.path.isEmpty || isRemovableRoot
+        let excludedCount = ref.path.isEmpty ? (root?.normalizedExcludedPaths.count ?? 0) : 0
+        let currentName = ref.path.isEmpty ? (root?.name ?? "Folder") : (ref.path as NSString).lastPathComponent
+
         List {
             if everything.isEmpty {
                 ContentUnavailableView(
@@ -321,19 +332,46 @@ struct FolderDetailView: View {
             ForEach(contents.folders, id: \.self) { name in
                 let child = FolderRef(root: ref.root, path: ref.path.isEmpty ? name : ref.path + "/" + name)
                 NavigationLink(value: child) {
-                    Label(name, systemImage: "folder")
+                    HStack(spacing: 12) {
+                        Label(name, systemImage: "folder")
+                        Spacer()
+                        Button("Remove Folder", systemImage: "minus.circle") {
+                            removingSubfolder = child
+                        }
+                        .labelStyle(.iconOnly)
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                        .help("Remove Folder")
+                        .accessibilityLabel("Remove Folder")
+                    }
                 }
-                .contextMenu { TrackMenuItems(ids: library.tracks(under: child.root, path: child.path).map(\.id)) }
+                .swipeActions(edge: .trailing) {
+                    Button("Remove", systemImage: "trash", role: .destructive) {
+                        removingSubfolder = child
+                    }
+                }
+                .contextMenu {
+                    Button("Remove Folder", systemImage: "trash", role: .destructive) {
+                        removingSubfolder = child
+                    }
+                    TrackMenuItems(ids: library.tracks(under: child.root, path: child.path).map(\.id))
+                }
             }
             TrackRows(tracks: contents.tracks) { $0.isCloud ? $0.artist : $0.fileName }
         }
         .listStyle(.plain)
-        .navigationTitle(ref.path.isEmpty ? (root?.name ?? "Folder") : (ref.path as NSString).lastPathComponent)
+        .navigationTitle(currentName)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await library.rescan() }
         .toolbar {
-            if isRemovableRoot {
-                ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if excludedCount > 0 {
+                    Button("Restore Removed Subfolders (\(excludedCount))", systemImage: "arrow.uturn.backward") {
+                        Task { await library.restoreExcludedFolders(ref.root) }
+                    }
+                    .help("Restore Removed Subfolders (\(excludedCount))")
+                }
+                if canRemoveCurrentFolder {
                     Button("Remove Folder", systemImage: "trash", role: .destructive) {
                         confirmRemove = true
                     }
@@ -341,15 +379,34 @@ struct FolderDetailView: View {
                 }
             }
         }
-        .confirmationDialog("Remove “\(root?.name ?? "")” from your library?",
+        .confirmationDialog("Remove “\(currentName)” from your library?",
                             isPresented: $confirmRemove,
                             titleVisibility: .visible) {
             Button("Remove from Library", role: .destructive) {
-                library.removeRoot(ref.root)
+                if ref.path.isEmpty {
+                    library.removeRoot(ref.root)
+                } else {
+                    library.removeSubfolder(rootID: ref.root, path: ref.path)
+                }
                 dismiss()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
+            if root?.kind.isCloud == true {
+                Text("Its songs leave your library, playlists and queues.")
+            } else {
+                Text("Its songs leave your library, playlists and queues. The files themselves are not deleted.")
+            }
+        }
+        .confirmationDialog("Remove “\((removingSubfolder?.path as NSString?)?.lastPathComponent ?? "")” from your library?",
+                            isPresented: Binding(get: { removingSubfolder != nil }, set: { if !$0 { removingSubfolder = nil } }),
+                            titleVisibility: .visible,
+                            presenting: removingSubfolder) { target in
+            Button("Remove from Library", role: .destructive) {
+                library.removeSubfolder(rootID: target.root, path: target.path)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
             if root?.kind.isCloud == true {
                 Text("Its songs leave your library, playlists and queues.")
             } else {

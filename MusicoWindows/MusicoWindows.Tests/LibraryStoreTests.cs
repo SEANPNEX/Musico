@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http;
 using System.Text;
+using System.Text.Json;
 using MusicoWindows.Cloud;
 using MusicoWindows.Core;
 using MusicoWindows.Models;
@@ -369,5 +370,88 @@ public sealed class LibraryStoreTests
         reloaded.RemoveRoot(root.Id);
         Assert.Single(reloaded.Roots);
         Assert.Empty(reloaded.Tracks);
+    }
+
+    [Fact]
+    public async Task RemoveSubfolderExcludesOnlyTargetedTreeAndPersistsAcrossRescanAndReload()
+    {
+        string picked = TestHelpers.MakeTempDir();
+        TestHelpers.TouchFile(picked, "A/one.mp3");
+        TestHelpers.TouchFile(picked, "A/Deep/two.mp3");
+        TestHelpers.TouchFile(picked, "AB/sibling.mp3");
+        TestHelpers.TouchFile(picked, "root.mp3");
+
+        var store = MakeStore();
+        await store.AddRootAsync(picked);
+        var pickedRoot = store.Roots.First(r => r.Kind == RootKind.Picked);
+
+        var aOne = store.Tracks.First(t => t.RelativePath == "A/one.mp3");
+        var aDeep = store.Tracks.First(t => t.RelativePath == "A/Deep/two.mp3");
+        var ab = store.Tracks.First(t => t.RelativePath == "AB/sibling.mp3");
+        var plId = store.CreatePlaylist("Sub Mix");
+        store.AddToPlaylist([aOne.Id, aDeep.Id, ab.Id], plId);
+        store.ToggleFavourite(aOne.Id);
+        store.ToggleFavourite(ab.Id);
+
+        var removedCallbacks = new HashSet<string>();
+        store.OnTracksRemoved = ids => removedCallbacks.UnionWith(ids);
+
+        store.RemoveSubfolder(pickedRoot.Id, "A");
+
+        // Disk files remain intact.
+        Assert.True(File.Exists(Path.Combine(picked, "A", "one.mp3")));
+        Assert.True(File.Exists(Path.Combine(picked, "A", "Deep", "two.mp3")));
+
+        Assert.Equal(["AB/sibling.mp3", "root.mp3"], store.Tracks.Select(t => t.RelativePath).OrderBy(x => x));
+        Assert.Equal(new HashSet<string>([aOne.Id, aDeep.Id]), removedCallbacks);
+        Assert.Equal([ab.Id], store.Playlists[0].TrackIds);
+        Assert.False(store.IsFavourite(aOne.Id));
+        Assert.True(store.IsFavourite(ab.Id));
+
+        // Rescan & fresh store reload keep "A" excluded.
+        await store.RescanAsync();
+        Assert.Equal(["AB/sibling.mp3", "root.mp3"], store.Tracks.Select(t => t.RelativePath).OrderBy(x => x));
+
+        var reloaded = MakeStore();
+        await reloaded.RescanAsync();
+        Assert.Equal(["AB/sibling.mp3", "root.mp3"], reloaded.Tracks.Select(t => t.RelativePath).OrderBy(x => x));
+        Assert.Equal(["A"], reloaded.GetRoot(pickedRoot.Id)?.ExcludedPaths);
+
+        // Restoring excluded subfolders brings A's tracks back on rescan.
+        await reloaded.RestoreExcludedFoldersAsync(pickedRoot.Id);
+        Assert.Equal(
+            ["A/Deep/two.mp3", "A/one.mp3", "AB/sibling.mp3", "root.mp3"],
+            reloaded.Tracks.Select(t => t.RelativePath).OrderBy(x => x));
+        Assert.Null(reloaded.GetRoot(pickedRoot.Id)?.ExcludedPaths);
+    }
+
+    [Fact]
+    public async Task RemovingAllSubfoldersAndParentPruningAndLegacyDecode()
+    {
+        string picked = TestHelpers.MakeTempDir();
+        TestHelpers.TouchFile(picked, "Group/Sub/one.mp3");
+        TestHelpers.TouchFile(picked, "Group/two.mp3");
+
+        var store = MakeStore();
+        await store.AddRootAsync(picked);
+        var pickedRoot = store.Roots.First(r => r.Kind == RootKind.Picked);
+
+        store.RemoveSubfolder(pickedRoot.Id, "Group/Sub");
+        Assert.Equal(["Group/two.mp3"], store.Tracks.Select(t => t.RelativePath));
+        Assert.Equal(["Group/Sub"], store.GetRoot(pickedRoot.Id)?.ExcludedPaths);
+
+        // Excluding parent prunes deeper child exclusion and removes remaining track cleanly.
+        store.RemoveSubfolder(pickedRoot.Id, "Group");
+        Assert.Equal(["Group"], store.GetRoot(pickedRoot.Id)?.ExcludedPaths);
+        Assert.Empty(store.Tracks);
+
+        await store.RescanAsync();
+        Assert.Empty(store.Tracks);
+
+        const string legacyJson = """{"Id":"00000000-0000-0000-0000-000000000001","Name":"Old","Kind":0,"Path":"C:\\Music"}""";
+        var decoded = JsonSerializer.Deserialize<LibraryRoot>(legacyJson);
+        Assert.NotNull(decoded);
+        Assert.Null(decoded.ExcludedPaths);
+        Assert.False(decoded.IsExcluded("Any/song.mp3"));
     }
 }

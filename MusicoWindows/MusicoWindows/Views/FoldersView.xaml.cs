@@ -95,10 +95,22 @@ public partial class FoldersView : UserControl
         RescanButton.IsEnabled = !lib.IsScanning;
 
         // If drilled root was removed, jump back to roots
-        if (_currentRootId is Guid rid && lib.GetRoot(rid) is null)
+        if (_currentRootId is Guid rid)
         {
-            _currentRootId = null;
-            _currentPath = string.Empty;
+            var activeRoot = lib.GetRoot(rid);
+            if (activeRoot is null)
+            {
+                _currentRootId = null;
+                _currentPath = string.Empty;
+            }
+            else
+            {
+                while (!string.IsNullOrEmpty(_currentPath) && activeRoot.IsExcluded(_currentPath))
+                {
+                    int slash = _currentPath.LastIndexOf('/');
+                    _currentPath = slash >= 0 ? _currentPath[..slash] : string.Empty;
+                }
+            }
         }
 
         if (_currentRootId is Guid activeRootId)
@@ -295,6 +307,14 @@ public partial class FoldersView : UserControl
                     {
                         menu.Items.Add(TrackMenuHelper.CreateItem("Locate Again...", "\uE8DA", async () => await PickAndRelocateAsync(rootId)));
                     }
+                    int excludedCount = root.ExcludedPaths?.Count ?? 0;
+                    if (excludedCount > 0)
+                    {
+                        menu.Items.Add(TrackMenuHelper.CreateItem(
+                            $"Restore Removed Subfolders ({excludedCount})",
+                            "\uE7A7",
+                            async () => await lib.RestoreExcludedFoldersAsync(rootId)));
+                    }
                     menu.Items.Add(TrackMenuHelper.CreateItem("Remove Folder", "\uE74D", () => ConfirmRemoveRoot(root)));
                 });
 
@@ -338,7 +358,7 @@ public partial class FoldersView : UserControl
         TitleText.Text = leafName;
         SubtitleText.Text = root.IsCloud ? (root.SourceUrl ?? root.Path ?? string.Empty) : (root.Path ?? string.Empty);
         DrillBar.Visibility = Visibility.Visible;
-        RemoveRootButton.Visibility = string.IsNullOrEmpty(_currentPath) ? Visibility.Visible : Visibility.Collapsed;
+        RemoveRootButton.Visibility = Visibility.Visible;
 
         BuildBreadcrumbs(root);
 
@@ -405,6 +425,7 @@ public partial class FoldersView : UserControl
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(32) });
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            rowGrid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
             var icon = new TextBlock
             {
@@ -435,9 +456,40 @@ public partial class FoldersView : UserControl
             countTb.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
             Grid.SetColumn(countTb, 2);
 
+            var removeSubBtn = new Button
+            {
+                Style = (Style)FindResource("Win10ButtonStyle"),
+                ToolTip = "Remove Folder from Library",
+                Margin = new Thickness(12, 0, 0, 0),
+                Padding = new Thickness(8, 4, 8, 4)
+            };
+            var removeSubContent = new StackPanel { Orientation = Orientation.Horizontal };
+            removeSubContent.Children.Add(new TextBlock
+            {
+                Text = "\uE74D",
+                FontFamily = (FontFamily)FindResource("Win10GlyphFont"),
+                FontSize = 11,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 5, 0)
+            });
+            removeSubContent.Children.Add(new TextBlock
+            {
+                Text = "Remove Folder",
+                FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            removeSubBtn.Content = removeSubContent;
+            removeSubBtn.Click += (_, e) =>
+            {
+                e.Handled = true;
+                ConfirmRemoveSubfolder(root, childPath, navigateUpOnConfirm: false);
+            };
+            Grid.SetColumn(removeSubBtn, 3);
+
             rowGrid.Children.Add(icon);
             rowGrid.Children.Add(nameTb);
             rowGrid.Children.Add(countTb);
+            rowGrid.Children.Add(removeSubBtn);
             row.Child = rowGrid;
 
             row.MouseEnter += (_, _) =>
@@ -461,7 +513,15 @@ public partial class FoldersView : UserControl
                 _ctx.Services,
                 folderTracks.Select(t => t.Id).ToList(),
                 null,
-                _ctx.OpenTextPrompt);
+                _ctx.OpenTextPrompt,
+                menu =>
+                {
+                    menu.Items.Add(new Separator());
+                    menu.Items.Add(TrackMenuHelper.CreateItem(
+                        "Remove Folder",
+                        "\uE74D",
+                        () => ConfirmRemoveSubfolder(root, childPath, navigateUpOnConfirm: false)));
+                });
 
             ContentStack.Children.Add(row);
         }
@@ -591,9 +651,35 @@ public partial class FoldersView : UserControl
         if (_ctx is null) return;
         _ctx.OpenConfirm(
             $"Remove \"{root.Name}\" from your library?",
-            "Its songs leave your library, playlists and queues. The files themselves are not deleted.",
+            root.IsCloud
+                ? "Its songs leave your library, playlists and queues."
+                : "Its songs leave your library, playlists and queues. The files themselves are not deleted.",
             "Remove from Library",
             () => _ctx.Services.Library.RemoveRoot(root.Id),
+            true);
+    }
+
+    private void ConfirmRemoveSubfolder(LibraryRoot root, string path, bool navigateUpOnConfirm)
+    {
+        if (_ctx is null) return;
+        string leaf = path.Split('/').LastOrDefault() ?? path;
+        _ctx.OpenConfirm(
+            $"Remove \"{leaf}\" from your library?",
+            root.IsCloud
+                ? "Its songs leave your library, playlists and queues."
+                : "Its songs leave your library, playlists and queues. The files themselves are not deleted.",
+            "Remove from Library",
+            () =>
+            {
+                _ctx.Services.Library.RemoveSubfolder(root.Id, path);
+                if (navigateUpOnConfirm)
+                {
+                    int slash = _currentPath.LastIndexOf('/');
+                    _currentPath = slash >= 0 ? _currentPath[..slash] : string.Empty;
+                    Refresh();
+                    Win10Animations.AnimateSlideX(ContentStack, -24);
+                }
+            },
             true);
     }
 
@@ -606,9 +692,14 @@ public partial class FoldersView : UserControl
     {
         if (_ctx is null || _currentRootId is not Guid rid) return;
         var root = _ctx.Services.Library.GetRoot(rid);
-        if (root is not null)
+        if (root is null) return;
+        if (string.IsNullOrEmpty(_currentPath))
         {
             ConfirmRemoveRoot(root);
+        }
+        else
+        {
+            ConfirmRemoveSubfolder(root, _currentPath, navigateUpOnConfirm: true);
         }
     }
 

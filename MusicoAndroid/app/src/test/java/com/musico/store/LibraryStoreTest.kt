@@ -14,6 +14,7 @@ import com.musico.model.RootKind
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -373,5 +374,82 @@ class LibraryStoreTest {
         reloaded.removeRoot(cloudRoot.id)
         assertEquals(1, reloaded.state.value.roots.size)
         assertTrue(reloaded.state.value.tracks.isEmpty())
+    }
+
+    @Test
+    fun removeSubfolderExcludesOnlyTargetedTreeAndPersistsAcrossRescanAndReload() = runBlocking {
+        touch("A/one.mp3")
+        touch("A/Deep/two.mp3")
+        touch("AB/sibling.mp3")
+        touch("root.mp3")
+
+        val store = makeStore()
+        store.rescan()
+
+        val aOne = store.state.value.tracks.first { it.relativePath == "A/one.mp3" }
+        val aDeep = store.state.value.tracks.first { it.relativePath == "A/Deep/two.mp3" }
+        val ab = store.state.value.tracks.first { it.relativePath == "AB/sibling.mp3" }
+        val playlistId = store.createPlaylist("Sub Mix")
+        store.addToPlaylist(listOf(aOne.id, aDeep.id, ab.id), playlistId)
+        store.toggleFavourite(aOne.id)
+        store.toggleFavourite(ab.id)
+
+        val removedCallbacks = mutableSetOf<String>()
+        store.onTracksRemoved = { removedCallbacks.addAll(it) }
+
+        store.removeSubfolder(LibraryRoot.APP_FOLDER_ID, "A")
+
+        // Disk files remain intact.
+        assertTrue(File(docsDir, "A/one.mp3").exists())
+        assertTrue(File(docsDir, "A/Deep/two.mp3").exists())
+
+        assertEquals(setOf("AB/sibling.mp3", "root.mp3"), store.state.value.tracks.map { it.relativePath }.toSet())
+        assertEquals(setOf(aOne.id, aDeep.id), removedCallbacks)
+        assertEquals(listOf(ab.id), store.state.value.playlists.first().trackIds)
+        assertFalse(store.isFavourite(aOne.id))
+        assertTrue(store.isFavourite(ab.id))
+
+        // Rescan & fresh store reload keep "A" excluded.
+        store.rescan()
+        assertEquals(setOf("AB/sibling.mp3", "root.mp3"), store.state.value.tracks.map { it.relativePath }.toSet())
+
+        val reloaded = makeStore()
+        reloaded.rescan()
+        assertEquals(setOf("AB/sibling.mp3", "root.mp3"), reloaded.state.value.tracks.map { it.relativePath }.toSet())
+        assertEquals(listOf("A"), reloaded.state.value.roots.first().excludedPaths)
+
+        // Restoring excluded subfolders brings A's tracks back on rescan.
+        reloaded.restoreExcludedFolders(LibraryRoot.APP_FOLDER_ID)
+        assertEquals(
+            setOf("A/one.mp3", "A/Deep/two.mp3", "AB/sibling.mp3", "root.mp3"),
+            reloaded.state.value.tracks.map { it.relativePath }.toSet(),
+        )
+        assertEquals(emptyList<String>(), reloaded.state.value.roots.first().excludedPaths)
+    }
+
+    @Test
+    fun parentExclusionPrunesChildrenAndLegacyRootJsonDecodesCleanly() = runBlocking {
+        touch("Group/Sub/one.mp3")
+        touch("Group/two.mp3")
+
+        val store = makeStore()
+        store.rescan()
+
+        store.removeSubfolder(LibraryRoot.APP_FOLDER_ID, "Group/Sub")
+        assertEquals(listOf("Group/two.mp3"), store.state.value.tracks.map { it.relativePath })
+        assertEquals(listOf("Group/Sub"), store.state.value.roots.first().excludedPaths)
+
+        // Excluding parent prunes deeper child exclusion and removes remaining track cleanly.
+        store.removeSubfolder(LibraryRoot.APP_FOLDER_ID, "Group")
+        assertEquals(listOf("Group"), store.state.value.roots.first().excludedPaths)
+        assertTrue(store.state.value.tracks.isEmpty())
+
+        store.rescan()
+        assertTrue(store.state.value.tracks.isEmpty())
+
+        val legacyJson = """{"id":"r1","name":"Old","kind":"PICKED"}"""
+        val decoded = Json { ignoreUnknownKeys = true }.decodeFromString<LibraryRoot>(legacyJson)
+        assertEquals(emptyList<String>(), decoded.excludedPaths)
+        assertFalse(decoded.isExcluded("Any/song.mp3"))
     }
 }

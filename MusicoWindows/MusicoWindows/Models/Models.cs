@@ -30,7 +30,8 @@ public sealed record LibraryRoot(
     string? RemoteId = null,
     string? Cookie = null,
     string? ProxyUrl = null,
-    DateTimeOffset? LastSyncedUtc = null)
+    DateTimeOffset? LastSyncedUtc = null,
+    IReadOnlyList<string>? ExcludedPaths = null)
 {
     public static readonly Guid AppFolderId = Guid.Parse("00000000-0000-0000-0000-00000000A990");
 
@@ -39,6 +40,38 @@ public sealed record LibraryRoot(
 
     [JsonIgnore]
     public bool IsLocal => Kind.IsLocal();
+
+    public static string NormalizeFolderPath(string path) =>
+        path.Replace('\\', '/')
+            .Normalize(NormalizationForm.FormC)
+            .Trim()
+            .Trim('/');
+
+    public static bool FolderContains(string folderPath, string relativePath)
+    {
+        string normFolder = NormalizeFolderPath(folderPath);
+        if (normFolder.Length == 0) return false;
+        string normRel = NormalizeFolderPath(relativePath);
+        return string.Equals(normRel, normFolder, StringComparison.Ordinal) ||
+               normRel.StartsWith(normFolder + "/", StringComparison.Ordinal);
+    }
+
+    public bool IsExcluded(string relativePath)
+    {
+        if (ExcludedPaths is null || ExcludedPaths.Count == 0) return false;
+        string normRel = NormalizeFolderPath(relativePath);
+        foreach (string ex in ExcludedPaths)
+        {
+            string normEx = NormalizeFolderPath(ex);
+            if (normEx.Length > 0 &&
+                (string.Equals(normRel, normEx, StringComparison.Ordinal) ||
+                 normRel.StartsWith(normEx + "/", StringComparison.Ordinal)))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
 }
 
 public sealed record Track(

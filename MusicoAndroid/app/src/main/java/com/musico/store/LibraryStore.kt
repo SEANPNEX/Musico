@@ -101,12 +101,14 @@ class LibraryStore(
         val loadedLib = Persistence.load<LibraryFile>(libraryFile)
         rereadAll = loadedLib != null && loadedLib.readerVersion != READER_VERSION
 
+        val savedAppRoot = loadedLib?.roots?.firstOrNull { it.kind == RootKind.APP_FOLDER }
         val userRoots = loadedLib?.roots?.filter { it.kind != RootKind.APP_FOLDER }.orEmpty()
         val appRoot = LibraryRoot(
             id = LibraryRoot.APP_FOLDER_ID,
             name = APP_FOLDER_NAME,
             kind = RootKind.APP_FOLDER,
             treeUri = null,
+            excludedPaths = savedAppRoot?.excludedPaths.orEmpty(),
         )
         val initialRoots = listOf(appRoot) + userRoots
         makeAppFolderVisible(appFolderDir)
@@ -400,6 +402,69 @@ class LibraryStore(
         saveLibrary()
     }
 
+    /** Excludes a subfolder from the library without deleting files on disk. */
+    fun removeSubfolder(rootId: String, path: String) {
+        val norm = LibraryRoot.normalizeFolderPath(path)
+        if (norm.isEmpty()) return
+        val current = _state.value
+        val index = current.roots.indexOfFirst { it.id == rootId }
+        if (index < 0) return
+
+        val existingExcluded = current.roots[index].excludedPaths
+            .map { LibraryRoot.normalizeFolderPath(it) }
+            .filter { it.isNotEmpty() }
+        val alreadyCovered = existingExcluded.any { ex -> norm == ex || norm.startsWith("$ex/") }
+        val nextExcluded = if (alreadyCovered) {
+            existingExcluded
+        } else {
+            (existingExcluded.filterNot { ex -> ex.startsWith("$norm/") } + norm).sorted()
+        }
+
+        val updatedRoots = current.roots.toMutableList()
+        updatedRoots[index] = updatedRoots[index].copy(excludedPaths = nextExcluded)
+
+        val removedIds = current.tracks
+            .filter { it.rootId == rootId && LibraryRoot.folderContains(norm, it.relativePath) }
+            .map { it.id }
+            .toSet()
+
+        if (removedIds.isEmpty()) {
+            _state.value = current.copy(roots = updatedRoots)
+            saveLibrary()
+            return
+        }
+
+        val keptTracks = current.tracks.filter { it.id !in removedIds }
+        for (id in removedIds) {
+            trackUris.remove(id)
+        }
+        val (albums, artists, idMap) = buildIndices(keptTracks)
+        byId = idMap
+
+        _state.value = current.copy(
+            roots = updatedRoots,
+            tracks = keptTracks,
+            albums = albums,
+            artists = artists,
+        )
+        forget(removedIds)
+        saveLibrary()
+        val keysToKeep = keptTracks.mapNotNull { it.artworkKey }.toSet()
+        artwork.prune(keysToKeep)
+    }
+
+    /** Clears excluded subfolders on [rootId] and rescans so its songs return. */
+    suspend fun restoreExcludedFolders(rootId: String) {
+        val current = _state.value
+        val index = current.roots.indexOfFirst { it.id == rootId }
+        if (index < 0 || current.roots[index].excludedPaths.isEmpty()) return
+        val updatedRoots = current.roots.toMutableList()
+        updatedRoots[index] = updatedRoots[index].copy(excludedPaths = emptyList())
+        _state.value = current.copy(roots = updatedRoots)
+        saveLibrary()
+        rescan()
+    }
+
     suspend fun rescan() {
         if (_state.value.isScanning) {
             rescanRequested = true
@@ -516,6 +581,7 @@ class LibraryStore(
 
             val seen = mutableSetOf<String>()
             for (file in scanned) {
+                if (root.isExcluded(file.relativePath)) continue
                 if (!seen.add(file.relativePath)) continue
                 val old = existingByRel[file.relativePath]
                 if (old != null && file.uriString != null) {
@@ -580,8 +646,11 @@ class LibraryStore(
             _state.value = _state.value.copy(roots = updatedRoots)
         }
 
-        val rootIds = _state.value.roots.map { it.id }.toSet()
-        val finalTracks = kept.filter { it.rootId in rootIds }
+        val activeRoots = _state.value.roots.associateBy { it.id }
+        val finalTracks = kept.filter { track ->
+            val r = activeRoots[track.rootId] ?: return@filter false
+            !r.isExcluded(track.relativePath)
+        }
         val finalIds = finalTracks.map { it.id }.toSet()
         val finalRemoved = removed.filter { it !in finalIds }.toSet()
 
@@ -622,6 +691,7 @@ class LibraryStore(
 
         for ((index, meta) in items.withIndex()) {
             val relPath = "$sourceSlug/${meta.remoteTrackId}"
+            if (root.isExcluded(relPath)) continue
             if (!seenRel.add(relPath)) continue
             val old = existingByRel[relPath]
             val artUrl = meta.artworkUrl
@@ -709,9 +779,11 @@ class LibraryStore(
 
     private fun publish(list: List<Track>) {
         val current = _state.value
-        val rootIds = current.roots.map { it.id }.toSet()
-        val filtered = list.filter { it.rootId in rootIds }
-            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+        val activeRoots = current.roots.associateBy { it.id }
+        val filtered = list.filter { track ->
+            val r = activeRoots[track.rootId] ?: return@filter false
+            !r.isExcluded(track.relativePath)
+        }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
         val (albums, artists, idMap) = buildIndices(filtered)
         byId = idMap
         _state.value = _state.value.copy(

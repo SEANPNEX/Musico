@@ -2,6 +2,7 @@ package com.musico.model
 
 import kotlinx.serialization.Serializable
 import java.security.MessageDigest
+import java.text.Normalizer
 
 @Serializable
 enum class RootKind {
@@ -26,9 +27,30 @@ data class LibraryRoot(
     val cookie: String? = null,
     val proxyUrl: String? = null,
     val lastSyncedEpochMs: Long? = null,
+    val excludedPaths: List<String> = emptyList(),
 ) {
+    fun isExcluded(relativePath: String): Boolean {
+        if (excludedPaths.isEmpty()) return false
+        val normRel = normalizeFolderPath(relativePath)
+        return excludedPaths.any { ex ->
+            val normEx = normalizeFolderPath(ex)
+            normEx.isNotEmpty() && (normRel == normEx || normRel.startsWith("$normEx/"))
+        }
+    }
+
     companion object {
         const val APP_FOLDER_ID = "00000000-0000-0000-0000-00000000A990"
+
+        fun normalizeFolderPath(path: String): String =
+            Normalizer.normalize(path.replace('\\', '/'), Normalizer.Form.NFC)
+                .trim { it == '/' || it.isWhitespace() }
+
+        fun folderContains(folderPath: String, relativePath: String): Boolean {
+            val normFolder = normalizeFolderPath(folderPath)
+            if (normFolder.isEmpty()) return false
+            val normRel = normalizeFolderPath(relativePath)
+            return normRel == normFolder || normRel.startsWith("$normFolder/")
+        }
     }
 }
 

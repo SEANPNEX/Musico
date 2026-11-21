@@ -81,12 +81,13 @@ public sealed class LibraryStore : ObservableStore
         var file = Persistence.Load<LibraryFile>(LibraryPath);
         _rereadAll = file is not null && file.ReaderVersion != CurrentReaderVersion;
 
+        var savedAppRoot = file?.Roots.FirstOrDefault(r => r.Kind == RootKind.AppFolder);
         var loadedRoots = file?.Roots.Where(r => r.Kind != RootKind.AppFolder).ToList() ?? new List<LibraryRoot>();
         _appFolderRemoved = _appFolderRemovable && file?.AppFolderRemoved == true;
 
         if (!_appFolderRemoved)
         {
-            loadedRoots.Insert(0, CreateAppFolderRoot());
+            loadedRoots.Insert(0, CreateAppFolderRoot() with { ExcludedPaths = savedAppRoot?.ExcludedPaths });
             _rootPaths[LibraryRoot.AppFolderId] = _musicDirectory;
         }
 
@@ -288,6 +289,69 @@ public sealed class LibraryStore : ObservableStore
         SaveLibrary();
     }
 
+    public void RemoveSubfolder(Guid rootId, string path)
+    {
+        string norm = LibraryRoot.NormalizeFolderPath(path);
+        if (norm.Length == 0) return;
+
+        int index = _roots.FindIndex(r => r.Id == rootId);
+        if (index < 0) return;
+
+        var currentExcluded = (_roots[index].ExcludedPaths ?? Array.Empty<string>())
+            .Select(LibraryRoot.NormalizeFolderPath)
+            .Where(p => p.Length > 0)
+            .ToList();
+
+        bool alreadyCovered = currentExcluded.Any(ex =>
+            string.Equals(norm, ex, StringComparison.Ordinal) ||
+            norm.StartsWith(ex + "/", StringComparison.Ordinal));
+
+        var nextExcluded = currentExcluded;
+        if (!alreadyCovered)
+        {
+            nextExcluded = currentExcluded
+                .Where(ex => !ex.StartsWith(norm + "/", StringComparison.Ordinal))
+                .Append(norm)
+                .OrderBy(p => p, StringComparer.Ordinal)
+                .ToList();
+        }
+
+        var updatedRoots = new List<LibraryRoot>(_roots);
+        updatedRoots[index] = updatedRoots[index] with { ExcludedPaths = nextExcluded };
+        _roots = updatedRoots;
+        OnPropertyChanged(nameof(Roots));
+
+        var removedIds = new HashSet<string>(_tracks
+            .Where(t => t.RootId == rootId && LibraryRoot.FolderContains(norm, t.RelativePath))
+            .Select(t => t.Id));
+
+        if (removedIds.Count > 0)
+        {
+            _tracks = _tracks.Where(t => !removedIds.Contains(t.Id)).ToList();
+            RebuildIndex();
+            OnPropertyChanged(nameof(Tracks));
+            Forget(removedIds);
+            _cloudCache?.RemoveForTracks(removedIds);
+            var keepKeys = new HashSet<string>(_tracks.Select(t => t.ArtworkKey).Where(k => k is not null)!);
+            _ = Task.Run(() => Artwork.Prune(keepKeys));
+        }
+
+        SaveLibrary();
+    }
+
+    public async Task RestoreExcludedFoldersAsync(Guid rootId)
+    {
+        int index = _roots.FindIndex(r => r.Id == rootId);
+        if (index < 0 || (_roots[index].ExcludedPaths?.Count ?? 0) == 0) return;
+
+        var updatedRoots = new List<LibraryRoot>(_roots);
+        updatedRoots[index] = updatedRoots[index] with { ExcludedPaths = null };
+        _roots = updatedRoots;
+        OnPropertyChanged(nameof(Roots));
+        SaveLibrary();
+        await RescanAsync();
+    }
+
     public async Task RestoreAppFolderAsync()
     {
         if (!AppFolderRemoved) return;
@@ -393,6 +457,7 @@ public sealed class LibraryStore : ObservableStore
             var seen = new HashSet<string>(StringComparer.Ordinal);
             foreach (var file in scanned)
             {
+                if (root.IsExcluded(file.RelativePath)) continue;
                 if (!seen.Add(file.RelativePath)) continue;
 
                 if (!reread
@@ -475,9 +540,11 @@ public sealed class LibraryStore : ObservableStore
             }
         }
 
-        // A root removed while scanning must not leave orphan tracks behind.
-        var activeRootIds = new HashSet<Guid>(_roots.Select(r => r.Id));
-        var finalTracks = kept.Where(t => activeRootIds.Contains(t.RootId)).ToList();
+        // A root or subfolder removed while scanning must not leave orphan tracks behind.
+        var activeRoots = _roots.ToDictionary(r => r.Id);
+        var finalTracks = kept
+            .Where(t => activeRoots.TryGetValue(t.RootId, out var r) && !r.IsExcluded(t.RelativePath))
+            .ToList();
         var finalTrackIds = new HashSet<string>(finalTracks.Select(t => t.Id));
         removed.RemoveWhere(id => finalTrackIds.Contains(id));
 
@@ -538,6 +605,7 @@ public sealed class LibraryStore : ObservableStore
         foreach (var item in result.Items)
         {
             string relPath = MakeCloudRelativePath(item.RemoteTrackId);
+            if (root.IsExcluded(relPath)) continue;
             string trackId = Track.MakeId(root.Id, relPath);
             if (!seenTrackIds.Add(trackId)) continue;
 
@@ -622,9 +690,9 @@ public sealed class LibraryStore : ObservableStore
 
     private void Publish(IEnumerable<Track> list)
     {
-        var activeRootIds = new HashSet<Guid>(_roots.Select(r => r.Id));
+        var activeRoots = _roots.ToDictionary(r => r.Id);
         _tracks = list
-            .Where(t => activeRootIds.Contains(t.RootId))
+            .Where(t => activeRoots.TryGetValue(t.RootId, out var r) && !r.IsExcluded(t.RelativePath))
             .OrderBy(t => t.Title, StringComparer.CurrentCultureIgnoreCase)
             .ToList();
         RebuildIndex();
