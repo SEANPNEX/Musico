@@ -1,6 +1,7 @@
 package com.musico.ui.screens
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -29,6 +30,7 @@ import com.musico.model.PlayQueue
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
 import com.musico.ui.components.TrackActionState
+import com.musico.ui.theme.MusicoMotion
 
 enum class LibrarySection(val label: String) {
     SONGS("Songs"),
@@ -61,129 +63,151 @@ fun LibraryScreen(
         detailStack.removeAt(detailStack.lastIndex)
     }
 
-    val topDetail = detailStack.lastOrNull()
-    if (topDetail != null) {
-        when (topDetail) {
-            is LibraryDetail.AlbumDetail -> {
-                AlbumDetailScreen(
-                    albumId = topDetail.album.id,
-                    fallbackAlbum = topDetail.album,
-                    libraryStore = libraryStore,
-                    libraryState = libraryState,
-                    playerState = playerState,
-                    queues = queues,
-                    activeQueue = activeQueue,
-                    trackActions = trackActions,
-                    onBack = { detailStack.removeAt(detailStack.lastIndex) },
-                    modifier = modifier
-                )
-            }
-            is LibraryDetail.ArtistDetail -> {
-                ArtistDetailScreen(
-                    artist = topDetail.artist,
-                    libraryStore = libraryStore,
-                    libraryState = libraryState,
-                    playerState = playerState,
-                    queues = queues,
-                    activeQueue = activeQueue,
-                    trackActions = trackActions,
-                    onAlbumClick = { album -> detailStack.add(LibraryDetail.AlbumDetail(album)) },
-                    onBack = { detailStack.removeAt(detailStack.lastIndex) },
-                    modifier = modifier
-                )
-            }
-            is LibraryDetail.PlaylistDetail -> {
-                PlaylistDetailScreen(
-                    ref = topDetail.ref,
-                    libraryStore = libraryStore,
-                    libraryState = libraryState,
-                    playerState = playerState,
-                    queues = queues,
-                    activeQueue = activeQueue,
-                    trackActions = trackActions,
-                    onBack = { detailStack.removeAt(detailStack.lastIndex) },
-                    modifier = modifier
-                )
-            }
-        }
-        return
-    }
+    val stackSnapshot = detailStack.toList()
 
-    Scaffold(
-        modifier = modifier,
-        contentWindowInsets = WindowInsets(0),
-        topBar = {
-            TopAppBar(
-                title = { Text("Library") }
-            )
-        }
-    ) { innerPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(innerPadding)
-        ) {
-            SingleChoiceSegmentedButtonRow(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 4.dp)
-            ) {
-                LibrarySection.entries.forEachIndexed { index, item ->
-                    SegmentedButton(
-                        selected = section == item,
-                        onClick = { section = item },
-                        shape = SegmentedButtonDefaults.itemShape(
-                            index = index,
-                            count = LibrarySection.entries.size
-                        ),
-                        label = {
-                            Text(
-                                text = item.label,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis
-                            )
-                        }
+    AnimatedContent(
+        targetState = stackSnapshot,
+        transitionSpec = {
+            val forward = targetState.size >= initialState.size
+            MusicoMotion.sharedAxisXTransform(forward = forward)
+        },
+        label = "library_drill_in",
+        modifier = modifier
+    ) { stack ->
+        val topDetail = stack.lastOrNull()
+        if (topDetail != null) {
+            when (topDetail) {
+                is LibraryDetail.AlbumDetail -> {
+                    AlbumDetailScreen(
+                        albumId = topDetail.album.id,
+                        fallbackAlbum = topDetail.album,
+                        libraryStore = libraryStore,
+                        libraryState = libraryState,
+                        playerState = playerState,
+                        queues = queues,
+                        activeQueue = activeQueue,
+                        trackActions = trackActions,
+                        onBack = { detailStack.removeAt(detailStack.lastIndex) },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                is LibraryDetail.ArtistDetail -> {
+                    ArtistDetailScreen(
+                        artist = topDetail.artist,
+                        libraryStore = libraryStore,
+                        libraryState = libraryState,
+                        playerState = playerState,
+                        queues = queues,
+                        activeQueue = activeQueue,
+                        trackActions = trackActions,
+                        onAlbumClick = { album -> detailStack.add(LibraryDetail.AlbumDetail(album)) },
+                        onBack = { detailStack.removeAt(detailStack.lastIndex) },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
+                is LibraryDetail.PlaylistDetail -> {
+                    PlaylistDetailScreen(
+                        ref = topDetail.ref,
+                        libraryStore = libraryStore,
+                        libraryState = libraryState,
+                        playerState = playerState,
+                        queues = queues,
+                        activeQueue = activeQueue,
+                        trackActions = trackActions,
+                        onBack = { detailStack.removeAt(detailStack.lastIndex) },
+                        modifier = Modifier.fillMaxSize()
                     )
                 }
             }
+        } else {
+            Scaffold(
+                modifier = Modifier.fillMaxSize(),
+                contentWindowInsets = WindowInsets(0),
+                topBar = {
+                    TopAppBar(
+                        title = { Text("Library") }
+                    )
+                }
+            ) { innerPadding ->
+                Column(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                ) {
+                    SingleChoiceSegmentedButtonRow(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp)
+                    ) {
+                        LibrarySection.entries.forEachIndexed { index, item ->
+                            SegmentedButton(
+                                selected = section == item,
+                                onClick = { section = item },
+                                shape = SegmentedButtonDefaults.itemShape(
+                                    index = index,
+                                    count = LibrarySection.entries.size
+                                ),
+                                label = {
+                                    Text(
+                                        text = item.label,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+                                }
+                            )
+                        }
+                    }
 
-            when (section) {
-                LibrarySection.SONGS -> SongsScreen(
-                    libraryStore = libraryStore,
-                    libraryState = libraryState,
-                    playerState = playerState,
-                    queues = queues,
-                    activeQueue = activeQueue,
-                    trackActions = trackActions,
-                    modifier = Modifier.fillMaxSize()
-                )
-                LibrarySection.ALBUMS -> AlbumsScreen(
-                    libraryState = libraryState,
-                    artworkCache = libraryStore.artwork,
-                    queues = queues,
-                    activeQueue = activeQueue,
-                    trackActions = trackActions,
-                    onAlbumClick = { album -> detailStack.add(LibraryDetail.AlbumDetail(album)) },
-                    modifier = Modifier.fillMaxSize()
-                )
-                LibrarySection.ARTISTS -> ArtistsScreen(
-                    libraryStore = libraryStore,
-                    libraryState = libraryState,
-                    queues = queues,
-                    activeQueue = activeQueue,
-                    trackActions = trackActions,
-                    onArtistClick = { artist -> detailStack.add(LibraryDetail.ArtistDetail(artist)) },
-                    modifier = Modifier.fillMaxSize()
-                )
-                LibrarySection.PLAYLISTS -> PlaylistsScreen(
-                    libraryStore = libraryStore,
-                    libraryState = libraryState,
-                    queues = queues,
-                    activeQueue = activeQueue,
-                    trackActions = trackActions,
-                    onPlaylistClick = { ref -> detailStack.add(LibraryDetail.PlaylistDetail(ref)) },
-                    modifier = Modifier.fillMaxSize()
-                )
+                    AnimatedContent(
+                        targetState = section,
+                        transitionSpec = {
+                            MusicoMotion.sharedAxisXTransform(
+                                forward = targetState.ordinal >= initialState.ordinal
+                            )
+                        },
+                        label = "library_section_switch",
+                        modifier = Modifier.fillMaxSize()
+                    ) { currentSection ->
+                        when (currentSection) {
+                            LibrarySection.SONGS -> SongsScreen(
+                                libraryStore = libraryStore,
+                                libraryState = libraryState,
+                                playerState = playerState,
+                                queues = queues,
+                                activeQueue = activeQueue,
+                                trackActions = trackActions,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            LibrarySection.ALBUMS -> AlbumsScreen(
+                                libraryState = libraryState,
+                                artworkCache = libraryStore.artwork,
+                                queues = queues,
+                                activeQueue = activeQueue,
+                                trackActions = trackActions,
+                                onAlbumClick = { album -> detailStack.add(LibraryDetail.AlbumDetail(album)) },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            LibrarySection.ARTISTS -> ArtistsScreen(
+                                libraryStore = libraryStore,
+                                libraryState = libraryState,
+                                queues = queues,
+                                activeQueue = activeQueue,
+                                trackActions = trackActions,
+                                onArtistClick = { artist -> detailStack.add(LibraryDetail.ArtistDetail(artist)) },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            LibrarySection.PLAYLISTS -> PlaylistsScreen(
+                                libraryStore = libraryStore,
+                                libraryState = libraryState,
+                                queues = queues,
+                                activeQueue = activeQueue,
+                                trackActions = trackActions,
+                                onPlaylistClick = { ref -> detailStack.add(LibraryDetail.PlaylistDetail(ref)) },
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        }
+                    }
+                }
             }
         }
     }

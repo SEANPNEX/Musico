@@ -51,13 +51,22 @@ fun MiniPlayer(
         tonalElevation = 3.dp
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
-            LinearProgressIndicator(
-                progress = { progress },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(2.dp),
-                trackColor = MaterialTheme.colorScheme.surfaceVariant
-            )
+            if (playerState.isLoadingCloud) {
+                LinearProgressIndicator(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp),
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            } else {
+                LinearProgressIndicator(
+                    progress = { progress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(2.dp),
+                    trackColor = MaterialTheme.colorScheme.surfaceVariant
+                )
+            }
             Row(
                 modifier = Modifier
                     .fillMaxWidth()

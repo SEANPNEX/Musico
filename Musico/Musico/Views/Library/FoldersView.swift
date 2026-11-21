@@ -9,10 +9,11 @@ struct FolderRef: Hashable {
 struct FoldersView: View {
     @Environment(LibraryStore.self) private var library
     @State private var showImporter = false
+    @State private var showCloudSheet = false
     /// When set, the next picked folder replaces this unavailable root instead of adding a new one.
     @State private var relocating: UUID?
     @State private var importError: String?
-    /// The folder the user asked to remove, awaiting confirmation (Mac).
+    /// The folder the user asked to remove, awaiting confirmation.
     @State private var removing: LibraryRoot?
 
     var body: some View {
@@ -28,6 +29,26 @@ struct FoldersView: View {
                 }
             } footer: {
                 Text(Self.hint)
+            }
+            if !library.cloudSyncErrors.isEmpty {
+                Section("Cloud Sync Issues") {
+                    ForEach(library.roots.filter { library.cloudSyncErrors[$0.id] != nil }) { root in
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "exclamationmark.triangle.fill")
+                                .foregroundStyle(.orange)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(root.name).font(.subheadline.weight(.medium))
+                                Text(library.cloudSyncErrors[root.id] ?? "")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Button("Retry") { Task { await library.rescan() } }
+                                .buttonStyle(.borderless)
+                                .disabled(library.isScanning)
+                        }
+                    }
+                }
             }
             if library.isScanning {
                 Section {
@@ -49,12 +70,18 @@ struct FoldersView: View {
                 Button("Rescan", systemImage: "arrow.clockwise") { Task { await library.rescan() } }
                     .disabled(library.isScanning)
             }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                Button("Add Cloud Folder", systemImage: "icloud.and.arrow.down") {
+                    showCloudSheet = true
+                }
                 Button("Add Folder", systemImage: "folder.badge.plus") {
                     relocating = nil
                     showImporter = true
                 }
             }
+        }
+        .sheet(isPresented: $showCloudSheet) {
+            AddCloudFolderSheet()
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
             guard case .success(let url) = result else { return }
@@ -76,8 +103,12 @@ struct FoldersView: View {
                             titleVisibility: .visible, presenting: removing) { root in
             Button("Remove from Library", role: .destructive) { library.removeRoot(root.id) }
             Button("Cancel", role: .cancel) {}
-        } message: { _ in
-            Text("Its songs leave your library, playlists and queues. The files themselves are not deleted.")
+        } message: { root in
+            if root.kind.isCloud {
+                Text("Its songs leave your library, playlists and queues.")
+            } else {
+                Text("Its songs leave your library, playlists and queues. The files themselves are not deleted.")
+            }
         }
         .alert("Couldn’t Add Folder", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button("OK", role: .cancel) {}
@@ -90,9 +121,9 @@ struct FoldersView: View {
 
     private static var hint: String {
         #if targetEnvironment(macCatalyst)
-        "Your Mac’s Music folder is included to start with. Add any other folder that holds music, or remove one you don’t want."
+        "Your Mac’s Music folder is included to start with. Add local folders or YouTube/Bilibili cloud playlists, or remove any you don’t want."
         #else
-        "Add a folder from Files, or copy music into the Musico folder in Files › On My \(isPad ? "iPad" : "iPhone")."
+        "Add a folder from Files, link a YouTube or Bilibili playlist, or copy music into the Musico folder in Files › On My \(isPad ? "iPad" : "iPhone")."
         #endif
     }
 
@@ -104,33 +135,67 @@ struct FoldersView: View {
         #endif
     }
 
+    private static func iconName(for root: LibraryRoot) -> String {
+        switch root.kind {
+        case .appFolder: appFolderIcon
+        case .picked: "folder.fill"
+        case .cloudYouTube: "play.rectangle.fill"
+        case .cloudBilibili: "play.tv.fill"
+        }
+    }
+
+    private static func sourceLabel(for kind: LibraryRoot.Kind) -> String? {
+        switch kind {
+        case .cloudYouTube: "YouTube"
+        case .cloudBilibili: "Bilibili"
+        case .picked, .appFolder: nil
+        }
+    }
+
     @ViewBuilder
     private func rootRow(_ root: LibraryRoot) -> some View {
         let available = library.isAvailable(root)
         let count = library.tracks.lazy.filter { $0.rootID == root.id }.count
-        let removable = root.kind == .picked || library.appFolderRemovable
+        let removable = library.isRemovable(root)
+        let syncError = library.cloudSyncErrors[root.id]
         NavigationLink(value: FolderRef(root: root.id, path: "")) {
             HStack(spacing: 12) {
-                Image(systemName: root.kind == .appFolder ? Self.appFolderIcon : "folder.fill")
-                    .foregroundStyle(Color.accentColor)
+                Image(systemName: Self.iconName(for: root))
+                    .foregroundStyle(root.kind.isCloud ? Color.red : Color.accentColor)
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(root.name)
-                    Text(available ? "\(count) songs" : "Unavailable — folder moved or disconnected")
-                        .font(.subheadline)
-                        .foregroundStyle(available ? Color.secondary : Color.orange)
+                    HStack(spacing: 6) {
+                        Text(root.name)
+                            .lineLimit(1)
+                        if let label = Self.sourceLabel(for: root.kind) {
+                            Text(label)
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.14), in: Capsule())
+                                .foregroundStyle(Color.accentColor)
+                        }
+                    }
+                    if let syncError {
+                        Text("\(count) songs · Sync issue: \(syncError)")
+                            .font(.subheadline)
+                            .foregroundStyle(.orange)
+                            .lineLimit(1)
+                    } else {
+                        Text(available ? "\(count) songs" : "Unavailable — folder moved or disconnected")
+                            .font(.subheadline)
+                            .foregroundStyle(available ? Color.secondary : Color.orange)
+                    }
                 }
-                #if targetEnvironment(macCatalyst)
-                // The Mac has no swipe gesture to discover, so removal gets a visible button.
                 if removable {
                     Spacer()
-                    Button("Remove", systemImage: "minus.circle") { removing = root }
+                    Button("Remove Folder", systemImage: "minus.circle") { removing = root }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
                         .foregroundStyle(.secondary)
-                        .help("Remove from Library")
+                        .help("Remove Folder")
+                        .accessibilityLabel("Remove Folder")
                 }
-                #endif
             }
         }
         .swipeActions(edge: .trailing) {
@@ -146,9 +211,86 @@ struct FoldersView: View {
                 }
             }
             if removable {
-                Button("Remove from Library", systemImage: "trash", role: .destructive) { library.removeRoot(root.id) }
+                Button("Remove Folder", systemImage: "trash", role: .destructive) { removing = root }
             }
             TrackMenuItems(ids: library.tracks(under: root.id, path: "").map(\.id))
+        }
+    }
+}
+
+private struct AddCloudFolderSheet: View {
+    @Environment(LibraryStore.self) private var library
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var urlText = ""
+    @State private var cookieText = ""
+    @State private var isLoading = false
+    @State private var errorMessage: String?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("YouTube or Bilibili URL or ID", text: $urlText)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                } header: {
+                    Text("Playlist or Video Link")
+                } footer: {
+                    Text("Examples: youtube.com/playlist?list=…, music.youtube.com/playlist?list=…, youtu.be/…, bilibili.com/video/BV…, space.bilibili.com/…/favlist?fid=…, b23.tv/…")
+                }
+
+                Section {
+                    TextField("Cookie (optional)", text: $cookieText, axis: .vertical)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .lineLimit(2...4)
+                } header: {
+                    Text("Authentication")
+                } footer: {
+                    Text("Public playlists work without signing in. Add a Cookie only for private playlists or higher Bilibili audio quality.")
+                }
+
+                if let errorMessage {
+                    Section {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Add Cloud Folder")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                        .disabled(isLoading)
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if isLoading {
+                        ProgressView()
+                    } else {
+                        Button("Add") { add() }
+                            .disabled(urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+                }
+            }
+        }
+    }
+
+    private func add() {
+        errorMessage = nil
+        isLoading = true
+        let source = urlText
+        let cookie = cookieText
+        Task {
+            do {
+                try await library.addCloudRoot(sourceURL: source, cookie: cookie)
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+                isLoading = false
+            }
         }
     }
 }
@@ -156,14 +298,23 @@ struct FoldersView: View {
 struct FolderDetailView: View {
     let ref: FolderRef
     @Environment(LibraryStore.self) private var library
+    @Environment(\.dismiss) private var dismiss
+    @State private var confirmRemove = false
 
     var body: some View {
+        let root = library.root(ref.root)
         let contents = library.folderContents(root: ref.root, path: ref.path)
         let everything = library.tracks(under: ref.root, path: ref.path)
+        let isRemovableRoot = ref.path.isEmpty && (root.map { library.isRemovable($0) } ?? false)
         List {
             if everything.isEmpty {
-                ContentUnavailableView("No Music Here", systemImage: "folder",
-                                       description: Text("Songs you add to this folder appear after a rescan."))
+                ContentUnavailableView(
+                    "No Music Here",
+                    systemImage: root?.kind.isCloud == true ? "icloud" : "folder",
+                    description: Text(root?.kind.isCloud == true
+                                      ? "Pull to refresh to sync tracks from this cloud source."
+                                      : "Songs you add to this folder appear after a rescan.")
+                )
             } else {
                 PlayShuffleButtons(ids: everything.map(\.id))
             }
@@ -174,11 +325,36 @@ struct FolderDetailView: View {
                 }
                 .contextMenu { TrackMenuItems(ids: library.tracks(under: child.root, path: child.path).map(\.id)) }
             }
-            TrackRows(tracks: contents.tracks) { $0.fileName }
+            TrackRows(tracks: contents.tracks) { $0.isCloud ? $0.artist : $0.fileName }
         }
         .listStyle(.plain)
-        .navigationTitle(ref.path.isEmpty ? (library.root(ref.root)?.name ?? "Folder") : (ref.path as NSString).lastPathComponent)
+        .navigationTitle(ref.path.isEmpty ? (root?.name ?? "Folder") : (ref.path as NSString).lastPathComponent)
         .navigationBarTitleDisplayMode(.inline)
         .refreshable { await library.rescan() }
+        .toolbar {
+            if isRemovableRoot {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Remove Folder", systemImage: "trash", role: .destructive) {
+                        confirmRemove = true
+                    }
+                    .help("Remove Folder")
+                }
+            }
+        }
+        .confirmationDialog("Remove “\(root?.name ?? "")” from your library?",
+                            isPresented: $confirmRemove,
+                            titleVisibility: .visible) {
+            Button("Remove from Library", role: .destructive) {
+                library.removeRoot(ref.root)
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if root?.kind.isCloud == true {
+                Text("Its songs leave your library, playlists and queues.")
+            } else {
+                Text("Its songs leave your library, playlists and queues. The files themselves are not deleted.")
+            }
+        }
     }
 }

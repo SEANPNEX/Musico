@@ -2,7 +2,18 @@ import Foundation
 import CryptoKit
 
 struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
-    enum Kind: String, Codable, Sendable { case picked, appFolder }
+    enum Kind: String, Codable, Sendable {
+        case picked, appFolder, cloudYouTube, cloudBilibili
+
+        var isCloud: Bool {
+            switch self {
+            case .cloudYouTube, .cloudBilibili: true
+            case .picked, .appFolder: false
+            }
+        }
+
+        var isLocal: Bool { !isCloud }
+    }
 
     /// Fixed id of the app's own Documents folder root.
     static let appFolderID = UUID(uuidString: "00000000-0000-0000-0000-00000000A990")!
@@ -11,6 +22,11 @@ struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
     var name: String
     var kind: Kind
     var bookmark: Data?
+    var sourceURL: String? = nil
+    var remoteID: String? = nil
+    var cookie: String? = nil
+    var proxyURL: String? = nil
+    var lastSynced: Date? = nil
 }
 
 struct Track: Codable, Hashable, Identifiable, Sendable {
@@ -30,6 +46,11 @@ struct Track: Codable, Hashable, Identifiable, Sendable {
     var dateAdded: Date
     /// Key into `ArtworkCache` (hash of the embedded image), shared by songs with the same cover.
     var artworkKey: String? = nil
+    var cloudSource: String? = nil
+    var remoteTrackID: String? = nil
+    var remoteArtworkURL: String? = nil
+
+    var isCloud: Bool { cloudSource != nil }
 
     static func makeID(rootID: UUID, relativePath: String) -> String {
         let digest = SHA256.hash(data: Data("\(rootID.uuidString)/\(relativePath)".utf8))

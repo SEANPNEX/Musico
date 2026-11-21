@@ -1,7 +1,18 @@
 package com.musico.ui.player
 
 import android.net.Uri
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -51,6 +62,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -69,6 +81,7 @@ import com.musico.ui.components.EmptyState
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.screens.QueueSheet
 import com.musico.ui.screens.QueuesContent
+import com.musico.ui.theme.MusicoMotion
 
 enum class PlayerModalSheet {
     QUEUE,
@@ -157,27 +170,37 @@ fun FullPlayerScreen(
                             }
                         }
 
-                        when (sidePane) {
-                            PlayerSidePane.LYRICS -> LyricsContent(
-                                libraryStore = libraryStore,
-                                lyricsStore = lyricsStore,
-                                playerController = playerController,
-                                playerState = playerState,
-                                onPickLyricsFile = onPickLyricsFile,
-                                embedded = true,
-                                modifier = Modifier.fillMaxSize()
-                            )
-                            PlayerSidePane.QUEUE -> QueuesContent(
-                                libraryStore = libraryStore,
-                                libraryState = libraryState,
-                                queueStore = queueStore,
-                                queueState = queueState,
-                                playerController = playerController,
-                                playerState = playerState,
-                                trackActions = trackActions,
-                                editing = false,
-                                modifier = Modifier.fillMaxSize()
-                            )
+                        AnimatedContent(
+                            targetState = sidePane,
+                            transitionSpec = {
+                                MusicoMotion.sharedAxisXTransform(
+                                    forward = targetState.ordinal >= initialState.ordinal
+                                )
+                            },
+                            label = "player_side_pane"
+                        ) { pane ->
+                            when (pane) {
+                                PlayerSidePane.LYRICS -> LyricsContent(
+                                    libraryStore = libraryStore,
+                                    lyricsStore = lyricsStore,
+                                    playerController = playerController,
+                                    playerState = playerState,
+                                    onPickLyricsFile = onPickLyricsFile,
+                                    embedded = true,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                                PlayerSidePane.QUEUE -> QueuesContent(
+                                    libraryStore = libraryStore,
+                                    libraryState = libraryState,
+                                    queueStore = queueStore,
+                                    queueState = queueState,
+                                    playerController = playerController,
+                                    playerState = playerState,
+                                    trackActions = trackActions,
+                                    editing = false,
+                                    modifier = Modifier.fillMaxSize()
+                                )
+                            }
                         }
                     }
                 }
@@ -264,17 +287,66 @@ private fun PlayerControlsPane(
         }
 
         if (track != null) {
-            ArtworkImage(
-                artworkKey = track.artworkKey,
-                artworkCache = libraryStore.artwork,
-                cornerRadius = 20.dp,
+            val artworkScale by animateFloatAsState(
+                targetValue = if (playerState.isPlaying) 1.0f else 0.92f,
+                animationSpec = MusicoMotion.ArtworkScaleSpring,
+                label = "artwork_scale"
+            )
+            val artworkElevation by animateDpAsState(
+                targetValue = if (playerState.isPlaying) 12.dp else 4.dp,
+                animationSpec = tween(durationMillis = 260, easing = MusicoMotion.EmphasizedEasing),
+                label = "artwork_elevation"
+            )
+
+            AnimatedContent(
+                targetState = track,
+                contentKey = { it.id },
+                transitionSpec = {
+                    (fadeIn(
+                        animationSpec = tween(
+                            durationMillis = MusicoMotion.ENTER_DURATION_MS,
+                            easing = MusicoMotion.EmphasizedDecelerateEasing,
+                        )
+                    ) + scaleIn(
+                        initialScale = 0.96f,
+                        animationSpec = tween(
+                            durationMillis = MusicoMotion.ENTER_DURATION_MS,
+                            easing = MusicoMotion.EmphasizedDecelerateEasing,
+                        )
+                    )) togetherWith fadeOut(
+                        animationSpec = tween(
+                            durationMillis = 120,
+                            easing = MusicoMotion.EmphasizedAccelerateEasing,
+                        )
+                    )
+                },
+                label = "full_player_artwork",
                 modifier = Modifier
                     .weight(1f, fill = false)
                     .padding(vertical = 8.dp)
                     .widthIn(max = 360.dp)
                     .aspectRatio(1f)
-                    .clickable { onOpenSheet(PlayerModalSheet.LYRICS) }
-            )
+            ) { currentTrack ->
+                Surface(
+                    shape = RoundedCornerShape(20.dp),
+                    shadowElevation = artworkElevation,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .graphicsLayer {
+                            scaleX = artworkScale
+                            scaleY = artworkScale
+                        }
+                ) {
+                    ArtworkImage(
+                        artworkKey = currentTrack.artworkKey,
+                        artworkCache = libraryStore.artwork,
+                        cornerRadius = 20.dp,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .clickable { onOpenSheet(PlayerModalSheet.LYRICS) }
+                    )
+                }
+            }
 
             Column(
                 modifier = Modifier.fillMaxWidth(),
@@ -285,21 +357,47 @@ private fun PlayerControlsPane(
                     modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Column(modifier = Modifier.weight(1f)) {
-                        Text(
-                            text = track.title,
-                            style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                        Spacer(Modifier.height(2.dp))
-                        Text(
-                            text = "${track.artist} — ${track.album}",
-                            style = MaterialTheme.typography.bodyLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
+                    AnimatedContent(
+                        targetState = track,
+                        contentKey = { it.id },
+                        transitionSpec = {
+                            (slideInVertically(
+                                animationSpec = tween(
+                                    durationMillis = 220,
+                                    easing = MusicoMotion.EmphasizedDecelerateEasing,
+                                ),
+                                initialOffsetY = { it / 4 }
+                            ) + fadeIn(
+                                animationSpec = tween(durationMillis = 200)
+                            )) togetherWith (slideOutVertically(
+                                animationSpec = tween(
+                                    durationMillis = 120,
+                                    easing = MusicoMotion.EmphasizedAccelerateEasing,
+                                ),
+                                targetOffsetY = { -it / 4 }
+                            ) + fadeOut(
+                                animationSpec = tween(durationMillis = 100)
+                            ))
+                        },
+                        label = "full_player_title",
+                        modifier = Modifier.weight(1f)
+                    ) { currentTrack ->
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = currentTrack.title,
+                                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                            Spacer(Modifier.height(2.dp))
+                            Text(
+                                text = "${currentTrack.artist} — ${currentTrack.album}",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        }
                     }
                     val isFav = track.id in libraryState.favourites
                     IconButton(onClick = { libraryStore.toggleFavourite(track.id) }) {

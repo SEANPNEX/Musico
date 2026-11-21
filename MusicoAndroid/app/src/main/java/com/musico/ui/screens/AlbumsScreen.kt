@@ -90,7 +90,8 @@ fun AlbumsScreen(
                 queues = queues,
                 activeQueue = activeQueue,
                 trackActions = trackActions,
-                onClick = { onAlbumClick(album) }
+                onClick = { onAlbumClick(album) },
+                modifier = Modifier.animateItem()
             )
         }
     }
@@ -283,6 +284,7 @@ fun AlbumDetailScreen(
                     isAvailable = libraryStore.isAvailable(track),
                     subtitle = subtitle,
                     onClick = { trackActions.playerController.play(album.trackIds, startAt = index) },
+                    modifier = Modifier.animateItem(),
                     menuContent = { onDismiss ->
                         TrackMenuItems(
                             ids = listOf(track.id),

@@ -7,16 +7,38 @@ namespace MusicoWindows.Models;
 public enum RootKind
 {
     Picked,
-    AppFolder
+    AppFolder,
+    CloudYouTube,
+    CloudBilibili
+}
+
+public static class RootKindExtensions
+{
+    public static bool IsCloud(this RootKind kind) =>
+        kind is RootKind.CloudYouTube or RootKind.CloudBilibili;
+
+    public static bool IsLocal(this RootKind kind) =>
+        kind is RootKind.Picked or RootKind.AppFolder;
 }
 
 public sealed record LibraryRoot(
     Guid Id,
     string Name,
     RootKind Kind,
-    string? Path)
+    string? Path,
+    string? SourceUrl = null,
+    string? RemoteId = null,
+    string? Cookie = null,
+    string? ProxyUrl = null,
+    DateTimeOffset? LastSyncedUtc = null)
 {
     public static readonly Guid AppFolderId = Guid.Parse("00000000-0000-0000-0000-00000000A990");
+
+    [JsonIgnore]
+    public bool IsCloud => Kind.IsCloud();
+
+    [JsonIgnore]
+    public bool IsLocal => Kind.IsLocal();
 }
 
 public sealed record Track(
@@ -34,8 +56,13 @@ public sealed record Track(
     DateTimeOffset ModifiedUtc,
     bool HasEmbeddedLyrics,
     DateTimeOffset DateAddedUtc,
-    string? ArtworkKey = null)
+    string? ArtworkKey = null,
+    string? CloudSource = null,
+    string? RemoteTrackId = null,
+    string? RemoteArtworkUrl = null)
 {
+    [JsonIgnore]
+    public bool IsCloud => CloudSource is not null;
     /// <summary>Folder part of RelativePath (empty string for files directly in the root).</summary>
     [JsonIgnore]
     public string FolderPath

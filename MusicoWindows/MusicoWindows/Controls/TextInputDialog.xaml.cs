@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using MusicoWindows.Theme;
 
 namespace MusicoWindows.Controls;
 
@@ -37,6 +38,7 @@ public partial class TextInputDialog : UserControl
         UpdateConfirmEnabled();
 
         Visibility = Visibility.Visible;
+        Win10Animations.AnimateModalOpen(BackdropGrid, DialogCard);
         Dispatcher.BeginInvoke(() =>
         {
             InputBox.Focus();

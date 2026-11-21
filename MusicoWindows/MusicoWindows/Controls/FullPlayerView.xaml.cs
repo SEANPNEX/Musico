@@ -6,6 +6,7 @@ using System.Windows.Input;
 using MusicoWindows.Converters;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
+using MusicoWindows.Theme;
 using MusicoWindows.Views;
 
 namespace MusicoWindows.Controls;
@@ -14,6 +15,8 @@ public partial class FullPlayerView : UserControl
 {
     private ViewContext? _ctx;
     private bool _isScrubbing;
+    private bool? _lastIsPlaying;
+    private string? _lastTrackId;
 
     public event Action? CloseRequested;
     public event Action? OpenEqualizerRequested;
@@ -51,6 +54,7 @@ public partial class FullPlayerView : UserControl
     {
         Visibility = Visibility.Visible;
         RefreshAll();
+        Win10Animations.AnimateModalOpen(BackdropGrid, PlayerCard);
     }
 
     public void Close()
@@ -75,6 +79,20 @@ public partial class FullPlayerView : UserControl
         var queue = services.Queues.Active;
 
         CoverArt.SetSource(services.Library.Artwork, track?.ArtworkKey, 600);
+        if (!string.Equals(_lastTrackId, track?.Id, StringComparison.Ordinal))
+        {
+            _lastTrackId = track?.Id;
+            if (IsOpen)
+            {
+                Win10Animations.AnimateFadeIn(CoverArt, 0.35, 220);
+            }
+        }
+        if (_lastIsPlaying != player.IsPlaying)
+        {
+            _lastIsPlaying = player.IsPlaying;
+            Win10Animations.AnimateScale(CoverArt, player.IsPlaying ? 1.0 : 0.94, 260);
+        }
+
         TitleText.Text = track?.Title ?? "Nothing Playing";
         MetaText.Text = track != null ? $"{track.Artist} — {track.Album}" : "Pick a song from your library";
 

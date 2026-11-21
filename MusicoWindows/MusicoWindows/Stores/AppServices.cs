@@ -1,4 +1,5 @@
 using MusicoWindows.Audio;
+using MusicoWindows.Cloud;
 using MusicoWindows.Core;
 
 namespace MusicoWindows.Stores;
@@ -18,12 +19,19 @@ public sealed class AppServices : IDisposable
         MusicDirectory = musicDirectory ?? Environment.GetFolderPath(Environment.SpecialFolder.MyMusic);
 
         var artwork = new ArtworkCache(Path.Combine(StateDirectory, "Artwork"));
+        CloudCache = new CloudAudioCache(Path.Combine(StateDirectory, "CloudCache"));
+        YouTube = new YouTubeClient();
+        Bilibili = new BilibiliClient();
+
         Library = new LibraryStore(
             stateDirectory: StateDirectory,
             musicDirectory: MusicDirectory,
             reader: new TagLibMetadataReader(),
             artwork: artwork,
-            appFolderRemovable: true);
+            appFolderRemovable: true,
+            youtubeClient: YouTube,
+            bilibiliClient: Bilibili,
+            cloudCache: CloudCache);
 
         Queues = new QueueStore(StateDirectory);
         History = new PlayHistoryStore(StateDirectory);
@@ -36,11 +44,17 @@ public sealed class AppServices : IDisposable
             history: History,
             engine: AudioEngine,
             settingsPath: Path.Combine(StateDirectory, "settings.json"),
-            smtc: Smtc);
+            smtc: Smtc,
+            cloudCache: CloudCache,
+            youtubeClient: YouTube,
+            bilibiliClient: Bilibili);
     }
 
     public string StateDirectory { get; }
     public string MusicDirectory { get; }
+    public CloudAudioCache CloudCache { get; }
+    public YouTubeClient YouTube { get; }
+    public BilibiliClient Bilibili { get; }
     public LibraryStore Library { get; }
     public QueueStore Queues { get; }
     public PlayHistoryStore History { get; }

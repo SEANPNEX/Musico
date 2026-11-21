@@ -2,6 +2,8 @@ package com.musico.ui.screens
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -13,7 +15,6 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -24,12 +25,15 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.CloudQueue
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOff
 import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -46,7 +50,9 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.SwipeToDismissBox
 import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
@@ -77,6 +83,7 @@ import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
+import com.musico.ui.theme.MusicoMotion
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 
@@ -84,6 +91,12 @@ data class FolderRef(
     val rootId: String,
     val path: String = ""
 )
+
+private fun folderDepth(ref: FolderRef?): Int {
+    if (ref == null) return 0
+    if (ref.path.isEmpty()) return 1
+    return 1 + ref.path.split('/').count { it.isNotEmpty() }
+}
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -101,6 +114,8 @@ fun FoldersScreen(
     var currentFolder by remember { mutableStateOf<FolderRef?>(null) }
     var importError by remember { mutableStateOf<String?>(null) }
     var removingRoot by remember { mutableStateOf<LibraryRoot?>(null) }
+    var showAddCloudDialog by remember { mutableStateOf(false) }
+    var detailMenuExpanded by remember { mutableStateOf(false) }
 
     BackHandler(enabled = currentFolder != null) {
         val ref = currentFolder ?: return@BackHandler
@@ -143,6 +158,9 @@ fun FoldersScreen(
                 TopAppBar(
                     title = { Text("Folders") },
                     actions = {
+                        IconButton(onClick = { showAddCloudDialog = true }) {
+                            Icon(Icons.Rounded.CloudQueue, contentDescription = "Add Cloud Folder")
+                        }
                         IconButton(
                             onClick = { scope.launch { libraryStore.rescan() } },
                             enabled = !libraryState.isScanning
@@ -157,6 +175,10 @@ fun FoldersScreen(
                 } else {
                     activeRef.path.substringAfterLast('/')
                 }
+                val isRemovableRootDetail = activeRef.path.isEmpty() &&
+                    currentRoot != null &&
+                    currentRoot.kind != RootKind.APP_FOLDER
+
                 TopAppBar(
                     navigationIcon = {
                         IconButton(
@@ -188,6 +210,43 @@ fun FoldersScreen(
                         ) {
                             Icon(Icons.Rounded.Refresh, contentDescription = "Rescan")
                         }
+                        if (isRemovableRootDetail) {
+                            val rootForMenu = currentRoot
+                            Box {
+                                IconButton(onClick = { detailMenuExpanded = true }) {
+                                    Icon(Icons.Rounded.MoreVert, contentDescription = "Folder options")
+                                }
+                                DropdownMenu(
+                                    expanded = detailMenuExpanded,
+                                    onDismissRequest = { detailMenuExpanded = false }
+                                ) {
+                                    if (rootForMenu.kind == RootKind.PICKED) {
+                                        DropdownMenuItem(
+                                            text = { Text("Locate Again…") },
+                                            leadingIcon = { Icon(Icons.Rounded.Folder, contentDescription = null) },
+                                            onClick = {
+                                                detailMenuExpanded = false
+                                                launchRelocateFolder(rootForMenu.id)
+                                            }
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text("Remove Folder") },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Rounded.Delete,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.error
+                                            )
+                                        },
+                                        onClick = {
+                                            detailMenuExpanded = false
+                                            removingRoot = rootForMenu
+                                        }
+                                    )
+                                }
+                            }
+                        }
                     }
                 )
             }
@@ -209,32 +268,53 @@ fun FoldersScreen(
                 .fillMaxSize()
                 .padding(innerPadding)
         ) {
-            if (activeRef == null) {
-                FolderRootList(
-                    libraryStore = libraryStore,
-                    libraryState = libraryState,
-                    queues = queues,
-                    activeQueue = activeQueue,
-                    trackActions = trackActions,
-                    onOpenRoot = { rootId -> currentFolder = FolderRef(rootId, "") },
-                    onRelocateRoot = ::launchRelocateFolder,
-                    onRequestRemove = { removingRoot = it },
-                    onAddFolder = ::launchAddFolder
-                )
-            } else {
-                FolderDetailContent(
-                    ref = activeRef,
-                    rootName = currentRoot?.name ?: "Folder",
-                    libraryStore = libraryStore,
-                    libraryState = libraryState,
-                    playerState = playerState,
-                    queues = queues,
-                    activeQueue = activeQueue,
-                    trackActions = trackActions,
-                    onNavigate = { nextRef -> currentFolder = nextRef }
-                )
+            AnimatedContent(
+                targetState = activeRef,
+                transitionSpec = {
+                    MusicoMotion.sharedAxisXTransform(
+                        forward = folderDepth(targetState) >= folderDepth(initialState)
+                    )
+                },
+                label = "folders_navigation"
+            ) { ref ->
+                if (ref == null) {
+                    FolderRootList(
+                        libraryStore = libraryStore,
+                        libraryState = libraryState,
+                        queues = queues,
+                        activeQueue = activeQueue,
+                        trackActions = trackActions,
+                        onOpenRoot = { rootId -> currentFolder = FolderRef(rootId, "") },
+                        onRelocateRoot = ::launchRelocateFolder,
+                        onRequestRemove = { removingRoot = it },
+                        onAddFolder = ::launchAddFolder,
+                        onAddCloudFolder = { showAddCloudDialog = true }
+                    )
+                } else {
+                    val rootForRef = libraryState.roots.firstOrNull { it.id == ref.rootId }
+                    FolderDetailContent(
+                        ref = ref,
+                        rootName = rootForRef?.name ?: "Folder",
+                        libraryStore = libraryStore,
+                        libraryState = libraryState,
+                        playerState = playerState,
+                        queues = queues,
+                        activeQueue = activeQueue,
+                        trackActions = trackActions,
+                        onNavigate = { nextRef -> currentFolder = nextRef }
+                    )
+                }
             }
         }
+    }
+
+    if (showAddCloudDialog) {
+        AddCloudFolderDialog(
+            onDismiss = { showAddCloudDialog = false },
+            onAdd = { url, cookie ->
+                libraryStore.addCloudRoot(url, cookie)
+            }
+        )
     }
 
     val pendingRemove = removingRoot
@@ -242,7 +322,7 @@ fun FoldersScreen(
         ConfirmDialog(
             title = "Remove “${pendingRemove.name}” from your library?",
             message = "Its songs leave your library, playlists and queues. The files themselves are not deleted.",
-            confirmLabel = "Remove from Library",
+            confirmLabel = "Remove Folder",
             onDismiss = { removingRoot = null },
             onConfirm = {
                 libraryStore.removeRoot(pendingRemove.id)
@@ -268,6 +348,96 @@ fun FoldersScreen(
     }
 }
 
+@Composable
+private fun AddCloudFolderDialog(
+    onDismiss: () -> Unit,
+    onAdd: suspend (url: String, cookie: String?) -> Result<Unit>
+) {
+    val scope = rememberCoroutineScope()
+    var url by remember { mutableStateOf("") }
+    var cookie by remember { mutableStateOf("") }
+    var isAdding by remember { mutableStateOf(false) }
+    var errorText by remember { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = { if (!isAdding) onDismiss() },
+        icon = { Icon(Icons.Rounded.CloudQueue, contentDescription = null) },
+        title = { Text("Add Cloud Folder") },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .animateContentSize(),
+                verticalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = {
+                        url = it
+                        errorText = null
+                    },
+                    label = { Text("YouTube or Bilibili URL") },
+                    placeholder = { Text("Playlist, collection, or video URL") },
+                    supportingText = {
+                        Text("Supports YouTube / YT Music playlists & videos, Bilibili favlists, collections, series, and BV / b23.tv links.")
+                    },
+                    singleLine = true,
+                    enabled = !isAdding,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = cookie,
+                    onValueChange = { cookie = it },
+                    label = { Text("Cookie (optional)") },
+                    placeholder = { Text("Only needed for private playlists") },
+                    maxLines = 3,
+                    enabled = !isAdding,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                if (isAdding) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
+                val err = errorText
+                if (err != null) {
+                    Text(
+                        text = err,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = url.trim().isNotEmpty() && !isAdding,
+                onClick = {
+                    isAdding = true
+                    errorText = null
+                    scope.launch {
+                        val result = onAdd(url, cookie.takeIf { it.isNotBlank() })
+                        isAdding = false
+                        result.onSuccess {
+                            onDismiss()
+                        }.onFailure { err ->
+                            errorText = err.message ?: "Could not load that cloud playlist."
+                        }
+                    }
+                }
+            ) {
+                Text(if (isAdding) "Adding…" else "Add")
+            }
+        },
+        dismissButton = {
+            TextButton(
+                enabled = !isAdding,
+                onClick = onDismiss
+            ) {
+                Text("Cancel")
+            }
+        }
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FolderRootList(
@@ -279,9 +449,10 @@ private fun FolderRootList(
     onOpenRoot: (String) -> Unit,
     onRelocateRoot: (String) -> Unit,
     onRequestRemove: (LibraryRoot) -> Unit,
-    onAddFolder: () -> Unit
+    onAddFolder: () -> Unit,
+    onAddCloudFolder: () -> Unit
 ) {
-    val pickedRoots = libraryState.roots.filter { it.kind == RootKind.PICKED }
+    val userRoots = libraryState.roots.filter { it.kind != RootKind.APP_FOLDER }
 
     LazyColumn(
         modifier = Modifier.fillMaxSize(),
@@ -292,6 +463,7 @@ private fun FolderRootList(
                 ElevatedCard(
                     modifier = Modifier
                         .fillMaxWidth()
+                        .animateContentSize()
                         .padding(horizontal = 16.dp, vertical = 8.dp)
                 ) {
                     Column(
@@ -328,34 +500,50 @@ private fun FolderRootList(
             val rootTrackIds = remember(libraryState.tracks, root.id) {
                 libraryStore.tracksUnder(root.id, "").map { it.id }
             }
+            val isRemovable = root.kind != RootKind.APP_FOLDER
 
-            if (root.kind == RootKind.PICKED) {
-                val dismissState = rememberSwipeToDismissBoxState(
-                    confirmValueChange = { value ->
-                        if (value == SwipeToDismissBoxValue.EndToStart) {
-                            onRequestRemove(root)
+            Column(modifier = Modifier.animateItem()) {
+                if (isRemovable) {
+                    val dismissState = rememberSwipeToDismissBoxState(
+                        confirmValueChange = { value ->
+                            if (value == SwipeToDismissBoxValue.EndToStart) {
+                                onRequestRemove(root)
+                            }
+                            false
                         }
-                        false
-                    }
-                )
-                SwipeToDismissBox(
-                    state = dismissState,
-                    enableDismissFromStartToEnd = false,
-                    backgroundContent = {
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .padding(horizontal = 20.dp),
-                            contentAlignment = Alignment.CenterEnd
-                        ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Delete,
-                                contentDescription = "Remove folder",
-                                tint = MaterialTheme.colorScheme.error
-                            )
+                    )
+                    SwipeToDismissBox(
+                        state = dismissState,
+                        enableDismissFromStartToEnd = false,
+                        backgroundContent = {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 20.dp),
+                                contentAlignment = Alignment.CenterEnd
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Delete,
+                                    contentDescription = "Remove Folder",
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
+                    ) {
+                        RootItemRow(
+                            root = root,
+                            available = available,
+                            songCount = count,
+                            rootTrackIds = rootTrackIds,
+                            queues = queues,
+                            activeQueue = activeQueue,
+                            trackActions = trackActions,
+                            onOpen = { onOpenRoot(root.id) },
+                            onRelocate = { onRelocateRoot(root.id) },
+                            onRemove = { onRequestRemove(root) }
+                        )
                     }
-                ) {
+                } else {
                     RootItemRow(
                         root = root,
                         available = available,
@@ -365,33 +553,40 @@ private fun FolderRootList(
                         activeQueue = activeQueue,
                         trackActions = trackActions,
                         onOpen = { onOpenRoot(root.id) },
-                        onRelocate = { onRelocateRoot(root.id) },
-                        onRemove = { onRequestRemove(root) }
+                        onRelocate = {},
+                        onRemove = {}
                     )
                 }
-            } else {
-                RootItemRow(
-                    root = root,
-                    available = available,
-                    songCount = count,
-                    rootTrackIds = rootTrackIds,
-                    queues = queues,
-                    activeQueue = activeQueue,
-                    trackActions = trackActions,
-                    onOpen = { onOpenRoot(root.id) },
-                    onRelocate = {},
-                    onRemove = {}
-                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
             }
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
         }
 
-        if (pickedRoots.isEmpty() && libraryState.tracks.isEmpty()) {
+        item(key = "cloud_action_row") {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                FilledTonalButton(onClick = onAddCloudFolder) {
+                    Icon(
+                        imageVector = Icons.Rounded.CloudQueue,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp)
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text("Add Cloud Folder")
+                }
+            }
+        }
+
+        if (userRoots.isEmpty() && libraryState.tracks.isEmpty()) {
             item(key = "empty_hint_card") {
                 EmptyState(
                     icon = Icons.Rounded.CreateNewFolder,
                     title = "Add Your Music Folders",
-                    description = "Pick folders on your device that hold your music, or copy songs into the Musico Folder and pull down to rescan.",
+                    description = "Pick folders on your device, add a YouTube or Bilibili playlist, or copy songs into the Musico Folder and pull down to rescan.",
                     actionLabel = "Add Folder",
                     onAction = onAddFolder
                 )
@@ -399,10 +594,10 @@ private fun FolderRootList(
         } else {
             item(key = "footer_hint") {
                 Text(
-                    text = "Add any folder on your device that holds music, or copy music into the Musico Folder and pull down to rescan.",
+                    text = "Add local folders, link YouTube or Bilibili playlists, or copy music into the Musico Folder and pull down to rescan.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp)
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
             }
         }
@@ -423,8 +618,13 @@ private fun RootItemRow(
     onRemove: () -> Unit
 ) {
     var menuExpanded by remember { mutableStateOf(false) }
+    val isRemovable = root.kind != RootKind.APP_FOLDER
 
-    Column(modifier = Modifier.fillMaxWidth()) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .animateContentSize()
+    ) {
         ListItem(
             modifier = Modifier.clickable(onClick = onOpen),
             leadingContent = {
@@ -432,13 +632,41 @@ private fun RootItemRow(
                     imageVector = when {
                         !available -> Icons.Rounded.FolderOff
                         root.kind == RootKind.APP_FOLDER -> Icons.Rounded.LibraryMusic
+                        root.kind == RootKind.CLOUD_YOUTUBE -> Icons.Rounded.PlayCircle
+                        root.kind == RootKind.CLOUD_BILIBILI -> Icons.Rounded.LiveTv
                         else -> Icons.Rounded.Folder
                     },
                     contentDescription = null,
                     tint = if (available) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
                 )
             },
-            headlineContent = { Text(root.name) },
+            headlineContent = {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(
+                        text = root.name,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                    if (root.kind.isCloud) {
+                        val chipLabel = if (root.kind == RootKind.CLOUD_YOUTUBE) "YouTube" else "Bilibili"
+                        Surface(
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = MaterialTheme.shapes.extraSmall
+                        ) {
+                            Text(
+                                text = chipLabel,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+            },
             supportingContent = {
                 Text(
                     text = if (available) "$songCount songs" else "Unavailable — folder moved or disconnected",
@@ -463,8 +691,10 @@ private fun RootItemRow(
                                     onRelocate()
                                 }
                             )
+                        }
+                        if (isRemovable) {
                             DropdownMenuItem(
-                                text = { Text("Remove from Library") },
+                                text = { Text("Remove Folder") },
                                 leadingIcon = {
                                     Icon(
                                         Icons.Rounded.Delete,
@@ -477,9 +707,9 @@ private fun RootItemRow(
                                     onRemove()
                                 }
                             )
-                            if (rootTrackIds.isNotEmpty()) {
-                                HorizontalDivider()
-                            }
+                        }
+                        if (isRemovable && rootTrackIds.isNotEmpty()) {
+                            HorizontalDivider()
                         }
                         if (rootTrackIds.isNotEmpty()) {
                             TrackMenuItems(
@@ -600,7 +830,9 @@ private fun FolderDetailContent(
             var menuExpanded by remember { mutableStateOf(false) }
 
             ListItem(
-                modifier = Modifier.clickable { onNavigate(FolderRef(ref.rootId, childPath)) },
+                modifier = Modifier
+                    .animateItem()
+                    .clickable { onNavigate(FolderRef(ref.rootId, childPath)) },
                 leadingContent = {
                     Icon(
                         imageVector = Icons.Rounded.Folder,
@@ -639,8 +871,9 @@ private fun FolderDetailContent(
                 isCurrent = playerState.currentTrack?.id == track.id,
                 isPlaying = playerState.isPlaying,
                 isAvailable = libraryStore.isAvailable(track),
-                subtitle = track.fileName,
+                subtitle = if (track.isCloud) track.artist else track.fileName,
                 onClick = { trackActions.playerController.play(directIds, startAt = index) },
+                modifier = Modifier.animateItem(),
                 menuContent = { onDismiss ->
                     TrackMenuItems(
                         ids = listOf(track.id),

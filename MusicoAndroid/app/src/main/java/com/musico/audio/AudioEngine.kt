@@ -5,13 +5,17 @@ import android.media.audiofx.DynamicsProcessing
 import android.media.audiofx.Equalizer
 import android.net.Uri
 import android.os.Build
+import androidx.annotation.OptIn
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.common.util.UnstableApi
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import com.musico.model.EqSettings
 import java.io.File
 import java.io.IOException
@@ -116,6 +120,30 @@ class AudioEngine(
         }
         player.playWhenReady = false
         player.setMediaItem(itemBuilder.build())
+        player.prepare()
+    }
+
+    @OptIn(UnstableApi::class)
+    @Throws(IOException::class)
+    fun loadStream(
+        url: String,
+        headers: Map<String, String>,
+        metadata: MediaMetadata? = null,
+    ) {
+        if (url.isBlank()) throw IOException("Empty stream URL")
+        val dataSourceFactory = DefaultHttpDataSource.Factory()
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(15_000)
+            .setReadTimeoutMs(20_000)
+            .setDefaultRequestProperties(headers)
+        val mediaSourceFactory = ProgressiveMediaSource.Factory(dataSourceFactory)
+        val itemBuilder = MediaItem.Builder().setUri(url)
+        if (metadata != null) {
+            itemBuilder.setMediaMetadata(metadata)
+        }
+        val mediaSource = mediaSourceFactory.createMediaSource(itemBuilder.build())
+        player.playWhenReady = false
+        player.setMediaSource(mediaSource)
         player.prepare()
     }
 

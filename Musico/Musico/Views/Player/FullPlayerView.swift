@@ -153,10 +153,16 @@ private struct PlayerPage: View {
             Spacer()
             Button("Previous", systemImage: "backward.fill") { player.previous() }.font(.title)
             Spacer()
-            Button("Play or Pause", systemImage: player.isPlaying ? "pause.circle.fill" : "play.circle.fill") {
-                player.togglePlayPause()
+            if player.isBuffering {
+                ProgressView()
+                    .controlSize(.large)
+                    .frame(width: 68, height: 68)
+            } else {
+                Button("Play or Pause", systemImage: player.isPlaying ? "pause.circle.fill" : "play.circle.fill") {
+                    player.togglePlayPause()
+                }
+                .font(.system(size: 68))
             }
-            .font(.system(size: 68))
             Spacer()
             Button("Next", systemImage: "forward.fill") { player.next() }.font(.title)
             Spacer()

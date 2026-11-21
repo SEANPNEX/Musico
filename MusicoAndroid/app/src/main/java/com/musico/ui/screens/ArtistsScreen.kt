@@ -3,6 +3,7 @@ package com.musico.ui.screens
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
@@ -79,46 +80,48 @@ fun ArtistsScreen(
             }
             var menuExpanded by remember { mutableStateOf(false) }
 
-            ListItem(
-                modifier = Modifier.clickable { onArtistClick(artist) },
-                leadingContent = {
-                    Icon(
-                        imageVector = Icons.Rounded.Person,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.primary
-                    )
-                },
-                headlineContent = {
-                    Text(
-                        text = artist,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
-                },
-                supportingContent = {
-                    Text("${artistTrackIds.size} songs")
-                },
-                trailingContent = {
-                    Box {
-                        IconButton(onClick = { menuExpanded = true }) {
-                            Icon(Icons.Rounded.MoreVert, contentDescription = "Artist options")
-                        }
-                        DropdownMenu(
-                            expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false }
-                        ) {
-                            TrackMenuItems(
-                                ids = artistTrackIds,
-                                queues = queues,
-                                activeQueueId = activeQueue.id,
-                                actionState = trackActions,
-                                onDismiss = { menuExpanded = false }
-                            )
+            Column(modifier = Modifier.animateItem()) {
+                ListItem(
+                    modifier = Modifier.clickable { onArtistClick(artist) },
+                    leadingContent = {
+                        Icon(
+                            imageVector = Icons.Rounded.Person,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary
+                        )
+                    },
+                    headlineContent = {
+                        Text(
+                            text = artist,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    },
+                    supportingContent = {
+                        Text("${artistTrackIds.size} songs")
+                    },
+                    trailingContent = {
+                        Box {
+                            IconButton(onClick = { menuExpanded = true }) {
+                                Icon(Icons.Rounded.MoreVert, contentDescription = "Artist options")
+                            }
+                            DropdownMenu(
+                                expanded = menuExpanded,
+                                onDismissRequest = { menuExpanded = false }
+                            ) {
+                                TrackMenuItems(
+                                    ids = artistTrackIds,
+                                    queues = queues,
+                                    activeQueueId = activeQueue.id,
+                                    actionState = trackActions,
+                                    onDismiss = { menuExpanded = false }
+                                )
+                            }
                         }
                     }
-                }
-            )
-            HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                )
+                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+            }
         }
     }
 }
@@ -253,6 +256,7 @@ fun ArtistDetailScreen(
                     isAvailable = libraryStore.isAvailable(track),
                     subtitle = track.album,
                     onClick = { trackActions.playerController.play(trackIds, startAt = index) },
+                    modifier = Modifier.animateItem(),
                     menuContent = { onDismiss ->
                         TrackMenuItems(
                             ids = listOf(track.id),

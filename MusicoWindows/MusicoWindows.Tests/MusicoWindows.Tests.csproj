@@ -37,6 +37,7 @@
     <Compile Include="*.cs" />
     <Compile Include="..\MusicoWindows\Models\*.cs" LinkBase="Models" />
     <Compile Include="..\MusicoWindows\Core\*.cs" LinkBase="Core" />
+    <Compile Include="..\MusicoWindows\Cloud\*.cs" LinkBase="Cloud" />
     <Compile Include="..\MusicoWindows\Stores\*.cs" Exclude="..\MusicoWindows\Stores\AppServices.cs" LinkBase="Stores" />
     <Compile Include="..\MusicoWindows\Audio\IAudioEngine.cs" LinkBase="Audio" />
     <Compile Include="..\MusicoWindows\Audio\ISmtcBridge.cs" LinkBase="Audio" />

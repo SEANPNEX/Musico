@@ -41,6 +41,15 @@
                             <TextBlock Text="Rescan" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
+                    <Button x:Name="AddCloudFolderButton"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            Margin="0,0,8,0"
+                            Click="AddCloudFolder_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE753;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBlock Text="Add Cloud Folder" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                     <Button x:Name="AddFolderButton"
                             Style="{StaticResource Win10PrimaryButtonStyle}"
                             Click="AddFolder_Click">
@@ -108,6 +117,16 @@
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
                             <TextBlock Text="Shuffle" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="RemoveRootButton"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            Margin="8,0,0,0"
+                            Visibility="Collapsed"
+                            Click="RemoveRoot_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE74D;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
+                            <TextBlock Text="Remove Folder" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                 </StackPanel>

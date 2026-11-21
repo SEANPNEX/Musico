@@ -38,7 +38,8 @@ public partial class MainWindow : Window
             OpenConfirm = ShowConfirmDialog,
             OpenAlbum = ShowAlbumDetail,
             OpenArtist = ShowArtistDetail,
-            OpenPlaylist = ShowPlaylistDetail
+            OpenPlaylist = ShowPlaylistDetail,
+            OpenAddCloudFolder = () => CloudDialog.Show(_services)
         };
 
         BottomPlayerBar.Initialize(_services);
@@ -203,7 +204,7 @@ public partial class MainWindow : Window
         }
     }
 
-    private void NavigateTo(string route)
+    private void NavigateTo(string route, double? slideFromX = null)
     {
         _activeRoute = route;
         _activePlaylistId = null;
@@ -237,7 +238,7 @@ public partial class MainWindow : Window
                 break;
             case "favourites":
                 ShowPlaylistDetail(PlaylistRef.Favourites, showBack: false);
-                break;
+                return;
             case "queues":
                 var qv = new QueuesView();
                 qv.Bind(_ctx);
@@ -249,22 +250,33 @@ public partial class MainWindow : Window
                 ContentHost.Content = stv;
                 break;
         }
+
+        if (slideFromX is double offset)
+        {
+            Win10Animations.AnimateSlideX(ContentHost.Content as UIElement, offset);
+        }
+        else
+        {
+            Win10Animations.AnimatePageEntrance(ContentHost.Content as UIElement);
+        }
     }
 
     private void ShowAlbumDetail(AlbumInfo album)
     {
         var detail = new AlbumDetailView();
-        detail.BackRequested += () => NavigateTo(_activeRoute == "artists" ? "artists" : "albums");
+        detail.BackRequested += () => NavigateTo(_activeRoute == "artists" ? "artists" : "albums", slideFromX: -24);
         detail.Bind(_ctx, album);
         ContentHost.Content = detail;
+        Win10Animations.AnimateSlideX(detail, 24);
     }
 
     private void ShowArtistDetail(string artist)
     {
         var detail = new ArtistDetailView();
-        detail.BackRequested += () => NavigateTo("artists");
+        detail.BackRequested += () => NavigateTo("artists", slideFromX: -24);
         detail.Bind(_ctx, artist);
         ContentHost.Content = detail;
+        Win10Animations.AnimateSlideX(detail, 24);
     }
 
     private void ShowPlaylistDetail(PlaylistRef playlistRef) => ShowPlaylistDetail(playlistRef, showBack: true);
@@ -275,10 +287,18 @@ public partial class MainWindow : Window
         detail.BackRequested += () =>
         {
             NavPlaylists.IsChecked = true;
-            NavigateTo("playlists");
+            NavigateTo("playlists", slideFromX: -24);
         };
         detail.Bind(_ctx, playlistRef, showBack);
         ContentHost.Content = detail;
+        if (showBack)
+        {
+            Win10Animations.AnimateSlideX(detail, 24);
+        }
+        else
+        {
+            Win10Animations.AnimatePageEntrance(detail);
+        }
     }
 
     private void ToggleSidePanel(SidePanelKind kind)
@@ -286,18 +306,35 @@ public partial class MainWindow : Window
         if (_sidePanel == kind)
         {
             _sidePanel = null;
-            SidePanelColumn.Width = new GridLength(0);
-            SidePanelBorder.Visibility = Visibility.Collapsed;
-            SideLyricsPanel.Visibility = Visibility.Collapsed;
-            SideQueuesView.Visibility = Visibility.Collapsed;
+            double currentWidth = SidePanelColumn.Width.Value;
+            Win10Animations.AnimatePanelWidth(SidePanelColumn, currentWidth, 0, 180, () =>
+            {
+                if (_sidePanel is null)
+                {
+                    SidePanelBorder.Visibility = Visibility.Collapsed;
+                    SideLyricsPanel.Visibility = Visibility.Collapsed;
+                    SideQueuesView.Visibility = Visibility.Collapsed;
+                }
+            });
         }
         else
         {
+            bool wasClosed = _sidePanel is null;
             _sidePanel = kind;
-            SidePanelColumn.Width = new GridLength(340);
             SidePanelBorder.Visibility = Visibility.Visible;
             SideLyricsPanel.Visibility = kind == SidePanelKind.Lyrics ? Visibility.Visible : Visibility.Collapsed;
             SideQueuesView.Visibility = kind == SidePanelKind.Queue ? Visibility.Visible : Visibility.Collapsed;
+
+            if (wasClosed)
+            {
+                Win10Animations.AnimatePanelWidth(SidePanelColumn, SidePanelColumn.Width.Value, 340, 200);
+                Win10Animations.AnimatePanelIn(SidePanelBorder, 28);
+            }
+            else
+            {
+                Win10Animations.AnimatePanelIn(kind == SidePanelKind.Lyrics ? SideLyricsPanel : SideQueuesView, 16);
+            }
+
             if (kind == SidePanelKind.Lyrics)
             {
                 _ = SideLyricsPanel.LoadLyricsAsync(forceReload: false);
@@ -332,7 +369,9 @@ public partial class MainWindow : Window
     private void Hamburger_Click(object sender, RoutedEventArgs e)
     {
         _navExpanded = !_navExpanded;
-        NavPaneColumn.Width = new GridLength(_navExpanded ? 240 : 48);
+        double fromW = NavPaneColumn.Width.Value;
+        double toW = _navExpanded ? 240 : 48;
+        Win10Animations.AnimatePanelWidth(NavPaneColumn, fromW, toW, 200);
 
         var labelVis = _navExpanded ? Visibility.Visible : Visibility.Collapsed;
         LblFolders.Visibility = labelVis;
@@ -392,6 +431,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.Escape)
         {
             if (ConfirmOverlay.IsOpen) { ConfirmOverlay.Close(); e.Handled = true; return; }
+            if (CloudDialog.IsOpen) { CloudDialog.Close(); e.Handled = true; return; }
             if (PromptDialog.IsOpen) { PromptDialog.Close(); e.Handled = true; return; }
             if (EqDialog.IsOpen) { EqDialog.Close(); e.Handled = true; return; }
             if (SleepDialog.IsOpen) { SleepDialog.Close(); e.Handled = true; return; }
@@ -429,7 +469,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
         {
             if (Keyboard.FocusedElement is TextBoxBase) return;
-            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen) return;
+            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen) return;
             _services.Player.TogglePlayPause();
             e.Handled = true;
         }

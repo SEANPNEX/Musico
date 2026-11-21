@@ -4,11 +4,12 @@
              xmlns:controls="clr-namespace:MusicoWindows.Controls"
              xmlns:views="clr-namespace:MusicoWindows.Views"
              Visibility="Collapsed">
-    <Grid Background="{DynamicResource ContentBackgroundBrush}">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
-        </Grid.RowDefinitions>
+    <Grid x:Name="BackdropGrid" Background="{DynamicResource ContentBackgroundBrush}">
+        <Grid x:Name="PlayerCard">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
 
         <!-- Top Bar -->
         <Border Grid.Row="0"
@@ -255,6 +256,7 @@
                     <views:QueuesView x:Name="EmbeddedQueues" Compact="True" Visibility="Collapsed" />
                 </Grid>
             </Grid>
+        </Grid>
         </Grid>
     </Grid>
 </UserControl>

@@ -1,10 +1,16 @@
 package com.musico.store
 
 import android.net.Uri
+import com.musico.cloud.BilibiliClient
+import com.musico.cloud.CloudHttpClient
+import com.musico.cloud.CloudHttpResponse
+import com.musico.cloud.CloudSource
+import com.musico.cloud.YouTubeClient
 import com.musico.core.ArtworkCache
 import com.musico.core.MetadataReading
 import com.musico.core.TrackMetadata
 import com.musico.model.LibraryRoot
+import com.musico.model.RootKind
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -262,5 +268,110 @@ class LibraryStoreTest {
         job.join()
         assertEquals(6, store.state.value.tracks.size)
         assertNotNull(store.state.value.tracks.firstOrNull())
+    }
+
+    @Test
+    fun cloudRootLifecycleAddSyncRetainOnErrorPersistAndRemove() = runBlocking {
+        var failNetwork = false
+        var playlistTitle = "Cloud Mix"
+        var includeSecondTrack = false
+
+        val fakeHttp = object : CloudHttpClient {
+            override suspend fun get(url: String, headers: Map<String, String>, followRedirects: Boolean): CloudHttpResponse {
+                if (url.contains("/x/frontend/finger/spi")) {
+                    return CloudHttpResponse(200, url, emptyMap(), """{"code":0,"data":{"b_3":"B3"}}""".toByteArray())
+                }
+                return CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+            }
+
+            override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse {
+                if (failNetwork) {
+                    return CloudHttpResponse(503, url, emptyMap(), ByteArray(0))
+                }
+                val second = if (includeSecondTrack) {
+                    """,{
+                      "playlistVideoRenderer": {
+                        "videoId": "vid_two_0002",
+                        "title": { "runs": [ { "text": "Cloud Song 2" } ] },
+                        "shortBylineText": { "runs": [ { "text": "Artist 2" } ] },
+                        "lengthSeconds": "200"
+                      }
+                    }"""
+                } else ""
+                val body = """
+                    {
+                      "header": { "musicDetailHeaderRenderer": { "title": { "runs": [ { "text": "$playlistTitle" } ] } } },
+                      "contents": {
+                        "items": [
+                          {
+                            "playlistVideoRenderer": {
+                              "videoId": "vid_one_0001",
+                              "title": { "runs": [ { "text": "Cloud Song 1" } ] },
+                              "shortBylineText": { "runs": [ { "text": "Artist 1" } ] },
+                              "lengthSeconds": "180"
+                            }
+                          }
+                          $second
+                        ]
+                      }
+                    }
+                """.trimIndent()
+                return CloudHttpResponse(200, url, emptyMap(), body.toByteArray())
+            }
+
+            override suspend fun probeRange(url: String, headers: Map<String, String>): Int = 206
+        }
+
+        fun makeCloudStore(): LibraryStore = LibraryStore(
+            directory = stateDir,
+            appFolderDir = docsDir,
+            reader = reader,
+            artwork = ArtworkCache(File(stateDir, "artwork")),
+            context = null,
+            cloudHttpClient = fakeHttp,
+            youTubeClient = YouTubeClient(fakeHttp),
+            bilibiliClient = BilibiliClient(fakeHttp),
+        )
+
+        val store = makeCloudStore()
+        val added = store.addCloudRoot("https://music.youtube.com/playlist?list=PLcloud123456")
+        assertTrue(added.isSuccess)
+
+        val dup = store.addCloudRoot("https://www.youtube.com/playlist?list=PLcloud123456")
+        assertTrue(dup.isFailure)
+
+        val cloudRoot = store.state.value.roots.first { it.kind == RootKind.CLOUD_YOUTUBE }
+        assertEquals("Cloud Mix", cloudRoot.name)
+        assertTrue(store.isAvailable(cloudRoot))
+        assertEquals(1, store.state.value.tracks.size)
+        val firstTrack = store.state.value.tracks.first()
+        assertTrue(firstTrack.isCloud)
+        assertEquals(CloudSource.YOUTUBE, firstTrack.cloudSource)
+        assertTrue(store.isAvailable(firstTrack))
+        val originalAddedMs = firstTrack.dateAddedEpochMs
+
+        // Transient network error retains existing cloud tracks.
+        failNetwork = true
+        store.rescan()
+        assertEquals(1, store.state.value.tracks.size)
+        assertEquals(firstTrack.id, store.state.value.tracks.first().id)
+
+        // Successful rescan adds new track while preserving dateAddedEpochMs of existing track.
+        failNetwork = false
+        includeSecondTrack = true
+        store.rescan()
+        assertEquals(2, store.state.value.tracks.size)
+        assertEquals(originalAddedMs, store.track(firstTrack.id)?.dateAddedEpochMs)
+
+        // Persists across store reload.
+        val reloaded = makeCloudStore()
+        assertEquals(2, reloaded.state.value.roots.size)
+        assertEquals(2, reloaded.state.value.tracks.size)
+        assertTrue(reloaded.isAvailable(reloaded.state.value.roots.first { it.kind.isCloud }))
+
+        // Removing cloud root deletes its tracks cleanly.
+        reloaded.removeRoot(cloudRoot.id)
+        assertEquals(1, reloaded.state.value.roots.size)
+        assertTrue(reloaded.state.value.tracks.isEmpty())
     }
 }

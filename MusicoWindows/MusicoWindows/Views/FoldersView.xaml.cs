@@ -10,6 +10,7 @@ using Microsoft.Win32;
 using MusicoWindows.Controls;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
+using MusicoWindows.Theme;
 
 namespace MusicoWindows.Views;
 
@@ -36,9 +37,14 @@ public partial class FoldersView : UserControl
 
     public void ResetToRoots()
     {
+        bool wasDrilled = _currentRootId is not null;
         _currentRootId = null;
         _currentPath = string.Empty;
         Refresh();
+        if (wasDrilled)
+        {
+            Win10Animations.AnimateSlideX(ContentStack, -24);
+        }
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e) => Detach();
@@ -139,7 +145,13 @@ public partial class FoldersView : UserControl
 
             var icon = new TextBlock
             {
-                Text = root.Kind == RootKind.AppFolder ? "\uE8D6" : "\uE8B7",
+                Text = root.Kind switch
+                {
+                    RootKind.AppFolder => "\uE8D6",
+                    RootKind.CloudYouTube => "\uE753",
+                    RootKind.CloudBilibili => "\uE753",
+                    _ => "\uE8B7"
+                },
                 FontFamily = (FontFamily)FindResource("Win10GlyphFont"),
                 FontSize = 20,
                 VerticalAlignment = VerticalAlignment.Center
@@ -148,19 +160,48 @@ public partial class FoldersView : UserControl
             Grid.SetColumn(icon, 0);
 
             var info = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(8, 0, 12, 0) };
+            var titleRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             var nameTb = new TextBlock
             {
                 Text = root.Name,
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 15,
-                FontWeight = FontWeights.SemiBold
+                FontWeight = FontWeights.SemiBold,
+                VerticalAlignment = VerticalAlignment.Center
             };
             nameTb.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
+            titleRow.Children.Add(nameTb);
 
+            if (root.IsCloud)
+            {
+                var badge = new Border
+                {
+                    Margin = new Thickness(8, 0, 0, 0),
+                    Padding = new Thickness(6, 2, 6, 2),
+                    BorderThickness = new Thickness(1),
+                    CornerRadius = new CornerRadius(0),
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                badge.SetResourceReference(Border.BackgroundProperty, "AccentSubtleBrush");
+                badge.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
+
+                var badgeText = new TextBlock
+                {
+                    Text = root.Kind == RootKind.CloudBilibili ? "Bilibili" : "YouTube",
+                    FontFamily = (FontFamily)FindResource("Win10Font"),
+                    FontSize = 10,
+                    FontWeight = FontWeights.SemiBold
+                };
+                badgeText.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
+                badge.Child = badgeText;
+                titleRow.Children.Add(badge);
+            }
+
+            string locationDisplay = root.IsCloud ? (root.SourceUrl ?? root.Path ?? string.Empty) : (root.Path ?? string.Empty);
             var detailTb = new TextBlock
             {
                 Text = available
-                    ? $"{count} {(count == 1 ? "song" : "songs")} · {root.Path}"
+                    ? $"{count} {(count == 1 ? "song" : "songs")} · {locationDisplay}"
                     : "Unavailable — folder moved or disconnected",
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 12,
@@ -169,7 +210,7 @@ public partial class FoldersView : UserControl
             };
             detailTb.SetResourceReference(TextBlock.ForegroundProperty, available ? "TextSecondaryBrush" : "WarningTextBrush");
 
-            info.Children.Add(nameTb);
+            info.Children.Add(titleRow);
             info.Children.Add(detailTb);
             Grid.SetColumn(info, 1);
 
@@ -192,10 +233,24 @@ public partial class FoldersView : UserControl
 
             var removeBtn = new Button
             {
-                Content = "\uE74D",
-                ToolTip = "Remove from Library",
-                Style = (Style)FindResource("Win10IconButtonStyle")
+                Style = (Style)FindResource("Win10ButtonStyle"),
+                ToolTip = "Remove Folder from Library"
             };
+            var removeContent = new StackPanel { Orientation = Orientation.Horizontal };
+            removeContent.Children.Add(new TextBlock
+            {
+                Text = "\uE74D",
+                FontFamily = (FontFamily)FindResource("Win10GlyphFont"),
+                FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 6, 0)
+            });
+            removeContent.Children.Add(new TextBlock
+            {
+                Text = "Remove Folder",
+                VerticalAlignment = VerticalAlignment.Center
+            });
+            removeBtn.Content = removeContent;
             removeBtn.Click += (_, e) =>
             {
                 e.Handled = true;
@@ -224,6 +279,7 @@ public partial class FoldersView : UserControl
                 _currentRootId = rootId;
                 _currentPath = string.Empty;
                 Refresh();
+                Win10Animations.AnimateSlideX(ContentStack, 24);
             };
 
             var rootTrackIds = lib.GetTracksUnder(rootId, string.Empty).Select(t => t.Id).ToList();
@@ -239,7 +295,7 @@ public partial class FoldersView : UserControl
                     {
                         menu.Items.Add(TrackMenuHelper.CreateItem("Locate Again...", "\uE8DA", async () => await PickAndRelocateAsync(rootId)));
                     }
-                    menu.Items.Add(TrackMenuHelper.CreateItem("Remove from Library", "\uE74D", () => ConfirmRemoveRoot(root)));
+                    menu.Items.Add(TrackMenuHelper.CreateItem("Remove Folder", "\uE74D", () => ConfirmRemoveRoot(root)));
                 });
 
             ContentStack.Children.Add(card);
@@ -280,8 +336,9 @@ public partial class FoldersView : UserControl
             ? root.Name
             : _currentPath.Split('/').Last();
         TitleText.Text = leafName;
-        SubtitleText.Text = root.Path ?? string.Empty;
+        SubtitleText.Text = root.IsCloud ? (root.SourceUrl ?? root.Path ?? string.Empty) : (root.Path ?? string.Empty);
         DrillBar.Visibility = Visibility.Visible;
+        RemoveRootButton.Visibility = string.IsNullOrEmpty(_currentPath) ? Visibility.Visible : Visibility.Collapsed;
 
         BuildBreadcrumbs(root);
 
@@ -397,6 +454,7 @@ public partial class FoldersView : UserControl
             {
                 _currentPath = childPath;
                 Refresh();
+                Win10Animations.AnimateSlideX(ContentStack, 24);
             };
 
             row.ContextMenu = TrackMenuHelper.BuildTrackMenu(
@@ -422,7 +480,7 @@ public partial class FoldersView : UserControl
             row.Bind(
                 _ctx.Services,
                 track,
-                track.FileName,
+                track.IsCloud ? track.Artist : track.FileName,
                 isCurrent,
                 isPlaying,
                 isAvail,
@@ -479,14 +537,14 @@ public partial class FoldersView : UserControl
 
         string[] segments = string.IsNullOrEmpty(_currentPath) ? Array.Empty<string>() : _currentPath.Split('/');
         AddCrumb("Folders", ResetToRoots, false);
-        AddCrumb(root.Name, () => { _currentPath = string.Empty; Refresh(); }, segments.Length == 0);
+        AddCrumb(root.Name, () => { _currentPath = string.Empty; Refresh(); Win10Animations.AnimateSlideX(ContentStack, -24); }, segments.Length == 0);
 
         string accum = string.Empty;
         for (int i = 0; i < segments.Length; i++)
         {
             accum = i == 0 ? segments[i] : $"{accum}/{segments[i]}";
             string target = accum;
-            AddCrumb(segments[i], () => { _currentPath = target; Refresh(); }, i == segments.Length - 1);
+            AddCrumb(segments[i], () => { _currentPath = target; Refresh(); Win10Animations.AnimateSlideX(ContentStack, -24); }, i == segments.Length - 1);
         }
     }
 
@@ -537,6 +595,21 @@ public partial class FoldersView : UserControl
             "Remove from Library",
             () => _ctx.Services.Library.RemoveRoot(root.Id),
             true);
+    }
+
+    private void AddCloudFolder_Click(object sender, RoutedEventArgs e)
+    {
+        _ctx?.OpenAddCloudFolder?.Invoke();
+    }
+
+    private void RemoveRoot_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ctx is null || _currentRootId is not Guid rid) return;
+        var root = _ctx.Services.Library.GetRoot(rid);
+        if (root is not null)
+        {
+            ConfirmRemoveRoot(root);
+        }
     }
 
     private async void Rescan_Click(object sender, RoutedEventArgs e)

@@ -20,7 +20,7 @@
 
 ## Shared Feature Set
 
-- **Folder-First Library**: Add multiple music folders (`Documents` / `MyMusic` + user-picked folders), preserve folder hierarchies across relaunches, handle temporarily unavailable/disconnected drives gracefully with **Relocate**, and incrementally diff rescans.
+- **Folder-First Library & Cloud Locations**: Add or remove multiple music folders (`Documents` / `MyMusic` + user-picked folders), preserve folder hierarchies across relaunches, handle disconnected drives gracefully with **Relocate**, incrementally diff rescans, and mount **YouTube** & **Bilibili** playlists/collections/multi-part videos directly under **Folders** (with anonymous public playlist loading, Bilibili WBI signing, and local playback parity).
 - **Library Browsing & Search**: Browse by **Folders**, **Songs** (title/artist/album/date-added sort + instant diacritic-insensitive search), **Albums** (ordered by disc & track number), **Artists**, and **Playlists** (built-in **Favourites** + user playlists with create/rename/delete/reorder).
 - **Multiple Independent Queues**: Create, rename, switch, reorder, clear, and delete queues—each remembering its current track, playback position, shuffle permutation, and repeat mode (`Off` / `All` / `One`).
 - **10-Band Equalizer**: Master toggle, preamp (`-12 dB` to `+12 dB`), 10 ISO bands (`31 Hz`–`16 kHz`), and 8 presets (`Flat`, `Bass Boost`, `Treble Boost`, `Rock`, `Pop`, `Jazz`, `Classical`, `Vocal`) plus `Custom`.

@@ -4,10 +4,12 @@ import Observation
 enum LibraryError: LocalizedError {
     case duplicateRoot
     case notAFolder
+    case invalidCloudURL
     var errorDescription: String? {
         switch self {
-        case .duplicateRoot: "That folder is already in your library."
+        case .duplicateRoot: "That location is already in your library."
         case .notAFolder: "That location could not be opened as a folder."
+        case .invalidCloudURL: "Enter a valid YouTube or Bilibili playlist or video URL."
         }
     }
 }
@@ -37,6 +39,7 @@ final class LibraryStore {
     private(set) var favourites: Set<String> = []
     private(set) var isScanning = false
     private(set) var scanProgress: (done: Int, total: Int) = (0, 0)
+    private(set) var cloudSyncErrors: [UUID: String] = [:]
     private var rootURLs: [UUID: URL] = [:]
     /// True once the user has removed the built-in root (only possible where it is removable).
     private(set) var appFolderRemoved = false
@@ -49,6 +52,8 @@ final class LibraryStore {
     @ObservationIgnored private let documentsURL: URL
     @ObservationIgnored private let reader: MetadataReading
     @ObservationIgnored let artwork: ArtworkCache
+    @ObservationIgnored private let cloudFetcher: any CloudPlaylistFetching
+    @ObservationIgnored private let artworkDownloader: @Sendable (URL) async -> Data?
     /// How many newly read songs are published (and saved) at a time during a scan.
     @ObservationIgnored private let scanBatchSize: Int
     @ObservationIgnored private var rescanRequested = false
@@ -76,17 +81,21 @@ final class LibraryStore {
     }
 
     init(directory: URL, documentsURL: URL, reader: MetadataReading, artwork: ArtworkCache, scanBatchSize: Int = 100,
-         appFolderRemovable: Bool = false) {
+         appFolderRemovable: Bool = false,
+         cloudFetcher: any CloudPlaylistFetching = LiveCloudService.shared,
+         artworkDownloader: (@Sendable (URL) async -> Data?)? = nil) {
         self.appFolderRemovable = appFolderRemovable
         self.scanBatchSize = max(scanBatchSize, 1)
         self.directory = directory
         self.documentsURL = documentsURL
         self.reader = reader
         self.artwork = artwork
+        self.cloudFetcher = cloudFetcher
+        self.artworkDownloader = artworkDownloader ?? Self.defaultArtworkDownload
 
         let file = Persistence.load(LibraryFile.self, from: libraryURL)
         rereadAll = file != nil && file?.readerVersion != Self.readerVersion
-        var loadedRoots = file?.roots.filter { $0.kind == .picked } ?? []
+        var loadedRoots = file?.roots.filter { $0.kind != .appFolder } ?? []
         appFolderRemoved = appFolderRemovable && file?.appFolderRemoved == true
         if !appFolderRemoved {
             loadedRoots.insert(Self.appFolderRoot, at: 0)
@@ -151,7 +160,8 @@ final class LibraryStore {
         rootURLs[roots[index].id] = url
     }
 
-    func isAvailable(_ root: LibraryRoot) -> Bool { rootURLs[root.id] != nil }
+    func isAvailable(_ root: LibraryRoot) -> Bool { root.kind.isCloud || rootURLs[root.id] != nil }
+    func isRemovable(_ root: LibraryRoot) -> Bool { root.kind != .appFolder || appFolderRemovable }
     func rootURL(_ id: UUID) -> URL? { rootURLs[id] }
     func root(_ id: UUID) -> LibraryRoot? { roots.first { $0.id == id } }
 
@@ -191,15 +201,46 @@ final class LibraryStore {
         await rescan()
     }
 
+    func addCloudRoot(sourceURL: String, cookie: String? = nil) async throws {
+        let trimmedURL = sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedURL.isEmpty else { throw LibraryError.invalidCloudURL }
+        let trimmedCookie = cookie?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanCookie = (trimmedCookie?.isEmpty == false) ? trimmedCookie : nil
+
+        let fetched = try await cloudFetcher.fetchPlaylist(sourceURL: trimmedURL, cookie: cleanCookie, kindHint: nil)
+        guard !roots.contains(where: { $0.kind == fetched.kind && $0.remoteID == fetched.remoteID }) else {
+            throw LibraryError.duplicateRoot
+        }
+
+        let now = Date()
+        let root = LibraryRoot(
+            id: UUID(),
+            name: fetched.title,
+            kind: fetched.kind,
+            bookmark: nil,
+            sourceURL: trimmedURL,
+            remoteID: fetched.remoteID,
+            cookie: cleanCookie,
+            proxyURL: nil,
+            lastSynced: now
+        )
+        let (newTracks, _) = Self.mergeCloudTracks(root: root, items: fetched.tracks, existing: [:], now: now)
+        roots.append(root)
+        cloudSyncErrors[root.id] = nil
+        publish(tracks + newTracks)
+        await populateMissingCloudArtwork(forRoot: root.id)
+    }
+
     func removeRoot(_ id: UUID) {
         guard let index = roots.firstIndex(where: { $0.id == id }) else { return }
         if roots[index].kind == .appFolder {
             guard appFolderRemovable else { return }
             appFolderRemoved = true
-        } else {
+        } else if roots[index].kind == .picked {
             rootURLs[id]?.stopAccessingSecurityScopedResource()
         }
         rootURLs[id] = nil
+        cloudSyncErrors[id] = nil
         roots.remove(at: index)
         let removed = Set(tracks.filter { $0.rootID == id }.map(\.id))
         tracks.removeAll { $0.rootID == id }
@@ -254,14 +295,43 @@ final class LibraryStore {
             }
         }
 
-        var kept = tracks.filter { rootURLs[$0.rootID] == nil }
+        var kept = tracks.filter { track in
+            rootURLs[track.rootID] == nil && self.root(track.rootID)?.kind.isCloud != true
+        }
         var pending: [(root: LibraryRoot, url: URL, file: ScannedFile, old: Track?)] = []
         var removed = Set<String>()
+        var cloudChanged = false
         let reread = rereadAll
+        let syncNow = Date()
 
         for root in roots {
-            guard let rootURL = rootURLs[root.id] else { continue }
             let existingTracks = tracks.filter { $0.rootID == root.id }
+            if root.kind.isCloud {
+                do {
+                    let source = root.sourceURL ?? root.remoteID ?? ""
+                    let fetched = try await cloudFetcher.fetchPlaylist(sourceURL: source, cookie: root.cookie, kindHint: root.kind)
+                    // A root removed while fetching must not resurrect.
+                    guard let rootIndex = roots.firstIndex(where: { $0.id == root.id }) else { continue }
+                    cloudSyncErrors[root.id] = nil
+                    roots[rootIndex].lastSynced = syncNow
+                    if roots[rootIndex].name.isEmpty, !fetched.title.isEmpty {
+                        roots[rootIndex].name = fetched.title
+                    }
+                    let existing = Dictionary(existingTracks.map { ($0.relativePath, $0) }, uniquingKeysWith: { first, _ in first })
+                    let (merged, didChange) = Self.mergeCloudTracks(root: roots[rootIndex], items: fetched.tracks, existing: existing, now: syncNow)
+                    let seen = Set(merged.map(\.relativePath))
+                    let dropped = existing.filter { !seen.contains($0.key) }.map(\.value.id)
+                    removed.formUnion(dropped)
+                    if didChange || !dropped.isEmpty { cloudChanged = true }
+                    kept.append(contentsOf: merged)
+                } catch {
+                    cloudSyncErrors[root.id] = error.localizedDescription
+                    kept.append(contentsOf: existingTracks)
+                }
+                continue
+            }
+
+            guard let rootURL = rootURLs[root.id] else { continue }
             let scanned = await Task.detached(priority: .userInitiated) { FolderScanner.scan(root: rootURL) }.value
             // A folder that cannot be listed, or a cloud/external folder that suddenly lists nothing,
             // is treated as temporarily unreadable: keep what we know rather than purge playlists.
@@ -314,15 +384,16 @@ final class LibraryStore {
         let final = kept.filter { rootIDs.contains($0.rootID) }
         removed = removed.filter { id in !final.contains { $0.id == id } }
         if reread { rereadAll = false }
-        guard !pending.isEmpty || !removed.isEmpty || final.count != tracks.count else {
-            if reread { saveLibrary() }
-            return
+        if !pending.isEmpty || !removed.isEmpty || final.count != tracks.count || cloudChanged {
+            publish(final)
+            forget(removed)
+            let keys = Set(tracks.compactMap(\.artworkKey))
+            await Task.detached(priority: .utility) { artwork.prune(keeping: keys) }.value
+        } else if reread {
+            saveLibrary()
         }
 
-        publish(final)
-        forget(removed)
-        let keys = Set(tracks.compactMap(\.artworkKey))
-        await Task.detached(priority: .utility) { artwork.prune(keeping: keys) }.value
+        await populateMissingCloudArtwork(forRoot: nil)
     }
 
     private func publish(_ list: [Track]) {
@@ -351,6 +422,133 @@ final class LibraryStore {
             hasEmbeddedLyrics: metadata.lyrics != nil,
             dateAdded: dateAdded,
             artworkKey: artworkKey)
+    }
+
+    private static func mergeCloudTracks(
+        root: LibraryRoot,
+        items: [CloudTrackInfo],
+        existing: [String: Track],
+        now: Date
+    ) -> (tracks: [Track], changed: Bool) {
+        let sourceName = root.kind == .cloudYouTube ? "youtube" : "bilibili"
+        var seen = Set<String>()
+        var result: [Track] = []
+        var changed = false
+
+        for item in items {
+            guard seen.insert(item.relativePath).inserted else { continue }
+            if let old = existing[item.relativePath] {
+                let sameMetadata = old.title == item.title
+                    && old.artist == item.artist
+                    && old.album == item.album
+                    && old.trackNumber == item.trackNumber
+                    && abs(old.duration - item.duration) < 0.5
+                    && old.remoteTrackID == item.remoteTrackID
+                    && old.remoteArtworkURL == item.artworkURL
+                    && old.cloudSource == sourceName
+                if sameMetadata {
+                    result.append(old)
+                    continue
+                }
+            }
+            changed = true
+            let old = existing[item.relativePath]
+            let keepArtworkKey = (old?.remoteArtworkURL == item.artworkURL) ? old?.artworkKey : nil
+            result.append(Track(
+                id: Track.makeID(rootID: root.id, relativePath: item.relativePath),
+                rootID: root.id,
+                relativePath: item.relativePath,
+                title: item.title,
+                artist: item.artist,
+                album: item.album,
+                albumArtist: item.artist,
+                trackNumber: item.trackNumber,
+                discNumber: nil,
+                duration: item.duration,
+                fileSize: 0,
+                modified: now,
+                hasEmbeddedLyrics: false,
+                dateAdded: old?.dateAdded ?? now,
+                artworkKey: keepArtworkKey,
+                cloudSource: sourceName,
+                remoteTrackID: item.remoteTrackID,
+                remoteArtworkURL: item.artworkURL
+            ))
+        }
+        return (result, changed)
+    }
+
+    private func populateMissingCloudArtwork(forRoot rootID: UUID?) async {
+        let targets = tracks.filter { track in
+            track.isCloud
+                && track.artworkKey == nil
+                && track.remoteArtworkURL != nil
+                && (rootID == nil || track.rootID == rootID)
+        }
+        guard !targets.isEmpty else { return }
+
+        // Deduplicate thumbnail URLs so shared covers download once.
+        var byURL: [String: [String]] = [:]
+        for track in targets {
+            if let urlStr = track.remoteArtworkURL {
+                byURL[urlStr, default: []].append(track.id)
+            }
+        }
+
+        let downloader = self.artworkDownloader
+        let artwork = self.artwork
+        var urlToKey: [String: String] = [:]
+
+        let urlStrings = Array(byURL.keys)
+        let batchLimit = 6
+        for start in stride(from: 0, to: urlStrings.count, by: batchLimit) {
+            let batch = Array(urlStrings[start..<min(start + batchLimit, urlStrings.count)])
+            await withTaskGroup(of: (String, String?).self) { group in
+                for urlStr in batch {
+                    group.addTask {
+                        guard let url = URL(string: urlStr),
+                              let data = await downloader(url),
+                              let key = artwork.store(data) else {
+                            return (urlStr, nil)
+                        }
+                        return (urlStr, key)
+                    }
+                }
+                for await (urlStr, key) in group {
+                    if let key { urlToKey[urlStr] = key }
+                }
+            }
+        }
+
+        guard !urlToKey.isEmpty else { return }
+        var updated = tracks
+        var changed = false
+        for index in updated.indices {
+            if updated[index].artworkKey == nil,
+               let urlStr = updated[index].remoteArtworkURL,
+               let key = urlToKey[urlStr] {
+                updated[index].artworkKey = key
+                changed = true
+            }
+        }
+        if changed {
+            publish(updated)
+        }
+    }
+
+    private static let defaultArtworkDownload: @Sendable (URL) async -> Data? = { url in
+        var req = URLRequest(url: url, timeoutInterval: 10)
+        req.setValue(YouTubeClient.webUserAgent, forHTTPHeaderField: "User-Agent")
+        if url.host?.lowercased().contains("hdslb.com") == true {
+            req.setValue(BilibiliClient.referer, forHTTPHeaderField: "Referer")
+        }
+        guard let (data, response) = try? await URLSession.shared.data(for: req),
+              let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode),
+              !data.isEmpty else {
+            return nil
+        }
+        return data
     }
 
     /// Removes vanished tracks from playlists and favourites and tells the player.
@@ -389,7 +587,7 @@ final class LibraryStore {
         rootURLs[track.rootID].map { FolderScanner.url(root: $0, relativePath: track.relativePath) }
     }
 
-    func isAvailable(_ track: Track) -> Bool { rootURLs[track.rootID] != nil }
+    func isAvailable(_ track: Track) -> Bool { track.isCloud || rootURLs[track.rootID] != nil }
 
     func embeddedLyrics(for track: Track) async -> String? {
         guard track.hasEmbeddedLyrics, let url = url(for: track) else { return nil }

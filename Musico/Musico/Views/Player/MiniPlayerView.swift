@@ -20,9 +20,14 @@ struct MiniPlayerView: View {
                         Text(track.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer(minLength: 8)
-                    Button("Play or Pause", systemImage: player.isPlaying ? "pause.fill" : "play.fill") { player.togglePlayPause() }
-                        .font(.title3)
-                        .frame(width: 44, height: 44)
+                    if player.isBuffering {
+                        ProgressView()
+                            .frame(width: 44, height: 44)
+                    } else {
+                        Button("Play or Pause", systemImage: player.isPlaying ? "pause.fill" : "play.fill") { player.togglePlayPause() }
+                            .font(.title3)
+                            .frame(width: 44, height: 44)
+                    }
                     Button("Next", systemImage: "forward.fill") { player.next() }
                         .font(.title3)
                         .frame(width: 44, height: 44)

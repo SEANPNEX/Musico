@@ -248,4 +248,91 @@ final class PlayerControllerTests: XCTestCase {
         XCTAssertEqual(player.eq.presetName, "Rock")
         XCTAssertTrue(player.eq.enabled)
     }
+
+    func testCloudTrackPlaysAsynchronouslyAndRapidNextCancelsStaleLoad() async throws {
+        let fixture = try XCTUnwrap(Bundle(for: PlayerControllerTests.self).url(forResource: "sample", withExtension: "mp3"))
+        let sampleData = try Data(contentsOf: fixture)
+        let fetcher = TestCloudFetcher(result: CloudPlaylistResult(
+            kind: .cloudYouTube,
+            remoteID: "PLplayback",
+            title: "Cloud Play",
+            tracks: [
+                CloudTrackInfo(remoteTrackID: "c1", relativePath: "c1", title: "Cloud 1", artist: "A", album: "Al", trackNumber: 1, duration: 58, artworkURL: nil),
+                CloudTrackInfo(remoteTrackID: "c2", relativePath: "c2", title: "Cloud 2", artist: "B", album: "Al", trackNumber: 2, duration: 58, artworkURL: nil)
+            ]
+        ))
+        let cloudLib = LibraryStore(
+            directory: makeTempDir(),
+            documentsURL: makeTempDir(),
+            reader: StubReader(),
+            artwork: ArtworkCache(directory: makeTempDir()),
+            cloudFetcher: fetcher,
+            artworkDownloader: { _ in nil }
+        )
+        try await cloudLib.addCloudRoot(sourceURL: "https://music.youtube.com/playlist?list=PLplayback")
+
+        let cacheDir = makeTempDir()
+        let resolver = TestCloudResolver { track, _, _ in
+            if track.remoteTrackID == "c1" {
+                try await Task.sleep(nanoseconds: 250_000_000)
+            }
+            return CloudStreamResult(url: URL(string: "https://cdn.example/\(track.remoteTrackID ?? "x").mp3")!, headers: [:], fileExtension: "mp3", expiresAt: Date().addingTimeInterval(600))
+        }
+        let cache = CloudAudioCache(
+            directory: cacheDir,
+            maxBytes: 50_000_000,
+            resolver: resolver,
+            downloader: { _, _ in
+                let tmp = makeTempDir().appendingPathComponent("s.mp3")
+                try sampleData.write(to: tmp)
+                return (tmp, 200, "audio/mpeg")
+            }
+        )
+
+        let cloudState = makeTempDir()
+        let cloudQueues = QueueStore(directory: cloudState)
+        let cloudHistory = PlayHistoryStore(directory: cloudState)
+        let cloudPlayer = PlayerController(
+            library: cloudLib,
+            queues: cloudQueues,
+            history: cloudHistory,
+            engine: AudioEngine(),
+            settingsURL: cloudState.appendingPathComponent("settings.json"),
+            cloudAudio: cache
+        )
+        defer { cloudPlayer.shutdown() }
+
+        let ids = cloudLib.tracks.sorted { $0.relativePath < $1.relativePath }.map(\.id)
+        cloudPlayer.play(ids, startAt: 0)
+        XCTAssertEqual(cloudPlayer.currentTrack?.relativePath, "c1")
+        XCTAssertTrue(cloudPlayer.isBuffering)
+
+        // Rapidly skip to c2 while c1 is still resolving.
+        cloudPlayer.next()
+        XCTAssertEqual(cloudPlayer.currentTrack?.relativePath, "c2")
+
+        // Wait for c2 to load and start playing.
+        for _ in 0..<40 {
+            if cloudPlayer.isPlaying { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(cloudPlayer.currentTrack?.relativePath, "c2")
+        XCTAssertFalse(cloudPlayer.isBuffering)
+        XCTAssertTrue(cloudPlayer.isPlaying)
+        XCTAssertNil(cloudPlayer.errorMessage)
+    }
+}
+
+private struct TestCloudFetcher: CloudPlaylistFetching {
+    let result: CloudPlaylistResult
+    func fetchPlaylist(sourceURL: String, cookie: String?, kindHint: LibraryRoot.Kind?) async throws -> CloudPlaylistResult {
+        result
+    }
+}
+
+private struct TestCloudResolver: CloudStreamResolving {
+    let handler: @Sendable (Track, LibraryRoot?, Bool) async throws -> CloudStreamResult
+    func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult {
+        try await handler(track, root, forceRefresh)
+    }
 }

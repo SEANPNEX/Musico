@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
+using MusicoWindows.Theme;
 
 namespace MusicoWindows.Controls;
 
@@ -96,6 +97,7 @@ public partial class EqualizerDialog : UserControl
         _working = services.Player.Eq.Clone();
         SyncUiFromWorking();
         Visibility = Visibility.Visible;
+        Win10Animations.AnimateModalOpen(BackdropGrid, DialogCard);
     }
 
     public void Close()

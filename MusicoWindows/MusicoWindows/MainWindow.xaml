@@ -332,6 +332,7 @@
             <controls:SleepTimerDialog x:Name="SleepDialog" />
             <controls:TextInputDialog x:Name="PromptDialog" />
             <controls:ConfirmDialog x:Name="ConfirmOverlay" />
+            <controls:AddCloudFolderDialog x:Name="CloudDialog" />
         </Grid>
     </Grid>
 </Window>

@@ -2,9 +2,10 @@ package com.musico.ui
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.slideInVertically
-import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -63,6 +64,7 @@ import com.musico.ui.screens.LibraryScreen
 import com.musico.ui.screens.QueuesContent
 import com.musico.ui.screens.QueuesScreen
 import com.musico.ui.screens.StatsScreen
+import com.musico.ui.theme.MusicoMotion
 
 enum class TopDestination(
     val label: String,
@@ -96,6 +98,17 @@ fun MusicoApp(
     var selectedDestination by rememberSaveable { mutableStateOf(TopDestination.LIBRARY) }
     var showFullPlayer by rememberSaveable { mutableStateOf(false) }
     var sidePanel by rememberSaveable { mutableStateOf<SidePanel?>(null) }
+    var lastTrack by remember { mutableStateOf(playerState.currentTrack) }
+    if (playerState.currentTrack != null) {
+        lastTrack = playerState.currentTrack
+    }
+    val miniPlayerState = remember(playerState, lastTrack) {
+        if (playerState.currentTrack != null) playerState else playerState.copy(currentTrack = lastTrack)
+    }
+    var lastSidePanel by remember { mutableStateOf(sidePanel) }
+    if (sidePanel != null) {
+        lastSidePanel = sidePanel
+    }
 
     BackHandler(enabled = showFullPlayer) {
         showFullPlayer = false
@@ -110,15 +123,21 @@ fun MusicoApp(
                 contentWindowInsets = WindowInsets(0),
                 bottomBar = {
                     Column(modifier = Modifier.fillMaxWidth()) {
-                        if (playerState.currentTrack != null) {
-                            MiniPlayer(
-                                playerState = playerState,
-                                artworkCache = libraryStore.artwork,
-                                onTogglePlayPause = { playerController.togglePlayPause() },
-                                onNext = { playerController.next() },
-                                onOpenFullPlayer = { showFullPlayer = true }
-                            )
-                            HorizontalDivider()
+                        AnimatedVisibility(
+                            visible = playerState.currentTrack != null,
+                            enter = MusicoMotion.miniPlayerEnter,
+                            exit = MusicoMotion.miniPlayerExit
+                        ) {
+                            Column(modifier = Modifier.fillMaxWidth()) {
+                                MiniPlayer(
+                                    playerState = miniPlayerState,
+                                    artworkCache = libraryStore.artwork,
+                                    onTogglePlayPause = { playerController.togglePlayPause() },
+                                    onNext = { playerController.next() },
+                                    onOpenFullPlayer = { showFullPlayer = true }
+                                )
+                                HorizontalDivider()
+                            }
                         }
                         NavigationBar {
                             TopDestination.entries.forEach { dest ->
@@ -191,52 +210,65 @@ fun MusicoApp(
                             .fillMaxHeight()
                     )
 
-                    if (isWide && sidePanel != null) {
-                        VerticalDivider()
-                        Surface(
-                            modifier = Modifier
-                                .width(340.dp)
-                                .fillMaxHeight()
-                                .statusBarsPadding(),
-                            color = MaterialTheme.colorScheme.surface
-                        ) {
-                            Column(modifier = Modifier.fillMaxSize()) {
-                                Row(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(start = 16.dp, end = 4.dp, top = 8.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.SpaceBetween
-                                ) {
-                                    Text(
-                                        text = if (sidePanel == SidePanel.LYRICS) "Lyrics" else "Queue",
-                                        style = MaterialTheme.typography.titleMedium
-                                    )
-                                    IconButton(onClick = { sidePanel = null }) {
-                                        Icon(Icons.Rounded.Close, contentDescription = "Close panel")
+                    AnimatedVisibility(
+                        visible = isWide && sidePanel != null,
+                        enter = MusicoMotion.sidePanelEnter,
+                        exit = MusicoMotion.sidePanelExit
+                    ) {
+                        Row(modifier = Modifier.fillMaxHeight()) {
+                            VerticalDivider()
+                            Surface(
+                                modifier = Modifier
+                                    .width(340.dp)
+                                    .fillMaxHeight()
+                                    .statusBarsPadding(),
+                                color = MaterialTheme.colorScheme.surface
+                            ) {
+                                val displayedPanel = sidePanel ?: lastSidePanel ?: SidePanel.QUEUE
+                                Column(modifier = Modifier.fillMaxSize()) {
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(start = 16.dp, end = 4.dp, top = 8.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.SpaceBetween
+                                    ) {
+                                        Text(
+                                            text = if (displayedPanel == SidePanel.LYRICS) "Lyrics" else "Queue",
+                                            style = MaterialTheme.typography.titleMedium
+                                        )
+                                        IconButton(onClick = { sidePanel = null }) {
+                                            Icon(Icons.Rounded.Close, contentDescription = "Close panel")
+                                        }
                                     }
-                                }
-                                when (sidePanel) {
-                                    SidePanel.LYRICS -> LyricsContent(
-                                        libraryStore = libraryStore,
-                                        lyricsStore = lyricsStore,
-                                        playerController = playerController,
-                                        playerState = playerState,
-                                        onPickLyricsFile = onPickLyricsFile,
-                                        embedded = true,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
-                                    SidePanel.QUEUE, null -> QueuesContent(
-                                        libraryStore = libraryStore,
-                                        libraryState = libraryState,
-                                        queueStore = queueStore,
-                                        queueState = queueState,
-                                        playerController = playerController,
-                                        playerState = playerState,
-                                        trackActions = trackActions,
-                                        editing = false,
-                                        modifier = Modifier.fillMaxSize()
-                                    )
+                                    Crossfade(
+                                        targetState = displayedPanel,
+                                        animationSpec = tween(durationMillis = MusicoMotion.ENTER_DURATION_MS),
+                                        label = "wide_side_panel"
+                                    ) { panel ->
+                                        when (panel) {
+                                            SidePanel.LYRICS -> LyricsContent(
+                                                libraryStore = libraryStore,
+                                                lyricsStore = lyricsStore,
+                                                playerController = playerController,
+                                                playerState = playerState,
+                                                onPickLyricsFile = onPickLyricsFile,
+                                                embedded = true,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                            SidePanel.QUEUE -> QueuesContent(
+                                                libraryStore = libraryStore,
+                                                libraryState = libraryState,
+                                                queueStore = queueStore,
+                                                queueState = queueState,
+                                                playerController = playerController,
+                                                playerState = playerState,
+                                                trackActions = trackActions,
+                                                editing = false,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -255,23 +287,29 @@ fun MusicoApp(
                         },
                         onOpenFullPlayer = { showFullPlayer = true }
                     )
-                } else if (playerState.currentTrack != null) {
-                    MiniPlayer(
-                        playerState = playerState,
-                        artworkCache = libraryStore.artwork,
-                        onTogglePlayPause = { playerController.togglePlayPause() },
-                        onNext = { playerController.next() },
-                        onOpenFullPlayer = { showFullPlayer = true },
-                        applyNavBarPadding = true
-                    )
+                } else {
+                    AnimatedVisibility(
+                        visible = playerState.currentTrack != null,
+                        enter = MusicoMotion.miniPlayerEnter,
+                        exit = MusicoMotion.miniPlayerExit
+                    ) {
+                        MiniPlayer(
+                            playerState = miniPlayerState,
+                            artworkCache = libraryStore.artwork,
+                            onTogglePlayPause = { playerController.togglePlayPause() },
+                            onNext = { playerController.next() },
+                            onOpenFullPlayer = { showFullPlayer = true },
+                            applyNavBarPadding = true
+                        )
+                    }
                 }
             }
         }
 
         AnimatedVisibility(
             visible = showFullPlayer,
-            enter = slideInVertically(initialOffsetY = { it }),
-            exit = slideOutVertically(targetOffsetY = { it })
+            enter = MusicoMotion.fullPlayerEnter,
+            exit = MusicoMotion.fullPlayerExit
         ) {
             FullPlayerScreen(
                 libraryStore = libraryStore,
@@ -323,47 +361,53 @@ private fun DestinationContent(
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier) {
-        when (destination) {
-            TopDestination.FOLDERS -> FoldersScreen(
-                libraryStore = appContainer.libraryStore,
-                libraryState = libraryState,
-                playerState = playerState,
-                queues = queueState.queues,
-                activeQueue = queueState.active,
-                trackActions = trackActions,
-                onPickFolder = onPickFolder,
-                modifier = Modifier.fillMaxSize()
-            )
-            TopDestination.LIBRARY -> LibraryScreen(
-                libraryStore = appContainer.libraryStore,
-                libraryState = libraryState,
-                playerState = playerState,
-                queues = queueState.queues,
-                activeQueue = queueState.active,
-                trackActions = trackActions,
-                modifier = Modifier.fillMaxSize()
-            )
-            TopDestination.QUEUES -> QueuesScreen(
-                libraryStore = appContainer.libraryStore,
-                libraryState = libraryState,
-                queueStore = appContainer.queueStore,
-                queueState = queueState,
-                playerController = appContainer.playerController,
-                playerState = playerState,
-                trackActions = trackActions,
-                modifier = Modifier.fillMaxSize()
-            )
-            TopDestination.STATS -> StatsScreen(
-                libraryStore = appContainer.libraryStore,
-                libraryState = libraryState,
-                historyStore = appContainer.historyStore,
-                historyState = historyState,
-                playerState = playerState,
-                queues = queueState.queues,
-                activeQueue = queueState.active,
-                trackActions = trackActions,
-                modifier = Modifier.fillMaxSize()
-            )
+        AnimatedContent(
+            targetState = destination,
+            transitionSpec = { MusicoMotion.fadeThroughTransform() },
+            label = "top_destination"
+        ) { dest ->
+            when (dest) {
+                TopDestination.FOLDERS -> FoldersScreen(
+                    libraryStore = appContainer.libraryStore,
+                    libraryState = libraryState,
+                    playerState = playerState,
+                    queues = queueState.queues,
+                    activeQueue = queueState.active,
+                    trackActions = trackActions,
+                    onPickFolder = onPickFolder,
+                    modifier = Modifier.fillMaxSize()
+                )
+                TopDestination.LIBRARY -> LibraryScreen(
+                    libraryStore = appContainer.libraryStore,
+                    libraryState = libraryState,
+                    playerState = playerState,
+                    queues = queueState.queues,
+                    activeQueue = queueState.active,
+                    trackActions = trackActions,
+                    modifier = Modifier.fillMaxSize()
+                )
+                TopDestination.QUEUES -> QueuesScreen(
+                    libraryStore = appContainer.libraryStore,
+                    libraryState = libraryState,
+                    queueStore = appContainer.queueStore,
+                    queueState = queueState,
+                    playerController = appContainer.playerController,
+                    playerState = playerState,
+                    trackActions = trackActions,
+                    modifier = Modifier.fillMaxSize()
+                )
+                TopDestination.STATS -> StatsScreen(
+                    libraryStore = appContainer.libraryStore,
+                    libraryState = libraryState,
+                    historyStore = appContainer.historyStore,
+                    historyState = historyState,
+                    playerState = playerState,
+                    queues = queueState.queues,
+                    activeQueue = queueState.active,
+                    trackActions = trackActions,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
         }
     }
 }

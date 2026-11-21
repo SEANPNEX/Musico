@@ -1,5 +1,6 @@
 package com.musico.ui.screens
 
+import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -272,6 +273,7 @@ fun QueuesContent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
+                .animateContentSize()
                 .padding(start = 16.dp, end = 8.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -379,6 +381,7 @@ fun QueuesContent(
                             isAvailable = libraryStore.isAvailable(track),
                             backgroundColor = rowBg,
                             onClick = { playerController.jump(index) },
+                            modifier = Modifier.animateItem(),
                             trailingActions = if (editing) {
                                 {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -437,6 +440,7 @@ fun QueuesContent(
                         )
                     } else {
                         ListItem(
+                            modifier = Modifier.animateItem(),
                             headlineContent = {
                                 Text(
                                     text = "Missing song",

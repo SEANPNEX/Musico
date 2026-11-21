@@ -2,6 +2,7 @@ using System;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using MusicoWindows.Theme;
 
 namespace MusicoWindows.Controls;
 
@@ -24,6 +25,7 @@ public partial class ConfirmDialog : UserControl
         ConfirmButton.Content = confirmLabel;
         CancelButton.Visibility = showCancel ? Visibility.Visible : Visibility.Collapsed;
         Visibility = Visibility.Visible;
+        Win10Animations.AnimateModalOpen(BackdropGrid, DialogCard);
     }
 
     public void Close()

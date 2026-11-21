@@ -2,6 +2,7 @@ package com.musico.ui.screens
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.WindowInsets
@@ -121,69 +122,71 @@ fun PlaylistsScreen(
             items(libraryState.playlists, key = { it.id }) { playlist ->
                 var menuExpanded by remember { mutableStateOf(false) }
 
-                ListItem(
-                    modifier = Modifier.clickable { onPlaylistClick(PlaylistRef.User(playlist.id)) },
-                    leadingContent = {
-                        Icon(
-                            imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
-                        )
-                    },
-                    headlineContent = {
-                        Text(
-                            text = playlist.name,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    },
-                    supportingContent = { Text("${playlist.trackIds.size} songs") },
-                    trailingContent = {
-                        Box {
-                            IconButton(onClick = { menuExpanded = true }) {
-                                Icon(Icons.Rounded.MoreVert, contentDescription = "Playlist options")
-                            }
-                            DropdownMenu(
-                                expanded = menuExpanded,
-                                onDismissRequest = { menuExpanded = false }
-                            ) {
-                                DropdownMenuItem(
-                                    text = { Text("Rename…") },
-                                    leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
-                                    onClick = {
-                                        menuExpanded = false
-                                        renamingPlaylist = playlist
-                                    }
-                                )
-                                DropdownMenuItem(
-                                    text = { Text("Delete") },
-                                    leadingIcon = {
-                                        Icon(
-                                            Icons.Rounded.Delete,
-                                            contentDescription = null,
-                                            tint = MaterialTheme.colorScheme.error
-                                        )
-                                    },
-                                    onClick = {
-                                        menuExpanded = false
-                                        deletingPlaylist = playlist
-                                    }
-                                )
-                                if (playlist.trackIds.isNotEmpty()) {
-                                    HorizontalDivider()
-                                    TrackMenuItems(
-                                        ids = playlist.trackIds,
-                                        queues = queues,
-                                        activeQueueId = activeQueue.id,
-                                        actionState = trackActions,
-                                        onDismiss = { menuExpanded = false }
+                Column(modifier = Modifier.animateItem()) {
+                    ListItem(
+                        modifier = Modifier.clickable { onPlaylistClick(PlaylistRef.User(playlist.id)) },
+                        leadingContent = {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        },
+                        headlineContent = {
+                            Text(
+                                text = playlist.name,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis
+                            )
+                        },
+                        supportingContent = { Text("${playlist.trackIds.size} songs") },
+                        trailingContent = {
+                            Box {
+                                IconButton(onClick = { menuExpanded = true }) {
+                                    Icon(Icons.Rounded.MoreVert, contentDescription = "Playlist options")
+                                }
+                                DropdownMenu(
+                                    expanded = menuExpanded,
+                                    onDismissRequest = { menuExpanded = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Rename…") },
+                                        leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                        onClick = {
+                                            menuExpanded = false
+                                            renamingPlaylist = playlist
+                                        }
                                     )
+                                    DropdownMenuItem(
+                                        text = { Text("Delete") },
+                                        leadingIcon = {
+                                            Icon(
+                                                Icons.Rounded.Delete,
+                                                contentDescription = null,
+                                                tint = MaterialTheme.colorScheme.error
+                                            )
+                                        },
+                                        onClick = {
+                                            menuExpanded = false
+                                            deletingPlaylist = playlist
+                                        }
+                                    )
+                                    if (playlist.trackIds.isNotEmpty()) {
+                                        HorizontalDivider()
+                                        TrackMenuItems(
+                                            ids = playlist.trackIds,
+                                            queues = queues,
+                                            activeQueueId = activeQueue.id,
+                                            actionState = trackActions,
+                                            onDismiss = { menuExpanded = false }
+                                        )
+                                    }
                                 }
                             }
                         }
-                    }
-                )
-                HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                    )
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
+                }
             }
         }
     }
@@ -328,6 +331,7 @@ fun PlaylistDetailScreen(
                         isPlaying = playerState.isPlaying,
                         isAvailable = libraryStore.isAvailable(track),
                         onClick = { trackActions.playerController.play(trackIds, startAt = index) },
+                        modifier = Modifier.animateItem(),
                         trailingActions = if (ref is PlaylistRef.User && editing) {
                             {
                                 Row(verticalAlignment = Alignment.CenterVertically) {

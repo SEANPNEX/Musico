@@ -5,6 +5,12 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
+import com.musico.cloud.BilibiliClient
+import com.musico.cloud.CloudHttpClient
+import com.musico.cloud.CloudSource
+import com.musico.cloud.CloudTrackMetadata
+import com.musico.cloud.UrlConnectionCloudHttpClient
+import com.musico.cloud.YouTubeClient
 import com.musico.core.ArtworkCache
 import com.musico.core.FolderScanner
 import com.musico.core.MetadataReading
@@ -34,6 +40,7 @@ import kotlin.math.abs
 sealed class LibraryException(message: String) : Exception(message) {
     data object DuplicateRoot : LibraryException("That folder is already in your library.")
     data object NotAFolder : LibraryException("That location could not be opened as a folder.")
+    data object UnsupportedCloudUrl : LibraryException("Enter a valid YouTube or Bilibili playlist, collection, or video URL.")
 }
 
 data class LibraryUiState(
@@ -56,6 +63,9 @@ class LibraryStore(
     val artwork: ArtworkCache,
     private val context: Context? = null,
     private val scanBatchSize: Int = 100,
+    private val cloudHttpClient: CloudHttpClient = UrlConnectionCloudHttpClient(),
+    private val youTubeClient: YouTubeClient = YouTubeClient(cloudHttpClient),
+    private val bilibiliClient: BilibiliClient = BilibiliClient(cloudHttpClient),
 ) {
     @Serializable
     private data class LibraryFile(
@@ -91,14 +101,14 @@ class LibraryStore(
         val loadedLib = Persistence.load<LibraryFile>(libraryFile)
         rereadAll = loadedLib != null && loadedLib.readerVersion != READER_VERSION
 
-        val pickedRoots = loadedLib?.roots?.filter { it.kind == RootKind.PICKED }.orEmpty()
+        val userRoots = loadedLib?.roots?.filter { it.kind != RootKind.APP_FOLDER }.orEmpty()
         val appRoot = LibraryRoot(
             id = LibraryRoot.APP_FOLDER_ID,
             name = APP_FOLDER_NAME,
             kind = RootKind.APP_FOLDER,
             treeUri = null,
         )
-        val initialRoots = listOf(appRoot) + pickedRoots
+        val initialRoots = listOf(appRoot) + userRoots
         makeAppFolderVisible(appFolderDir)
 
         if (loadedLib != null) {
@@ -134,6 +144,9 @@ class LibraryStore(
     }
 
     private fun checkRootAvailable(root: LibraryRoot): Boolean {
+        if (root.kind.isCloud) {
+            return true
+        }
         if (root.kind == RootKind.APP_FOLDER) {
             return appFolderDir.exists() && appFolderDir.isDirectory && appFolderDir.canRead()
         }
@@ -230,6 +243,7 @@ class LibraryStore(
                 RootKind.PICKED -> root.treeUri?.let {
                     runCatching { canonicalUriKey(Uri.parse(it)) }.getOrNull() == candidateKey
                 } == true
+                RootKind.CLOUD_YOUTUBE, RootKind.CLOUD_BILIBILI -> false
             }
         }
         if (duplicate) {
@@ -281,6 +295,79 @@ class LibraryStore(
         return Result.success(Unit)
     }
 
+    suspend fun addCloudRoot(sourceUrl: String, cookie: String? = null): Result<Unit> {
+        val trimmedUrl = sourceUrl.trim()
+        if (trimmedUrl.isEmpty()) {
+            return Result.failure(LibraryException.UnsupportedCloudUrl)
+        }
+        val cleanCookie = cookie?.trim()?.takeIf { it.isNotEmpty() }
+
+        val isBilibili = BilibiliClient.canHandle(trimmedUrl)
+        val isYouTube = YouTubeClient.canHandle(trimmedUrl)
+        if (!isBilibili && !isYouTube) {
+            return Result.failure(LibraryException.UnsupportedCloudUrl)
+        }
+
+        val playlist = try {
+            withContext(Dispatchers.IO) {
+                if (isBilibili && !isYouTube) {
+                    bilibiliClient.fetchPlaylist(trimmedUrl, cleanCookie)
+                } else if (isYouTube && !isBilibili) {
+                    youTubeClient.fetchPlaylist(trimmedUrl, cleanCookie)
+                } else {
+                    if (trimmedUrl.contains("bilibili", ignoreCase = true) || trimmedUrl.contains("b23.tv", ignoreCase = true)) {
+                        bilibiliClient.fetchPlaylist(trimmedUrl, cleanCookie)
+                    } else {
+                        youTubeClient.fetchPlaylist(trimmedUrl, cleanCookie)
+                    }
+                }
+            }
+        } catch (err: Exception) {
+            return Result.failure(err)
+        }
+
+        val kind = if (playlist.source == CloudSource.YOUTUBE) {
+            RootKind.CLOUD_YOUTUBE
+        } else {
+            RootKind.CLOUD_BILIBILI
+        }
+
+        val duplicate = _state.value.roots.any {
+            it.kind == kind && it.remoteId == playlist.remoteId
+        }
+        if (duplicate) {
+            return Result.failure(LibraryException.DuplicateRoot)
+        }
+
+        val nowMs = System.currentTimeMillis()
+        val root = LibraryRoot(
+            id = UUID.randomUUID().toString(),
+            name = playlist.title,
+            kind = kind,
+            sourceUrl = trimmedUrl,
+            remoteId = playlist.remoteId,
+            cookie = cleanCookie,
+            lastSyncedEpochMs = nowMs,
+        )
+
+        val newTracks = withContext(Dispatchers.IO) {
+            buildCloudTracks(
+                root = root,
+                items = playlist.tracks,
+                existingByRel = emptyMap(),
+                nowMs = nowMs,
+            )
+        }
+
+        val current = _state.value
+        _state.value = current.copy(
+            roots = current.roots + root,
+            availableRootIds = current.availableRootIds + root.id,
+        )
+        publish(current.tracks + newTracks)
+        return Result.success(Unit)
+    }
+
     fun removeRoot(rootId: String) {
         val current = _state.value
         val index = current.roots.indexOfFirst { it.id == rootId }
@@ -288,7 +375,9 @@ class LibraryStore(
         val root = current.roots[index]
         if (root.kind == RootKind.APP_FOLDER) return
 
-        releasePersistableReadPermission(root.treeUri)
+        if (root.kind == RootKind.PICKED) {
+            releasePersistableReadPermission(root.treeUri)
+        }
 
         val updatedRoots = current.roots.toMutableList().apply { removeAt(index) }
         val removedIds = current.tracks.filter { it.rootId == rootId }.map { it.id }.toSet()
@@ -349,10 +438,67 @@ class LibraryStore(
         val pending = mutableListOf<PendingScan>()
         val removed = mutableSetOf<String>()
         val reread = rereadAll
+        val updatedRoots = currentRoots.toMutableList()
+        var rootsChanged = false
+        var cloudTracksChanged = false
 
-        for (root in currentRoots) {
+        for ((rootIndex, root) in currentRoots.withIndex()) {
             if (root.id !in availableNow) continue
             val existingTracks = currentTracks.filter { it.rootId == root.id }
+
+            if (root.kind.isCloud) {
+                val url = root.sourceUrl ?: root.remoteId
+                if (url.isNullOrBlank()) {
+                    kept.addAll(existingTracks)
+                    continue
+                }
+                val syncResult = withContext(Dispatchers.IO) {
+                    runCatching {
+                        when (root.kind) {
+                            RootKind.CLOUD_YOUTUBE -> youTubeClient.fetchPlaylist(url, root.cookie)
+                            RootKind.CLOUD_BILIBILI -> bilibiliClient.fetchPlaylist(url, root.cookie)
+                            else -> null
+                        }
+                    }
+                }
+                val playlist = syncResult.getOrNull()
+                if (playlist == null || (playlist.tracks.isEmpty() && existingTracks.isNotEmpty())) {
+                    // Retain existing cloud tracks on transient network errors.
+                    kept.addAll(existingTracks)
+                    continue
+                }
+
+                val existingByRel = LinkedHashMap<String, Track>()
+                for (t in existingTracks) {
+                    existingByRel.putIfAbsent(t.relativePath, t)
+                }
+                val syncNow = System.currentTimeMillis()
+                val syncedTracks = withContext(Dispatchers.IO) {
+                    buildCloudTracks(
+                        root = root,
+                        items = playlist.tracks,
+                        existingByRel = existingByRel,
+                        nowMs = syncNow,
+                    )
+                }
+                val seenRels = syncedTracks.map { it.relativePath }.toSet()
+                for ((rel, oldTrack) in existingByRel) {
+                    if (rel !in seenRels) {
+                        removed.add(oldTrack.id)
+                    }
+                }
+                if (syncedTracks != existingTracks) {
+                    cloudTracksChanged = true
+                }
+                kept.addAll(syncedTracks)
+                updatedRoots[rootIndex] = root.copy(
+                    name = playlist.title.ifBlank { root.name },
+                    lastSyncedEpochMs = syncNow,
+                )
+                rootsChanged = true
+                continue
+            }
+
             val scanned: List<ScannedFile>? = withContext(Dispatchers.IO) {
                 scanRoot(root)
             }
@@ -430,14 +576,18 @@ class LibraryStore(
             }
         }
 
+        if (rootsChanged) {
+            _state.value = _state.value.copy(roots = updatedRoots)
+        }
+
         val rootIds = _state.value.roots.map { it.id }.toSet()
         val finalTracks = kept.filter { it.rootId in rootIds }
         val finalIds = finalTracks.map { it.id }.toSet()
         val finalRemoved = removed.filter { it !in finalIds }.toSet()
 
         if (reread) rereadAll = false
-        if (pending.isEmpty() && finalRemoved.isEmpty() && finalTracks.size == _state.value.tracks.size) {
-            if (reread) saveLibrary()
+        if (pending.isEmpty() && finalRemoved.isEmpty() && !cloudTracksChanged && finalTracks.size == _state.value.tracks.size) {
+            if (reread || rootsChanged) saveLibrary()
             return
         }
 
@@ -451,6 +601,79 @@ class LibraryStore(
         withContext(Dispatchers.IO) {
             artwork.prune(keysToKeep)
         }
+    }
+
+    private suspend fun buildCloudTracks(
+        root: LibraryRoot,
+        items: List<CloudTrackMetadata>,
+        existingByRel: Map<String, Track>,
+        nowMs: Long,
+    ): List<Track> {
+        val artKeysByUrl = HashMap<String, String?>()
+        val seenRel = HashSet<String>()
+        val result = ArrayList<Track>(items.size)
+        val sourceSlug = root.kind.name.lowercase()
+        val artHeaders = buildMap {
+            if (root.kind == RootKind.CLOUD_BILIBILI) {
+                put("Referer", "https://www.bilibili.com/")
+                put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+            }
+        }
+
+        for ((index, meta) in items.withIndex()) {
+            val relPath = "$sourceSlug/${meta.remoteTrackId}"
+            if (!seenRel.add(relPath)) continue
+            val old = existingByRel[relPath]
+            val artUrl = meta.artworkUrl
+
+            val artworkKey = when {
+                old != null &&
+                    old.remoteArtworkUrl == artUrl &&
+                    old.artworkKey != null &&
+                    artwork.file(old.artworkKey) != null -> old.artworkKey
+                !artUrl.isNullOrBlank() -> artKeysByUrl.getOrPut(artUrl) {
+                    runCatching {
+                        val resp = cloudHttpClient.get(artUrl, headers = artHeaders)
+                        if (resp.statusCode in 200..299 && resp.bodyBytes.isNotEmpty()) {
+                            artwork.store(resp.bodyBytes)
+                        } else {
+                            null
+                        }
+                    }.getOrNull()
+                }
+                else -> old?.artworkKey
+            }
+
+            val cloudSource = if (root.kind == RootKind.CLOUD_YOUTUBE) {
+                CloudSource.YOUTUBE
+            } else {
+                CloudSource.BILIBILI
+            }
+
+            result.add(
+                Track(
+                    id = Track.makeId(root.id, relPath),
+                    rootId = root.id,
+                    relativePath = relPath,
+                    title = meta.title.ifBlank { meta.remoteTrackId },
+                    artist = meta.artist.ifBlank { root.name },
+                    album = meta.album.ifBlank { root.name },
+                    albumArtist = meta.artist.ifBlank { root.name },
+                    trackNumber = meta.trackNumber ?: (index + 1),
+                    discNumber = null,
+                    durationSec = meta.durationSec,
+                    fileSize = 0L,
+                    modifiedEpochMs = 0L,
+                    hasEmbeddedLyrics = false,
+                    dateAddedEpochMs = old?.dateAddedEpochMs ?: nowMs,
+                    artworkKey = artworkKey,
+                    cloudSource = cloudSource,
+                    remoteTrackId = meta.remoteTrackId,
+                    remoteArtworkUrl = artUrl,
+                )
+            )
+        }
+        return result
     }
 
     private fun scanRoot(root: LibraryRoot): List<ScannedFile>? {
@@ -585,10 +808,15 @@ class LibraryStore(
 
     fun tracks(ids: List<String>): List<Track> = ids.mapNotNull { byId[it] }
 
+    fun rootFor(track: Track): LibraryRoot? =
+        _state.value.roots.firstOrNull { it.id == track.rootId }
+
     fun uriFor(track: Track): Uri? {
+        if (track.isCloud) return null
         val current = _state.value
         if (track.rootId !in current.availableRootIds) return null
         val root = current.roots.firstOrNull { it.id == track.rootId } ?: return null
+        if (root.kind.isCloud) return null
         if (root.kind == RootKind.APP_FOLDER) {
             return Uri.fromFile(FolderScanner.fileFor(appFolderDir, track.relativePath))
         }
@@ -612,9 +840,11 @@ class LibraryStore(
     }
 
     suspend fun readSiblingLyrics(track: Track): ByteArray? = withContext(Dispatchers.IO) {
+        if (track.isCloud) return@withContext null
         val current = _state.value
         if (track.rootId !in current.availableRootIds) return@withContext null
         val root = current.roots.firstOrNull { it.id == track.rootId } ?: return@withContext null
+        if (root.kind.isCloud) return@withContext null
 
         val stem = track.fileName.substringBeforeLast('.', track.fileName)
         val folderPath = track.folderPath

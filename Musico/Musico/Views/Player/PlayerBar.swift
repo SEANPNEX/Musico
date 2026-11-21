@@ -49,9 +49,14 @@ struct PlayerBar: View {
             Button("Shuffle", systemImage: "shuffle") { player.toggleShuffle() }
                 .foregroundStyle(queue.shuffle ? Color.accentColor : .secondary)
             Button("Previous", systemImage: "backward.fill") { player.previous() }
-            Button("Play or Pause", systemImage: player.isPlaying ? "pause.fill" : "play.fill") { player.togglePlayPause() }
-                .font(.title2)
-                .frame(width: 32)
+            if player.isBuffering {
+                ProgressView()
+                    .frame(width: 32)
+            } else {
+                Button("Play or Pause", systemImage: player.isPlaying ? "pause.fill" : "play.fill") { player.togglePlayPause() }
+                    .font(.title2)
+                    .frame(width: 32)
+            }
             Button("Next", systemImage: "forward.fill") { player.next() }
             Button("Repeat", systemImage: queue.repeatMode == .one ? "repeat.1" : "repeat") { player.cycleRepeat() }
                 .foregroundStyle(queue.repeatMode == .off ? .secondary : Color.accentColor)

@@ -6,6 +6,7 @@ using System.Windows.Threading;
 using MusicoWindows.Converters;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
+using MusicoWindows.Theme;
 
 namespace MusicoWindows.Controls;
 
@@ -51,6 +52,7 @@ public partial class SleepTimerDialog : UserControl
         RefreshStatus();
         _countdownTimer.Start();
         Visibility = Visibility.Visible;
+        Win10Animations.AnimateModalOpen(BackdropGrid, DialogCard);
     }
 
     public void Close()

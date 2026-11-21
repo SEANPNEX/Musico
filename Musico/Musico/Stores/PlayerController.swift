@@ -15,6 +15,7 @@ final class PlayerController {
 
     private(set) var currentTrack: Track?
     private(set) var isPlaying = false
+    private(set) var isBuffering = false
     private(set) var duration: TimeInterval = 0
     private(set) var currentTime: TimeInterval = 0
     var errorMessage: String?
@@ -29,6 +30,7 @@ final class PlayerController {
     @ObservationIgnored let library: LibraryStore
     @ObservationIgnored let queues: QueueStore
     @ObservationIgnored private let history: PlayHistoryStore
+    @ObservationIgnored private let cloudAudio: CloudAudioCache
     /// Time actually listened to the loaded track since it was loaded, and whether that
     /// listen has been counted as a play yet.
     @ObservationIgnored private var listened: TimeInterval = 0
@@ -38,6 +40,8 @@ final class PlayerController {
     @ObservationIgnored private let settingsURL: URL
     /// Whether the engine currently holds `currentTrack`'s file.
     @ObservationIgnored private var isLoaded = false
+    @ObservationIgnored private var cloudLoadTask: Task<Void, Never>?
+    @ObservationIgnored private var cloudLoadGeneration = 0
     @ObservationIgnored private var ticker: Timer?
     @ObservationIgnored private var tickCount = 0
     @ObservationIgnored private var sleepTask: Task<Void, Never>?
@@ -51,12 +55,14 @@ final class PlayerController {
     /// Listening this long puts a song in "recently played"; shorter is treated as a skip.
     static let recentAfter: TimeInterval = 5
 
-    init(library: LibraryStore, queues: QueueStore, history: PlayHistoryStore, engine: AudioEngine, settingsURL: URL) {
+    init(library: LibraryStore, queues: QueueStore, history: PlayHistoryStore, engine: AudioEngine, settingsURL: URL,
+         cloudAudio: CloudAudioCache = .shared) {
         self.library = library
         self.queues = queues
         self.history = history
         self.engine = engine
         self.settingsURL = settingsURL
+        self.cloudAudio = cloudAudio
         eq = Persistence.load(EQSettings.self, from: settingsURL) ?? EQSettings()
         engine.apply(eq)
         engine.onTrackEnded = { [weak self] in self?.trackDidEnd() }
@@ -74,6 +80,7 @@ final class PlayerController {
 
     /// Detaches from the system. The app keeps one controller for its lifetime; tests create many.
     func shutdown() {
+        cancelCloudLoad()
         ticker?.invalidate()
         ticker = nil
         sleepTask?.cancel()
@@ -87,6 +94,13 @@ final class PlayerController {
     }
 
     // MARK: Loading
+
+    private func cancelCloudLoad() {
+        cloudLoadGeneration += 1
+        cloudLoadTask?.cancel()
+        cloudLoadTask = nil
+        isBuffering = false
+    }
 
     /// Loads the active queue's current track. Returns false if there is none or it cannot be opened.
     private func loadCurrent(autoplay: Bool, at position: TimeInterval) -> Bool {
@@ -135,12 +149,17 @@ final class PlayerController {
     }
 
     /// Loads the current track, skipping forward over files that will not open.
-    private func startCurrent(autoplay: Bool, at position: TimeInterval = 0) {
-        var failures = 0
+    private func startCurrent(autoplay: Bool, at position: TimeInterval = 0, startingFailures: Int = 0) {
+        cancelCloudLoad()
+        var failures = startingFailures
         var position = position
         while true {
-            guard queues.active.currentTrackID != nil else {
+            guard let id = queues.active.currentTrackID else {
                 clearPlayback()
+                return
+            }
+            if let track = library.track(id), track.isCloud {
+                startCloudTrack(track, autoplay: autoplay, at: position, failures: failures)
                 return
             }
             if loadCurrent(autoplay: autoplay, at: position) { return }
@@ -162,7 +181,91 @@ final class PlayerController {
         }
     }
 
+    private func startCloudTrack(_ track: Track, autoplay: Bool, at position: TimeInterval, failures: Int) {
+        cloudLoadGeneration += 1
+        let gen = cloudLoadGeneration
+        engine.unload()
+        isLoaded = false
+        isPlaying = false
+        currentTrack = track
+        duration = track.duration
+        currentTime = min(max(position, 0), track.duration)
+        errorMessage = nil
+        isBuffering = true
+        updateNowPlaying()
+
+        let root = library.root(track.rootID)
+        let cache = cloudAudio
+
+        cloudLoadTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                var cachedURL = try await cache.resolveAndCache(track: track, root: root, forceRefresh: false)
+                guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
+
+                do {
+                    try self.engine.load(url: cachedURL)
+                } catch {
+                    // Cached file may be corrupt or incomplete; re-resolve once before failing over.
+                    await cache.remove(trackID: track.id)
+                    cachedURL = try await cache.resolveAndCache(track: track, root: root, forceRefresh: true)
+                    guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
+                    try self.engine.load(url: cachedURL)
+                }
+
+                guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
+                self.isBuffering = false
+                self.isLoaded = true
+                self.listened = 0
+                self.playCounted = false
+                self.markedRecent = false
+                self.duration = self.engine.duration > 0 ? self.engine.duration : track.duration
+                if position > 0, position < self.engine.duration - 1 {
+                    self.engine.seek(to: position)
+                }
+                self.currentTime = self.engine.currentTime
+                if autoplay { self.startEngine() }
+                self.isPlaying = self.engine.isPlaying
+                self.updateNowPlaying()
+                self.prefetchNextCloudTrack()
+            } catch is CancellationError {
+                return
+            } catch {
+                guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
+                self.isBuffering = false
+                let nextFailures = failures + 1
+                var advanced: String?
+                if nextFailures < Self.maxConsecutiveFailures {
+                    self.queues.updateActive { advanced = $0.next(auto: false) }
+                }
+                if advanced != nil {
+                    self.startCurrent(autoplay: autoplay, at: 0, startingFailures: nextFailures)
+                } else {
+                    self.engine.unload()
+                    self.isPlaying = false
+                    self.errorMessage = nextFailures > 1
+                        ? "Playback stopped: \(nextFailures) songs in a row could not be played."
+                        : "“\(track.title)” could not be played."
+                    self.updateNowPlaying()
+                }
+            }
+        }
+    }
+
+    private func prefetchNextCloudTrack() {
+        guard let nextIndex = queues.active.upcomingIndices.first,
+              queues.active.trackIDs.indices.contains(nextIndex),
+              let nextTrack = library.track(queues.active.trackIDs[nextIndex]),
+              nextTrack.isCloud else { return }
+        let root = library.root(nextTrack.rootID)
+        let cache = cloudAudio
+        Task.detached(priority: .utility) {
+            await cache.prefetch(track: nextTrack, root: root)
+        }
+    }
+
     private func clearPlayback() {
+        cancelCloudLoad()
         engine.unload()
         isLoaded = false
         currentTrack = nil
@@ -206,7 +309,7 @@ final class PlayerController {
     // MARK: Transport
 
     func togglePlayPause() {
-        if isPlaying {
+        if isPlaying || isBuffering {
             pause()
         } else {
             resume()
@@ -227,6 +330,11 @@ final class PlayerController {
 
     func pause() {
         resumeAfterInterruption = false
+        if isBuffering {
+            cancelCloudLoad()
+            updateNowPlaying()
+            return
+        }
         guard isPlaying else { return }
         engine.pause()
         isPlaying = false
@@ -236,7 +344,7 @@ final class PlayerController {
     }
 
     func next() {
-        let wasPlaying = isPlaying
+        let wasPlaying = isPlaying || isBuffering
         var advanced: String?
         queues.updateActive { advanced = $0.next(auto: false) }
         if advanced != nil { startCurrent(autoplay: wasPlaying) }
@@ -248,7 +356,7 @@ final class PlayerController {
             seek(to: 0)
             return
         }
-        let wasPlaying = isPlaying
+        let wasPlaying = isPlaying || isBuffering
         queues.updateActive { _ = $0.previous() }
         startCurrent(autoplay: wasPlaying)
     }
@@ -324,7 +432,7 @@ final class PlayerController {
 
     func switchQueue(to id: UUID) {
         guard id != queues.activeID else { return }
-        let wasPlaying = isPlaying
+        let wasPlaying = isPlaying || isBuffering
         persistPosition()
         queues.setActive(id)
         errorMessage = nil
@@ -333,14 +441,14 @@ final class PlayerController {
 
     func deleteQueue(_ id: UUID) {
         let wasActive = id == queues.activeID
-        let wasPlaying = isPlaying
+        let wasPlaying = isPlaying || isBuffering
         queues.delete(id)
         if wasActive, queues.activeID != id { startCurrent(autoplay: wasPlaying, at: queues.active.position) }
     }
 
     func removeFromQueue(at index: Int) {
         let removingCurrent = index == queues.active.currentIndex
-        let wasPlaying = isPlaying
+        let wasPlaying = isPlaying || isBuffering
         queues.updateActive { $0.remove(at: index) }
         if removingCurrent { startCurrent(autoplay: wasPlaying) }
     }
@@ -356,7 +464,7 @@ final class PlayerController {
 
     private func tracksRemoved(_ ids: Set<String>) {
         let currentRemoved = currentTrack.map { ids.contains($0.id) } ?? false
-        let wasPlaying = isPlaying
+        let wasPlaying = isPlaying || isBuffering
         queues.removeTracks(ids)
         history.removeTracks(ids)
         if currentRemoved { startCurrent(autoplay: wasPlaying) }
@@ -366,6 +474,16 @@ final class PlayerController {
 
     /// Shows the saved queue's track, paused at its saved position, after launch.
     func restore() {
+        if let id = queues.active.currentTrackID, let track = library.track(id), track.isCloud {
+            cancelCloudLoad()
+            isLoaded = false
+            currentTrack = track
+            duration = track.duration
+            currentTime = min(max(queues.active.position, 0), track.duration)
+            isPlaying = false
+            updateNowPlaying()
+            return
+        }
         _ = loadCurrent(autoplay: false, at: queues.active.position)
     }
 

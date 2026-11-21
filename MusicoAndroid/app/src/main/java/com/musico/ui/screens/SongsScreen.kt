@@ -206,6 +206,7 @@ fun SongsScreen(
                             isAvailable = libraryStore.isAvailable(track),
                             subtitle = if (sort == SongSort.ALBUM) "${track.artist} — ${track.album}" else track.artist,
                             onClick = { trackActions.playerController.play(songIds, startAt = index) },
+                            modifier = Modifier.animateItem(),
                             menuContent = { onDismiss ->
                                 TrackMenuItems(
                                     ids = listOf(track.id),

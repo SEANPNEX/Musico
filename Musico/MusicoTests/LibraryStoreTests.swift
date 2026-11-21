@@ -410,4 +410,148 @@ final class LibraryStoreTests: XCTestCase {
         cache.prune(keeping: [])
         XCTAssertNil(ArtworkCache(directory: state.appendingPathComponent("Art")).image(forKey: key!))
     }
+
+    // MARK: - Cloud Roots
+
+    func testAddCloudRootPersistsSyncsAndPreservesPlaylistsOnOfflineError() async throws {
+        let png = UIGraphicsImageRenderer(size: CGSize(width: 10, height: 10)).pngData { ctx in
+            UIColor.blue.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 10, height: 10))
+        }
+        let fetcher = StubCloudFetcher(result: .success(CloudPlaylistResult(
+            kind: .cloudYouTube,
+            remoteID: "PLcloud123",
+            title: "Cloud Mix",
+            tracks: [
+                CloudTrackInfo(
+                    remoteTrackID: "vid1",
+                    relativePath: "vid1",
+                    title: "Song One",
+                    artist: "Artist One",
+                    album: "Album One",
+                    trackNumber: 1,
+                    duration: 180,
+                    artworkURL: "https://example.com/art1.jpg"
+                ),
+                CloudTrackInfo(
+                    remoteTrackID: "vid2",
+                    relativePath: "vid2",
+                    title: "Song Two",
+                    artist: "Artist Two",
+                    album: "Album One",
+                    trackNumber: 2,
+                    duration: 210,
+                    artworkURL: nil
+                )
+            ]
+        )))
+
+        let store = LibraryStore(
+            directory: state,
+            documentsURL: docs,
+            reader: reader,
+            artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
+            cloudFetcher: fetcher,
+            artworkDownloader: { _ in png }
+        )
+
+        try await store.addCloudRoot(sourceURL: "https://music.youtube.com/playlist?list=PLcloud123")
+        XCTAssertEqual(store.roots.count, 2)
+        let cloudRoot = try XCTUnwrap(store.roots.last)
+        XCTAssertEqual(cloudRoot.kind, .cloudYouTube)
+        XCTAssertEqual(cloudRoot.name, "Cloud Mix")
+        XCTAssertTrue(store.isAvailable(cloudRoot))
+        XCTAssertTrue(store.isRemovable(cloudRoot))
+        XCTAssertEqual(store.tracks.count, 2)
+        XCTAssertTrue(store.tracks.allSatisfy(\.isCloud))
+        XCTAssertNotNil(store.tracks.first { $0.relativePath == "vid1" }?.artworkKey)
+
+        // Duplicate cloud root is rejected.
+        do {
+            try await store.addCloudRoot(sourceURL: "https://www.youtube.com/playlist?list=PLcloud123")
+            XCTFail("Expected duplicateRoot error")
+        } catch {}
+
+        // Add one track to a playlist and favourite it.
+        let song1 = try XCTUnwrap(store.tracks.first { $0.relativePath == "vid1" })
+        let addedDate = song1.dateAdded
+        let playlistID = store.createPlaylist(name: "Fav Cloud")
+        store.add([song1.id], toPlaylist: playlistID)
+        store.toggleFavourite(song1.id)
+
+        // Relaunch: cloud root and tracks persist, and offline sync error keeps tracks/playlists intact.
+        fetcher.result = .failure(CloudSourceError.networkError("Offline"))
+        let relaunched = LibraryStore(
+            directory: state,
+            documentsURL: docs,
+            reader: reader,
+            artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
+            cloudFetcher: fetcher,
+            artworkDownloader: { _ in png }
+        )
+        XCTAssertEqual(relaunched.roots.count, 2)
+        XCTAssertEqual(relaunched.tracks.count, 2)
+        await relaunched.rescan()
+        XCTAssertEqual(relaunched.tracks.count, 2)
+        XCTAssertNotNil(relaunched.cloudSyncErrors[cloudRoot.id])
+        XCTAssertEqual(relaunched.playlists.first?.trackIDs, [song1.id])
+        XCTAssertTrue(relaunched.isFavourite(song1.id))
+
+        // Online again with updated track list: keeps vid1 dateAdded, removes vid2, adds vid3.
+        fetcher.result = .success(CloudPlaylistResult(
+            kind: .cloudYouTube,
+            remoteID: "PLcloud123",
+            title: "Cloud Mix",
+            tracks: [
+                CloudTrackInfo(
+                    remoteTrackID: "vid1",
+                    relativePath: "vid1",
+                    title: "Song One",
+                    artist: "Artist One",
+                    album: "Album One",
+                    trackNumber: 1,
+                    duration: 180,
+                    artworkURL: "https://example.com/art1.jpg"
+                ),
+                CloudTrackInfo(
+                    remoteTrackID: "vid3",
+                    relativePath: "vid3",
+                    title: "Song Three",
+                    artist: "Artist Three",
+                    album: "Album Two",
+                    trackNumber: 3,
+                    duration: 195,
+                    artworkURL: nil
+                )
+            ]
+        ))
+        await relaunched.rescan()
+        XCTAssertNil(relaunched.cloudSyncErrors[cloudRoot.id])
+        XCTAssertEqual(relaunched.tracks.map(\.relativePath).sorted(), ["vid1", "vid3"])
+        XCTAssertEqual(relaunched.track(song1.id)?.dateAdded, addedDate)
+        XCTAssertEqual(relaunched.playlists.first?.trackIDs, [song1.id])
+
+        // Removing cloud root drops its tracks and cleans up playlists/favourites.
+        relaunched.removeRoot(cloudRoot.id)
+        XCTAssertEqual(relaunched.roots.count, 1)
+        XCTAssertTrue(relaunched.tracks.isEmpty)
+        XCTAssertEqual(relaunched.playlists.first?.trackIDs, [])
+        XCTAssertFalse(relaunched.favourites.contains(song1.id))
+    }
+}
+
+private final class StubCloudFetcher: CloudPlaylistFetching, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _result: Result<CloudPlaylistResult, Error>
+    var result: Result<CloudPlaylistResult, Error> {
+        get { lock.withLock { _result } }
+        set { lock.withLock { _result = newValue } }
+    }
+
+    init(result: Result<CloudPlaylistResult, Error>) {
+        self._result = result
+    }
+
+    func fetchPlaylist(sourceURL: String, cookie: String?, kindHint: LibraryRoot.Kind?) async throws -> CloudPlaylistResult {
+        try result.get()
+    }
 }

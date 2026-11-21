@@ -1,4 +1,6 @@
 using System.Globalization;
+using System.Net.Http;
+using MusicoWindows.Cloud;
 using MusicoWindows.Core;
 using MusicoWindows.Models;
 
@@ -31,6 +33,10 @@ public sealed class LibraryStore : ObservableStore
     private readonly IMetadataReader _reader;
     private readonly int _scanBatchSize;
     private readonly bool _appFolderRemovable;
+    private readonly YouTubeClient _youtube;
+    private readonly BilibiliClient _bilibili;
+    private readonly HttpMessageHandler? _artworkHandler;
+    private readonly CloudAudioCache? _cloudCache;
 
     private readonly Dictionary<Guid, string> _rootPaths = new();
     private Dictionary<string, Track> _byId = new();
@@ -55,7 +61,11 @@ public sealed class LibraryStore : ObservableStore
         IMetadataReader reader,
         ArtworkCache artwork,
         int scanBatchSize = 100,
-        bool appFolderRemovable = true)
+        bool appFolderRemovable = true,
+        YouTubeClient? youtubeClient = null,
+        BilibiliClient? bilibiliClient = null,
+        HttpMessageHandler? artworkHandler = null,
+        CloudAudioCache? cloudCache = null)
     {
         _stateDirectory = stateDirectory;
         _musicDirectory = musicDirectory;
@@ -63,11 +73,15 @@ public sealed class LibraryStore : ObservableStore
         Artwork = artwork;
         _scanBatchSize = Math.Max(scanBatchSize, 1);
         _appFolderRemovable = appFolderRemovable;
+        _youtube = youtubeClient ?? new YouTubeClient();
+        _bilibili = bilibiliClient ?? new BilibiliClient();
+        _artworkHandler = artworkHandler;
+        _cloudCache = cloudCache;
 
         var file = Persistence.Load<LibraryFile>(LibraryPath);
         _rereadAll = file is not null && file.ReaderVersion != CurrentReaderVersion;
 
-        var loadedRoots = file?.Roots.Where(r => r.Kind == RootKind.Picked).ToList() ?? new List<LibraryRoot>();
+        var loadedRoots = file?.Roots.Where(r => r.Kind != RootKind.AppFolder).ToList() ?? new List<LibraryRoot>();
         _appFolderRemoved = _appFolderRemovable && file?.AppFolderRemoved == true;
 
         if (!_appFolderRemoved)
@@ -148,9 +162,9 @@ public sealed class LibraryStore : ObservableStore
 
     // MARK: Roots
 
-    public bool IsAvailable(LibraryRoot root) => _rootPaths.ContainsKey(root.Id);
+    public bool IsAvailable(LibraryRoot root) => root.IsCloud || _rootPaths.ContainsKey(root.Id);
 
-    public bool IsAvailable(Track track) => _rootPaths.ContainsKey(track.RootId);
+    public bool IsAvailable(Track track) => track.IsCloud || _rootPaths.ContainsKey(track.RootId);
 
     public string? GetRootPath(Guid rootId) => _rootPaths.TryGetValue(rootId, out string? p) ? p : null;
 
@@ -182,6 +196,45 @@ public sealed class LibraryStore : ObservableStore
         OnPropertyChanged(nameof(Roots));
         SaveLibrary();
         await RescanAsync();
+    }
+
+    public async Task<LibraryRoot> AddCloudRootAsync(
+        string sourceUrl,
+        string? cookie = null,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        var kind = CloudUrlClassifier.Classify(sourceUrl);
+        string? normalizedProxy = YouTubeClient.NormalizeProxyUrl(proxyUrl);
+        string? trimmedCookie = string.IsNullOrWhiteSpace(cookie) ? null : cookie.Trim();
+
+        CloudPlaylistResult result = kind == RootKind.CloudYouTube
+            ? await _youtube.FetchPlaylistAsync(sourceUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false)
+            : await _bilibili.FetchPlaylistAsync(sourceUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false);
+
+        if (_roots.Any(r => r.Kind == result.Kind &&
+                            string.Equals(r.RemoteId, result.RemoteId, StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new InvalidOperationException("That cloud playlist is already in your library.");
+        }
+
+        var root = new LibraryRoot(
+            Id: Guid.NewGuid(),
+            Name: result.Title,
+            Kind: result.Kind,
+            Path: result.SourceUrl,
+            SourceUrl: result.SourceUrl,
+            RemoteId: result.RemoteId,
+            Cookie: trimmedCookie,
+            ProxyUrl: normalizedProxy,
+            LastSyncedUtc: DateTimeOffset.UtcNow);
+
+        var newTracks = await BuildCloudTracksAsync(root, result, Array.Empty<Track>(), ct).ConfigureAwait(false);
+
+        _roots = [.. _roots, root];
+        OnPropertyChanged(nameof(Roots));
+        Publish([.. _tracks, .. newTracks]);
+        return root;
     }
 
     public async Task RelocateRootAsync(Guid id, string path)
@@ -229,6 +282,7 @@ public sealed class LibraryStore : ObservableStore
             RebuildIndex();
             OnPropertyChanged(nameof(Tracks));
             Forget(removedIds);
+            _cloudCache?.RemoveForTracks(removedIds);
         }
 
         SaveLibrary();
@@ -309,10 +363,11 @@ public sealed class LibraryStore : ObservableStore
 
         var snapshotRoots = _roots.ToList();
         var snapshotTracks = _tracks.ToList();
-        var kept = snapshotTracks.Where(t => !_rootPaths.ContainsKey(t.RootId)).ToList();
+        var kept = snapshotTracks.Where(t => !_rootPaths.ContainsKey(t.RootId) && !t.IsCloud).ToList();
         var pending = new List<(LibraryRoot Root, string RootPath, ScannedFile File, Track? Old)>();
         var removed = new HashSet<string>();
         bool reread = _rereadAll;
+        bool cloudSynced = false;
 
         foreach (var root in snapshotRoots)
         {
@@ -388,6 +443,38 @@ public sealed class LibraryStore : ObservableStore
             }
         }
 
+        // Sync cloud roots; preserve existing cloud tracks on transient network failure.
+        foreach (var root in snapshotRoots.Where(r => r.IsCloud))
+        {
+            var existingTracks = snapshotTracks.Where(t => t.RootId == root.Id).ToList();
+            try
+            {
+                string source = root.SourceUrl ?? root.Path ?? string.Empty;
+                CloudPlaylistResult result = root.Kind == RootKind.CloudYouTube
+                    ? await _youtube.FetchPlaylistAsync(source, root.Cookie, root.ProxyUrl).ConfigureAwait(false)
+                    : await _bilibili.FetchPlaylistAsync(source, root.Cookie, root.ProxyUrl).ConfigureAwait(false);
+
+                var synced = await BuildCloudTracksAsync(root, result, existingTracks, CancellationToken.None).ConfigureAwait(false);
+                kept.AddRange(synced);
+
+                var syncedIds = new HashSet<string>(synced.Select(t => t.Id), StringComparer.Ordinal);
+                foreach (var old in existingTracks)
+                {
+                    if (!syncedIds.Contains(old.Id))
+                    {
+                        removed.Add(old.Id);
+                    }
+                }
+
+                UpdateCloudRootSynced(root.Id, result.Title);
+                cloudSynced = true;
+            }
+            catch
+            {
+                kept.AddRange(existingTracks);
+            }
+        }
+
         // A root removed while scanning must not leave orphan tracks behind.
         var activeRootIds = new HashSet<Guid>(_roots.Select(r => r.Id));
         var finalTracks = kept.Where(t => activeRootIds.Contains(t.RootId)).ToList();
@@ -396,7 +483,7 @@ public sealed class LibraryStore : ObservableStore
 
         if (reread) _rereadAll = false;
 
-        if (pending.Count == 0 && removed.Count == 0 && finalTracks.Count == _tracks.Count)
+        if (pending.Count == 0 && removed.Count == 0 && !cloudSynced && finalTracks.Count == _tracks.Count)
         {
             if (reread) SaveLibrary();
             return;
@@ -404,9 +491,133 @@ public sealed class LibraryStore : ObservableStore
 
         Publish(finalTracks);
         Forget(removed);
+        _cloudCache?.RemoveForTracks(removed);
 
         var keepKeys = new HashSet<string>(_tracks.Select(t => t.ArtworkKey).Where(k => k is not null)!);
         await Task.Run(() => Artwork.Prune(keepKeys));
+    }
+
+    private void UpdateCloudRootSynced(Guid rootId, string title)
+    {
+        int idx = _roots.FindIndex(r => r.Id == rootId);
+        if (idx < 0) return;
+        var updated = new List<LibraryRoot>(_roots);
+        var current = updated[idx];
+        updated[idx] = current with
+        {
+            Name = string.IsNullOrWhiteSpace(title) ? current.Name : title,
+            LastSyncedUtc = DateTimeOffset.UtcNow
+        };
+        _roots = updated;
+        OnPropertyChanged(nameof(Roots));
+    }
+
+    private async Task<List<Track>> BuildCloudTracksAsync(
+        LibraryRoot root,
+        CloudPlaylistResult result,
+        IReadOnlyList<Track> existingTracks,
+        CancellationToken ct)
+    {
+        var existingByRemoteId = new Dictionary<string, Track>(StringComparer.Ordinal);
+        foreach (var t in existingTracks)
+        {
+            if (!string.IsNullOrWhiteSpace(t.RemoteTrackId))
+            {
+                existingByRemoteId.TryAdd(t.RemoteTrackId, t);
+            }
+        }
+
+        var urlArtCache = new Dictionary<string, string?>(StringComparer.Ordinal);
+        using var artHttp = CreateArtworkHttpClient(root);
+        var now = DateTimeOffset.UtcNow;
+        var built = new List<Track>(result.Items.Count);
+        var seenTrackIds = new HashSet<string>(StringComparer.Ordinal);
+        string cloudSource = root.Kind == RootKind.CloudBilibili ? CloudSources.Bilibili : CloudSources.YouTube;
+        string albumArtist = root.Kind == RootKind.CloudBilibili ? "Bilibili" : "YouTube";
+
+        foreach (var item in result.Items)
+        {
+            string relPath = MakeCloudRelativePath(item.RemoteTrackId);
+            string trackId = Track.MakeId(root.Id, relPath);
+            if (!seenTrackIds.Add(trackId)) continue;
+
+            existingByRemoteId.TryGetValue(item.RemoteTrackId, out var old);
+
+            string? artKey = null;
+            if (!string.IsNullOrWhiteSpace(item.ArtworkUrl))
+            {
+                if (old is not null &&
+                    string.Equals(old.RemoteArtworkUrl, item.ArtworkUrl, StringComparison.Ordinal) &&
+                    Artwork.GetImagePath(old.ArtworkKey) is not null)
+                {
+                    artKey = old.ArtworkKey;
+                }
+                else if (urlArtCache.TryGetValue(item.ArtworkUrl, out string? cachedKey))
+                {
+                    artKey = cachedKey;
+                }
+                else
+                {
+                    artKey = await DownloadAndStoreArtworkAsync(artHttp, root.Kind, item.ArtworkUrl, ct).ConfigureAwait(false);
+                    urlArtCache[item.ArtworkUrl] = artKey;
+                }
+            }
+
+            built.Add(new Track(
+                Id: trackId,
+                RootId: root.Id,
+                RelativePath: relPath,
+                Title: item.Title,
+                Artist: item.Artist,
+                Album: string.IsNullOrWhiteSpace(item.Album) ? result.Title : item.Album,
+                AlbumArtist: albumArtist,
+                TrackNumber: item.TrackNumber,
+                DiscNumber: 1,
+                DurationSeconds: item.DurationSeconds,
+                FileSize: 0,
+                ModifiedUtc: now,
+                HasEmbeddedLyrics: false,
+                DateAddedUtc: old?.DateAddedUtc ?? now,
+                ArtworkKey: artKey,
+                CloudSource: cloudSource,
+                RemoteTrackId: item.RemoteTrackId,
+                RemoteArtworkUrl: item.ArtworkUrl));
+        }
+
+        return built;
+    }
+
+    private HttpClient CreateArtworkHttpClient(LibraryRoot root)
+    {
+        string? proxy = root.Kind == RootKind.CloudYouTube ? root.ProxyUrl : null;
+        return CloudHttpHelper.CreateClient(proxy, _artworkHandler, TimeSpan.FromSeconds(15));
+    }
+
+    private async Task<string?> DownloadAndStoreArtworkAsync(HttpClient http, RootKind kind, string url, CancellationToken ct)
+    {
+        try
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            if (kind == RootKind.CloudBilibili)
+            {
+                req.Headers.TryAddWithoutValidation("Referer", BilibiliClient.DefaultReferer);
+                req.Headers.TryAddWithoutValidation("User-Agent", BilibiliClient.DefaultUserAgent);
+            }
+            using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return null;
+            byte[] bytes = await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);
+            return Artwork.Store(bytes);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static string MakeCloudRelativePath(string remoteTrackId)
+    {
+        string safe = remoteTrackId.Replace('/', '_').Replace('\\', '_').Replace(':', '_');
+        return $"{safe}.m4a";
     }
 
     private void Publish(IEnumerable<Track> list)

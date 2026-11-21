@@ -6,6 +6,8 @@ import android.net.Uri
 import androidx.media3.common.MediaMetadata
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.musico.cloud.CloudStreamResolver
+import com.musico.cloud.ResolvedStream
 import com.musico.core.Persistence
 import com.musico.model.EqSettings
 import com.musico.model.RepeatMode
@@ -25,6 +27,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.max
 
@@ -36,6 +39,7 @@ data class PlayerUiState(
     val errorMessage: String? = null,
     val sleepMode: SleepMode = SleepMode.Off,
     val eq: EqSettings = EqSettings(),
+    val isLoadingCloud: Boolean = false,
 )
 
 /**
@@ -49,6 +53,7 @@ class PlayerController(
     private val history: PlayHistoryStore,
     private val engine: AudioEngine,
     private val settingsFile: File,
+    private val cloudResolver: CloudStreamResolver = CloudStreamResolver(),
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
 
@@ -63,6 +68,12 @@ class PlayerController(
     private var tickerJob: Job? = null
     private var tickCount = 0
     private var sleepJob: Job? = null
+    private var cloudLoadJob: Job? = null
+    private var prefetchJob: Job? = null
+    private var loadGeneration: Long = 0L
+    private var cloudRetryTrackId: String? = null
+    private var cloudRetryCount: Int = 0
+    private var cloudAutoplayRequested: Boolean = false
     private var mediaControllerStarted = false
 
     init {
@@ -83,16 +94,37 @@ class PlayerController(
             }
         }
         engine.onPlaybackError = { message ->
-            _state.value = _state.value.copy(
-                isPlaying = false,
-                errorMessage = message,
-            )
-            stopTicker()
+            val current = _state.value.currentTrack
+            if (current != null && current.isCloud && cloudRetryCount < 1) {
+                cloudRetryCount += 1
+                val resumePos = engine.currentTimeSec.coerceAtLeast(_state.value.currentTimeSec)
+                val shouldPlay = _state.value.isPlaying || cloudAutoplayRequested
+                cloudResolver.invalidate(current, library.rootFor(current))
+                startCloudTrack(
+                    track = current,
+                    autoplay = shouldPlay,
+                    positionSec = resumePos,
+                    forceRefresh = true,
+                    consecutiveFailures = 0,
+                )
+            } else {
+                _state.value = _state.value.copy(
+                    isPlaying = false,
+                    isLoadingCloud = false,
+                    errorMessage = message,
+                )
+                stopTicker()
+            }
         }
         library.onTracksRemoved = { ids -> tracksRemoved(ids) }
     }
 
     fun shutdown() {
+        loadGeneration += 1
+        cloudLoadJob?.cancel()
+        cloudLoadJob = null
+        prefetchJob?.cancel()
+        prefetchJob = null
         stopTicker()
         sleepJob?.cancel()
         sleepJob = null
@@ -188,16 +220,42 @@ class PlayerController(
             durationSec = resolvedDur,
             currentTimeSec = currentPos,
             isPlaying = autoplay,
+            isLoadingCloud = false,
         )
+        prefetchNextCloudTrack()
         return true
     }
 
-    private fun startCurrent(autoplay: Boolean, positionSec: Double = 0.0) {
-        var failures = 0
+    private fun startCurrent(
+        autoplay: Boolean,
+        positionSec: Double = 0.0,
+        initialFailures: Int = 0,
+    ) {
+        loadGeneration += 1
+        cloudLoadJob?.cancel()
+        cloudLoadJob = null
+
+        var failures = initialFailures
         var pos = positionSec
         while (true) {
-            if (queues.active.currentTrackId == null) {
+            val id = queues.active.currentTrackId
+            if (id == null) {
                 clearPlayback()
+                return
+            }
+            val track = library.track(id)
+            if (track != null && track.isCloud) {
+                if (cloudRetryTrackId != track.id) {
+                    cloudRetryTrackId = track.id
+                    cloudRetryCount = 0
+                }
+                startCloudTrack(
+                    track = track,
+                    autoplay = autoplay,
+                    positionSec = pos,
+                    forceRefresh = false,
+                    consecutiveFailures = failures,
+                )
                 return
             }
             if (loadCurrent(autoplay = autoplay, positionSec = pos)) {
@@ -214,30 +272,138 @@ class PlayerController(
                 }
             }
             if (advanced == null) {
-                engine.unload()
-                stopTicker()
-                val title = _state.value.currentTrack?.title ?: "This song"
-                val message = if (failures > 1) {
-                    "Playback stopped: $failures songs in a row could not be played."
-                } else {
-                    "“$title” could not be played."
-                }
-                _state.value = _state.value.copy(
-                    isPlaying = false,
-                    errorMessage = message,
-                )
+                stopOnConsecutiveFailures(failures)
                 return
             }
         }
     }
 
+    private fun startCloudTrack(
+        track: Track,
+        autoplay: Boolean,
+        positionSec: Double,
+        forceRefresh: Boolean,
+        consecutiveFailures: Int,
+    ) {
+        val gen = ++loadGeneration
+        cloudLoadJob?.cancel()
+        cloudAutoplayRequested = autoplay
+        isLoaded = false
+        engine.unload()
+        stopTicker()
+
+        _state.value = _state.value.copy(
+            currentTrack = track,
+            durationSec = track.durationSec,
+            currentTimeSec = positionSec.coerceAtLeast(0.0),
+            isPlaying = false,
+            isLoadingCloud = true,
+        )
+
+        cloudLoadJob = scope.launch {
+            val root = library.rootFor(track)
+            val resolved = runCatching {
+                withContext(Dispatchers.IO) {
+                    cloudResolver.resolve(track, root, forceRefresh = forceRefresh)
+                }
+            }
+            if (gen != loadGeneration || !isActive) return@launch
+
+            val stream: ResolvedStream? = resolved.getOrNull()
+            if (stream != null) {
+                try {
+                    engine.loadStream(stream.url, stream.headers, buildMediaMetadata(track))
+                    isLoaded = true
+                    listenedSec = 0.0
+                    playCounted = false
+                    markedRecent = false
+
+                    val resolvedDur = if (engine.durationSec > 0.0) engine.durationSec else track.durationSec
+                    if (positionSec > 0.0 && (resolvedDur <= 0.0 || positionSec < resolvedDur - 1.0)) {
+                        engine.seekTo(positionSec)
+                    }
+                    val currentPos = if (positionSec > 0.0) positionSec else engine.currentTimeSec
+
+                    if (autoplay) {
+                        ensureMediaServiceConnected()
+                        engine.play()
+                        startTicker()
+                    } else {
+                        stopTicker()
+                    }
+
+                    _state.value = _state.value.copy(
+                        currentTrack = track,
+                        durationSec = resolvedDur,
+                        currentTimeSec = currentPos,
+                        isPlaying = autoplay,
+                        isLoadingCloud = false,
+                    )
+                    prefetchNextCloudTrack()
+                    return@launch
+                } catch (_: Exception) {
+                    cloudResolver.invalidate(track, root)
+                }
+            }
+
+            if (gen != loadGeneration || !isActive) return@launch
+            val nextFailures = consecutiveFailures + 1
+            var advanced: String? = null
+            if (nextFailures < MAX_CONSECUTIVE_FAILURES) {
+                queues.updateActive { queue ->
+                    val (updated, nextId) = queue.next(auto = false)
+                    advanced = nextId
+                    updated
+                }
+            }
+            if (advanced == null) {
+                stopOnConsecutiveFailures(nextFailures)
+            } else {
+                startCurrent(autoplay = autoplay, positionSec = 0.0, initialFailures = nextFailures)
+            }
+        }
+    }
+
+    private fun stopOnConsecutiveFailures(failures: Int) {
+        engine.unload()
+        stopTicker()
+        isLoaded = false
+        val title = _state.value.currentTrack?.title ?: "This song"
+        val message = if (failures > 1) {
+            "Playback stopped: $failures songs in a row could not be played."
+        } else {
+            "“$title” could not be played."
+        }
+        _state.value = _state.value.copy(
+            isPlaying = false,
+            isLoadingCloud = false,
+            errorMessage = message,
+        )
+    }
+
+    private fun prefetchNextCloudTrack() {
+        val nextIndex = queues.active.upcomingIndices.firstOrNull() ?: return
+        val nextId = queues.active.trackIds.getOrNull(nextIndex) ?: return
+        val nextTrack = library.track(nextId) ?: return
+        if (!nextTrack.isCloud) return
+        val root = library.rootFor(nextTrack)
+        prefetchJob?.cancel()
+        prefetchJob = scope.launch(Dispatchers.IO) {
+            cloudResolver.prefetch(nextTrack, root)
+        }
+    }
+
     private fun clearPlayback() {
+        loadGeneration += 1
+        cloudLoadJob?.cancel()
+        cloudLoadJob = null
         engine.unload()
         stopTicker()
         isLoaded = false
         _state.value = _state.value.copy(
             currentTrack = null,
             isPlaying = false,
+            isLoadingCloud = false,
             durationSec = 0.0,
             currentTimeSec = 0.0,
         )
@@ -277,13 +443,20 @@ class PlayerController(
         }
     }
 
+    private val isActiveOrLoadingToPlay: Boolean
+        get() = _state.value.isPlaying || (_state.value.isLoadingCloud && cloudAutoplayRequested)
+
     fun togglePlayPause() {
-        if (_state.value.isPlaying) pause() else resume()
+        if (isActiveOrLoadingToPlay) pause() else resume()
     }
 
     fun resume() {
         if (_state.value.isPlaying) return
         _state.value = _state.value.copy(errorMessage = null)
+        if (_state.value.isLoadingCloud) {
+            cloudAutoplayRequested = true
+            return
+        }
         if (isLoaded) {
             ensureMediaServiceConnected()
             engine.play()
@@ -295,6 +468,9 @@ class PlayerController(
     }
 
     fun pause() {
+        if (_state.value.isLoadingCloud) {
+            cloudAutoplayRequested = false
+        }
         if (!_state.value.isPlaying) return
         engine.pause()
         stopTicker()
@@ -307,7 +483,7 @@ class PlayerController(
     }
 
     fun next() {
-        val wasPlaying = _state.value.isPlaying
+        val wasPlaying = isActiveOrLoadingToPlay
         var advanced: String? = null
         queues.updateActive { queue ->
             val (updated, nextId) = queue.next(auto = false)
@@ -324,7 +500,7 @@ class PlayerController(
             seek(0.0)
             return
         }
-        val wasPlaying = _state.value.isPlaying
+        val wasPlaying = isActiveOrLoadingToPlay
         queues.updateActive { it.previous().first }
         startCurrent(autoplay = wasPlaying)
     }
@@ -409,7 +585,7 @@ class PlayerController(
 
     fun switchQueue(id: String) {
         if (id == queues.state.value.activeId) return
-        val wasPlaying = _state.value.isPlaying
+        val wasPlaying = isActiveOrLoadingToPlay
         persistPosition()
         queues.setActive(id)
         _state.value = _state.value.copy(errorMessage = null)
@@ -418,7 +594,7 @@ class PlayerController(
 
     fun deleteQueue(id: String) {
         val wasActive = id == queues.state.value.activeId
-        val wasPlaying = _state.value.isPlaying
+        val wasPlaying = isActiveOrLoadingToPlay
         queues.delete(id)
         if (wasActive && queues.state.value.activeId != id) {
             startCurrent(autoplay = wasPlaying, positionSec = queues.active.positionSec)
@@ -427,7 +603,7 @@ class PlayerController(
 
     fun removeFromQueue(index: Int) {
         val removingCurrent = index == queues.active.currentIndex
-        val wasPlaying = _state.value.isPlaying
+        val wasPlaying = isActiveOrLoadingToPlay
         queues.updateActive { it.removeAt(index) }
         if (removingCurrent) {
             startCurrent(autoplay = wasPlaying)
@@ -445,7 +621,7 @@ class PlayerController(
 
     private fun tracksRemoved(ids: Set<String>) {
         val currentRemoved = _state.value.currentTrack?.id?.let { it in ids } ?: false
-        val wasPlaying = _state.value.isPlaying
+        val wasPlaying = isActiveOrLoadingToPlay
         queues.removeTracks(ids)
         history.removeTracks(ids)
         if (currentRemoved) {
@@ -478,6 +654,18 @@ class PlayerController(
     }
 
     fun restore() {
+        val id = queues.active.currentTrackId ?: return
+        val track = library.track(id) ?: return
+        if (track.isCloud) {
+            isLoaded = false
+            _state.value = _state.value.copy(
+                currentTrack = track,
+                durationSec = track.durationSec,
+                currentTimeSec = queues.active.positionSec.coerceAtLeast(0.0),
+                isPlaying = false,
+            )
+            return
+        }
         loadCurrent(autoplay = false, positionSec = queues.active.positionSec)
     }
 

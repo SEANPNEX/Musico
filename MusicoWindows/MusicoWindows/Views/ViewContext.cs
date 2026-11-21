@@ -24,4 +24,5 @@ public sealed class ViewContext
     public required Action<AlbumInfo> OpenAlbum { get; init; }
     public required Action<string> OpenArtist { get; init; }
     public required Action<PlaylistRef> OpenPlaylist { get; init; }
+    public Action? OpenAddCloudFolder { get; init; }
 }

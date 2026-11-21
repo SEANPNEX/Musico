@@ -7,6 +7,12 @@ import java.security.MessageDigest
 enum class RootKind {
     PICKED,
     APP_FOLDER,
+    CLOUD_YOUTUBE,
+    CLOUD_BILIBILI,
+    ;
+
+    val isCloud: Boolean
+        get() = this == CLOUD_YOUTUBE || this == CLOUD_BILIBILI
 }
 
 @Serializable
@@ -15,6 +21,11 @@ data class LibraryRoot(
     val name: String,
     val kind: RootKind,
     val treeUri: String? = null,
+    val sourceUrl: String? = null,
+    val remoteId: String? = null,
+    val cookie: String? = null,
+    val proxyUrl: String? = null,
+    val lastSyncedEpochMs: Long? = null,
 ) {
     companion object {
         const val APP_FOLDER_ID = "00000000-0000-0000-0000-00000000A990"
@@ -38,7 +49,12 @@ data class Track(
     val hasEmbeddedLyrics: Boolean = false,
     val dateAddedEpochMs: Long,
     val artworkKey: String? = null,
+    val cloudSource: String? = null,
+    val remoteTrackId: String? = null,
+    val remoteArtworkUrl: String? = null,
 ) {
+    val isCloud: Boolean
+        get() = cloudSource != null
     /** Folder part of [relativePath] (empty string for files directly in the root). */
     val folderPath: String
         get() {

@@ -1,3 +1,7 @@
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using MusicoWindows.Cloud;
 using MusicoWindows.Core;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
@@ -244,5 +248,118 @@ public sealed class LibraryStoreTests
 
         Assert.Equal([id], store.Tracks.Select(t => t.Id));
         Assert.Equal([id], store.Playlists[0].TrackIds);
+    }
+
+    private sealed class DelegatingStubHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _fn;
+        public DelegatingStubHandler(Func<HttpRequestMessage, HttpResponseMessage> fn) => _fn = fn;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(_fn(request));
+    }
+
+    [Fact]
+    public async Task CloudRootAddSyncResilienceAndRemoveWorks()
+    {
+        bool failNetwork = false;
+        string playlistJson = """
+        {
+          "header": { "musicDetailHeaderRenderer": { "title": { "runs": [{ "text": "Cloud Mix" }] } } },
+          "contents": {
+            "singleColumnBrowseResultsRenderer": {
+              "tabs": [{
+                "tabRenderer": {
+                  "content": {
+                    "sectionListRenderer": {
+                      "contents": [{
+                        "musicPlaylistShelfRenderer": {
+                          "contents": [
+                            {
+                              "musicResponsiveListItemRenderer": {
+                                "playlistItemData": { "videoId": "cloudvid001" },
+                                "thumbnail": { "musicThumbnailRenderer": { "thumbnail": { "thumbnails": [{ "url": "https://img.test/cover.jpg", "width": 400 }] } } },
+                                "flexColumns": [
+                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Cloud Song 1" }] } } },
+                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Cloud Artist" }, { "text": " • " }, { "text": "2:30" }] } } }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      }]
+                    }
+                  }
+                }
+              }]
+            }
+          }
+        }
+        """;
+
+        byte[] fakeArtBytes = [0xFF, 0xD8, 0xFF, 0xE0, 1, 2, 3, 4];
+        var handler = new DelegatingStubHandler(req =>
+        {
+            if (req.RequestUri!.AbsoluteUri == "https://img.test/cover.jpg")
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(fakeArtBytes) };
+            }
+            if (failNetwork)
+            {
+                throw new HttpRequestException("Offline");
+            }
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(playlistJson, Encoding.UTF8, "application/json")
+            };
+        });
+
+        var yt = new YouTubeClient(handler);
+        var store = new LibraryStore(
+            _stateDir,
+            _musicDir,
+            _reader,
+            new ArtworkCache(Path.Combine(_stateDir, "Artwork")),
+            youtubeClient: yt,
+            artworkHandler: handler);
+
+        var root = await store.AddCloudRootAsync("https://music.youtube.com/playlist?list=PLCloudTest1234", proxyUrl: "7890");
+        Assert.Equal(RootKind.CloudYouTube, root.Kind);
+        Assert.Equal("http://127.0.0.1:7890", root.ProxyUrl);
+        Assert.True(store.IsAvailable(root));
+
+        var track = Assert.Single(store.Tracks);
+        Assert.True(track.IsCloud);
+        Assert.True(store.IsAvailable(track));
+        Assert.NotNull(track.ArtworkKey);
+        var addedUtc = track.DateAddedUtc;
+
+        var plId = store.CreatePlaylist("My Cloud List");
+        store.AddToPlaylist([track.Id], plId);
+        store.ToggleFavourite(track.Id);
+
+        // Transient network failure on rescan must keep existing cloud tracks & playlists intact.
+        failNetwork = true;
+        await store.RescanAsync();
+        Assert.Single(store.Tracks);
+        Assert.Equal(addedUtc, store.Tracks[0].DateAddedUtc);
+        Assert.Single(store.Playlists[0].TrackIds);
+        Assert.True(store.IsFavourite(track.Id));
+
+        // Re-instantiate store to verify cloud root persists across restarts.
+        var reloaded = new LibraryStore(
+            _stateDir,
+            _musicDir,
+            _reader,
+            new ArtworkCache(Path.Combine(_stateDir, "Artwork")),
+            youtubeClient: yt,
+            artworkHandler: handler);
+        Assert.Equal(2, reloaded.Roots.Count);
+        Assert.True(reloaded.IsAvailable(reloaded.Roots[1]));
+
+        // RemoveRoot cleans up cloud root & tracks.
+        reloaded.RemoveRoot(root.Id);
+        Assert.Single(reloaded.Roots);
+        Assert.Empty(reloaded.Tracks);
     }
 }

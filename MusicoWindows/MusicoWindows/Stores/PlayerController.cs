@@ -1,4 +1,5 @@
 using MusicoWindows.Audio;
+using MusicoWindows.Cloud;
 using MusicoWindows.Core;
 using MusicoWindows.Models;
 
@@ -24,10 +25,14 @@ public sealed class PlayerController : ObservableStore, IDisposable
     private readonly ISmtcBridge? _smtc;
     private readonly string _settingsPath;
     private readonly string _audioPrefsPath;
+    private readonly CloudAudioCache _cloudCache;
+    private readonly YouTubeClient _youtube;
+    private readonly BilibiliClient _bilibili;
     private readonly Timer _ticker;
 
     private Track? _currentTrack;
     private bool _isPlaying;
+    private bool _isLoadingCloud;
     private double _durationSeconds;
     private double _currentTimeSeconds;
     private float _volume = 1.0f;
@@ -37,10 +42,14 @@ public sealed class PlayerController : ObservableStore, IDisposable
     private EqSettings _eq;
 
     private bool _isLoaded;
+    private bool _targetAutoplay;
     private double _listenedSeconds;
     private bool _playCounted;
     private bool _markedRecent;
     private int _tickCount;
+    private int _loadGeneration;
+    private CancellationTokenSource? _loadCts;
+    private CancellationTokenSource? _prefetchCts;
     private CancellationTokenSource? _sleepCts;
     private bool _disposed;
 
@@ -51,7 +60,10 @@ public sealed class PlayerController : ObservableStore, IDisposable
         IAudioEngine engine,
         string settingsPath,
         ISmtcBridge? smtc = null,
-        bool enableTicker = true)
+        bool enableTicker = true,
+        CloudAudioCache? cloudCache = null,
+        YouTubeClient? youtubeClient = null,
+        BilibiliClient? bilibiliClient = null)
     {
         Library = library;
         Queues = queues;
@@ -59,7 +71,11 @@ public sealed class PlayerController : ObservableStore, IDisposable
         _engine = engine;
         _smtc = smtc;
         _settingsPath = settingsPath;
-        _audioPrefsPath = Path.Combine(Path.GetDirectoryName(settingsPath) ?? string.Empty, "audio_prefs.json");
+        string stateDir = Path.GetDirectoryName(settingsPath) ?? string.Empty;
+        _audioPrefsPath = Path.Combine(stateDir, "audio_prefs.json");
+        _cloudCache = cloudCache ?? new CloudAudioCache(Path.Combine(stateDir, "CloudCache"));
+        _youtube = youtubeClient ?? new YouTubeClient();
+        _bilibili = bilibiliClient ?? new BilibiliClient();
 
         _eq = Persistence.Load<EqSettings>(_settingsPath) ?? new EqSettings();
         _engine.ApplyEq(_eq);
@@ -93,6 +109,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
 
     public Track? CurrentTrack { get => _currentTrack; private set => SetProperty(ref _currentTrack, value); }
     public bool IsPlaying { get => _isPlaying; private set => SetProperty(ref _isPlaying, value); }
+    public bool IsLoadingCloud { get => _isLoadingCloud; private set => SetProperty(ref _isLoadingCloud, value); }
     public double DurationSeconds { get => _durationSeconds; private set => SetProperty(ref _durationSeconds, value); }
     public double CurrentTimeSeconds { get => _currentTimeSeconds; private set => SetProperty(ref _currentTimeSeconds, value); }
     public string? ErrorMessage { get => _errorMessage; private set => SetProperty(ref _errorMessage, value); }
@@ -152,12 +169,22 @@ public sealed class PlayerController : ObservableStore, IDisposable
 
     // MARK: Loading
 
+    private void CancelPendingCloudLoad()
+    {
+        _loadGeneration++;
+        _loadCts?.Cancel();
+        _loadCts?.Dispose();
+        _loadCts = null;
+        IsLoadingCloud = false;
+        _targetAutoplay = false;
+    }
+
     private bool LoadCurrent(bool autoplay, double position)
     {
         _isLoaded = false;
         string? trackId = Queues.Active.CurrentTrackId;
         var track = trackId is not null ? Library.GetTrack(trackId) : null;
-        if (track is null) return false;
+        if (track is null || track.IsCloud) return false;
 
         CurrentTrack = track;
         DurationSeconds = track.DurationSeconds;
@@ -166,6 +193,11 @@ public sealed class PlayerController : ObservableStore, IDisposable
         string? filePath = Library.GetFilePath(track);
         if (filePath is null) return false;
 
+        return FinishTrackLoad(track, filePath, autoplay, position);
+    }
+
+    private bool FinishTrackLoad(Track track, string filePath, bool autoplay, double position)
+    {
         try
         {
             _engine.Load(filePath);
@@ -193,19 +225,29 @@ public sealed class PlayerController : ObservableStore, IDisposable
         }
         IsPlaying = _engine.IsPlaying;
         UpdateSmtc(trackChanged: true);
+        PrefetchNextCloudTrack();
         return true;
     }
 
     private void StartCurrent(bool autoplay, double position = 0)
     {
+        CancelPendingCloudLoad();
         int failures = 0;
         double pos = position;
 
         while (true)
         {
-            if (Queues.Active.CurrentTrackId is null)
+            string? trackId = Queues.Active.CurrentTrackId;
+            if (trackId is null)
             {
                 ClearPlayback();
+                return;
+            }
+
+            var track = Library.GetTrack(trackId);
+            if (track is not null && track.IsCloud)
+            {
+                BeginCloudLoad(track, autoplay, pos);
                 return;
             }
 
@@ -232,8 +274,181 @@ public sealed class PlayerController : ObservableStore, IDisposable
         }
     }
 
+    private void BeginCloudLoad(Track track, bool autoplay, double position)
+    {
+        _engine.Unload();
+        _isLoaded = false;
+        IsPlaying = false;
+        CurrentTrack = track;
+        DurationSeconds = track.DurationSeconds;
+        CurrentTimeSeconds = 0;
+        IsLoadingCloud = true;
+        _targetAutoplay = autoplay;
+        UpdateSmtc(trackChanged: true);
+
+        var cts = new CancellationTokenSource();
+        _loadCts = cts;
+        int gen = _loadGeneration;
+        _ = LoadCloudAndStartAsync(position, gen, cts.Token);
+    }
+
+    private async Task LoadCloudAndStartAsync(double position, int gen, CancellationToken ct)
+    {
+        int failures = 0;
+        double pos = position;
+
+        while (true)
+        {
+            if (ct.IsCancellationRequested || gen != _loadGeneration || _disposed) return;
+
+            string? trackId = Queues.Active.CurrentTrackId;
+            var track = trackId is not null ? Library.GetTrack(trackId) : null;
+            if (track is null)
+            {
+                await RunOnUiAsync(() =>
+                {
+                    if (gen == _loadGeneration && !_disposed) ClearPlayback();
+                }).ConfigureAwait(false);
+                return;
+            }
+
+            string? filePath = null;
+            try
+            {
+                if (!track.IsCloud)
+                {
+                    filePath = Library.GetFilePath(track);
+                }
+                else
+                {
+                    var root = Library.GetRoot(track.RootId);
+                    filePath = await _cloudCache.GetOrDownloadAsync(
+                        track.Id,
+                        token => ResolveCloudStreamAsync(track, root, token),
+                        root?.ProxyUrl,
+                        ct).ConfigureAwait(false);
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+            catch
+            {
+                filePath = null;
+            }
+
+            if (ct.IsCancellationRequested || gen != _loadGeneration || _disposed) return;
+
+            bool loaded = false;
+            if (!string.IsNullOrEmpty(filePath))
+            {
+                loaded = await RunOnUiAsync(() =>
+                {
+                    if (ct.IsCancellationRequested || gen != _loadGeneration || _disposed) return true;
+                    CurrentTrack = track;
+                    DurationSeconds = track.DurationSeconds;
+                    CurrentTimeSeconds = 0;
+                    bool shouldPlay = _targetAutoplay;
+                    if (!FinishTrackLoad(track, filePath, shouldPlay, pos)) return false;
+                    IsLoadingCloud = false;
+                    _targetAutoplay = false;
+                    return true;
+                }).ConfigureAwait(false);
+            }
+
+            if (loaded) return;
+
+            pos = 0;
+            failures++;
+            bool shouldContinue = await RunOnUiAsync(() =>
+            {
+                if (ct.IsCancellationRequested || gen != _loadGeneration || _disposed) return false;
+                string? advanced = null;
+                if (failures < MaxConsecutiveFailures)
+                {
+                    Queues.UpdateActive(q => advanced = q.Next(auto: false));
+                }
+                if (advanced is not null) return true;
+
+                _engine.Unload();
+                IsPlaying = false;
+                IsLoadingCloud = false;
+                ErrorMessage = failures > 1
+                    ? $"Playback stopped: {failures} songs in a row could not be played."
+                    : $"\"{track.Title}\" could not be played.";
+                UpdateSmtc(trackChanged: true);
+                return false;
+            }).ConfigureAwait(false);
+
+            if (!shouldContinue) return;
+        }
+    }
+
+    private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct)
+    {
+        string remoteId = track.RemoteTrackId ?? throw new InvalidOperationException("Missing remote track ID.");
+        return string.Equals(track.CloudSource, CloudSources.Bilibili, StringComparison.OrdinalIgnoreCase)
+            ? _bilibili.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct)
+            : _youtube.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
+    }
+
+    private void PrefetchNextCloudTrack()
+    {
+        var q = Queues.Active;
+        var upcoming = q.UpcomingIndices;
+        if (upcoming.Count == 0) return;
+        int nextIdx = upcoming[0];
+        if (nextIdx < 0 || nextIdx >= q.TrackIds.Count) return;
+
+        var nextTrack = Library.GetTrack(q.TrackIds[nextIdx]);
+        if (nextTrack is null || !nextTrack.IsCloud) return;
+
+        _prefetchCts?.Cancel();
+        _prefetchCts?.Dispose();
+        var cts = new CancellationTokenSource();
+        _prefetchCts = cts;
+        var root = Library.GetRoot(nextTrack.RootId);
+
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _cloudCache.GetOrDownloadAsync(
+                    nextTrack.Id,
+                    token => ResolveCloudStreamAsync(nextTrack, root, token),
+                    root?.ProxyUrl,
+                    cts.Token).ConfigureAwait(false);
+            }
+            catch
+            {
+                // Best-effort prefetch only.
+            }
+        }, cts.Token);
+    }
+
+    private Task RunOnUiAsync(Action action) => RunOnUiAsync(() => { action(); return true; });
+
+    private Task<T> RunOnUiAsync<T>(Func<T> func)
+    {
+        var tcs = new TaskCompletionSource<T>(TaskCreationOptions.RunContinuationsAsynchronously);
+        InvokeOnUiContext(() =>
+        {
+            try
+            {
+                tcs.TrySetResult(func());
+            }
+            catch (Exception ex)
+            {
+                tcs.TrySetException(ex);
+            }
+        });
+        return tcs.Task;
+    }
+
     private void ClearPlayback()
     {
+        CancelPendingCloudLoad();
         _engine.Unload();
         _isLoaded = false;
         CurrentTrack = null;
@@ -282,7 +497,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
 
     public void TogglePlayPause()
     {
-        if (IsPlaying) Pause();
+        if (IsPlaying || (IsLoadingCloud && _targetAutoplay)) Pause();
         else Resume();
     }
 
@@ -290,6 +505,11 @@ public sealed class PlayerController : ObservableStore, IDisposable
     {
         if (IsPlaying) return;
         ErrorMessage = null;
+        if (IsLoadingCloud)
+        {
+            _targetAutoplay = true;
+            return;
+        }
         if (_isLoaded)
         {
             _engine.Play();
@@ -304,6 +524,11 @@ public sealed class PlayerController : ObservableStore, IDisposable
 
     public void Pause()
     {
+        if (IsLoadingCloud && _targetAutoplay)
+        {
+            _targetAutoplay = false;
+            return;
+        }
         if (!IsPlaying) return;
         _engine.Pause();
         IsPlaying = false;
@@ -314,7 +539,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
 
     public void Next()
     {
-        bool wasPlaying = IsPlaying;
+        bool wasPlaying = IsPlaying || (IsLoadingCloud && _targetAutoplay);
         string? advanced = null;
         Queues.UpdateActive(q => advanced = q.Next(auto: false));
         if (advanced is not null) StartCurrent(autoplay: wasPlaying);
@@ -327,7 +552,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
             Seek(0);
             return;
         }
-        bool wasPlaying = IsPlaying;
+        bool wasPlaying = IsPlaying || (IsLoadingCloud && _targetAutoplay);
         Queues.UpdateActive(q => _ = q.Previous());
         StartCurrent(autoplay: wasPlaying);
     }
@@ -422,7 +647,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
     public void SwitchQueue(Guid id)
     {
         if (id == Queues.ActiveId) return;
-        bool wasPlaying = IsPlaying;
+        bool wasPlaying = IsPlaying || (IsLoadingCloud && _targetAutoplay);
         PersistPosition(flush: true);
         Queues.SetActive(id);
         ErrorMessage = null;
@@ -432,7 +657,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
     public void DeleteQueue(Guid id)
     {
         bool wasActive = id == Queues.ActiveId;
-        bool wasPlaying = IsPlaying;
+        bool wasPlaying = IsPlaying || (IsLoadingCloud && _targetAutoplay);
         Queues.Delete(id);
         if (wasActive && Queues.ActiveId != id)
         {
@@ -443,7 +668,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
     public void RemoveFromQueue(int index)
     {
         bool removingCurrent = index == Queues.Active.CurrentIndex;
-        bool wasPlaying = IsPlaying;
+        bool wasPlaying = IsPlaying || (IsLoadingCloud && _targetAutoplay);
         Queues.UpdateActive(q => q.RemoveAt(index));
         if (removingCurrent) StartCurrent(autoplay: wasPlaying);
     }
@@ -462,7 +687,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
     private void OnLibraryTracksRemoved(ISet<string> ids)
     {
         bool currentRemoved = CurrentTrack is not null && ids.Contains(CurrentTrack.Id);
-        bool wasPlaying = IsPlaying;
+        bool wasPlaying = IsPlaying || (IsLoadingCloud && _targetAutoplay);
         Queues.RemoveTracks(ids);
         History.RemoveTracks(ids);
         if (currentRemoved) StartCurrent(autoplay: wasPlaying);
@@ -472,6 +697,23 @@ public sealed class PlayerController : ObservableStore, IDisposable
 
     public void Restore()
     {
+        string? trackId = Queues.Active.CurrentTrackId;
+        var track = trackId is not null ? Library.GetTrack(trackId) : null;
+        if (track is not null && track.IsCloud)
+        {
+            if (_cloudCache.TryGetCachedPath(track.Id) is not null)
+            {
+                StartCurrent(autoplay: false, position: Queues.Active.PositionSeconds);
+            }
+            else
+            {
+                CurrentTrack = track;
+                DurationSeconds = track.DurationSeconds;
+                CurrentTimeSeconds = Math.Clamp(Queues.Active.PositionSeconds, 0, Math.Max(track.DurationSeconds, 0));
+                UpdateSmtc(trackChanged: true);
+            }
+            return;
+        }
         _ = LoadCurrent(autoplay: false, position: Queues.Active.PositionSeconds);
     }
 
@@ -562,6 +804,11 @@ public sealed class PlayerController : ObservableStore, IDisposable
 
         _ticker.Change(Timeout.Infinite, Timeout.Infinite);
         _ticker.Dispose();
+
+        CancelPendingCloudLoad();
+        _prefetchCts?.Cancel();
+        _prefetchCts?.Dispose();
+        _prefetchCts = null;
 
         _sleepCts?.Cancel();
         _sleepCts?.Dispose();
