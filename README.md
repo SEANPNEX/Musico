@@ -27,6 +27,7 @@
 - **Lyrics Support**: Resolves **Imported** `.lrc`/`.txt` → **Sidecar** `.lrc`/`.txt` → **Embedded** tags; supports multi-timestamp `.lrc`, UTF-8 / UTF-16 BOM / GB18030 decoding, live line auto-scroll, and tap-to-seek.
 - **Sleep Timer & Listening Stats**: Presets (`5`–`90` min), custom duration, or **End of current song**, plus listening statistics (**Recent**, **Plays**, **Not Lately**, **Never**).
 - **System Media Controls**: Lock-screen / Control Center & headphone buttons on iOS/macOS, `MediaSessionService` notification & media keys on Android, and Windows 10 System Media Transport Controls (SMTC) on Windows.
+- **In-App Update Detection & Updater**: Checks GitHub Releases (`releases/latest`) with SHA-256 verification against `SHA256SUMS.txt` and **Skip Version** persistence on **Windows** (supports both Installer `.exe` and self-replacing Portable `.zip`), **Android** (`FileProvider` APK installer), and **macOS Catalyst** (downloads & opens `.dmg`); skipped on iOS for personal-team signing.
 
 ---
 

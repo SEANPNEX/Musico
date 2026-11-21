@@ -297,6 +297,35 @@
                                                    VerticalAlignment="Center" />
                                     </StackPanel>
                                 </Button>
+                                <Button x:Name="CheckUpdatesButton"
+                                        Style="{StaticResource Win10FlatButtonStyle}"
+                                        Height="38"
+                                        Padding="0"
+                                        HorizontalContentAlignment="Left"
+                                        ToolTip="Check for Updates"
+                                        Click="CheckUpdatesFooter_Click">
+                                    <StackPanel Orientation="Horizontal" Margin="14,0">
+                                        <Grid Width="22" Height="22" VerticalAlignment="Center">
+                                            <TextBlock Text="&#xE895;"
+                                                       FontFamily="{StaticResource Win10GlyphFont}"
+                                                       FontSize="15"
+                                                       HorizontalAlignment="Center"
+                                                       VerticalAlignment="Center" />
+                                            <Ellipse x:Name="UpdateBadgeDot"
+                                                     Width="7"
+                                                     Height="7"
+                                                     Fill="{DynamicResource AccentBrush}"
+                                                     HorizontalAlignment="Right"
+                                                     VerticalAlignment="Top"
+                                                     Margin="0,1,0,0"
+                                                     Visibility="Collapsed" />
+                                        </Grid>
+                                        <TextBlock x:Name="LblCheckUpdates"
+                                                   Text="Check for Updates"
+                                                   Margin="12,0,0,0"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
                             </StackPanel>
                         </Grid>
                     </Border>
@@ -333,6 +362,7 @@
             <controls:TextInputDialog x:Name="PromptDialog" />
             <controls:ConfirmDialog x:Name="ConfirmOverlay" />
             <controls:AddCloudFolderDialog x:Name="CloudDialog" />
+            <controls:UpdateDialog x:Name="UpdateDialog" />
         </Grid>
     </Grid>
 </Window>

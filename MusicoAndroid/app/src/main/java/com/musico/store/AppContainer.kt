@@ -13,6 +13,7 @@ import com.musico.core.AndroidMetadataReader
 import com.musico.core.ArtworkCache
 import com.musico.core.LyricsStore
 import com.musico.core.MetadataReading
+import com.musico.update.UpdateManager
 import java.io.File
 
 interface AppContainerProvider {
@@ -47,6 +48,7 @@ class AppContainer(context: Context) {
     val queueStore: QueueStore = QueueStore(stateDir)
     val historyStore: PlayHistoryStore = PlayHistoryStore(stateDir)
     val lyricsStore: LyricsStore = LyricsStore(File(stateDir, "lyrics"))
+    val updateManager: UpdateManager = UpdateManager(appContext)
     val audioEngine: AudioEngine = AudioEngine(appContext)
     val playerController: PlayerController = PlayerController(
         context = appContext,

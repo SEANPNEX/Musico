@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -87,6 +88,11 @@ fun MusicoApp(
     val historyStore = appContainer.historyStore
     val lyricsStore = appContainer.lyricsStore
     val playerController = appContainer.playerController
+    val updateManager = appContainer.updateManager
+
+    LaunchedEffect(updateManager) {
+        updateManager.checkForUpdates(silent = true)
+    }
 
     val libraryState by libraryStore.state.collectAsStateWithLifecycle()
     val queueState by queueStore.state.collectAsStateWithLifecycle()
@@ -374,6 +380,7 @@ private fun DestinationContent(
                     queues = queueState.queues,
                     activeQueue = queueState.active,
                     trackActions = trackActions,
+                    updateManager = appContainer.updateManager,
                     onPickFolder = onPickFolder,
                     modifier = Modifier.fillMaxSize()
                 )

@@ -12,6 +12,8 @@ public static class Persistence
         Converters = { new JsonStringEnumConverter() }
     };
 
+    public static bool IsPortableMode => File.Exists(Path.Combine(AppContext.BaseDirectory, "portable.txt"));
+
     public static string AppDataDirectory
     {
         get

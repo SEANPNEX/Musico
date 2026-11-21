@@ -11,6 +11,7 @@ using MusicoWindows.Controls;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 using MusicoWindows.Theme;
+using MusicoWindows.Update;
 using MusicoWindows.Views;
 
 namespace MusicoWindows;
@@ -60,15 +61,18 @@ public partial class MainWindow : Window
 
         _services.Library.PropertyChanged += OnLibraryChanged;
         _services.Player.PropertyChanged += OnPlayerChanged;
+        _services.Update.UpdateStateChanged += OnUpdateStateChanged;
 
         ThemeManager.ThemeChanged += OnThemeChanged;
         SourceInitialized += (_, _) => AcrylicBackdrop.Apply(this, ThemeManager.IsDark);
+        Loaded += OnMainWindowLoaded;
         StateChanged += (_, _) => UpdateMaximizedState();
         Closed += (_, _) =>
         {
             ThemeManager.ThemeChanged -= OnThemeChanged;
             _services.Library.PropertyChanged -= OnLibraryChanged;
             _services.Player.PropertyChanged -= OnPlayerChanged;
+            _services.Update.UpdateStateChanged -= OnUpdateStateChanged;
         };
 
         UpdateThemeButton();
@@ -387,6 +391,7 @@ public partial class MainWindow : Window
         LblStats.Visibility = labelVis;
         LblTheme.Visibility = labelVis;
         LblRescan.Visibility = labelVis;
+        LblCheckUpdates.Visibility = labelVis;
 
         foreach (var rb in _dynamicPlaylistButtons)
         {
@@ -412,9 +417,35 @@ public partial class MainWindow : Window
         ThemeManager.ToggleTheme(Application.Current);
     }
 
+    private async void OnMainWindowLoaded(object sender, RoutedEventArgs e)
+    {
+        Loaded -= OnMainWindowLoaded;
+        try
+        {
+            await _services.Update.CheckForUpdatesAsync(manual: false);
+        }
+        catch
+        {
+            // Startup check is silent.
+        }
+    }
+
+    private void OnUpdateStateChanged(object? sender, UpdateCheckResult result)
+    {
+        Dispatcher.BeginInvoke(() =>
+        {
+            UpdateBadgeDot.Visibility = result.IsUpdateAvailable ? Visibility.Visible : Visibility.Collapsed;
+        });
+    }
+
     private async void RescanFooter_Click(object sender, RoutedEventArgs e)
     {
         await _services.Library.RescanAsync();
+    }
+
+    private void CheckUpdatesFooter_Click(object sender, RoutedEventArgs e)
+    {
+        UpdateDialog.Show(_services, () => Application.Current.Shutdown());
     }
 
     private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
@@ -431,6 +462,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.Escape)
         {
             if (ConfirmOverlay.IsOpen) { ConfirmOverlay.Close(); e.Handled = true; return; }
+            if (UpdateDialog.IsOpen) { UpdateDialog.Close(); e.Handled = true; return; }
             if (CloudDialog.IsOpen) { CloudDialog.Close(); e.Handled = true; return; }
             if (PromptDialog.IsOpen) { PromptDialog.Close(); e.Handled = true; return; }
             if (EqDialog.IsOpen) { EqDialog.Close(); e.Handled = true; return; }
@@ -469,7 +501,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
         {
             if (Keyboard.FocusedElement is TextBoxBase) return;
-            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen) return;
+            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || UpdateDialog.IsOpen) return;
             _services.Player.TogglePlayPause();
             e.Handled = true;
         }

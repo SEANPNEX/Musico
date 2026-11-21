@@ -1,6 +1,7 @@
 using MusicoWindows.Audio;
 using MusicoWindows.Cloud;
 using MusicoWindows.Core;
+using MusicoWindows.Update;
 
 namespace MusicoWindows.Stores;
 
@@ -38,6 +39,7 @@ public sealed class AppServices : IDisposable
         Lyrics = new LyricsStore(Path.Combine(StateDirectory, "Lyrics"));
         AudioEngine = new AudioEngine();
         Smtc = new SmtcBridge();
+        Update = new UpdateService(stateDirectory: StateDirectory);
         Player = new PlayerController(
             library: Library,
             queues: Queues,
@@ -61,6 +63,7 @@ public sealed class AppServices : IDisposable
     public LyricsStore Lyrics { get; }
     public AudioEngine AudioEngine { get; }
     public SmtcBridge Smtc { get; }
+    public UpdateService Update { get; }
     public PlayerController Player { get; }
 
     public async Task InitializeAsync()
@@ -82,5 +85,6 @@ public sealed class AppServices : IDisposable
         Player.Shutdown();
         Smtc.Dispose();
         AudioEngine.Dispose();
+        Update.Dispose();
     }
 }

@@ -8,6 +8,9 @@ final class AppModel {
     let player: PlayerController
     let lyrics: LyricsStore
     let history: PlayHistoryStore
+    #if targetEnvironment(macCatalyst)
+    let updateManager: UpdateManager
+    #endif
 
     init() {
         let support = Persistence.supportDirectory
@@ -27,6 +30,9 @@ final class AppModel {
         player = PlayerController(library: library, queues: queues, history: history, engine: AudioEngine(),
                                   settingsURL: support.appendingPathComponent("settings.json"))
         lyrics = LyricsStore(directory: support.appendingPathComponent("Lyrics"))
+        #if targetEnvironment(macCatalyst)
+        updateManager = UpdateManager()
+        #endif
     }
 }
 
@@ -47,6 +53,12 @@ struct MusicoApp: App {
                 .environment(model.player)
                 .environment(model.history)
                 .environment(\.lyricsStore, model.lyrics)
+                #if targetEnvironment(macCatalyst)
+                .environment(\.updateManager, model.updateManager)
+                .task {
+                    await model.updateManager.checkForUpdates(manual: false)
+                }
+                #endif
                 .task {
                     model.player.restore()
                     await model.library.rescan()

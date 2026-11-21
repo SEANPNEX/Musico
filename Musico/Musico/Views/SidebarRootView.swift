@@ -12,6 +12,10 @@ struct SidebarRootView: View {
     @Environment(PlayerController.self) private var player
     @Environment(QueueStore.self) private var queues
     @Environment(NewPlaylistPrompt.self) private var newPlaylist
+    #if targetEnvironment(macCatalyst)
+    @Environment(\.updateManager) private var updateManager
+    @State private var showUpdateSheet = false
+    #endif
     @State private var selection: SidebarItem? = .songs
     @State private var sidePanel: SidePanel?
 
@@ -70,7 +74,49 @@ struct SidebarRootView: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("Musico")
+        #if targetEnvironment(macCatalyst)
+        .safeAreaInset(edge: .bottom) {
+            updateFooter
+        }
+        .sheet(isPresented: $showUpdateSheet) {
+            UpdateSheet()
+                .environment(\.updateManager, updateManager)
+        }
+        #endif
     }
+
+    #if targetEnvironment(macCatalyst)
+    private var updateFooter: some View {
+        Button {
+            showUpdateSheet = true
+            switch updateManager.state {
+            case .available, .downloading, .readyToInstall:
+                break
+            default:
+                Task { await updateManager.checkForUpdates(manual: true) }
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle")
+                Text("Check for Updates")
+                Spacer()
+                if updateManager.hasAvailableUpdate {
+                    Circle()
+                        .fill(Color.accentColor)
+                        .frame(width: 8, height: 8)
+                        .accessibilityLabel("Update available")
+                }
+            }
+            .font(.subheadline)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .foregroundStyle(.secondary)
+        .background(.bar)
+    }
+    #endif
 
     private func link(_ item: SidebarItem, _ title: String, _ icon: String) -> some View {
         NavigationLink(value: item) { Label(title, systemImage: icon) }

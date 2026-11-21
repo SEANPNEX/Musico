@@ -35,8 +35,11 @@ import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.Refresh
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -83,7 +86,12 @@ import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
+import com.musico.ui.components.UpdateDialog
 import com.musico.ui.theme.MusicoMotion
+import com.musico.update.UpdateManager
+import com.musico.update.UpdateUiState
+import com.musico.update.hasAvailableUpdate
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 
@@ -107,14 +115,17 @@ fun FoldersScreen(
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
+    updateManager: UpdateManager,
     onPickFolder: ((Uri) -> Unit) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
+    val updateState by updateManager.state.collectAsStateWithLifecycle()
     var currentFolder by remember { mutableStateOf<FolderRef?>(null) }
     var importError by remember { mutableStateOf<String?>(null) }
     var removingRoot by remember { mutableStateOf<LibraryRoot?>(null) }
     var showAddCloudDialog by remember { mutableStateOf(false) }
+    var showUpdateDialog by remember { mutableStateOf(false) }
     var detailMenuExpanded by remember { mutableStateOf(false) }
 
     BackHandler(enabled = currentFolder != null) {
@@ -158,6 +169,30 @@ fun FoldersScreen(
                 TopAppBar(
                     title = { Text("Folders") },
                     actions = {
+                        IconButton(
+                            onClick = {
+                                showUpdateDialog = true
+                                if (updateState is UpdateUiState.Idle ||
+                                    updateState is UpdateUiState.UpToDate ||
+                                    updateState is UpdateUiState.Error
+                                ) {
+                                    scope.launch { updateManager.checkForUpdates(silent = false) }
+                                }
+                            }
+                        ) {
+                            BadgedBox(
+                                badge = {
+                                    if (updateState.hasAvailableUpdate) {
+                                        Badge()
+                                    }
+                                }
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.SystemUpdate,
+                                    contentDescription = "Check for Updates"
+                                )
+                            }
+                        }
                         IconButton(onClick = { showAddCloudDialog = true }) {
                             Icon(Icons.Rounded.CloudQueue, contentDescription = "Add Cloud Folder")
                         }
@@ -314,6 +349,13 @@ fun FoldersScreen(
             onAdd = { url, cookie ->
                 libraryStore.addCloudRoot(url, cookie)
             }
+        )
+    }
+
+    if (showUpdateDialog) {
+        UpdateDialog(
+            updateManager = updateManager,
+            onDismiss = { showUpdateDialog = false }
         )
     }
 
