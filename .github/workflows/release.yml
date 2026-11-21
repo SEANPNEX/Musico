@@ -1,0 +1,198 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag name (e.g. v1.0.0)'
+        required: true
+        default: 'v1.0.0'
+
+permissions:
+  contents: write
+
+jobs:
+  build-android:
+    name: Build Android APK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: MusicoAndroid
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Build and test Android APKs
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest assembleDebug assembleRelease --stacktrace
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk "dist/MusicoAndroid-${VERSION}-debug.apk"
+          if [ -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
+            cp app/build/outputs/apk/release/app-release-unsigned.apk "dist/MusicoAndroid-${VERSION}-release-unsigned.apk"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-release
+          path: MusicoAndroid/dist/*.apk
+
+  build-windows:
+    name: Build Windows Installer & Portable
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: MusicoWindows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Run unit tests
+        run: dotnet test MusicoWindows.Tests/MusicoWindows.Tests.csproj -c Release
+
+      - name: Publish Portable & Installer Payloads
+        shell: pwsh
+        run: |
+          $tag = "${{ inputs.tag || github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          $portableDir = "dist\MusicoWindows-$version-win-x64-portable"
+          $portableZip = "dist\MusicoWindows-$version-win-x64-portable.zip"
+          $payloadDir = "dist\installer-payload"
+
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+
+          dotnet publish MusicoWindows\MusicoWindows.csproj `
+            -c Release -r win-x64 --self-contained true `
+            -p:Version=$version `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            -p:DebugType=none `
+            -o $portableDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          @"
+          Portable mode enabled.
+          When portable.txt exists next to MusicoWindows.exe, library index, playlists, queues, history, and settings are stored in .\Data\.
+          "@ | Set-Content -Path "$portableDir\portable.txt" -Encoding UTF8
+
+          Compress-Archive -Path $portableDir -DestinationPath $portableZip -CompressionLevel Optimal -Force
+
+          dotnet publish MusicoWindows\MusicoWindows.csproj `
+            -c Release -r win-x64 --self-contained true `
+            -p:Version=$version `
+            -p:PublishSingleFile=false `
+            -p:DebugType=none `
+            -o $payloadDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build NSIS Setup Installer
+        shell: pwsh
+        run: |
+          $tag = "${{ inputs.tag || github.ref_name }}"
+          $version = $tag -replace '^v', ''
+          $makensis = (Get-Command makensis.exe -ErrorAction SilentlyContinue)?.Source
+          if (-not $makensis -and (Test-Path "C:\Program Files (x86)\NSIS\makensis.exe")) {
+            $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          }
+          if (-not $makensis) {
+            choco install nsis -y
+            $makensis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          }
+          & $makensis "/DAPP_VERSION=$version" "installer\MusicoWindows.nsi"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-release
+          path: |
+            MusicoWindows/dist/MusicoWindows-*-win-x64-portable.zip
+            MusicoWindows/dist/MusicoWindows-*-win-x64-Setup.exe
+
+  build-apple:
+    name: Build macOS Catalyst App (Unsigned)
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: Musico
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Mac Catalyst Release app
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          xcodebuild -project Musico.xcodeproj -scheme Musico \
+            -configuration Release \
+            -destination 'generic/platform=macOS,variant=Mac Catalyst' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+          mkdir -p dist
+          ditto -c -k --sequesterRsrc --keepParent \
+            build/DerivedData/Build/Products/Release-maccatalyst/Musico.app \
+            "dist/Musico-${VERSION}-macOS-Catalyst-unsigned.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: apple-release
+          path: Musico/dist/*.zip
+
+  publish-release:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs: [build-android, build-windows, build-apple]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ inputs.tag || github.ref_name }}"
+          VERSION="${TAG#v}"
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+          ls -lh
+
+          cat > ../release-notes.md <<EOF
+          ## Musico ${TAG}
+
+          Unified release across **Windows 10/11**, **Android**, and **macOS Catalyst** (plus iOS/iPadOS source in \`Musico/\`).
+
+          ### Downloads
+          - **Windows 10/11 Installer**: \`MusicoWindows-${VERSION}-win-x64-Setup.exe\` (self-contained x64, Start Menu & uninstaller)
+          - **Windows 10/11 Portable**: \`MusicoWindows-${VERSION}-win-x64-portable.zip\` (self-contained single-file EXE + \`portable.txt\` using \`.\Data\\\`)
+          - **Android (API 26+)**: \`MusicoAndroid-${VERSION}-debug.apk\` (directly sideloadable) & \`MusicoAndroid-${VERSION}-release-unsigned.apk\`
+          - **macOS (Mac Catalyst)**: \`Musico-${VERSION}-macOS-Catalyst-unsigned.zip\`
+
+          Checksums are included in \`SHA256SUMS.txt\`.
+          EOF
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" * --clobber
+            gh release edit "$TAG" --notes-file ../release-notes.md
+          else
+            gh release create "$TAG" * \
+              --title "Musico ${TAG}" \
+              --notes-file ../release-notes.md
+          fi

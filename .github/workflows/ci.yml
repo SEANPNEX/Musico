@@ -1,0 +1,113 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  android:
+    name: Android (Unit Tests & Debug APK)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: MusicoAndroid
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+
+      - name: Run unit tests and build debug APK
+        run: |
+          chmod +x gradlew
+          ./gradlew testDebugUnitTest assembleDebug --stacktrace
+
+  windows:
+    name: Windows (xUnit Tests & WPF Release Build)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: MusicoWindows
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore dependencies
+        run: dotnet restore MusicoWindows.sln
+
+      - name: Run unit tests
+        run: dotnet test MusicoWindows.Tests/MusicoWindows.Tests.csproj -c Release --no-restore
+
+      - name: Build WPF app
+        run: dotnet build MusicoWindows/MusicoWindows.csproj -c Release --no-restore
+
+  apple:
+    name: Apple (iOS Simulator Tests & Mac Catalyst Build)
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: Musico
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Inspect Xcode and select iPhone simulator
+        id: sim
+        run: |
+          xcodebuild -version
+          SIM_UDID=$(python3 - <<'PY'
+          import json, subprocess, sys
+          data = json.loads(subprocess.check_output(["xcrun", "simctl", "list", "devices", "available", "-j"]))
+          candidates = []
+          for runtime, devices in data.get("devices", {}).items():
+              if "iOS" not in runtime:
+                  continue
+              for d in devices:
+                  if d.get("isAvailable") and "iPhone" in d.get("name", ""):
+                      candidates.append((runtime, d["name"], d["udid"]))
+          if not candidates:
+              sys.exit("No available iPhone simulator found")
+          candidates.sort(reverse=True)
+          print(f"Selected simulator: {candidates[0]}", file=sys.stderr)
+          print(candidates[0][2])
+          PY
+          )
+          echo "udid=$SIM_UDID" >> "$GITHUB_OUTPUT"
+
+      - name: Run iOS unit tests
+        run: |
+          set -o pipefail
+          for attempt in 1 2 3; do
+            if xcodebuild -project Musico.xcodeproj -scheme Musico \
+              -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+              -derivedDataPath build/DerivedData \
+              CODE_SIGNING_ALLOWED=NO \
+              test 2>&1 | tee build/ci-test.log; then
+              exit 0
+            fi
+            grep -q "failed preflight checks" build/ci-test.log || exit 1
+            sleep 8
+          done
+          exit 1
+
+      - name: Build Mac Catalyst (Release, unsigned)
+        run: |
+          xcodebuild -project Musico.xcodeproj -scheme Musico \
+            -configuration Release \
+            -destination 'generic/platform=macOS,variant=Mac Catalyst' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGNING_ALLOWED=NO \
+            build

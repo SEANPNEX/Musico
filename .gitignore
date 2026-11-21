@@ -1,0 +1,27 @@
+# OS & Tooling
+.DS_Store
+Thumbs.db
+Library/
+.superpowers/
+
+# Xcode / Swift (Musico Apple)
+Musico/build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+.build/
+
+# Android / Gradle (MusicoAndroid)
+MusicoAndroid/.gradle/
+MusicoAndroid/build/
+MusicoAndroid/*/build/
+MusicoAndroid/local.properties
+.idea/
+*.iml
+
+# .NET / WPF (MusicoWindows)
+MusicoWindows/**/bin/
+MusicoWindows/**/obj/
+MusicoWindows/dist/
+.vs/
+*.user

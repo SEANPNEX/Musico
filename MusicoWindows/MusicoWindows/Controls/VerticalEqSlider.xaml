@@ -1,0 +1,38 @@
+<UserControl x:Class="MusicoWindows.Controls.VerticalEqSlider"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             MinWidth="32"
+             Height="170"
+             Cursor="Hand"
+             Background="Transparent">
+    <Grid x:Name="TrackArea"
+          Background="Transparent"
+          MouseLeftButtonDown="TrackArea_MouseLeftButtonDown"
+          MouseMove="TrackArea_MouseMove"
+          MouseLeftButtonUp="TrackArea_MouseLeftButtonUp"
+          SizeChanged="TrackArea_SizeChanged">
+        <!-- Vertical track -->
+        <Border Width="4"
+                HorizontalAlignment="Center"
+                Background="{DynamicResource SliderTrackBrush}"
+                CornerRadius="0" />
+
+        <!-- Center 0 dB tick -->
+        <Rectangle Width="14"
+                   Height="1"
+                   HorizontalAlignment="Center"
+                   VerticalAlignment="Center"
+                   Fill="{DynamicResource ControlBorderBrush}" />
+
+        <!-- Active fill from center or bottom -->
+        <Canvas x:Name="ThumbCanvas" IsHitTestVisible="False">
+            <Border x:Name="Thumb"
+                    Width="16"
+                    Height="10"
+                    Background="{DynamicResource SliderThumbFillBrush}"
+                    BorderBrush="{DynamicResource AccentBrush}"
+                    BorderThickness="2"
+                    CornerRadius="0" />
+        </Canvas>
+    </Grid>
+</UserControl>

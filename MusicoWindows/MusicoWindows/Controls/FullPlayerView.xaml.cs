@@ -1,0 +1,168 @@
+using System;
+using System.ComponentModel;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using MusicoWindows.Converters;
+using MusicoWindows.Models;
+using MusicoWindows.Stores;
+using MusicoWindows.Views;
+
+namespace MusicoWindows.Controls;
+
+public partial class FullPlayerView : UserControl
+{
+    private ViewContext? _ctx;
+    private bool _isScrubbing;
+
+    public event Action? CloseRequested;
+    public event Action? OpenEqualizerRequested;
+    public event Action? OpenSleepTimerRequested;
+    public event Action<string, string>? ErrorOccurred;
+
+    public FullPlayerView()
+    {
+        InitializeComponent();
+        EmbeddedLyrics.ErrorOccurred += (title, msg) => ErrorOccurred?.Invoke(title, msg);
+    }
+
+    public bool IsOpen => Visibility == Visibility.Visible;
+
+    public void Initialize(ViewContext ctx)
+    {
+        if (_ctx != null)
+        {
+            _ctx.Services.Player.PropertyChanged -= OnPlayerChanged;
+            _ctx.Services.Queues.PropertyChanged -= OnQueueChanged;
+            _ctx.Services.Library.PropertyChanged -= OnLibraryChanged;
+        }
+
+        _ctx = ctx;
+        _ctx.Services.Player.PropertyChanged += OnPlayerChanged;
+        _ctx.Services.Queues.PropertyChanged += OnQueueChanged;
+        _ctx.Services.Library.PropertyChanged += OnLibraryChanged;
+
+        EmbeddedLyrics.Initialize(ctx.Services);
+        EmbeddedQueues.Bind(ctx);
+        RefreshAll();
+    }
+
+    public void Show()
+    {
+        Visibility = Visibility.Visible;
+        RefreshAll();
+    }
+
+    public void Close()
+    {
+        Visibility = Visibility.Collapsed;
+        CloseRequested?.Invoke();
+    }
+
+    private void OnPlayerChanged(object? sender, PropertyChangedEventArgs e) => RefreshAll();
+    private void OnQueueChanged(object? sender, PropertyChangedEventArgs e) => RefreshAll();
+    private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName == nameof(LibraryStore.Favourites)) RefreshAll();
+    }
+
+    private void RefreshAll()
+    {
+        if (_ctx is null) return;
+        var services = _ctx.Services;
+        var player = services.Player;
+        var track = player.CurrentTrack;
+        var queue = services.Queues.Active;
+
+        CoverArt.SetSource(services.Library.Artwork, track?.ArtworkKey, 600);
+        TitleText.Text = track?.Title ?? "Nothing Playing";
+        MetaText.Text = track != null ? $"{track.Artist} — {track.Album}" : "Pick a song from your library";
+
+        bool hasTrack = track != null;
+        FavouriteButton.IsEnabled = hasTrack;
+        ShuffleButton.IsEnabled = hasTrack;
+        PrevButton.IsEnabled = hasTrack;
+        PlayPauseButton.IsEnabled = hasTrack;
+        NextButton.IsEnabled = hasTrack;
+        RepeatButton.IsEnabled = hasTrack;
+        ScrubberSlider.IsEnabled = hasTrack;
+
+        bool isFav = track != null && services.Library.IsFavourite(track.Id);
+        FavouriteButton.Content = isFav ? "\uEB52" : "\uEB51";
+        FavouriteButton.SetResourceReference(ForegroundProperty, isFav ? "AccentBrush" : "TextSecondaryBrush");
+
+        PlayPauseButton.Content = player.IsPlaying ? "\uE769" : "\uE768";
+
+        if (!_isScrubbing)
+        {
+            double duration = Math.Max(player.DurationSeconds, 1);
+            double current = Math.Clamp(player.CurrentTimeSeconds, 0, duration);
+            ScrubberSlider.Maximum = duration;
+            ScrubberSlider.Value = hasTrack ? current : 0;
+            UpdateTimeLabels(hasTrack ? current : 0, hasTrack ? player.DurationSeconds : 0);
+        }
+
+        ShuffleButton.SetResourceReference(ForegroundProperty, queue.Shuffle ? "AccentBrush" : "TextSecondaryBrush");
+        RepeatButton.Content = queue.RepeatMode == RepeatMode.One ? "\uE8ED" : "\uE8EE";
+        RepeatButton.SetResourceReference(ForegroundProperty, queue.RepeatMode == RepeatMode.Off ? "TextSecondaryBrush" : "AccentBrush");
+
+        if (queue.CurrentIndex is int idx && queue.TrackIds.Count > 0)
+        {
+            QueuePositionText.Text = $"{queue.Name} · {idx + 1} of {queue.TrackIds.Count}";
+        }
+        else
+        {
+            QueuePositionText.Text = queue.Name;
+        }
+
+        EqButton.SetResourceReference(ForegroundProperty, player.Eq.Enabled ? "AccentBrush" : "TextPrimaryBrush");
+        SleepButton.SetResourceReference(ForegroundProperty, player.SleepState.Kind != SleepModeKind.Off ? "AccentBrush" : "TextPrimaryBrush");
+    }
+
+    private void UpdateTimeLabels(double current, double total)
+    {
+        ElapsedText.Text = TimeFormatter.Format(current);
+        RemainingText.Text = "-" + TimeFormatter.Format(Math.Max(total - current, 0));
+    }
+
+    private void Close_Click(object sender, RoutedEventArgs e) => Close();
+    private void Artwork_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => LyricsPivotTab.IsChecked = true;
+    private void Favourite_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ctx?.Services.Player.CurrentTrack is { } track)
+            _ctx.Services.Library.ToggleFavourite(track.Id);
+    }
+
+    private void Shuffle_Click(object sender, RoutedEventArgs e) => _ctx?.Services.Player.ToggleShuffle();
+    private void Prev_Click(object sender, RoutedEventArgs e) => _ctx?.Services.Player.Previous();
+    private void PlayPause_Click(object sender, RoutedEventArgs e) => _ctx?.Services.Player.TogglePlayPause();
+    private void Next_Click(object sender, RoutedEventArgs e) => _ctx?.Services.Player.Next();
+    private void Repeat_Click(object sender, RoutedEventArgs e) => _ctx?.Services.Player.CycleRepeat();
+    private void Eq_Click(object sender, RoutedEventArgs e) => OpenEqualizerRequested?.Invoke();
+    private void Sleep_Click(object sender, RoutedEventArgs e) => OpenSleepTimerRequested?.Invoke();
+
+    private void PivotTab_Checked(object sender, RoutedEventArgs e)
+    {
+        if (EmbeddedLyrics is null || EmbeddedQueues is null) return;
+        bool showLyrics = LyricsPivotTab.IsChecked == true;
+        EmbeddedLyrics.Visibility = showLyrics ? Visibility.Visible : Visibility.Collapsed;
+        EmbeddedQueues.Visibility = showLyrics ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void Scrubber_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) => _isScrubbing = true;
+    private void Scrubber_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e) => FinishScrub();
+    private void Scrubber_LostMouseCapture(object sender, MouseEventArgs e) => FinishScrub();
+
+    private void FinishScrub()
+    {
+        if (!_isScrubbing) return;
+        _isScrubbing = false;
+        _ctx?.Services.Player.Seek(ScrubberSlider.Value);
+    }
+
+    private void Scrubber_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_isScrubbing && _ctx is not null)
+            UpdateTimeLabels(e.NewValue, _ctx.Services.Player.DurationSeconds);
+    }
+}

@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <TargetFramework>net8.0</TargetFramework>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.11.1" />
+    <PackageReference Include="xunit" Version="2.9.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.8.2">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+  <ItemGroup Condition="$([MSBuild]::IsOSPlatform('Windows'))">
+    <ProjectReference Include="..\MusicoWindows\MusicoWindows.csproj" />
+  </ItemGroup>
+
+  <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <PackageReference Include="NAudio.Core" Version="2.2.1" />
+    <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
+    <PackageReference Include="TagLibSharp" Version="2.3.0" />
+    <Compile Include="*.cs" />
+    <Compile Include="..\MusicoWindows\Models\*.cs" LinkBase="Models" />
+    <Compile Include="..\MusicoWindows\Core\*.cs" LinkBase="Core" />
+    <Compile Include="..\MusicoWindows\Stores\*.cs" Exclude="..\MusicoWindows\Stores\AppServices.cs" LinkBase="Stores" />
+    <Compile Include="..\MusicoWindows\Audio\IAudioEngine.cs" LinkBase="Audio" />
+    <Compile Include="..\MusicoWindows\Audio\ISmtcBridge.cs" LinkBase="Audio" />
+    <Compile Include="..\MusicoWindows\Audio\TenBandEqualizerSampleProvider.cs" LinkBase="Audio" />
+  </ItemGroup>
+
+</Project>

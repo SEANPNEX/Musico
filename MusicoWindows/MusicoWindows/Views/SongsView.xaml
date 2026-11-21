@@ -1,0 +1,226 @@
+<UserControl x:Class="MusicoWindows.Views.SongsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:MusicoWindows.Controls">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <Border Grid.Row="0"
+                Padding="24,20,24,14"
+                BorderBrush="{DynamicResource DividerBrush}"
+                BorderThickness="0,0,0,1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                    <TextBlock Text="Songs" Style="{StaticResource Win10PageTitleStyle}" />
+                    <TextBlock x:Name="CountText"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="0,3,0,0" />
+                </StackPanel>
+
+                <!-- Search & Sort Controls -->
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Grid Width="240" Margin="0,0,10,0">
+                        <TextBox x:Name="SearchBox"
+                                 Style="{StaticResource Win10TextBoxStyle}"
+                                 Height="32"
+                                 Padding="8,4,28,4"
+                                 TextChanged="SearchBox_TextChanged" />
+                        <TextBlock x:Name="SearchPlaceholder"
+                                   Text="Search songs, artists, albums (Ctrl+F)"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   IsHitTestVisible="False"
+                                   VerticalAlignment="Center"
+                                   Margin="10,0,28,0" />
+                        <Button x:Name="ClearSearchButton"
+                                Style="{StaticResource Win10IconButtonStyle}"
+                                Width="28"
+                                Height="28"
+                                FontSize="11"
+                                Content="&#xE711;"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                Margin="0,0,2,0"
+                                Visibility="Collapsed"
+                                Click="ClearSearch_Click" />
+                    </Grid>
+
+                    <ComboBox x:Name="SortCombo"
+                              Style="{StaticResource Win10ComboBoxStyle}"
+                              Width="150"
+                              SelectionChanged="SortCombo_SelectionChanged" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Play All / Shuffle Action Bar -->
+        <Border x:Name="ActionBar"
+                Grid.Row="1"
+                Padding="24,10"
+                BorderBrush="{DynamicResource DividerBrush}"
+                BorderThickness="0,0,0,1">
+            <StackPanel Orientation="Horizontal">
+                <Button x:Name="PlayAllButton"
+                        Style="{StaticResource Win10PrimaryButtonStyle}"
+                        Margin="0,0,8,0"
+                        Click="PlayAll_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBlock Text="Play All" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="ShuffleAllButton"
+                        Style="{StaticResource Win10ButtonStyle}"
+                        Click="ShuffleAll_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
+                        <TextBlock Text="Shuffle" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+            </StackPanel>
+        </Border>
+
+        <!-- Virtualized Song List -->
+        <Grid Grid.Row="2">
+            <ListBox x:Name="SongsList"
+                     Background="Transparent"
+                     BorderThickness="0"
+                     Padding="16,8"
+                     ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                     ScrollViewer.CanContentScroll="True"
+                     VirtualizingPanel.IsVirtualizing="True"
+                     VirtualizingPanel.VirtualizationMode="Standard"
+                     HorizontalContentAlignment="Stretch"
+                     SelectionChanged="SongsList_SelectionChanged">
+                <ListBox.ItemContainerStyle>
+                    <Style TargetType="ListBoxItem">
+                        <Setter Property="Padding" Value="0" />
+                        <Setter Property="Margin" Value="0" />
+                        <Setter Property="Background" Value="Transparent" />
+                        <Setter Property="BorderThickness" Value="0" />
+                        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+                        <Setter Property="Template">
+                            <Setter.Value>
+                                <ControlTemplate TargetType="ListBoxItem">
+                                    <ContentPresenter />
+                                </ControlTemplate>
+                            </Setter.Value>
+                        </Setter>
+                    </Style>
+                </ListBox.ItemContainerStyle>
+                <ListBox.ItemTemplate>
+                    <DataTemplate>
+                        <Border x:Name="RowBorder"
+                                Background="{Binding RowBackground}"
+                                BorderBrush="Transparent"
+                                BorderThickness="1"
+                                Padding="10,7"
+                                Cursor="Hand"
+                                Opacity="{Binding RowOpacity}"
+                                MouseEnter="SongRow_MouseEnter"
+                                MouseLeave="SongRow_MouseLeave"
+                                MouseLeftButtonUp="SongRow_MouseLeftButtonUp"
+                                MouseRightButtonUp="SongRow_MouseRightButtonUp">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="42" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="56" />
+                                </Grid.ColumnDefinitions>
+
+                                <Rectangle Grid.Column="0"
+                                           Width="3"
+                                           Height="24"
+                                           Margin="0,0,8,0"
+                                           Fill="{DynamicResource AccentBrush}"
+                                           Visibility="{Binding ActiveVisibility}" />
+
+                                <controls:ArtworkImage Grid.Column="1"
+                                                       Width="40"
+                                                       Height="40"
+                                                       GlyphSize="15"
+                                                       DecodeSize="96"
+                                                       ArtworkCache="{Binding ArtworkCache}"
+                                                       ArtworkKey="{Binding Track.ArtworkKey}" />
+
+                                <StackPanel Grid.Column="2" Margin="12,0,12,0" VerticalAlignment="Center">
+                                    <TextBlock Text="{Binding Track.Title}"
+                                               FontFamily="{StaticResource Win10Font}"
+                                               FontSize="14"
+                                               FontWeight="{Binding TitleWeight}"
+                                               Foreground="{Binding TitleBrush}"
+                                               TextTrimming="CharacterEllipsis" />
+                                    <TextBlock Text="{Binding Subtitle}"
+                                               FontFamily="{StaticResource Win10Font}"
+                                               FontSize="12"
+                                               Foreground="{DynamicResource TextSecondaryBrush}"
+                                               TextTrimming="CharacterEllipsis"
+                                               Margin="0,1,0,0" />
+                                </StackPanel>
+
+                                <TextBlock Grid.Column="3"
+                                           Text="{Binding StateGlyph}"
+                                           FontFamily="{StaticResource Win10GlyphFont}"
+                                           FontSize="13"
+                                           Foreground="{DynamicResource AccentBrush}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,12,0"
+                                           Visibility="{Binding ActiveVisibility}" />
+
+                                <TextBlock Grid.Column="4"
+                                           Text="{Binding DurationText}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           VerticalAlignment="Center"
+                                           HorizontalAlignment="Right" />
+                            </Grid>
+                        </Border>
+                    </DataTemplate>
+                </ListBox.ItemTemplate>
+            </ListBox>
+
+            <!-- Empty State -->
+            <StackPanel x:Name="EmptyState"
+                        VerticalAlignment="Center"
+                        HorizontalAlignment="Center"
+                        Margin="32"
+                        Visibility="Collapsed">
+                <TextBlock Text="&#xE8D6;"
+                           FontFamily="{StaticResource Win10GlyphFont}"
+                           FontSize="36"
+                           Foreground="{DynamicResource TextTertiaryBrush}"
+                           HorizontalAlignment="Center"
+                           Margin="0,0,0,12" />
+                <TextBlock x:Name="EmptyTitleText"
+                           Text="No Songs Yet"
+                           FontFamily="{StaticResource Win10Font}"
+                           FontSize="17"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           HorizontalAlignment="Center"
+                           Margin="0,0,0,6" />
+                <TextBlock x:Name="EmptyDescText"
+                           Text="Add a folder in Folders to build your music library."
+                           FontFamily="{StaticResource Win10Font}"
+                           FontSize="13"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           TextAlignment="Center" />
+            </StackPanel>
+        </Grid>
+    </Grid>
+</UserControl>
