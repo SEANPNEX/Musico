@@ -1,5 +1,8 @@
 package com.musico.ui.components
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animate
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListState
@@ -8,6 +11,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
@@ -27,6 +31,7 @@ data class DragReorderItem<T>(
 class DragReorderState<T>(
     private val listState: LazyListState,
     private val headerCountProvider: () -> Int,
+    private val keyOfProvider: () -> ((T) -> String),
     private val onCommitProvider: () -> ((List<DragReorderItem<T>>) -> Unit),
 ) {
     var items by mutableStateOf<List<DragReorderItem<T>>>(emptyList())
@@ -38,14 +43,79 @@ class DragReorderState<T>(
     var draggingOffsetY by mutableFloatStateOf(0f)
         private set
 
+    var settlingUid by mutableStateOf<String?>(null)
+        private set
+
+    internal var settlingOffsetY by mutableFloatStateOf(0f)
+
+    internal var settlingToken by mutableIntStateOf(0)
+        private set
+
+    private var pendingCommitKeys by mutableStateOf<List<String>?>(null)
+
+    internal var pendingCommitToken by mutableIntStateOf(0)
+        private set
+
     val isDragging: Boolean
         get() = activeUid != null
 
+    val isSettling: Boolean
+        get() = settlingUid != null
+
     fun syncSource(source: List<T>, keyOf: (T) -> String) {
         if (activeUid != null) return
+        val incomingKeys = source.map(keyOf)
+        val pending = pendingCommitKeys
+        if (pending != null) {
+            if (incomingKeys == pending) {
+                pendingCommitKeys = null
+            } else if (sameMultiset(incomingKeys, pending)) {
+                val byKey = HashMap<String, ArrayDeque<T>>(source.size)
+                for (i in source.indices) {
+                    byKey.getOrPut(incomingKeys[i]) { ArrayDeque() }.addLast(source[i])
+                }
+                var changed = false
+                val refreshed = items.map { item ->
+                    val key = keyOf(item.value)
+                    val nextValue = byKey[key]?.removeFirstOrNull()
+                    if (nextValue != null && nextValue != item.value) {
+                        changed = true
+                        item.copy(value = nextValue)
+                    } else {
+                        item
+                    }
+                }
+                if (changed) {
+                    items = refreshed
+                }
+                return
+            } else {
+                pendingCommitKeys = null
+            }
+        }
+
+        if (items.size == source.size &&
+            items.indices.all { idx ->
+                keyOf(items[idx].value) == incomingKeys[idx] &&
+                    items[idx].originalIndex == idx &&
+                    items[idx].value == source[idx]
+            }
+        ) {
+            return
+        }
+
+        if (items.size == source.size &&
+            items.indices.all { idx -> keyOf(items[idx].value) == incomingKeys[idx] }
+        ) {
+            items = items.mapIndexed { idx, existing ->
+                existing.copy(originalIndex = idx, value = source[idx])
+            }
+            return
+        }
+
         val seenCounts = HashMap<String, Int>(source.size)
         items = source.mapIndexed { index, value ->
-            val baseKey = keyOf(value)
+            val baseKey = incomingKeys[index]
             val occ = seenCounts.getOrPut(baseKey) { 0 }
             seenCounts[baseKey] = occ + 1
             DragReorderItem(
@@ -58,6 +128,8 @@ class DragReorderState<T>(
 
     fun startDrag(uid: String) {
         if (items.none { it.uid == uid }) return
+        settlingUid = null
+        settlingOffsetY = 0f
         activeUid = uid
         draggingOffsetY = 0f
     }
@@ -67,60 +139,84 @@ class DragReorderState<T>(
         change.consume()
         draggingOffsetY += deltaY
 
-        var curIdx = items.indexOfFirst { it.uid == uid }
+        val curIdx = items.indexOfFirst { it.uid == uid }
         if (curIdx < 0) return
 
         val headerCount = headerCountProvider()
         val visible = listState.layoutInfo.visibleItemsInfo
+        val currentInfo = visible.firstOrNull { it.key == uid }
+            ?: visible.firstOrNull { it.index == headerCount + curIdx }
+            ?: return
+        if (currentInfo.index != headerCount + curIdx) return
 
-        while (true) {
-            val currentInfo = visible.firstOrNull { it.index == headerCount + curIdx } ?: break
-            var swapped = false
-
-            if (draggingOffsetY > 0f && curIdx < items.lastIndex) {
-                val nextInfo = visible.firstOrNull { it.index == headerCount + curIdx + 1 }
-                if (nextInfo != null) {
-                    val draggedBottom = currentInfo.offset + draggingOffsetY + currentInfo.size
-                    val nextCenter = nextInfo.offset + nextInfo.size / 2f
-                    if (draggedBottom > nextCenter) {
-                        val mutable = items.toMutableList()
-                        val moved = mutable.removeAt(curIdx)
-                        mutable.add(curIdx + 1, moved)
-                        items = mutable
-                        draggingOffsetY -= (nextInfo.offset - currentInfo.offset).toFloat()
-                        curIdx += 1
-                        swapped = true
-                    }
-                }
-            } else if (draggingOffsetY < 0f && curIdx > 0) {
-                val prevInfo = visible.firstOrNull { it.index == headerCount + curIdx - 1 }
-                if (prevInfo != null) {
-                    val draggedTop = currentInfo.offset + draggingOffsetY
-                    val prevCenter = prevInfo.offset + prevInfo.size / 2f
-                    if (draggedTop < prevCenter) {
-                        val mutable = items.toMutableList()
-                        val moved = mutable.removeAt(curIdx)
-                        mutable.add(curIdx - 1, moved)
-                        items = mutable
-                        draggingOffsetY += (currentInfo.offset - prevInfo.offset).toFloat()
-                        curIdx -= 1
-                        swapped = true
-                    }
+        if (draggingOffsetY > 0f && curIdx < items.lastIndex) {
+            val nextInfo = visible.firstOrNull { it.index == headerCount + curIdx + 1 }
+            if (nextInfo != null) {
+                val draggedBottom = currentInfo.offset + draggingOffsetY + currentInfo.size
+                val nextCenter = nextInfo.offset + nextInfo.size / 2f
+                if (draggedBottom > nextCenter) {
+                    val mutable = items.toMutableList()
+                    val moved = mutable.removeAt(curIdx)
+                    mutable.add(curIdx + 1, moved)
+                    items = mutable
+                    draggingOffsetY -= (nextInfo.offset - currentInfo.offset).toFloat()
                 }
             }
-
-            if (!swapped) break
+        } else if (draggingOffsetY < 0f && curIdx > 0) {
+            val prevInfo = visible.firstOrNull { it.index == headerCount + curIdx - 1 }
+            if (prevInfo != null) {
+                val draggedTop = currentInfo.offset + draggingOffsetY
+                val prevCenter = prevInfo.offset + prevInfo.size / 2f
+                if (draggedTop < prevCenter) {
+                    val mutable = items.toMutableList()
+                    val moved = mutable.removeAt(curIdx)
+                    mutable.add(curIdx - 1, moved)
+                    items = mutable
+                    draggingOffsetY += (currentInfo.offset - prevInfo.offset).toFloat()
+                }
+            }
         }
     }
 
     fun endDrag() {
         val uid = activeUid ?: return
+        val releaseOffset = draggingOffsetY
         activeUid = null
         draggingOffsetY = 0f
         val snapshot = items
         val moved = snapshot.indices.any { idx -> snapshot[idx].originalIndex != idx }
-        if (moved && snapshot.any { it.uid == uid }) {
+        val uidPresent = snapshot.any { it.uid == uid }
+        if (releaseOffset != 0f && uidPresent) {
+            settlingUid = uid
+            settlingOffsetY = releaseOffset
+            settlingToken += 1
+        }
+        if (moved && uidPresent) {
+            val keyOf = keyOfProvider()
+            pendingCommitKeys = snapshot.map { keyOf(it.value) }
+            pendingCommitToken += 1
             onCommitProvider().invoke(snapshot)
+        }
+    }
+
+    internal fun moveItem(fromIndex: Int, toIndex: Int) {
+        if (fromIndex !in items.indices || toIndex !in items.indices || fromIndex == toIndex) return
+        val mutable = items.toMutableList()
+        val moved = mutable.removeAt(fromIndex)
+        mutable.add(toIndex, moved)
+        items = mutable
+    }
+
+    internal fun finishSettling(token: Int) {
+        if (settlingToken == token) {
+            settlingUid = null
+            settlingOffsetY = 0f
+        }
+    }
+
+    internal fun clearPendingCommitIfMatching(token: Int) {
+        if (pendingCommitToken == token) {
+            pendingCommitKeys = null
         }
     }
 
@@ -130,7 +226,7 @@ class DragReorderState<T>(
         if (curIdx < 0) return
         val layoutInfo = listState.layoutInfo
         val itemInfo = layoutInfo.visibleItemsInfo.firstOrNull {
-            it.index == headerCountProvider() + curIdx
+            it.key == uid || it.index == headerCountProvider() + curIdx
         } ?: return
 
         val topEdge = layoutInfo.viewportStartOffset + 80
@@ -151,7 +247,24 @@ class DragReorderState<T>(
         }
     }
 
-    fun offsetFor(uid: String): Float = if (activeUid == uid) draggingOffsetY else 0f
+    fun offsetFor(uid: String): Float = when (uid) {
+        activeUid -> draggingOffsetY
+        settlingUid -> settlingOffsetY
+        else -> 0f
+    }
+
+    private fun sameMultiset(a: List<String>, b: List<String>): Boolean {
+        if (a.size != b.size) return false
+        val counts = HashMap<String, Int>(a.size)
+        for (item in a) {
+            counts[item] = (counts[item] ?: 0) + 1
+        }
+        for (item in b) {
+            val remaining = counts[item] ?: return false
+            if (remaining <= 1) counts.remove(item) else counts[item] = remaining - 1
+        }
+        return counts.isEmpty()
+    }
 }
 
 @Composable
@@ -159,27 +272,55 @@ fun <T> rememberDragReorderState(
     items: List<T>,
     listState: LazyListState,
     headerCount: Int = 0,
+    scopeKey: Any? = Unit,
     keyOf: (T) -> String,
     onCommit: (List<DragReorderItem<T>>) -> Unit,
 ): DragReorderState<T> {
     val currentHeaderCount by rememberUpdatedState(headerCount)
+    val currentKeyOf by rememberUpdatedState(keyOf)
     val currentOnCommit by rememberUpdatedState(onCommit)
 
-    val state = remember(listState) {
+    val state = remember(listState, scopeKey) {
         DragReorderState<T>(
             listState = listState,
             headerCountProvider = { currentHeaderCount },
+            keyOfProvider = { currentKeyOf },
             onCommitProvider = { currentOnCommit },
         )
     }
 
     state.syncSource(items, keyOf)
 
-    LaunchedEffect(state.activeUid) {
+    LaunchedEffect(state, state.activeUid) {
         while (state.activeUid != null) {
             state.autoScrollStep()
             delay(16L)
         }
+    }
+
+    LaunchedEffect(state, state.settlingToken) {
+        val uid = state.settlingUid ?: return@LaunchedEffect
+        val token = state.settlingToken
+        val startOffset = state.settlingOffsetY
+        if (startOffset != 0f) {
+            animate(
+                initialValue = startOffset,
+                targetValue = 0f,
+                animationSpec = spring(stiffness = Spring.StiffnessMediumLow),
+            ) { value, _ ->
+                if (state.settlingUid == uid && state.settlingToken == token) {
+                    state.settlingOffsetY = value
+                }
+            }
+        }
+        state.finishSettling(token)
+    }
+
+    LaunchedEffect(state, state.pendingCommitToken) {
+        val token = state.pendingCommitToken
+        if (token == 0) return@LaunchedEffect
+        delay(600L)
+        state.clearPendingCommitIfMatching(token)
     }
 
     return state

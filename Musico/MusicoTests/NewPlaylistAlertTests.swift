@@ -41,6 +41,7 @@ private struct InnerSheetHost: View {
                 Text("Queue").onAppear(perform: onInnerAppear)
                     .modifier(NewPlaylistAlert())
                     .modifier(CloudExportHostModifier())
+                    .modifier(SongInfoHostModifier())
             }
             .task {
                 try? await Task.sleep(for: .milliseconds(600))

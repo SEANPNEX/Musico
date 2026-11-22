@@ -344,7 +344,7 @@ final class LibraryStore {
     }
 
     func addCloudRoot(sourceURL: String, cookie: String? = nil) async throws {
-        let trimmedURL = sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedURL = CloudSourceInput.extract(from: sourceURL)
         guard !trimmedURL.isEmpty else { throw LibraryError.invalidCloudURL }
         let trimmedCookie = cookie?.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanCookie = (trimmedCookie?.isEmpty == false) ? trimmedCookie : nil

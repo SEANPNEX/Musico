@@ -345,13 +345,14 @@ public sealed class LibraryStore : ObservableStore
         string? proxyUrl = null,
         CancellationToken ct = default)
     {
-        var kind = CloudUrlClassifier.Classify(sourceUrl);
+        string extractedUrl = CloudUrlClassifier.ExtractCloudUrl(sourceUrl);
+        var kind = CloudUrlClassifier.Classify(extractedUrl);
         string? normalizedProxy = YouTubeClient.NormalizeProxyUrl(proxyUrl);
         string? trimmedCookie = string.IsNullOrWhiteSpace(cookie) ? null : cookie.Trim();
 
         CloudPlaylistResult result = kind == RootKind.CloudYouTube
-            ? await _youtube.FetchPlaylistAsync(sourceUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false)
-            : await _bilibili.FetchPlaylistAsync(sourceUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false);
+            ? await _youtube.FetchPlaylistAsync(extractedUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false)
+            : await _bilibili.FetchPlaylistAsync(extractedUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false);
 
         if (_roots.Any(r => r.Kind == result.Kind &&
                             string.Equals(r.RemoteId, result.RemoteId, StringComparison.OrdinalIgnoreCase)))

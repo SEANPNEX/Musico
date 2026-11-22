@@ -628,7 +628,7 @@ class YouTubeClient(
         fun canHandle(input: String): Boolean = parseTarget(input) != null
 
         fun parseTarget(input: String): YouTubeTarget? {
-            val trimmed = input.trim()
+            val trimmed = extractCloudSourceInput(input)
             if (trimmed.isEmpty()) return null
 
             if (!trimmed.contains("://") && !trimmed.contains('/')) {

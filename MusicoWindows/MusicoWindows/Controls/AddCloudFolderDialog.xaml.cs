@@ -61,12 +61,14 @@ public partial class AddCloudFolderDialog : UserControl
     {
         if (_services is null || _isBusy) return;
 
-        string url = UrlBox.Text.Trim();
+        string rawUrl = UrlBox.Text.Trim();
         string? cookie = string.IsNullOrWhiteSpace(CookieBox.Text) ? null : CookieBox.Text.Trim();
         string? proxy = string.IsNullOrWhiteSpace(ProxyBox.Text) ? null : ProxyBox.Text.Trim();
 
+        string url;
         try
         {
+            url = CloudUrlClassifier.ExtractCloudUrl(rawUrl);
             CloudUrlClassifier.Classify(url);
             YouTubeClient.NormalizeProxyUrl(proxy);
         }

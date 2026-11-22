@@ -19,6 +19,12 @@ struct FullPlayerView: View {
 
     @State private var panel: Panel?
     @AppStorage("playerSidePane") private var sidePane: SidePane = .lyrics
+    @Environment(PlayerController.self) private var player: PlayerController?
+    @Environment(LibraryStore.self) private var library: LibraryStore?
+    @Environment(QueueStore.self) private var queues: QueueStore?
+    @Environment(PlayHistoryStore.self) private var history: PlayHistoryStore?
+    @Environment(\.appNavigation) private var navigation
+    @Environment(\.lyricsStore) private var lyricsStore
 
     var body: some View {
         GeometryReader { proxy in
@@ -42,12 +48,30 @@ struct FullPlayerView: View {
         .modifier(CloudExportHostModifier())
         .modifier(SongInfoHostModifier())
         .sheet(item: $panel) { panel in
+            sheetContent(for: panel)
+                .environment(\.appNavigation, navigation)
+                .environment(\.lyricsStore, lyricsStore)
+        }
+    }
+
+    @ViewBuilder
+    private func sheetContent(for panel: Panel) -> some View {
+        let base = Group {
             switch panel {
             case .queue: QueueSheet()
             case .lyrics: LyricsView()
             case .equalizer: EqualizerSheet()
             case .sleep: SleepTimerSheet().presentationDetents([.medium, .large])
             }
+        }
+        if let player, let library, let queues, let history {
+            base
+                .environment(player)
+                .environment(library)
+                .environment(queues)
+                .environment(history)
+        } else {
+            base
         }
     }
 

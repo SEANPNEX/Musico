@@ -4,6 +4,9 @@ import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -85,6 +88,7 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.documentfile.provider.DocumentFile
@@ -92,6 +96,7 @@ import com.musico.audio.PlayerUiState
 import com.musico.cloud.CloudExportSummary
 import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudUpdateSummary
+import com.musico.cloud.extractCloudSourceInput
 import com.musico.model.LibraryRoot
 import com.musico.model.PlayQueue
 import com.musico.model.RootKind
@@ -615,12 +620,13 @@ private fun AddCloudFolderDialog(
         },
         confirmButton = {
             TextButton(
-                enabled = url.trim().isNotEmpty() && !isAdding,
+                enabled = extractCloudSourceInput(url).isNotEmpty() && !isAdding,
                 onClick = {
                     isAdding = true
                     errorText = null
+                    val cleanedUrl = extractCloudSourceInput(url)
                     scope.launch {
-                        val result = onAdd(url, cookie.takeIf { it.isNotBlank() })
+                        val result = onAdd(cleanedUrl, cookie.takeIf { it.isNotBlank() })
                         isAdding = false
                         result.onSuccess {
                             onDismiss()
@@ -1535,6 +1541,7 @@ private fun FolderDetailContent(
         items = directTracks,
         listState = listState,
         headerCount = headerCount,
+        scopeKey = ref,
         keyOf = { it.id },
         onCommit = { reordered ->
             libraryStore.setFolderTrackOrder(
@@ -1694,7 +1701,16 @@ private fun FolderDetailContent(
                 Color.Transparent
             }
             val rowModifier = Modifier
-                .then(if (dragState.isDragging) Modifier else Modifier.animateItem())
+                .animateItem(
+                    placementSpec = if (dragState.isDragging || dragState.isSettling) {
+                        null
+                    } else {
+                        spring(
+                            stiffness = Spring.StiffnessMediumLow,
+                            visibilityThreshold = IntOffset.VisibilityThreshold,
+                        )
+                    }
+                )
                 .zIndex(if (isDragged) 1f else 0f)
                 .graphicsLayer { translationY = dragState.offsetFor(dragItem.uid) }
 
@@ -1707,9 +1723,10 @@ private fun FolderDetailContent(
                 subtitle = if (track.isCloud) track.artist else track.fileName,
                 backgroundColor = rowBg,
                 onClick = {
+                    val orderedIds = dragState.items.map { it.value.id }
                     trackActions.playerController.playInNamedQueue(
                         name = exactFolderName,
-                        ids = directIds,
+                        ids = orderedIds.ifEmpty { directIds },
                         startAt = index,
                         shuffle = false,
                     )

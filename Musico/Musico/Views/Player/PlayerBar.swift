@@ -48,6 +48,7 @@ struct PlayerBar: View {
                     .buttonStyle(.plain)
                     .font(.body)
                     .frame(width: 36, height: 32)
+                    .contentShape(Rectangle())
                     .foregroundStyle(.secondary)
                     .accessibilityLabel("Song options")
                 }
@@ -58,14 +59,16 @@ struct PlayerBar: View {
         }
 
         if #available(iOS 26.0, macCatalyst 26.0, *) {
-            GlassEffectContainer(spacing: 12) {
-                barContent
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 10)
-                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            }
-            .padding(.horizontal, 16)
-            .padding(.bottom, 10)
+            barContent
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+                .background {
+                    Color.clear
+                        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                        .allowsHitTesting(false)
+                }
+                .padding(.horizontal, 16)
+                .padding(.bottom, 10)
         } else {
             barContent
                 .padding(.horizontal, 16)
@@ -77,15 +80,21 @@ struct PlayerBar: View {
 
     private var transport: some View {
         let queue = queues.active
-        return HStack(spacing: 22) {
+        return HStack(spacing: 14) {
             Button("Shuffle", systemImage: "shuffle") {
                 withAnimation(.spring(duration: 0.25)) { player.toggleShuffle() }
             }
             .foregroundStyle(queue.shuffle ? Color.accentColor : .secondary)
+            .frame(width: 32, height: 30)
+            .contentShape(Rectangle())
+
             Button("Previous", systemImage: "backward.fill") { player.previous() }
+                .frame(width: 34, height: 30)
+                .contentShape(Rectangle())
+
             if player.isBuffering {
                 ProgressView()
-                    .frame(width: 32)
+                    .frame(width: 36, height: 30)
             } else {
                 Button("Play or Pause", systemImage: player.isPlaying ? "pause.fill" : "play.fill") {
                     player.togglePlayPause()
@@ -93,14 +102,21 @@ struct PlayerBar: View {
                 .font(.title2)
                 .contentTransition(.symbolEffect(.replace))
                 .animation(.spring(duration: 0.25), value: player.isPlaying)
-                .frame(width: 32)
+                .frame(width: 36, height: 30)
+                .contentShape(Rectangle())
             }
+
             Button("Next", systemImage: "forward.fill") { player.next() }
+                .frame(width: 34, height: 30)
+                .contentShape(Rectangle())
+
             Button("Repeat", systemImage: queue.repeatMode == .one ? "repeat.1" : "repeat") {
                 withAnimation(.spring(duration: 0.25)) { player.cycleRepeat() }
             }
             .contentTransition(.symbolEffect(.replace))
             .foregroundStyle(queue.repeatMode == .off ? .secondary : Color.accentColor)
+            .frame(width: 32, height: 30)
+            .contentShape(Rectangle())
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.plain)
@@ -120,6 +136,7 @@ struct PlayerBar: View {
         .font(.body)
         .contentTransition(.symbolEffect(.replace))
         .frame(width: 36, height: 32)
+        .contentShape(Rectangle())
         .foregroundStyle(isOn ? Color.accentColor : .primary)
         .background(isOn ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 7))
         .animation(.spring(duration: 0.25), value: isOn)

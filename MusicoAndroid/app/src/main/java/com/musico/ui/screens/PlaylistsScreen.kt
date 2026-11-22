@@ -1,5 +1,8 @@
 package com.musico.ui.screens
 
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.VisibilityThreshold
+import androidx.compose.animation.core.spring
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -49,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.musico.audio.PlayerUiState
@@ -289,6 +293,7 @@ fun PlaylistDetailScreen(
         items = tracks,
         listState = listState,
         headerCount = if (tracks.isEmpty()) 0 else 1,
+        scopeKey = ref,
         keyOf = { it.id },
         onCommit = { reordered ->
             if (ref is PlaylistRef.User) {
@@ -387,7 +392,16 @@ fun PlaylistDetailScreen(
                         Color.Transparent
                     }
                     val rowModifier = Modifier
-                        .then(if (dragState.isDragging) Modifier else Modifier.animateItem())
+                        .animateItem(
+                            placementSpec = if (dragState.isDragging || dragState.isSettling) {
+                                null
+                            } else {
+                                spring(
+                                    stiffness = Spring.StiffnessMediumLow,
+                                    visibilityThreshold = IntOffset.VisibilityThreshold,
+                                )
+                            }
+                        )
                         .zIndex(if (isDragged) 1f else 0f)
                         .graphicsLayer { translationY = dragState.offsetFor(dragItem.uid) }
 
@@ -408,7 +422,13 @@ fun PlaylistDetailScreen(
                         isPlaying = playerState.isPlaying,
                         isAvailable = libraryStore.isAvailable(track),
                         backgroundColor = rowBg,
-                        onClick = { trackActions.playerController.play(trackIds, startAt = index) },
+                        onClick = {
+                            val currentIds = dragState.items.map { it.value.id }
+                            trackActions.playerController.play(
+                                currentIds.ifEmpty { trackIds },
+                                startAt = index,
+                            )
+                        },
                         modifier = rowModifier,
                         dragHandleModifier = if (ref is PlaylistRef.User) {
                             Modifier.dragHandle(dragState, dragItem.uid)

@@ -86,13 +86,16 @@ struct FoldersView: View {
             }
         }
         .sheet(isPresented: $showCloudSheet) {
-            AddCloudFolderSheet()
+            AddCloudFolderSheet(library: library)
+                .environment(library)
         }
         .sheet(item: $exportingRoot) { root in
-            SaveCloudPlaylistSheet(root: root)
+            SaveCloudPlaylistSheet(root: root, library: library)
+                .environment(library)
         }
         .sheet(item: $updatingTrackedRoot) { root in
-            UpdateTrackedFolderSheet(root: root)
+            UpdateTrackedFolderSheet(root: root, library: library)
+                .environment(library)
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
             guard case .success(let url) = result else { return }
@@ -259,14 +262,25 @@ struct FoldersView: View {
     }
 }
 
-private struct AddCloudFolderSheet: View {
-    @Environment(LibraryStore.self) private var library
+struct AddCloudFolderSheet: View {
+    private let explicitLibrary: LibraryStore?
+    @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
     @Environment(\.dismiss) private var dismiss
 
     @State private var urlText = ""
     @State private var cookieText = ""
     @State private var isLoading = false
     @State private var errorMessage: String?
+
+    init(library: LibraryStore? = nil) {
+        self.explicitLibrary = library
+    }
+
+    private var library: LibraryStore? { explicitLibrary ?? envLibrary }
+
+    private var extractedSource: String {
+        CloudSourceInput.extract(from: urlText)
+    }
 
     var body: some View {
         NavigationStack {
@@ -312,7 +326,7 @@ private struct AddCloudFolderSheet: View {
                         ProgressView()
                     } else {
                         Button("Add") { add() }
-                            .disabled(urlText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                            .disabled(extractedSource.isEmpty || library == nil)
                     }
                 }
             }
@@ -320,9 +334,10 @@ private struct AddCloudFolderSheet: View {
     }
 
     private func add() {
+        guard let library else { return }
         errorMessage = nil
         isLoading = true
-        let source = urlText
+        let source = extractedSource
         let cookie = cookieText
         Task {
             do {
@@ -477,12 +492,14 @@ struct FolderDetailView: View {
         }
         .sheet(isPresented: $showExportSheet) {
             if let root {
-                SaveCloudPlaylistSheet(root: root)
+                SaveCloudPlaylistSheet(root: root, library: library)
+                    .environment(library)
             }
         }
         .sheet(isPresented: $showUpdateTrackedSheet) {
             if let root {
-                UpdateTrackedFolderSheet(root: root)
+                UpdateTrackedFolderSheet(root: root, library: library)
+                    .environment(library)
             }
         }
         .confirmationDialog("Remove “\(currentName)” from your library?",
@@ -522,9 +539,10 @@ struct FolderDetailView: View {
     }
 }
 
-private struct SaveCloudPlaylistSheet: View {
+struct SaveCloudPlaylistSheet: View {
     let root: LibraryRoot
-    @Environment(LibraryStore.self) private var library
+    private let explicitLibrary: LibraryStore?
+    @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
     @Environment(\.dismiss) private var dismiss
 
     @State private var folderName: String
@@ -537,13 +555,16 @@ private struct SaveCloudPlaylistSheet: View {
     @State private var summary: CloudExporter.ExportSummary?
     @State private var errorMessage: String?
 
-    init(root: LibraryRoot) {
+    init(root: LibraryRoot, library: LibraryStore? = nil) {
         self.root = root
+        self.explicitLibrary = library
         _folderName = State(initialValue: CloudExporter.sanitizeFileName(root.name, fallback: "Cloud Playlist"))
     }
 
+    private var library: LibraryStore? { explicitLibrary ?? envLibrary }
+
     private var cloudTracks: [Track] {
-        library.tracks(under: root.id, path: "").filter(\.isCloud)
+        library?.tracks(under: root.id, path: "").filter(\.isCloud) ?? []
     }
 
     var body: some View {
@@ -678,7 +699,7 @@ private struct SaveCloudPlaylistSheet: View {
                 }
                 summary = result
                 isExporting = false
-                if addToLibrary, FileManager.default.fileExists(atPath: result.destinationURL.path) {
+                if addToLibrary, let library, FileManager.default.fileExists(atPath: result.destinationURL.path) {
                     do {
                         try await library.addRoot(url: result.destinationURL)
                     } catch LibraryError.duplicateRoot {
@@ -700,9 +721,10 @@ private struct SaveCloudPlaylistSheet: View {
     }
 }
 
-private struct UpdateTrackedFolderSheet: View {
+struct UpdateTrackedFolderSheet: View {
     let root: LibraryRoot
-    @Environment(LibraryStore.self) private var library
+    private let explicitLibrary: LibraryStore?
+    @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
     @Environment(\.dismiss) private var dismiss
 
     @State private var isUpdating = true
@@ -710,6 +732,13 @@ private struct UpdateTrackedFolderSheet: View {
     @State private var summary: CloudExporter.CloudUpdateSummary?
     @State private var errorMessage: String?
     @State private var syncTask: Task<Void, Never>?
+
+    init(root: LibraryRoot, library: LibraryStore? = nil) {
+        self.root = root
+        self.explicitLibrary = library
+    }
+
+    private var library: LibraryStore? { explicitLibrary ?? envLibrary }
 
     var body: some View {
         NavigationStack {
@@ -799,6 +828,10 @@ private struct UpdateTrackedFolderSheet: View {
     }
 
     private func startUpdate() async {
+        guard let library else {
+            isUpdating = false
+            return
+        }
         isUpdating = true
         summary = nil
         errorMessage = nil

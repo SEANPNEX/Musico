@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct SleepTimerSheet: View {
-    @Environment(PlayerController.self) private var player
+    @Environment(PlayerController.self) private var player: PlayerController?
     @Environment(\.dismiss) private var dismiss
     @State private var customMinutes = 20
 
@@ -9,31 +9,11 @@ struct SleepTimerSheet: View {
 
     var body: some View {
         NavigationStack {
-            List {
-                if player.sleepMode != .off {
-                    Section {
-                        HStack {
-                            Image(systemName: "moon.zzz.fill").foregroundStyle(Color.accentColor)
-                            status
-                            Spacer()
-                            Button("Cancel Timer", role: .destructive) { player.setSleep(.off) }
-                                .buttonStyle(.borderless)
-                        }
-                    }
-                }
-                Section("Stop playing after") {
-                    ForEach(Self.presets, id: \.self) { minutes in
-                        Button("\(minutes) minutes") { start(minutes) }
-                    }
-                    HStack {
-                        Stepper("\(customMinutes) minutes", value: $customMinutes, in: 1...240)
-                        Button("Start") { start(customMinutes) }
-                            .buttonStyle(.borderedProminent)
-                    }
-                    Button("End of current song") {
-                        player.setSleep(.endOfTrack)
-                        dismiss()
-                    }
+            Group {
+                if let player {
+                    listContent(player: player)
+                } else {
+                    ProgressView()
                 }
             }
             .tint(.primary)
@@ -45,8 +25,38 @@ struct SleepTimerSheet: View {
         }
     }
 
+    private func listContent(player: PlayerController) -> some View {
+        List {
+            if player.sleepMode != .off {
+                Section {
+                    HStack {
+                        Image(systemName: "moon.zzz.fill").foregroundStyle(Color.accentColor)
+                        status(for: player)
+                        Spacer()
+                        Button("Cancel Timer", role: .destructive) { player.setSleep(.off) }
+                            .buttonStyle(.borderless)
+                    }
+                }
+            }
+            Section("Stop playing after") {
+                ForEach(Self.presets, id: \.self) { minutes in
+                    Button("\(minutes) minutes") { start(minutes, player: player) }
+                }
+                HStack {
+                    Stepper("\(customMinutes) minutes", value: $customMinutes, in: 1...240)
+                    Button("Start") { start(customMinutes, player: player) }
+                        .buttonStyle(.borderedProminent)
+                }
+                Button("End of current song") {
+                    player.setSleep(.endOfTrack)
+                    dismiss()
+                }
+            }
+        }
+    }
+
     @ViewBuilder
-    private var status: some View {
+    private func status(for player: PlayerController) -> some View {
         switch player.sleepMode {
         case .until(let date):
             TimelineView(.periodic(from: .now, by: 1)) { context in
@@ -59,7 +69,7 @@ struct SleepTimerSheet: View {
         }
     }
 
-    private func start(_ minutes: Int) {
+    private func start(_ minutes: Int, player: PlayerController) {
         player.setSleep(.until(Date().addingTimeInterval(TimeInterval(minutes * 60))))
         dismiss()
     }

@@ -13,6 +13,7 @@ import com.musico.cloud.CloudSource
 import com.musico.cloud.CloudTrackMetadata
 import com.musico.cloud.UrlConnectionCloudHttpClient
 import com.musico.cloud.YouTubeClient
+import com.musico.cloud.extractCloudSourceInput
 import com.musico.core.ArtworkCache
 import com.musico.core.FolderScanner
 import com.musico.core.MetadataReading
@@ -136,6 +137,7 @@ class LibraryStore(
             metadataOverrides.putAll(loadedLib.metadataOverrides)
             folderSortOrders.putAll(loadedLib.folderSortOrders)
             folderTrackOrders.putAll(loadedLib.folderTrackOrders)
+            migrateCloudFolderKeys(initialRoots)
         }
 
         val initialAvailable = computeAvailableRootIds(initialRoots)
@@ -425,14 +427,15 @@ class LibraryStore(
         cookie: String? = null,
         kindHint: RootKind? = null,
     ): CloudPlaylistResult = withContext(Dispatchers.IO) {
+        val cleanUrl = extractCloudSourceInput(sourceUrl)
         when (kindHint) {
-            RootKind.CLOUD_BILIBILI -> bilibiliClient.fetchPlaylist(sourceUrl, cookie)
-            RootKind.CLOUD_YOUTUBE -> youTubeClient.fetchPlaylist(sourceUrl, cookie)
+            RootKind.CLOUD_BILIBILI -> bilibiliClient.fetchPlaylist(cleanUrl, cookie)
+            RootKind.CLOUD_YOUTUBE -> youTubeClient.fetchPlaylist(cleanUrl, cookie)
             else -> {
-                if (sourceUrl.contains("bilibili", ignoreCase = true) || sourceUrl.contains("b23.tv", ignoreCase = true)) {
-                    bilibiliClient.fetchPlaylist(sourceUrl, cookie)
+                if (cleanUrl.contains("bilibili", ignoreCase = true) || cleanUrl.contains("b23.tv", ignoreCase = true)) {
+                    bilibiliClient.fetchPlaylist(cleanUrl, cookie)
                 } else {
-                    youTubeClient.fetchPlaylist(sourceUrl, cookie)
+                    youTubeClient.fetchPlaylist(cleanUrl, cookie)
                 }
             }
         }
@@ -477,7 +480,7 @@ class LibraryStore(
     }
 
     suspend fun addCloudRoot(sourceUrl: String, cookie: String? = null): Result<Unit> {
-        val trimmedUrl = sourceUrl.trim()
+        val trimmedUrl = extractCloudSourceInput(sourceUrl)
         if (trimmedUrl.isEmpty()) {
             return Result.failure(LibraryException.UnsupportedCloudUrl)
         }
@@ -568,6 +571,9 @@ class LibraryStore(
             trackUris.remove(id)
             metadataOverrides.remove(id)
         }
+        val rootPrefix = "$rootId\u001F"
+        folderSortOrders.keys.removeAll { it.startsWith(rootPrefix) }
+        folderTrackOrders.keys.removeAll { it.startsWith(rootPrefix) }
 
         val (albums, artists, idMap) = buildIndices(keptTracks)
         byId = idMap
@@ -578,6 +584,8 @@ class LibraryStore(
             tracks = keptTracks,
             albums = albums,
             artists = artists,
+            folderSortOrders = folderSortOrders.toMap(),
+            folderTrackOrders = folderTrackOrders.toMap(),
         )
         forget(removedIds)
         saveLibrary()
@@ -1079,11 +1087,24 @@ class LibraryStore(
             pl.copy(trackIds = pl.trackIds.filter { it !in ids })
         }
         val nextFavourites = current.favourites - ids
+        var ordersChanged = false
+        for (key in folderTrackOrders.keys.toList()) {
+            val oldOrder = folderTrackOrders[key] ?: continue
+            val pruned = oldOrder.filter { it !in ids }
+            if (pruned.size != oldOrder.size) {
+                folderTrackOrders[key] = pruned
+                ordersChanged = true
+            }
+        }
         _state.value = current.copy(
             playlists = nextPlaylists,
             favourites = nextFavourites,
+            folderTrackOrders = if (ordersChanged) folderTrackOrders.toMap() else current.folderTrackOrders,
         )
         savePlaylists()
+        if (ordersChanged) {
+            saveLibrary()
+        }
         onTracksRemoved?.invoke(ids)
     }
 
@@ -1300,8 +1321,47 @@ class LibraryStore(
     fun tracksByArtist(artist: String): List<Track> =
         _state.value.tracks.filter { it.artist == artist }
 
+    private fun migrateCloudFolderKeys(roots: List<LibraryRoot>) {
+        val cloudRoots = roots.filter { it.kind.isCloud }
+        if (cloudRoots.isEmpty()) return
+        val legacySubfolders = listOf("cloud_youtube", "cloud_bilibili", "youtube", "bilibili")
+        for (root in cloudRoots) {
+            val rootKey = "${root.id}\u001F"
+            for (sub in legacySubfolders) {
+                val legacyKey = "${root.id}\u001F$sub"
+                folderTrackOrders.remove(legacyKey)?.let { legacyOrder ->
+                    if (!folderTrackOrders.containsKey(rootKey)) {
+                        folderTrackOrders[rootKey] = legacyOrder
+                    }
+                }
+                folderSortOrders.remove(legacyKey)?.let { legacySort ->
+                    if (!folderSortOrders.containsKey(rootKey)) {
+                        folderSortOrders[rootKey] = legacySort
+                    }
+                }
+            }
+        }
+    }
+
+    private fun canonicalFolderPath(rootId: String, path: String): String {
+        val norm = LibraryRoot.normalizeFolderPath(path)
+        val root = _state.value.roots.firstOrNull { it.id == rootId }
+        if (root != null && root.kind.isCloud) {
+            if (norm.isEmpty() ||
+                norm.equals(root.kind.name, ignoreCase = true) ||
+                norm.equals("cloud_youtube", ignoreCase = true) ||
+                norm.equals("cloud_bilibili", ignoreCase = true) ||
+                norm.equals("youtube", ignoreCase = true) ||
+                norm.equals("bilibili", ignoreCase = true)
+            ) {
+                return ""
+            }
+        }
+        return norm
+    }
+
     fun folderKey(rootId: String, path: String): String =
-        "$rootId\u001F${LibraryRoot.normalizeFolderPath(path)}"
+        "$rootId\u001F${canonicalFolderPath(rootId, path)}"
 
     fun folderSortOrder(rootId: String, path: String): TrackSortOrder {
         val key = folderKey(rootId, path)
@@ -1342,6 +1402,18 @@ class LibraryStore(
         setFolderTrackOrder(rootId, path, updated)
     }
 
+    private fun defaultDirectTrackOrder(tracks: List<Track>): List<Track> {
+        if (tracks.isEmpty()) return tracks
+        return if (tracks.all { it.isCloud }) {
+            tracks.sortedWith(
+                compareBy<Track> { it.trackNumber ?: Int.MAX_VALUE }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title }
+            )
+        } else {
+            tracks.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.fileName })
+        }
+    }
+
     private fun orderDirectTracks(
         rootId: String,
         path: String,
@@ -1354,18 +1426,17 @@ class LibraryStore(
         return when {
             explicitSort == TrackSortOrder.CUSTOM || (explicitSort == null && customIds != null) -> {
                 if (customIds.isNullOrEmpty()) {
-                    direct.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.fileName })
+                    defaultDirectTrackOrder(direct)
                 } else {
                     val rank = HashMap<String, Int>(customIds.size)
                     customIds.forEachIndexed { idx, id -> rank.putIfAbsent(id, idx) }
                     val inCustom = direct.filter { it.id in rank }.sortedBy { rank[it.id] }
-                    val remaining = direct.filter { it.id !in rank }
-                        .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.fileName })
+                    val remaining = defaultDirectTrackOrder(direct.filter { it.id !in rank })
                     inCustom + remaining
                 }
             }
             explicitSort != null -> sortTracks(direct, explicitSort, playCounts)
-            else -> direct.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.fileName })
+            else -> defaultDirectTrackOrder(direct)
         }
     }
 
@@ -1377,7 +1448,16 @@ class LibraryStore(
         path: String,
         playCounts: (String) -> Int = { 0 },
     ): Pair<List<String>, List<Track>> {
-        val normPath = LibraryRoot.normalizeFolderPath(path)
+        val root = _state.value.roots.firstOrNull { it.id == rootId }
+        val normPath = canonicalFolderPath(rootId, path)
+        if (root != null && root.kind.isCloud) {
+            if (normPath.isNotEmpty()) {
+                return emptyList<String>() to emptyList()
+            }
+            val direct = _state.value.tracks.filter { it.rootId == rootId }
+            return emptyList<String>() to orderDirectTracks(rootId, "", direct, playCounts)
+        }
+
         val prefix = if (normPath.isEmpty()) "" else "$normPath/"
         val folders = linkedSetOf<String>()
         val direct = mutableListOf<Track>()
@@ -1395,13 +1475,25 @@ class LibraryStore(
             orderDirectTracks(rootId, normPath, direct, playCounts)
     }
 
+    private fun hasDescendantOrder(rootId: String, normPath: String): Boolean {
+        val prefixKey = if (normPath.isEmpty()) "$rootId\u001F" else "$rootId\u001F$normPath/"
+        return folderSortOrders.keys.any { it.startsWith(prefixKey) && it != "$rootId\u001F$normPath" } ||
+            folderTrackOrders.keys.any { it.startsWith(prefixKey) && it != "$rootId\u001F$normPath" }
+    }
+
     /** Every song in a folder and its subfolders, respecting persisted sort/custom order when set. */
     fun tracksUnder(
         rootId: String,
         path: String,
         playCounts: (String) -> Int = { 0 },
     ): List<Track> {
-        val normPath = LibraryRoot.normalizeFolderPath(path)
+        val root = _state.value.roots.firstOrNull { it.id == rootId }
+        val normPath = canonicalFolderPath(rootId, path)
+        if (root != null && root.kind.isCloud) {
+            if (normPath.isNotEmpty()) return emptyList()
+            return folderContents(rootId, "", playCounts).second
+        }
+
         val prefix = if (normPath.isEmpty()) "" else "$normPath/"
         val matching = _state.value.tracks.filter {
             it.rootId == rootId && it.relativePath.startsWith(prefix)
@@ -1411,7 +1503,7 @@ class LibraryStore(
         val hasCustom = explicitSort == TrackSortOrder.CUSTOM ||
             (explicitSort == null && folderTrackOrders.containsKey(key))
 
-        if (hasCustom) {
+        if (hasCustom || (explicitSort == null && hasDescendantOrder(rootId, normPath))) {
             val (subfolders, direct) = folderContents(rootId, normPath, playCounts)
             val subTracks = subfolders.flatMap { sub ->
                 val subPath = if (normPath.isEmpty()) sub else "$normPath/$sub"

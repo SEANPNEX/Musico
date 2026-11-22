@@ -41,11 +41,11 @@ class BilibiliClient(
     }
 
     private suspend fun resolveTarget(input: String): BilibiliTarget? {
-        parseTarget(input)?.let { return it }
-        val trimmed = input.trim()
-        val lower = trimmed.lowercase()
+        val cleanInput = extractCloudSourceInput(input)
+        parseTarget(cleanInput)?.let { return it }
+        val lower = cleanInput.lowercase()
         if (lower.contains("b23.tv")) {
-            val url = if (trimmed.contains("://")) trimmed else "https://$trimmed"
+            val url = if (cleanInput.contains("://")) cleanInput else "https://$cleanInput"
             val resp = httpClient.get(url, headers = baseHeaders(null), followRedirects = true)
             return parseTarget(resp.finalUrl)
         }
@@ -487,13 +487,13 @@ class BilibiliClient(
         private val ML_REGEX = Regex("^ml(\\d+)$", RegexOption.IGNORE_CASE)
 
         fun canHandle(input: String): Boolean {
-            val trimmed = input.trim().lowercase()
+            val trimmed = extractCloudSourceInput(input).lowercase()
             if (trimmed.contains("bilibili.com") || trimmed.contains("b23.tv")) return true
-            return parseTarget(input) != null
+            return parseTarget(trimmed) != null
         }
 
         fun parseTarget(input: String): BilibiliTarget? {
-            val trimmed = input.trim()
+            val trimmed = extractCloudSourceInput(input)
             if (trimmed.isEmpty()) return null
 
             if (!trimmed.contains("://") && !trimmed.contains('/')) {

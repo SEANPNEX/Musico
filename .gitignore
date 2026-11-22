@@ -3,6 +3,7 @@
 Thumbs.db
 /Library/
 .superpowers/
+.fix_note/
 
 # Xcode / Swift (Musico Apple)
 Musico/build/

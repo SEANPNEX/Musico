@@ -27,6 +27,23 @@ private struct MockStreamResolver: CloudStreamResolving {
     }
 }
 
+private final class RecordingCloudFetcher: CloudPlaylistFetching, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _recordedSource: String?
+    var recordedSource: String? { lock.withLock { _recordedSource } }
+
+    let result: CloudPlaylistResult
+
+    init(result: CloudPlaylistResult) {
+        self.result = result
+    }
+
+    func fetchPlaylist(sourceURL: String, cookie: String?, kindHint: LibraryRoot.Kind?) async throws -> CloudPlaylistResult {
+        lock.withLock { _recordedSource = sourceURL }
+        return result
+    }
+}
+
 final class CloudSourcesTests: XCTestCase {
 
     // MARK: - Backwards-Compatible Codable
@@ -168,6 +185,91 @@ final class CloudSourcesTests: XCTestCase {
             BilibiliClient.parse("BV1xx411c7mD"),
             .video(bvid: "BV1xx411c7mD", aid: nil)
         )
+    }
+
+    // MARK: - Share-Link URL Extraction
+
+    func testShareLinkExtractionAndClassification() async throws {
+        XCTAssertEqual(
+            CloudSourceInput.extract(from: "【歌单】深夜听的歌 https://b23.tv/abc1234"),
+            "https://b23.tv/abc1234"
+        )
+        XCTAssertEqual(
+            CloudSourceInput.extract(from: "Check out this playlist! https://music.youtube.com/playlist?list=PL1234567890。"),
+            "https://music.youtube.com/playlist?list=PL1234567890"
+        )
+        XCTAssertEqual(
+            CloudSourceInput.extract(from: "【合集】好听(https://www.bilibili.com/video/BV1xx411c7mD/)【来自B站】"),
+            "https://www.bilibili.com/video/BV1xx411c7mD/"
+        )
+        XCTAssertEqual(
+            CloudSourceInput.extract(from: "Listen: [https://youtu.be/dQw4w9WgXcQ]"),
+            "https://youtu.be/dQw4w9WgXcQ"
+        )
+        XCTAssertEqual(
+            CloudSourceInput.extract(from: "「推荐」https://www.youtube.com/playlist?list=PL1234567890ABCDEF」"),
+            "https://www.youtube.com/playlist?list=PL1234567890ABCDEF"
+        )
+        XCTAssertEqual(
+            CloudSourceInput.extract(from: "《收藏夹》https://space.bilibili.com/12345/favlist?fid=67890》"),
+            "https://space.bilibili.com/12345/favlist?fid=67890"
+        )
+        XCTAssertEqual(
+            CloudSourceInput.extract(from: "\"https://music.youtube.com/playlist?list=OLAK5uy_abc123def456\","),
+            "https://music.youtube.com/playlist?list=OLAK5uy_abc123def456"
+        )
+        XCTAssertEqual(
+            CloudSourceInput.extract(from: "'https://b23.tv/abcXYZ'."),
+            "https://b23.tv/abcXYZ"
+        )
+        XCTAssertEqual(
+            CloudSourceInput.extract(from: "Cover https://example.com/a.jpg Link: HTTPS://b23.tv/abc1234】"),
+            "https://b23.tv/abc1234"
+        )
+
+        // Parsing & classification work directly on share strings
+        XCTAssertEqual(
+            BilibiliClient.parse("【歌单】深夜听的歌 https://b23.tv/abc1234"),
+            .shortLink(url: URL(string: "https://b23.tv/abc1234")!)
+        )
+        XCTAssertEqual(
+            YouTubeClient.parse("Check out this playlist! https://music.youtube.com/playlist?list=PL1234567890。"),
+            .playlist(id: "PL1234567890")
+        )
+        XCTAssertEqual(CloudSourceInput.classify("【歌单】深夜听的歌 https://b23.tv/abc1234"), .cloudBilibili)
+        XCTAssertEqual(CloudSourceInput.classify("Check out this playlist! https://music.youtube.com/playlist?list=PL1234567890。"), .cloudYouTube)
+
+        // Bare IDs remain supported
+        XCTAssertEqual(YouTubeClient.parse("  PL1234567890ABCDEF  "), .playlist(id: "PL1234567890ABCDEF"))
+        XCTAssertEqual(YouTubeClient.parse("OLAK5uy_testplaylistid"), .playlist(id: "OLAK5uy_testplaylistid"))
+        XCTAssertEqual(BilibiliClient.parse("BV1xx411c7mD"), .video(bvid: "BV1xx411c7mD", aid: nil))
+        XCTAssertEqual(BilibiliClient.parse("av170001"), .video(bvid: nil, aid: "170001"))
+        XCTAssertEqual(BilibiliClient.parse("ml555666"), .favlist(mediaID: "555666"))
+
+        // LibraryStore.addCloudRoot extracts and stores the clean URL
+        let state = makeTempDir()
+        let fetcher = RecordingCloudFetcher(result: CloudPlaylistResult(
+            kind: .cloudBilibili,
+            remoteID: "BV1xx411c7mD",
+            title: "Shared Mix",
+            tracks: [
+                CloudTrackInfo(remoteTrackID: "BV1xx411c7mD", relativePath: "BV1xx411c7mD", title: "Track", artist: "Artist", album: "Album", trackNumber: 1, duration: 120, artworkURL: nil)
+            ]
+        ))
+        let store = await MainActor.run {
+            LibraryStore(
+                directory: state,
+                documentsURL: makeTempDir(),
+                reader: StubReader(),
+                artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
+                cloudFetcher: fetcher,
+                artworkDownloader: { _ in nil }
+            )
+        }
+        try await store.addCloudRoot(sourceURL: "【歌单】深夜听的歌 https://b23.tv/abc1234。")
+        XCTAssertEqual(fetcher.recordedSource, "https://b23.tv/abc1234")
+        let savedSource = await MainActor.run { store.roots.last?.sourceURL }
+        XCTAssertEqual(savedSource, "https://b23.tv/abc1234")
     }
 
     // MARK: - WBI & SAPISIDHASH

@@ -1,13 +1,32 @@
 import SwiftUI
 
 struct EqualizerSheet: View {
-    @Environment(PlayerController.self) private var player
+    @Environment(PlayerController.self) private var player: PlayerController?
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        if let player {
+            EqualizerContent(player: player)
+        } else {
+            NavigationStack {
+                ProgressView()
+                    .navigationTitle("Equalizer")
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                    }
+            }
+        }
+    }
+}
+
+private struct EqualizerContent: View {
+    @Bindable var player: PlayerController
     @Environment(\.dismiss) private var dismiss
 
     private static let labels = ["31", "62", "125", "250", "500", "1K", "2K", "4K", "8K", "16K"]
 
     var body: some View {
-        @Bindable var player = player
         NavigationStack {
             ScrollView {
             VStack(spacing: 24) {

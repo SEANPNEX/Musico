@@ -641,6 +641,167 @@ class LibraryStoreTest {
         assertEquals(listOf(idB, idC, idA), pl.trackIds)
     }
 
+    @Test
+    fun cloudFolderReorderingWorksForYouTubeAndBilibiliAndSurvivesSyncAndReload() = runBlocking {
+        var includeNewYtTrack = false
+        var includeNewBiliTrack = false
+
+        val fakeHttp = object : CloudHttpClient {
+            override suspend fun get(url: String, headers: Map<String, String>, followRedirects: Boolean): CloudHttpResponse {
+                if (url.contains("/x/frontend/finger/spi")) {
+                    return CloudHttpResponse(200, url, emptyMap(), """{"code":0,"data":{"b_3":"B3"}}""".toByteArray())
+                }
+                if (url.contains("/x/v3/fav/resource/list")) {
+                    val extra = if (includeNewBiliTrack) {
+                        """,{ "bvid": "BV4444444444", "title": "Bili Four", "upper": { "name": "UP4" }, "duration": 210, "attr": 0 }"""
+                    } else ""
+                    val body = """
+                        {
+                          "code": 0,
+                          "data": {
+                            "info": { "title": "Bili Fav" },
+                            "has_more": false,
+                            "medias": [
+                              { "bvid": "BV1111111111", "title": "Bili One", "upper": { "name": "UP1" }, "duration": 100, "attr": 0 },
+                              { "bvid": "BV2222222222", "title": "Bili Two", "upper": { "name": "UP2" }, "duration": 120, "attr": 0 },
+                              { "bvid": "BV3333333333", "title": "Bili Three", "upper": { "name": "UP3" }, "duration": 140, "attr": 0 }
+                              $extra
+                            ]
+                          }
+                        }
+                    """.trimIndent()
+                    return CloudHttpResponse(200, url, emptyMap(), body.toByteArray())
+                }
+                return CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+            }
+
+            override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse {
+                val extra = if (includeNewYtTrack) {
+                    """,{
+                      "playlistVideoRenderer": {
+                        "videoId": "yt_vid_0004",
+                        "title": { "runs": [ { "text": "YT Four" } ] },
+                        "shortBylineText": { "runs": [ { "text": "Art 4" } ] },
+                        "lengthSeconds": "240"
+                      }
+                    }"""
+                } else ""
+                val body = """
+                    {
+                      "header": { "musicDetailHeaderRenderer": { "title": { "runs": [ { "text": "YT Mix" } ] } } },
+                      "contents": {
+                        "items": [
+                          {
+                            "playlistVideoRenderer": {
+                              "videoId": "yt_vid_0001",
+                              "title": { "runs": [ { "text": "YT One" } ] },
+                              "shortBylineText": { "runs": [ { "text": "Art 1" } ] },
+                              "lengthSeconds": "180"
+                            }
+                          },
+                          {
+                            "playlistVideoRenderer": {
+                              "videoId": "yt_vid_0002",
+                              "title": { "runs": [ { "text": "YT Two" } ] },
+                              "shortBylineText": { "runs": [ { "text": "Art 2" } ] },
+                              "lengthSeconds": "190"
+                            }
+                          },
+                          {
+                            "playlistVideoRenderer": {
+                              "videoId": "yt_vid_0003",
+                              "title": { "runs": [ { "text": "YT Three" } ] },
+                              "shortBylineText": { "runs": [ { "text": "Art 3" } ] },
+                              "lengthSeconds": "200"
+                            }
+                          }
+                          $extra
+                        ]
+                      }
+                    }
+                """.trimIndent()
+                return CloudHttpResponse(200, url, emptyMap(), body.toByteArray())
+            }
+
+            override suspend fun probeRange(url: String, headers: Map<String, String>): Int = 206
+        }
+
+        fun makeCloudStore(): LibraryStore = LibraryStore(
+            directory = stateDir,
+            appFolderDir = docsDir,
+            reader = reader,
+            artwork = ArtworkCache(File(stateDir, "artwork")),
+            context = null,
+            cloudHttpClient = fakeHttp,
+            youTubeClient = YouTubeClient(fakeHttp),
+            bilibiliClient = BilibiliClient(fakeHttp),
+        )
+
+        val store = makeCloudStore()
+        assertTrue(store.addCloudRoot("My Mix https://music.youtube.com/playlist?list=PLcloudyt1234。").isSuccess)
+        assertTrue(store.addCloudRoot("【歌单】深夜听的歌 https://space.bilibili.com/12/favlist?fid=987654").isSuccess)
+
+        val ytRoot = store.state.value.roots.first { it.kind == RootKind.CLOUD_YOUTUBE }
+        val biliRoot = store.state.value.roots.first { it.kind == RootKind.CLOUD_BILIBILI }
+        assertEquals("https://music.youtube.com/playlist?list=PLcloudyt1234", ytRoot.sourceUrl)
+        assertEquals("https://space.bilibili.com/12/favlist?fid=987654", biliRoot.sourceUrl)
+
+        // Cloud folders expose tracks directly at root without synthetic subfolders.
+        val (ytFolders, ytInitial) = store.folderContents(ytRoot.id, "")
+        assertTrue(ytFolders.isEmpty())
+        assertEquals(listOf("YT One", "YT Two", "YT Three"), ytInitial.map { it.title })
+
+        val (biliFolders, biliInitial) = store.folderContents(biliRoot.id, "")
+        assertTrue(biliFolders.isEmpty())
+        assertEquals(listOf("Bili One", "Bili Two", "Bili Three"), biliInitial.map { it.title })
+
+        // Reorder via setFolderTrackOrder at root and verify both folderContents & tracksUnder match.
+        val ytReorderedIds = listOf(ytInitial[2].id, ytInitial[0].id, ytInitial[1].id)
+        store.setFolderTrackOrder(ytRoot.id, "", ytReorderedIds)
+        assertEquals(TrackSortOrder.CUSTOM, store.folderSortOrder(ytRoot.id, ""))
+        assertEquals(listOf("YT Three", "YT One", "YT Two"), store.folderContents(ytRoot.id, "").second.map { it.title })
+        assertEquals(listOf("YT Three", "YT One", "YT Two"), store.tracksUnder(ytRoot.id, "").map { it.title })
+
+        // Also works if called with legacy subfolder path (e.g. "cloud_bilibili" / "bilibili").
+        val biliReorderedIds = listOf(biliInitial[1].id, biliInitial[2].id, biliInitial[0].id)
+        store.setFolderTrackOrder(biliRoot.id, "cloud_bilibili", biliReorderedIds)
+        assertEquals(TrackSortOrder.CUSTOM, store.folderSortOrder(biliRoot.id, ""))
+        assertEquals(listOf("Bili Two", "Bili Three", "Bili One"), store.folderContents(biliRoot.id, "").second.map { it.title })
+        assertEquals(listOf("Bili Two", "Bili Three", "Bili One"), store.tracksUnder(biliRoot.id, "").map { it.title })
+
+        // Sync adds new tracks without losing existing tracks or their custom order.
+        includeNewYtTrack = true
+        includeNewBiliTrack = true
+        store.rescan()
+        assertEquals(
+            listOf("YT Three", "YT One", "YT Two", "YT Four"),
+            store.folderContents(ytRoot.id, "").second.map { it.title },
+        )
+        assertEquals(
+            listOf("YT Three", "YT One", "YT Two", "YT Four"),
+            store.tracksUnder(ytRoot.id, "").map { it.title },
+        )
+        assertEquals(
+            listOf("Bili Two", "Bili Three", "Bili One", "Bili Four"),
+            store.folderContents(biliRoot.id, "").second.map { it.title },
+        )
+        assertEquals(
+            listOf("Bili Two", "Bili Three", "Bili One", "Bili Four"),
+            store.tracksUnder(biliRoot.id, "").map { it.title },
+        )
+
+        // Reloading from disk preserves all tracks and custom orders.
+        val reloaded = makeCloudStore()
+        assertEquals(
+            listOf("YT Three", "YT One", "YT Two", "YT Four"),
+            reloaded.folderContents(ytRoot.id, "").second.map { it.title },
+        )
+        assertEquals(
+            listOf("Bili Two", "Bili Three", "Bili One", "Bili Four"),
+            reloaded.tracksUnder(biliRoot.id, "").map { it.title },
+        )
+    }
+
     private fun createValidPngBytes(): ByteArray = byteArrayOf(
         0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
     )

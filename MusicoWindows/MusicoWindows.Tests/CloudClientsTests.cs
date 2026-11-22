@@ -6,6 +6,7 @@ using System.Text.Json;
 using MusicoWindows.Cloud;
 using MusicoWindows.Core;
 using MusicoWindows.Models;
+using MusicoWindows.Stores;
 using Xunit;
 
 namespace MusicoWindows.Tests;
@@ -492,5 +493,229 @@ public sealed class CloudClientsTests
         Assert.False(track!.IsCloud);
         Assert.Null(track.CloudSource);
         Assert.Null(track.RemoteTrackId);
+    }
+
+    [Fact]
+    public void ExtractCloudUrlHandlesShareTextTrailingPunctuationAndBareIds()
+    {
+        // Chinese & English share text with URLs and trailing punctuation
+        Assert.Equal(
+            "https://b23.tv/abc1234",
+            CloudUrlClassifier.ExtractCloudUrl("【歌单】深夜听的歌 https://b23.tv/abc1234"));
+        Assert.Equal(
+            "https://b23.tv/abc1234",
+            CloudUrlClassifier.ExtractCloudUrl("【歌单】深夜听的歌https://b23.tv/abc1234快来听"));
+        Assert.Equal(
+            "https://music.youtube.com/playlist?list=PL1234567890abcdef",
+            CloudUrlClassifier.ExtractCloudUrl("Check out this mix https://music.youtube.com/playlist?list=PL1234567890abcdef。"));
+        Assert.Equal(
+            "https://youtu.be/dQw4w9WgXcQ",
+            CloudUrlClassifier.ExtractCloudUrl("Listen here (https://youtu.be/dQw4w9WgXcQ),"));
+        Assert.Equal(
+            "https://www.bilibili.com/video/BV1xx411c7mD",
+            CloudUrlClassifier.ExtractCloudUrl("Favorite track [https://www.bilibili.com/video/BV1xx411c7mD]."));
+        Assert.Equal(
+            "https://www.bilibili.com/video/BV1xx411c7mD?p=2",
+            CloudUrlClassifier.ExtractCloudUrl("【合集】https://www.bilibili.com/video/BV1xx411c7mD?p=2】"));
+        Assert.Equal(
+            "https://music.youtube.com/playlist?list=OLAK5uy_k12345678",
+            CloudUrlClassifier.ExtractCloudUrl("「夜曲」https://music.youtube.com/playlist?list=OLAK5uy_k12345678」"));
+        Assert.Equal(
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1234567890abcdef",
+            CloudUrlClassifier.ExtractCloudUrl("《歌单》https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1234567890abcdef》"));
+        Assert.Equal(
+            "https://youtu.be/dQw4w9WgXcQ",
+            CloudUrlClassifier.ExtractCloudUrl("Share: \"https://youtu.be/dQw4w9WgXcQ\""));
+        Assert.Equal(
+            "https://youtu.be/dQw4w9WgXcQ",
+            CloudUrlClassifier.ExtractCloudUrl("Share: 'https://youtu.be/dQw4w9WgXcQ'."));
+
+        // Multi-line share text & multiple URLs
+        Assert.Equal(
+            "https://space.bilibili.com/12345/favlist?fid=987654",
+            CloudUrlClassifier.ExtractCloudUrl("【B站收藏夹】夜曲\nhttps://space.bilibili.com/12345/favlist?fid=987654\n打开哔哩哔哩"));
+        Assert.Equal(
+            "https://b23.tv/abc1234",
+            CloudUrlClassifier.ExtractCloudUrl("App: https://example.com/download Link: https://b23.tv/abc1234"));
+
+        // Scheme-less URLs in share text
+        Assert.Equal(
+            "music.youtube.com/playlist?list=PL1234567890abcdef",
+            CloudUrlClassifier.ExtractCloudUrl("Mix: music.youtube.com/playlist?list=PL1234567890abcdef。"));
+        Assert.Equal(
+            "b23.tv/abc1234",
+            CloudUrlClassifier.ExtractCloudUrl("【歌单】b23.tv/abc1234)"));
+
+        // Bare IDs preserved
+        Assert.Equal("PL1234567890abcdef", CloudUrlClassifier.ExtractCloudUrl("  PL1234567890abcdef  "));
+        Assert.Equal("OLAK5uy_k12345678", CloudUrlClassifier.ExtractCloudUrl("OLAK5uy_k12345678"));
+        Assert.Equal("BV1xx411c7mD", CloudUrlClassifier.ExtractCloudUrl("BV1xx411c7mD"));
+        Assert.Equal("av170001", CloudUrlClassifier.ExtractCloudUrl("av170001"));
+        Assert.Equal("ml555666", CloudUrlClassifier.ExtractCloudUrl("ml555666"));
+        Assert.Equal("dQw4w9WgXcQ", CloudUrlClassifier.ExtractCloudUrl("dQw4w9WgXcQ"));
+        Assert.Equal(string.Empty, CloudUrlClassifier.ExtractCloudUrl("   "));
+    }
+
+    [Fact]
+    public void ClassifierAndClientsParseShareTextWithoutTitleInterference()
+    {
+        // Title mentions YouTube, URL is Bilibili -> classifies as Bilibili
+        string biliShare = "【YouTube搬运合集】深夜听的歌 https://b23.tv/abc1234】";
+        Assert.Equal(RootKind.CloudBilibili, CloudUrlClassifier.Classify(biliShare));
+
+        string biliFavShare = "My favs [https://space.bilibili.com/42/favlist?fid=987654].";
+        Assert.Equal(RootKind.CloudBilibili, CloudUrlClassifier.Classify(biliFavShare));
+        var biliTarget = BilibiliClient.ParseTarget(biliFavShare);
+        Assert.Equal(BilibiliTargetKind.FavList, biliTarget.Kind);
+        Assert.Equal("987654", biliTarget.Id);
+
+        // Title mentions BV id, URL is YouTube Music -> classifies as YouTube
+        string ytShare = "Check out this BV1xx411c7mD cover https://music.youtube.com/playlist?list=PL1234567890abcdef。";
+        Assert.Equal(RootKind.CloudYouTube, CloudUrlClassifier.Classify(ytShare));
+        var ytTarget = YouTubeClient.ParseInput(ytShare);
+        Assert.True(ytTarget.IsPlaylist);
+        Assert.Equal("PL1234567890abcdef", ytTarget.PlaylistId);
+
+        string ytShortShare = "「Listen」https://youtu.be/dQw4w9WgXcQ?t=10」";
+        Assert.Equal(RootKind.CloudYouTube, CloudUrlClassifier.Classify(ytShortShare));
+        var ytShortTarget = YouTubeClient.ParseInput(ytShortShare);
+        Assert.False(ytShortTarget.IsPlaylist);
+        Assert.Equal("dQw4w9WgXcQ", ytShortTarget.VideoId);
+
+        // Bare IDs still classify and parse
+        Assert.Equal(RootKind.CloudYouTube, CloudUrlClassifier.Classify("PL1234567890abcdef"));
+        Assert.Equal(RootKind.CloudYouTube, CloudUrlClassifier.Classify("OLAK5uy_k12345678"));
+        Assert.Equal(RootKind.CloudBilibili, CloudUrlClassifier.Classify("BV1xx411c7mD"));
+        Assert.Equal(RootKind.CloudBilibili, CloudUrlClassifier.Classify("av170001"));
+        Assert.Equal(RootKind.CloudBilibili, CloudUrlClassifier.Classify("ml555666"));
+
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("https://example.com/foo"));
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("just some random text"));
+    }
+
+    [Fact]
+    public async Task LibraryStoreAddCloudRootFromShareTextAndReorderCloudFolderTracks()
+    {
+        string stateDir = TestHelpers.MakeTempDir();
+        string musicDir = TestHelpers.MakeTempDir();
+
+        string ytJson = """
+        {
+          "header": { "musicDetailHeaderRenderer": { "title": { "runs": [{ "text": "YT Mix" }] } } },
+          "contents": {
+            "singleColumnBrowseResultsRenderer": {
+              "tabs": [{
+                "tabRenderer": {
+                  "content": {
+                    "sectionListRenderer": {
+                      "contents": [{
+                        "musicPlaylistShelfRenderer": {
+                          "contents": [
+                            {
+                              "musicResponsiveListItemRenderer": {
+                                "playlistItemData": { "videoId": "vid00000001" },
+                                "flexColumns": [
+                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Song Alpha" }] } } },
+                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Artist A" }] } } }
+                                ]
+                              }
+                            },
+                            {
+                              "musicResponsiveListItemRenderer": {
+                                "playlistItemData": { "videoId": "vid00000002" },
+                                "flexColumns": [
+                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Song Beta" }] } } },
+                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Artist B" }] } } }
+                                ]
+                              }
+                            }
+                          ]
+                        }
+                      }]
+                    }
+                  }
+                }
+              }]
+            }
+          }
+        }
+        """;
+
+        string biliViewJson = """
+        {
+          "code": 0,
+          "data": {
+            "bvid": "BV1xx411c7mD",
+            "title": "Bili Concert",
+            "duration": 400,
+            "cid": 1001,
+            "owner": { "name": "Uploader" },
+            "pages": [
+              { "cid": 1001, "page": 1, "part": "Part One", "duration": 180 },
+              { "cid": 1002, "page": 2, "part": "Part Two", "duration": 220 }
+            ]
+          }
+        }
+        """;
+
+        var handler = new StubHttpHandler(req =>
+        {
+            string url = req.RequestUri!.AbsoluteUri;
+            if (url.Contains("/youtubei/v1/browse")) return JsonResponse(ytJson);
+            if (url.Contains("b23.tv"))
+            {
+                var resp = new HttpResponseMessage(HttpStatusCode.Redirect);
+                resp.Headers.Location = new Uri("https://www.bilibili.com/video/BV1xx411c7mD");
+                return resp;
+            }
+            if (url.Contains("/x/frontend/finger/spi"))
+                return JsonResponse("""{"code":0,"data":{"b_3":"BUVID3TEST","b_4":"BUVID4TEST"}}""");
+            if (url.Contains("/x/web-interface/view"))
+                return JsonResponse(biliViewJson);
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var lib = new LibraryStore(
+            stateDir,
+            musicDir,
+            new StubMetadataReader(),
+            new ArtworkCache(Path.Combine(stateDir, "Art")),
+            youtubeClient: new YouTubeClient(handler),
+            bilibiliClient: new BilibiliClient(handler),
+            artworkHandler: handler);
+
+        var ytRoot = await lib.AddCloudRootAsync("Check out this mix https://music.youtube.com/playlist?list=PLShareTest123。");
+        Assert.Equal(RootKind.CloudYouTube, ytRoot.Kind);
+        Assert.Equal("https://music.youtube.com/playlist?list=PLShareTest123", ytRoot.SourceUrl);
+
+        var biliRoot = await lib.AddCloudRootAsync("【歌单】深夜听的歌 https://b23.tv/short123)");
+        Assert.Equal(RootKind.CloudBilibili, biliRoot.Kind);
+        Assert.Equal("https://www.bilibili.com/video/BV1xx411c7mD", biliRoot.SourceUrl);
+
+        // Verify cloud folder custom ordering persists cleanly without losing tracks
+        var history = new PlayHistoryStore(stateDir);
+        var initialYt = lib.GetFolderContents(ytRoot.Id, string.Empty, history).Tracks.Select(t => t.Id).ToList();
+        Assert.Equal(2, initialYt.Count);
+        lib.MoveFolderTrack(ytRoot.Id, string.Empty, 1, 0, history);
+        Assert.Equal(TrackSortMode.Custom, lib.GetFolderSortMode(ytRoot.Id, string.Empty));
+        Assert.Equal(
+            [initialYt[1], initialYt[0]],
+            lib.GetFolderContents(ytRoot.Id, string.Empty, history).Tracks.Select(t => t.Id));
+
+        var initialBili = lib.GetFolderContents(biliRoot.Id, string.Empty, history).Tracks.Select(t => t.Id).ToList();
+        Assert.Equal(2, initialBili.Count);
+        lib.MoveFolderTrack(biliRoot.Id, string.Empty, 0, 1, history);
+        Assert.Equal(
+            [initialBili[1], initialBili[0]],
+            lib.GetFolderContents(biliRoot.Id, string.Empty, history).Tracks.Select(t => t.Id));
+
+        // Resync preserves custom order and all tracks
+        await lib.RescanAsync();
+        Assert.Equal(
+            [initialYt[1], initialYt[0]],
+            lib.GetTracksUnder(ytRoot.Id, string.Empty, history).Select(t => t.Id));
+        Assert.Equal(
+            [initialBili[1], initialBili[0]],
+            lib.GetTracksUnder(biliRoot.Id, string.Empty, history).Select(t => t.Id));
     }
 }

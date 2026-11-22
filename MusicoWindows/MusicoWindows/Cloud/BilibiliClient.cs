@@ -113,12 +113,11 @@ public sealed class BilibiliClient
 
     public static BilibiliTarget ParseTarget(string input)
     {
-        if (string.IsNullOrWhiteSpace(input))
+        string trimmed = CloudUrlClassifier.ExtractCloudUrl(input);
+        if (string.IsNullOrWhiteSpace(trimmed))
         {
             throw new ArgumentException("Enter a Bilibili URL, BV ID, or playlist ID.");
         }
-
-        string trimmed = input.Trim();
 
         var bvDirect = BvidRegex.Match(trimmed);
         if (bvDirect.Success && !trimmed.Contains("favlist", StringComparison.OrdinalIgnoreCase) &&
@@ -222,8 +221,9 @@ public sealed class BilibiliClient
         string? proxyUrl = null,
         CancellationToken ct = default)
     {
+        string extractedUrl = CloudUrlClassifier.ExtractCloudUrl(sourceUrl);
         using var http = CloudHttpHelper.CreateClient(proxyUrl, _handler);
-        string resolvedUrl = await ResolveShortLinkIfNeededAsync(http, sourceUrl.Trim(), ct).ConfigureAwait(false);
+        string resolvedUrl = await ResolveShortLinkIfNeededAsync(http, extractedUrl, ct).ConfigureAwait(false);
         var target = ParseTarget(resolvedUrl);
         string effectiveCookie = await EnsureBuvid3CookieAsync(http, cookie, ct).ConfigureAwait(false);
 

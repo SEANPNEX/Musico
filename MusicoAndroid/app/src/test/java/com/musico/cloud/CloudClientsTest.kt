@@ -536,4 +536,52 @@ class CloudClientsTest {
         assertEquals(cloudRoot, Persistence.json.decodeFromString<LibraryRoot>(encodedRoot))
         assertTrue(cloudRoot.kind.isCloud)
     }
+
+    @Test
+    fun extractCloudSourceInputHandlesShareTextPunctuationAndBareIds() {
+        // Chinese & English share text with surrounding titles and trailing punctuation
+        assertEquals(
+            "https://b23.tv/abc1234",
+            extractCloudSourceInput("【歌单】深夜听的歌 https://b23.tv/abc1234"),
+        )
+        assertEquals(
+            "https://b23.tv/abc1234",
+            extractCloudSourceInput("【歌单】深夜听的歌https://b23.tv/abc1234快去听"),
+        )
+        assertEquals(
+            "https://music.youtube.com/playlist?list=PL123",
+            extractCloudSourceInput("My Mix https://music.youtube.com/playlist?list=PL123。"),
+        )
+        assertEquals(
+            "https://www.youtube.com/playlist?list=PLabc123",
+            extractCloudSourceInput("Check (https://www.youtube.com/playlist?list=PLabc123), enjoy!"),
+        )
+        assertEquals(
+            "https://www.bilibili.com/video/BV1xx411c7mD",
+            extractCloudSourceInput("「推荐」[https://www.bilibili.com/video/BV1xx411c7mD]】」》.,'\""),
+        )
+        assertEquals(
+            "https://youtu.be/dQw4w9WgXcQ",
+            extractCloudSourceInput("\"https://youtu.be/dQw4w9WgXcQ\"."),
+        )
+
+        // Bare IDs are preserved cleanly
+        assertEquals("PL1234567890", extractCloudSourceInput("  PL1234567890  "))
+        assertEquals("BV1xx411c7mD", extractCloudSourceInput("BV1xx411c7mD"))
+        assertEquals("av170001", extractCloudSourceInput("  av170001 "))
+        assertEquals("ml555666", extractCloudSourceInput("ml555666"))
+        assertEquals("", extractCloudSourceInput("   "))
+
+        // Clients classify and parse share text directly
+        assertTrue(BilibiliClient.canHandle("【歌单】深夜听的歌 https://b23.tv/abc1234。"))
+        assertEquals(
+            BilibiliTarget.Video(bvid = "BV1xx411c7mD"),
+            BilibiliClient.parseTarget("【B站】好歌分享 https://www.bilibili.com/video/BV1xx411c7mD」"),
+        )
+        assertTrue(YouTubeClient.canHandle("My Mix https://music.youtube.com/playlist?list=PL123。"))
+        assertEquals(
+            YouTubeTarget.Playlist("PL123"),
+            YouTubeClient.parseTarget("My Mix https://music.youtube.com/playlist?list=PL123。"),
+        )
+    }
 }

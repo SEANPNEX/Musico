@@ -13,6 +13,7 @@ struct RootView: View {
     @Environment(QueueStore.self) private var queues
     @Environment(PlayHistoryStore.self) private var history
     @Environment(\.appNavigation) private var navigation
+    @Environment(\.lyricsStore) private var lyricsStore
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var localShowPlayer: Bool
     @State private var didApplyInitialPlayerState = false
@@ -146,6 +147,7 @@ struct RootView: View {
             .environment(queues)
             .environment(history)
             .environment(\.appNavigation, navigation)
+            .environment(\.lyricsStore, lyricsStore)
     }
 
     @ViewBuilder

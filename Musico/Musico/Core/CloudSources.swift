@@ -118,6 +118,71 @@ protocol CloudStreamResolving: Sendable {
     func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult
 }
 
+// MARK: - Share-Link URL Extraction & Classification
+
+enum CloudSourceInput {
+    private static let trailingPunctuation: Set<Character> = [
+        ")", "]", "】", "」", "》", "。", ",", ".", "'", "\""
+    ]
+    private static let urlPattern = #"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+"#
+
+    /// Extracts an `http(s)://` URL from pasted share text while stripping surrounding copy and
+    /// trailing punctuation, or falls back to a trimmed bare ID / schemeless link.
+    static func extract(from raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        if let regex = try? NSRegularExpression(pattern: urlPattern, options: [.caseInsensitive]) {
+            let fullRange = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+            let matches = regex.matches(in: trimmed, range: fullRange)
+            var candidates: [String] = []
+            for match in matches {
+                guard let range = Range(match.range, in: trimmed) else { continue }
+                let cleaned = cleanMatchedURL(String(trimmed[range]))
+                if !cleaned.isEmpty {
+                    candidates.append(cleaned)
+                }
+            }
+            if let supported = candidates.first(where: {
+                YouTubeClient.parseExtracted($0) != nil || BilibiliClient.parseExtracted($0) != nil
+            }) {
+                return supported
+            }
+            if let first = candidates.first {
+                return first
+            }
+        }
+
+        return stripTrailingPunctuation(from: trimmed)
+    }
+
+    static func classify(_ raw: String) -> LibraryRoot.Kind? {
+        let extracted = extract(from: raw)
+        guard !extracted.isEmpty else { return nil }
+        if YouTubeClient.parseExtracted(extracted) != nil { return .cloudYouTube }
+        if BilibiliClient.parseExtracted(extracted) != nil { return .cloudBilibili }
+        return nil
+    }
+
+    private static func cleanMatchedURL(_ rawMatch: String) -> String {
+        var result = stripTrailingPunctuation(from: rawMatch)
+        if result.lowercased().hasPrefix("https://") {
+            result = "https://" + result.dropFirst(8)
+        } else if result.lowercased().hasPrefix("http://") {
+            result = "http://" + result.dropFirst(7)
+        }
+        return result
+    }
+
+    private static func stripTrailingPunctuation(from value: String) -> String {
+        var result = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        while let last = result.last, trailingPunctuation.contains(last) {
+            result.removeLast()
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+}
+
 // MARK: - Live Service Facade
 
 final class LiveCloudService: CloudPlaylistFetching, CloudStreamResolving, @unchecked Sendable {
@@ -132,11 +197,13 @@ final class LiveCloudService: CloudPlaylistFetching, CloudStreamResolving, @unch
     }
 
     func fetchPlaylist(sourceURL: String, cookie: String?, kindHint: LibraryRoot.Kind? = nil) async throws -> CloudPlaylistResult {
-        if kindHint == .cloudYouTube || (kindHint == nil && YouTubeClient.parse(sourceURL) != nil) {
-            return try await youtube.fetchPlaylist(sourceURL: sourceURL, cookie: cookie)
+        let extracted = CloudSourceInput.extract(from: sourceURL)
+        guard !extracted.isEmpty else { throw CloudSourceError.invalidURL }
+        if kindHint == .cloudYouTube || (kindHint == nil && YouTubeClient.parseExtracted(extracted) != nil) {
+            return try await youtube.fetchPlaylist(sourceURL: extracted, cookie: cookie)
         }
-        if kindHint == .cloudBilibili || BilibiliClient.parse(sourceURL) != nil {
-            return try await bilibili.fetchPlaylist(sourceURL: sourceURL, cookie: cookie)
+        if kindHint == .cloudBilibili || BilibiliClient.parseExtracted(extracted) != nil {
+            return try await bilibili.fetchPlaylist(sourceURL: extracted, cookie: cookie)
         }
         throw CloudSourceError.unsupportedSource
     }
@@ -266,6 +333,10 @@ actor YouTubeClient {
     // MARK: URL & ID Parsing
 
     nonisolated static func parse(_ input: String) -> Target? {
+        parseExtracted(CloudSourceInput.extract(from: input))
+    }
+
+    nonisolated static func parseExtracted(_ input: String) -> Target? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
@@ -905,6 +976,10 @@ actor BilibiliClient {
     // MARK: URL & ID Parsing
 
     nonisolated static func parse(_ input: String) -> Target? {
+        parseExtracted(CloudSourceInput.extract(from: input))
+    }
+
+    nonisolated static func parseExtracted(_ input: String) -> Target? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 

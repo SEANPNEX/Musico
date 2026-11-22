@@ -241,6 +241,36 @@ internal fun normalizeHttpsUrl(url: String?): String? {
     }
 }
 
+private val CLOUD_HTTP_URL_REGEX = Regex(
+    "https?://[A-Za-z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]+",
+    RegexOption.IGNORE_CASE,
+)
+
+private val CLOUD_URL_TRAILING_PUNCTUATION = setOf(
+    ')', ']', '】', '」', '》', '。', ',', '.', '\'', '"',
+    '）', '］', '，', ';', '!',
+)
+
+/**
+ * Extracts an `http(s)://...` link from pasted share text (e.g. title + URL + trailing
+ * punctuation), stripping surrounding text and trailing punctuation while preserving
+ * bare playlist/video IDs (`PL...`, `BV...`, `av...`, `ml...`).
+ */
+fun extractCloudSourceInput(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return ""
+    val matches = CLOUD_HTTP_URL_REGEX.findAll(trimmed)
+        .map { match -> match.value.trimEnd { it in CLOUD_URL_TRAILING_PUNCTUATION } }
+        .filter { it.isNotEmpty() }
+        .toList()
+    if (matches.isEmpty()) return trimmed
+    return matches.firstOrNull { url ->
+        val lower = url.lowercase()
+        lower.contains("youtube") || lower.contains("youtu.be") ||
+            lower.contains("bilibili") || lower.contains("b23.tv")
+    } ?: matches.first()
+}
+
 internal fun parseClockDurationSec(text: String?): Double {
     val clean = text?.trim()?.takeIf { it.isNotEmpty() } ?: return 0.0
     val parts = clean.split(':').mapNotNull { it.trim().toDoubleOrNull() }

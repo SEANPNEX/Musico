@@ -84,12 +84,11 @@ public sealed class YouTubeClient
 
     public static YouTubeTarget ParseInput(string input)
     {
-        if (string.IsNullOrWhiteSpace(input))
+        string trimmed = CloudUrlClassifier.ExtractCloudUrl(input);
+        if (string.IsNullOrWhiteSpace(trimmed))
         {
             throw new ArgumentException("Enter a YouTube playlist or video URL.");
         }
-
-        string trimmed = input.Trim();
 
         if (RawPlaylistRegex.IsMatch(trimmed))
         {

@@ -2,16 +2,24 @@ import PhotosUI
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct SongInfoTarget: Identifiable, Hashable {
+struct SongInfoTarget: Identifiable {
     let id: String
+    let library: LibraryStore?
+    let history: PlayHistoryStore?
+    let navigation: AppNavigation?
 }
 
 @MainActor @Observable
 final class SongInfoPrompt {
     var target: SongInfoTarget?
 
-    func show(_ trackID: String) {
-        target = SongInfoTarget(id: trackID)
+    func show(
+        _ trackID: String,
+        library: LibraryStore? = nil,
+        history: PlayHistoryStore? = nil,
+        navigation: AppNavigation? = nil
+    ) {
+        target = SongInfoTarget(id: trackID, library: library, history: history, navigation: navigation)
     }
 }
 
@@ -23,18 +31,42 @@ struct SongInfoHostModifier: ViewModifier {
         content
             .environment(prompt)
             .sheet(item: $prompt.target) { target in
-                SongInfoSheet(trackID: target.id)
+                SongInfoSheet(
+                    trackID: target.id,
+                    library: target.library,
+                    history: target.history,
+                    navigation: target.navigation
+                )
             }
     }
 }
 
 struct SongInfoSheet: View {
     let trackID: String
+    private let explicitLibrary: LibraryStore?
+    private let explicitHistory: PlayHistoryStore?
+    private let explicitNavigation: AppNavigation?
 
-    @Environment(LibraryStore.self) private var library
-    @Environment(PlayHistoryStore.self) private var history
-    @Environment(\.appNavigation) private var navigation
+    @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
+    @Environment(PlayHistoryStore.self) private var envHistory: PlayHistoryStore?
+    @Environment(\.appNavigation) private var envNavigation
     @Environment(\.dismiss) private var dismiss
+
+    init(
+        trackID: String,
+        library: LibraryStore? = nil,
+        history: PlayHistoryStore? = nil,
+        navigation: AppNavigation? = nil
+    ) {
+        self.trackID = trackID
+        self.explicitLibrary = library
+        self.explicitHistory = history
+        self.explicitNavigation = navigation
+    }
+
+    private var library: LibraryStore? { explicitLibrary ?? envLibrary }
+    private var history: PlayHistoryStore? { explicitHistory ?? envHistory }
+    private var navigation: AppNavigation { explicitNavigation ?? envNavigation }
 
     @State private var title = ""
     @State private var artist = ""
@@ -48,7 +80,7 @@ struct SongInfoSheet: View {
     @State private var savedFeedback = false
     @State private var techInfo: AudioTechnicalInfo?
 
-    private var track: Track? { library.track(trackID) }
+    private var track: Track? { library?.track(trackID) }
 
     private var hasChanges: Bool {
         guard let track else { return false }
@@ -62,8 +94,9 @@ struct SongInfoSheet: View {
     var body: some View {
         NavigationStack {
             Group {
-                if let track {
-                    formContent(for: track)
+                if let library, let track = library.track(trackID) {
+                    formContent(for: track, library: library)
+                        .environment(library)
                 } else {
                     ContentUnavailableView("Song Unavailable", systemImage: "music.note",
                                            description: Text("This song is no longer in your library."))
@@ -89,7 +122,7 @@ struct SongInfoSheet: View {
                 genre = track.displayGenre
                 loadedInitial = true
             }
-            if let track {
+            if let library, let track {
                 let url = library.url(for: track)
                 techInfo = await AudioFileInspector.inspect(url: url, track: track)
             }
@@ -120,7 +153,7 @@ struct SongInfoSheet: View {
     }
 
     @ViewBuilder
-    private func formContent(for track: Track) -> some View {
+    private func formContent(for track: Track, library: LibraryStore) -> some View {
         Form {
             Section("Cover & Metadata") {
                 HStack(spacing: 16) {
@@ -178,8 +211,8 @@ struct SongInfoSheet: View {
                 infoRow("Sound Tracks", value: techInfo?.channelsDisplay ?? "Loading…")
                 infoRow("Time Added", value: track.dateAdded.formatted(date: .abbreviated, time: .shortened))
                 infoRow("Time Edited", value: track.modified.formatted(date: .abbreviated, time: .shortened))
-                infoRow("Last Played", value: history.lastPlayed(for: track.id)?.formatted(date: .abbreviated, time: .shortened) ?? "Never")
-                infoRow("Played Times", value: "\(history.count(for: track.id))")
+                infoRow("Last Played", value: history?.lastPlayed(for: track.id)?.formatted(date: .abbreviated, time: .shortened) ?? "Never")
+                infoRow("Played Times", value: "\(history?.count(for: track.id) ?? 0)")
             }
         }
     }
@@ -231,7 +264,8 @@ struct SongInfoSheet: View {
     }
 
     private func saveChanges() {
-        guard let updated = library.updateTrackMetadata(
+        guard let library,
+              let updated = library.updateTrackMetadata(
             id: trackID,
             title: title,
             artist: artist,

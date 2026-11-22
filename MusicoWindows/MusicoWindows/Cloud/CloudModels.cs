@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
+using System.Text.RegularExpressions;
 using MusicoWindows.Models;
 
 namespace MusicoWindows.Cloud;
@@ -35,26 +36,102 @@ public sealed record CloudAudioStream(
 
 public static class CloudUrlClassifier
 {
-    public static RootKind Classify(string input)
+    private static readonly Regex HttpUrlRegex = new(
+        @"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex SchemelessCloudUrlRegex = new(
+        @"(?:[A-Za-z0-9-]+\.)*(?:youtube\.com|youtu\.be|bilibili\.com|b23\.tv)/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly char[] TrailingUrlPunctuation =
+        [')', ']', '】', '」', '》', '。', ',', '.', '\'', '"', '）', '］', '”', '’', '>', ';', '；', '！', '、', '!', '?'];
+
+    /// <summary>
+    /// Extracts an http(s)://... URL (or scheme-less YouTube/Bilibili URL) from pasted share text,
+    /// stripping surrounding title/description text and trailing punctuation while preserving bare IDs.
+    /// </summary>
+    public static string ExtractCloudUrl(string? input)
     {
         if (string.IsNullOrWhiteSpace(input))
+        {
+            return string.Empty;
+        }
+
+        var httpMatches = HttpUrlRegex.Matches(input);
+        if (httpMatches.Count > 0)
+        {
+            string? firstCandidate = null;
+            foreach (Match match in httpMatches)
+            {
+                string candidate = match.Value.TrimEnd(TrailingUrlPunctuation);
+                if (string.IsNullOrEmpty(candidate) ||
+                    candidate.Equals("http://", StringComparison.OrdinalIgnoreCase) ||
+                    candidate.Equals("https://", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                firstCandidate ??= candidate;
+                if (IsKnownCloudUrl(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            if (firstCandidate is not null)
+            {
+                return firstCandidate;
+            }
+        }
+
+        var schemelessMatch = SchemelessCloudUrlRegex.Match(input);
+        if (schemelessMatch.Success)
+        {
+            string candidate = schemelessMatch.Value.TrimEnd(TrailingUrlPunctuation);
+            if (!string.IsNullOrEmpty(candidate))
+            {
+                return candidate;
+            }
+        }
+
+        return input.Trim();
+    }
+
+    private static bool IsKnownCloudUrl(string url)
+    {
+        if (!Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        string host = uri.Host.ToLowerInvariant();
+        return host.Contains("youtube.com", StringComparison.Ordinal) ||
+               host.Contains("youtu.be", StringComparison.Ordinal) ||
+               host.Contains("bilibili.com", StringComparison.Ordinal) ||
+               host.Contains("b23.tv", StringComparison.Ordinal);
+    }
+
+    public static RootKind Classify(string input)
+    {
+        string extracted = ExtractCloudUrl(input);
+        if (string.IsNullOrWhiteSpace(extracted))
         {
             throw new ArgumentException("Enter a YouTube or Bilibili URL or playlist ID.", nameof(input));
         }
 
-        string trimmed = input.Trim();
-        string lower = trimmed.ToLowerInvariant();
+        string lower = extracted.ToLowerInvariant();
 
         if (lower.Contains("bilibili.com") || lower.Contains("b23.tv") ||
-            trimmed.StartsWith("BV", StringComparison.OrdinalIgnoreCase) && trimmed.Length >= 12 && !trimmed.Contains('/') ||
-            System.Text.RegularExpressions.Regex.IsMatch(trimmed, @"^(av|ml)\d+$", System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+            extracted.StartsWith("BV", StringComparison.OrdinalIgnoreCase) && extracted.Length >= 12 && !extracted.Contains('/') ||
+            Regex.IsMatch(extracted, @"^(av|ml)\d+$", RegexOptions.IgnoreCase))
         {
             return RootKind.CloudBilibili;
         }
 
         if (lower.Contains("youtube.com") || lower.Contains("youtu.be") ||
             lower.Contains("music.youtube.com") ||
-            YouTubeClient.LooksLikeRawYouTubeId(trimmed))
+            YouTubeClient.LooksLikeRawYouTubeId(extracted))
         {
             return RootKind.CloudYouTube;
         }

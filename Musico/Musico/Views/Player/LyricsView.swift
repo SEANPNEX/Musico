@@ -7,8 +7,8 @@ struct LyricsView: View {
     /// What Done does; closes the sheet when nil.
     var onDone: (() -> Void)?
 
-    @Environment(PlayerController.self) private var player
-    @Environment(LibraryStore.self) private var library
+    @Environment(PlayerController.self) private var player: PlayerController?
+    @Environment(LibraryStore.self) private var library: LibraryStore?
     @Environment(\.lyricsStore) private var store
     @Environment(\.dismiss) private var dismiss
 
@@ -19,7 +19,7 @@ struct LyricsView: View {
     /// Bumped after an import or removal to reload.
     @State private var revision = 0
 
-    private var loadKey: String { "\(player.currentTrack?.id ?? "")#\(revision)" }
+    private var loadKey: String { "\(player?.currentTrack?.id ?? "")#\(revision)" }
 
     var body: some View {
         NavigationStack {
@@ -34,25 +34,25 @@ struct LyricsView: View {
                     } actions: {
                         Button("Import from File…") { showImporter = true }
                             .buttonStyle(.borderedProminent)
-                            .disabled(player.currentTrack == nil)
+                            .disabled(player?.currentTrack == nil)
                     }
                 }
             }
-            .navigationTitle(player.currentTrack?.title ?? "Lyrics")
+            .navigationTitle(player?.currentTrack?.title ?? "Lyrics")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu("Lyrics Options", systemImage: "ellipsis.circle") {
                         if let source { Text(sourceText(source)) }
                         Button("Import from File…", systemImage: "square.and.arrow.down") { showImporter = true }
-                        if let id = player.currentTrack?.id, store.hasImported(trackID: id) {
+                        if let id = player?.currentTrack?.id, store.hasImported(trackID: id) {
                             Button("Remove Imported Lyrics", systemImage: "trash", role: .destructive) {
                                 store.removeImported(trackID: id)
                                 revision += 1
                             }
                         }
                     }
-                    .disabled(player.currentTrack == nil)
+                    .disabled(player?.currentTrack == nil)
                 }
                 if !embedded {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -63,7 +63,7 @@ struct LyricsView: View {
             .task(id: loadKey) { await load() }
             .fileImporter(isPresented: $showImporter,
                           allowedContentTypes: [.plainText, .text, UTType(filenameExtension: "lrc") ?? .data]) { result in
-                guard case .success(let url) = result, let id = player.currentTrack?.id else { return }
+                guard case .success(let url) = result, let id = player?.currentTrack?.id else { return }
                 do {
                     try store.importLyrics(from: url, trackID: id)
                     revision += 1
@@ -88,7 +88,7 @@ struct LyricsView: View {
     }
 
     private func load() async {
-        guard let track = player.currentTrack else {
+        guard let player, let library, let track = player.currentTrack else {
             lyrics = nil
             source = nil
             return
@@ -101,7 +101,7 @@ struct LyricsView: View {
     }
 
     private func timed(_ lyrics: Lyrics) -> some View {
-        let current = lyrics.lineIndex(at: player.currentTime)
+        let current = lyrics.lineIndex(at: player?.currentTime ?? 0)
         return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
@@ -112,7 +112,7 @@ struct LyricsView: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .contentShape(Rectangle())
                             .onTapGesture {
-                                if let time = line.time { player.seek(to: time) }
+                                if let time = line.time { player?.seek(to: time) }
                             }
                             .id(line.id)
                     }

@@ -219,9 +219,11 @@ struct TrackMenuItems: View {
     @Environment(LibraryStore.self) private var library
     @Environment(QueueStore.self) private var queues
     @Environment(PlayerController.self) private var player
+    @Environment(PlayHistoryStore.self) private var history: PlayHistoryStore?
     @Environment(NewPlaylistPrompt.self) private var newPlaylist
     @Environment(CloudExportPrompt.self) private var cloudExport
     @Environment(SongInfoPrompt.self) private var songInfo
+    @Environment(\.appNavigation) private var navigation
 
     var body: some View {
         Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") { player.playNext(ids) }
@@ -236,7 +238,7 @@ struct TrackMenuItems: View {
         Button("Play in New Queue", systemImage: "plus.rectangle.on.rectangle") { player.playInNewQueue(ids) }
         if ids.count == 1, let trackID = ids.first, library.track(trackID) != nil {
             Button("Song Info", systemImage: "info.circle") {
-                songInfo.show(trackID)
+                songInfo.show(trackID, library: library, history: history, navigation: navigation)
             }
         }
         Divider()
