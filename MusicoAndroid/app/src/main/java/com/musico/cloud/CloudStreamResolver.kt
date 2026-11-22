@@ -8,6 +8,7 @@ import java.util.concurrent.ConcurrentHashMap
 open class CloudStreamResolver(
     private val youTubeClient: YouTubeClient = YouTubeClient(),
     private val bilibiliClient: BilibiliClient = BilibiliClient(),
+    private val googleDriveClient: GoogleDriveClient = GoogleDriveClient(),
 ) {
     private val cache = ConcurrentHashMap<String, ResolvedStream>()
 
@@ -36,6 +37,7 @@ open class CloudStreamResolver(
         val resolved = when (source) {
             CloudSource.YOUTUBE -> youTubeClient.resolveStream(remoteId, cookie)
             CloudSource.BILIBILI -> bilibiliClient.resolveStream(remoteId, cookie)
+            CloudSource.GOOGLE_DRIVE -> googleDriveClient.resolveStream(remoteId, cookie)
             else -> throw IOException("Unsupported cloud source: $source")
         }
         cache[key] = resolved

@@ -3,6 +3,8 @@ import SwiftUI
 /// The full-screen player: this outer view owns the sheets and the two-column arrangement,
 /// `PlayerPage` draws the controls.
 struct FullPlayerView: View {
+    var onClose: (() -> Void)? = nil
+
     enum Panel: String, Identifiable {
         case queue, lyrics, equalizer, sleep
         var id: String { rawValue }
@@ -32,17 +34,28 @@ struct FullPlayerView: View {
 
     var body: some View {
         GeometryReader { proxy in
+            let twoColumn = proxy.size.width >= Self.twoColumnWidth
             Group {
-                if proxy.size.width >= Self.twoColumnWidth {
+                if twoColumn {
                     HStack(spacing: 0) {
-                        PlayerPage(panel: columnPanel, showsClose: true)
-                            .frame(maxWidth: .infinity)
+                        PlayerPage(
+                            panel: columnPanel,
+                            showsClose: true,
+                            activeSidePane: sidePane,
+                            onClose: onClose
+                        )
+                        .frame(maxWidth: .infinity)
                         Divider()
                         sideColumn
                             .frame(maxWidth: .infinity)
                     }
                 } else {
-                    PlayerPage(panel: $panel, showsClose: false)
+                    PlayerPage(
+                        panel: $panel,
+                        showsClose: onClose != nil,
+                        activeSidePane: nil,
+                        onClose: onClose
+                    )
                 }
             }
             .background { AmbientPlayerBackdrop() }
@@ -84,30 +97,37 @@ struct FullPlayerView: View {
     /// With two columns, Queue and Lyrics switch the right-hand column instead of opening a sheet.
     private var columnPanel: Binding<Panel?> {
         Binding(get: { panel }, set: { target in
-            switch target {
-            case .queue: sidePane = .queue
-            case .lyrics: sidePane = .lyrics
-            default: panel = target
+            withAnimation(.easeInOut(duration: 0.2)) {
+                switch target {
+                case .queue: sidePane = .queue
+                case .lyrics: sidePane = .lyrics
+                default: panel = target
+                }
             }
         })
     }
 
     private var sideColumn: some View {
         VStack(spacing: 0) {
-            Picker(L10n.tr("Show"), selection: $sidePane) {
+            Picker(L10n.tr("Show"), selection: $sidePane.animation(.easeInOut(duration: 0.2))) {
                 ForEach(SidePane.allCases) { Text($0.localizedTitle).tag($0) }
             }
             .pickerStyle(.segmented)
             .frame(maxWidth: 320)
             .padding(.top, 20)
             .padding(.bottom, 8)
-            switch sidePane {
-            case .lyrics: LyricsView(embedded: true)
-            case .queue:
-                NavigationStack {
-                    QueuesView().navigationBarTitleDisplayMode(.inline)
+            Group {
+                switch sidePane {
+                case .lyrics: LyricsView(embedded: true)
+                case .queue:
+                    NavigationStack {
+                        QueuesView(embeddedInInspector: true).navigationBarTitleDisplayMode(.inline)
+                    }
                 }
             }
+            .id(sidePane)
+            .transition(.opacity)
+            .animation(.easeInOut(duration: 0.2), value: sidePane)
         }
     }
 }
@@ -118,10 +138,13 @@ private struct PlayerPage: View {
     @Binding var panel: Panel?
     /// A close button, for when the player fills the window and cannot be dragged away.
     let showsClose: Bool
+    let activeSidePane: FullPlayerView.SidePane?
+    let onClose: (() -> Void)?
     @Environment(PlayerController.self) private var player
     @Environment(LibraryStore.self) private var library
     @Environment(QueueStore.self) private var queues
     @Environment(\.dismiss) private var dismiss
+    @State private var isCloseHovered = false
 
     var body: some View {
         VStack(spacing: 20) {
@@ -132,6 +155,9 @@ private struct PlayerPage: View {
             }
             if let track = player.currentTrack {
                 ArtworkView(artworkKey: track.artworkKey)
+                    .id(track.id)
+                    .transition(.opacity)
+                    .animation(.easeInOut(duration: 0.25), value: track.id)
                     .padding(.horizontal, 12)
                     .shadow(color: .black.opacity(player.isPlaying ? 0.28 : 0.14),
                             radius: player.isPlaying ? 22 : 12,
@@ -145,9 +171,16 @@ private struct PlayerPage: View {
 
                 HStack(alignment: .center) {
                     VStack(alignment: .leading, spacing: 4) {
-                        Text(track.title).font(.title2.weight(.semibold)).lineLimit(2)
-                        Text("\(L10n.displayArtist(track.artist)) — \(L10n.displayAlbum(track.album))").foregroundStyle(.secondary).lineLimit(1)
+                        Text(track.title)
+                            .font(.title2.weight(.semibold))
+                            .lineLimit(2)
+                            .contentTransition(.opacity)
+                        Text("\(L10n.displayArtist(track.artist)) — \(L10n.displayAlbum(track.album))")
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .contentTransition(.opacity)
                     }
+                    .animation(.easeInOut(duration: 0.2), value: track.id)
                     Spacer()
                     let isFavourite = library.isFavourite(track.id)
                     Button(L10n.tr("Favourite"), systemImage: isFavourite ? "heart.fill" : "heart") {
@@ -188,19 +221,48 @@ private struct PlayerPage: View {
         .padding(.bottom, 16)
     }
 
+    private func performClose() {
+        if let onClose {
+            onClose()
+        } else {
+            dismiss()
+        }
+    }
+
     @ViewBuilder
     private var closeButton: some View {
         if #available(iOS 26.0, macCatalyst 26.0, *) {
-            Button(L10n.tr("Close"), systemImage: "chevron.down") { dismiss() }
+            Button(L10n.tr("Close"), systemImage: "chevron.down") { performClose() }
                 .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
                 .font(.body.weight(.semibold))
                 .frame(width: 38, height: 38)
-                .glassEffect(.regular.interactive(), in: Capsule())
+                .contentShape(Capsule())
+                .background {
+                    Color.clear
+                        .glassEffect(.regular.interactive(), in: Capsule())
+                        .allowsHitTesting(false)
+                }
+                .overlay {
+                    if isCloseHovered {
+                        Capsule()
+                            .fill(Color.primary.opacity(0.08))
+                            .allowsHitTesting(false)
+                    }
+                }
+                .scaleEffect(isCloseHovered ? 1.05 : 1.0)
+                .onHover { isCloseHovered = $0 }
+                .animation(.easeOut(duration: 0.14), value: isCloseHovered)
         } else {
-            Button(L10n.tr("Close"), systemImage: "chevron.down") { dismiss() }
+            Button(L10n.tr("Close"), systemImage: "chevron.down") { performClose() }
                 .labelStyle(.iconOnly)
+                .buttonStyle(.plain)
                 .font(.title3.weight(.semibold))
                 .frame(width: 44, height: 32)
+                .background(isCloseHovered ? Color.primary.opacity(0.08) : .clear, in: Capsule())
+                .contentShape(Capsule())
+                .onHover { isCloseHovered = $0 }
+                .animation(.easeOut(duration: 0.14), value: isCloseHovered)
         }
     }
 
@@ -243,11 +305,13 @@ private struct PlayerPage: View {
 
     @ViewBuilder
     private var panelButtons: some View {
+        let queueActive = activeSidePane == .queue || panel == .queue
+        let lyricsActive = activeSidePane == .lyrics || panel == .lyrics
         if #available(iOS 26.0, macCatalyst 26.0, *) {
             GlassEffectContainer(spacing: 10) {
                 HStack(spacing: 8) {
-                    panelButton(L10n.tr("Queue"), "list.bullet", .queue, active: false)
-                    panelButton(L10n.tr("Lyrics"), "quote.bubble", .lyrics, active: false)
+                    panelButton(L10n.tr("Queue"), "list.bullet", .queue, active: queueActive)
+                    panelButton(L10n.tr("Lyrics"), "quote.bubble", .lyrics, active: lyricsActive)
                     panelButton(L10n.tr("Equalizer"), "slider.vertical.3", .equalizer, active: player.eq.enabled)
                     panelButton(L10n.tr("Sleep Timer"), "moon.zzz", .sleep, active: player.sleepMode != .off)
                 }
@@ -255,9 +319,9 @@ private struct PlayerPage: View {
             .padding(.top, 4)
         } else {
             HStack {
-                panelButton(L10n.tr("Queue"), "list.bullet", .queue, active: false)
+                panelButton(L10n.tr("Queue"), "list.bullet", .queue, active: queueActive)
                 Spacer()
-                panelButton(L10n.tr("Lyrics"), "quote.bubble", .lyrics, active: false)
+                panelButton(L10n.tr("Lyrics"), "quote.bubble", .lyrics, active: lyricsActive)
                 Spacer()
                 panelButton(L10n.tr("Equalizer"), "slider.vertical.3", .equalizer, active: player.eq.enabled)
                 Spacer()
@@ -267,12 +331,24 @@ private struct PlayerPage: View {
         }
     }
 
-    @ViewBuilder
     private func panelButton(_ title: String, _ icon: String, _ target: Panel, active: Bool) -> some View {
+        PlayerPanelButton(title: title, icon: icon, active: active) {
+            panel = target
+        }
+    }
+}
+
+private struct PlayerPanelButton: View {
+    let title: String
+    let icon: String
+    let active: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
         if #available(iOS 26.0, macCatalyst 26.0, *) {
-            Button {
-                panel = target
-            } label: {
+            Button(action: action) {
                 VStack(spacing: 4) {
                     Image(systemName: icon).font(.title3).frame(height: 24)
                     Text(title).font(.caption2).lineLimit(1).minimumScaleFactor(0.85)
@@ -280,21 +356,43 @@ private struct PlayerPage: View {
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 6)
+                .contentShape(Capsule())
             }
             .buttonStyle(.plain)
             .foregroundStyle(active ? Color.accentColor : .primary)
-            .glassEffect(.regular.interactive(), in: Capsule())
+            .background {
+                Color.clear
+                    .glassEffect(.regular.interactive(), in: Capsule())
+                    .allowsHitTesting(false)
+            }
+            .overlay {
+                if active || isHovered {
+                    Capsule()
+                        .fill(active ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.06))
+                        .allowsHitTesting(false)
+                }
+            }
+            .onHover { isHovered = $0 }
+            .animation(.easeOut(duration: 0.14), value: isHovered)
         } else {
-            Button {
-                panel = target
-            } label: {
+            Button(action: action) {
                 VStack(spacing: 4) {
                     Image(systemName: icon).font(.title3).frame(height: 26)
                     Text(title).font(.caption2)
                 }
                 .frame(minWidth: 64, minHeight: 44)
+                .background(
+                    active
+                        ? Color.accentColor.opacity(0.14)
+                        : (isHovered ? Color.primary.opacity(0.06) : .clear),
+                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
+                )
+                .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
             }
+            .buttonStyle(.plain)
             .foregroundStyle(active ? Color.accentColor : .primary)
+            .onHover { isHovered = $0 }
+            .animation(.easeOut(duration: 0.14), value: isHovered)
         }
     }
 }

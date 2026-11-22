@@ -9,7 +9,7 @@ enum LibraryError: LocalizedError {
         switch self {
         case .duplicateRoot: L10n.trNonisolated("That location is already in your library.")
         case .notAFolder: L10n.trNonisolated("That location could not be opened as a folder.")
-        case .invalidCloudURL: L10n.trNonisolated("Enter a valid YouTube or Bilibili playlist or video URL.")
+        case .invalidCloudURL: L10n.trNonisolated("Enter a valid YouTube, Bilibili, or Google Drive link.")
         }
     }
 }
@@ -675,7 +675,8 @@ final class LibraryStore {
         existing: [String: Track],
         now: Date
     ) -> (tracks: [Track], changed: Bool) {
-        let sourceName = root.kind == .cloudYouTube ? "youtube" : "bilibili"
+        let sourceName = root.kind.cloudSourceSlug ?? "bilibili"
+        let albumArtistName: String? = root.kind == .cloudGoogleDrive ? "Google Drive" : nil
         var seen = Set<String>()
         var result: [Track] = []
         var changed = false
@@ -692,6 +693,7 @@ final class LibraryStore {
                     && old.remoteTrackID == item.remoteTrackID
                     && old.remoteArtworkURL == item.artworkURL
                     && old.cloudSource == sourceName
+                    && old.albumArtist == (albumArtistName ?? item.artist)
                 if sameMetadata {
                     result.append(old)
                     continue
@@ -707,7 +709,7 @@ final class LibraryStore {
                 title: item.title,
                 artist: item.artist,
                 album: item.album,
-                albumArtist: item.artist,
+                albumArtist: albumArtistName ?? item.artist,
                 trackNumber: item.trackNumber,
                 discNumber: nil,
                 duration: item.duration,
@@ -930,6 +932,12 @@ final class LibraryStore {
 
     /// Direct children of a folder: subfolder names, then the songs in it.
     func folderContents(root: UUID, path: String) -> (folders: [String], tracks: [Track]) {
+        if path.isEmpty, self.root(root)?.kind.isCloud == true {
+            let direct = tracks
+                .filter { $0.rootID == root }
+                .sorted { $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending }
+            return ([], direct)
+        }
         let prefix = path.isEmpty ? "" : path + "/"
         var folders = Set<String>()
         var direct: [Track] = []

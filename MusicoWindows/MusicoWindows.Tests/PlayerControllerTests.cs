@@ -252,7 +252,10 @@ public sealed class PlayerControllerTests : IDisposable
             {
                 if (req.Headers.Range is not null)
                 {
-                    return new HttpResponseMessage(HttpStatusCode.PartialContent);
+                    return new HttpResponseMessage(HttpStatusCode.PartialContent)
+                    {
+                        Content = new ByteArrayContent([1, 2, 3, 4, 5, 6, 7, 8])
+                    };
                 }
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {

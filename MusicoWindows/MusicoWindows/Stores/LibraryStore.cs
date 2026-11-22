@@ -39,6 +39,7 @@ public sealed class LibraryStore : ObservableStore
     private readonly bool _appFolderRemovable;
     private readonly YouTubeClient _youtube;
     private readonly BilibiliClient _bilibili;
+    private readonly GoogleDriveClient _googleDrive;
     private readonly HttpMessageHandler? _artworkHandler;
     private readonly CloudAudioCache? _cloudCache;
 
@@ -73,7 +74,8 @@ public sealed class LibraryStore : ObservableStore
         YouTubeClient? youtubeClient = null,
         BilibiliClient? bilibiliClient = null,
         HttpMessageHandler? artworkHandler = null,
-        CloudAudioCache? cloudCache = null)
+        CloudAudioCache? cloudCache = null,
+        GoogleDriveClient? googleDriveClient = null)
     {
         _stateDirectory = stateDirectory;
         _musicDirectory = musicDirectory;
@@ -83,6 +85,7 @@ public sealed class LibraryStore : ObservableStore
         _appFolderRemovable = appFolderRemovable;
         _youtube = youtubeClient ?? new YouTubeClient();
         _bilibili = bilibiliClient ?? new BilibiliClient();
+        _googleDrive = googleDriveClient ?? new GoogleDriveClient();
         _artworkHandler = artworkHandler;
         _cloudCache = cloudCache;
 
@@ -350,9 +353,13 @@ public sealed class LibraryStore : ObservableStore
         string? normalizedProxy = YouTubeClient.NormalizeProxyUrl(proxyUrl);
         string? trimmedCookie = string.IsNullOrWhiteSpace(cookie) ? null : cookie.Trim();
 
-        CloudPlaylistResult result = kind == RootKind.CloudYouTube
-            ? await _youtube.FetchPlaylistAsync(extractedUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false)
-            : await _bilibili.FetchPlaylistAsync(extractedUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false);
+        CloudPlaylistResult result = kind switch
+        {
+            RootKind.CloudYouTube => await _youtube.FetchPlaylistAsync(extractedUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false),
+            RootKind.CloudBilibili => await _bilibili.FetchPlaylistAsync(extractedUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false),
+            RootKind.CloudGoogleDrive => await _googleDrive.FetchPlaylistAsync(extractedUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false),
+            _ => throw new ArgumentException($"Unsupported cloud source: {kind}")
+        };
 
         if (_roots.Any(r => r.Kind == result.Kind &&
                             string.Equals(r.RemoteId, result.RemoteId, StringComparison.OrdinalIgnoreCase)))
@@ -717,9 +724,13 @@ public sealed class LibraryStore : ObservableStore
             try
             {
                 string source = root.SourceUrl ?? root.Path ?? string.Empty;
-                CloudPlaylistResult result = root.Kind == RootKind.CloudYouTube
-                    ? await _youtube.FetchPlaylistAsync(source, root.Cookie, root.ProxyUrl).ConfigureAwait(false)
-                    : await _bilibili.FetchPlaylistAsync(source, root.Cookie, root.ProxyUrl).ConfigureAwait(false);
+                CloudPlaylistResult result = root.Kind switch
+                {
+                    RootKind.CloudYouTube => await _youtube.FetchPlaylistAsync(source, root.Cookie, root.ProxyUrl).ConfigureAwait(false),
+                    RootKind.CloudBilibili => await _bilibili.FetchPlaylistAsync(source, root.Cookie, root.ProxyUrl).ConfigureAwait(false),
+                    RootKind.CloudGoogleDrive => await _googleDrive.FetchPlaylistAsync(source, root.Cookie, root.ProxyUrl).ConfigureAwait(false),
+                    _ => throw new InvalidOperationException($"Unsupported cloud source: {root.Kind}")
+                };
 
                 var synced = await BuildCloudTracksAsync(root, result, existingTracks, CancellationToken.None).ConfigureAwait(false);
                 kept.AddRange(synced);
@@ -804,12 +815,22 @@ public sealed class LibraryStore : ObservableStore
         var now = DateTimeOffset.UtcNow;
         var built = new List<Track>(result.Items.Count);
         var seenTrackIds = new HashSet<string>(StringComparer.Ordinal);
-        string cloudSource = root.Kind == RootKind.CloudBilibili ? CloudSources.Bilibili : CloudSources.YouTube;
-        string albumArtist = root.Kind == RootKind.CloudBilibili ? "Bilibili" : "YouTube";
+        string cloudSource = root.Kind switch
+        {
+            RootKind.CloudBilibili => CloudSources.Bilibili,
+            RootKind.CloudGoogleDrive => CloudSources.GoogleDrive,
+            _ => CloudSources.YouTube
+        };
+        string albumArtist = root.Kind switch
+        {
+            RootKind.CloudBilibili => "Bilibili",
+            RootKind.CloudGoogleDrive => "Google Drive",
+            _ => "YouTube"
+        };
 
         foreach (var item in result.Items)
         {
-            string relPath = MakeCloudRelativePath(item.RemoteTrackId);
+            string relPath = MakeCloudRelativePath(item);
             if (root.IsExcluded(relPath)) continue;
             string trackId = Track.MakeId(root.Id, relPath);
             if (!seenTrackIds.Add(trackId)) continue;
@@ -862,7 +883,7 @@ public sealed class LibraryStore : ObservableStore
 
     private HttpClient CreateArtworkHttpClient(LibraryRoot root)
     {
-        string? proxy = root.Kind == RootKind.CloudYouTube ? root.ProxyUrl : null;
+        string? proxy = root.Kind is RootKind.CloudYouTube or RootKind.CloudGoogleDrive ? root.ProxyUrl : null;
         return CloudHttpHelper.CreateClient(proxy, _artworkHandler, TimeSpan.FromSeconds(15));
     }
 
@@ -887,10 +908,20 @@ public sealed class LibraryStore : ObservableStore
         }
     }
 
-    private static string MakeCloudRelativePath(string remoteTrackId)
+    private static string MakeCloudRelativePath(CloudPlaylistItem item)
     {
-        string safe = remoteTrackId.Replace('/', '_').Replace('\\', '_').Replace(':', '_');
-        return $"{safe}.m4a";
+        string safe = item.RemoteTrackId
+            .Replace('/', '_')
+            .Replace('\\', '_')
+            .Replace(':', '_')
+            .Replace('?', '_')
+            .Replace('&', '_')
+            .Replace('=', '_')
+            .Replace('|', '_');
+        string ext = string.IsNullOrWhiteSpace(item.FileExtension)
+            ? ".m4a"
+            : item.FileExtension.StartsWith('.') ? item.FileExtension : "." + item.FileExtension;
+        return $"{safe}{ext}";
     }
 
     private void Publish(IEnumerable<Track> list)

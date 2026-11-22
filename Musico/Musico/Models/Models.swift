@@ -3,16 +3,25 @@ import CryptoKit
 
 struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
-        case picked, appFolder, cloudYouTube, cloudBilibili
+        case picked, appFolder, cloudYouTube, cloudBilibili, cloudGoogleDrive
 
         var isCloud: Bool {
             switch self {
-            case .cloudYouTube, .cloudBilibili: true
+            case .cloudYouTube, .cloudBilibili, .cloudGoogleDrive: true
             case .picked, .appFolder: false
             }
         }
 
         var isLocal: Bool { !isCloud }
+
+        var cloudSourceSlug: String? {
+            switch self {
+            case .cloudYouTube: "youtube"
+            case .cloudBilibili: "bilibili"
+            case .cloudGoogleDrive: "gdrive"
+            case .picked, .appFolder: nil
+            }
+        }
     }
 
     /// Fixed id of the app's own Documents folder root.

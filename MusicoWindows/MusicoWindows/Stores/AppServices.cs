@@ -23,7 +23,8 @@ public sealed class AppServices : IDisposable
         CloudCache = new CloudAudioCache(Path.Combine(StateDirectory, "CloudCache"));
         YouTube = new YouTubeClient();
         Bilibili = new BilibiliClient();
-        CloudExporter = new CloudExporter(CloudCache, YouTube, Bilibili, artwork);
+        GoogleDrive = new GoogleDriveClient();
+        CloudExporter = new CloudExporter(CloudCache, YouTube, Bilibili, artwork, GoogleDrive);
 
         Library = new LibraryStore(
             stateDirectory: StateDirectory,
@@ -33,7 +34,8 @@ public sealed class AppServices : IDisposable
             appFolderRemovable: true,
             youtubeClient: YouTube,
             bilibiliClient: Bilibili,
-            cloudCache: CloudCache);
+            cloudCache: CloudCache,
+            googleDriveClient: GoogleDrive);
 
         Queues = new QueueStore(StateDirectory);
         History = new PlayHistoryStore(StateDirectory);
@@ -50,7 +52,8 @@ public sealed class AppServices : IDisposable
             smtc: Smtc,
             cloudCache: CloudCache,
             youtubeClient: YouTube,
-            bilibiliClient: Bilibili);
+            bilibiliClient: Bilibili,
+            googleDriveClient: GoogleDrive);
     }
 
     public string StateDirectory { get; }
@@ -58,6 +61,7 @@ public sealed class AppServices : IDisposable
     public CloudAudioCache CloudCache { get; }
     public YouTubeClient YouTube { get; }
     public BilibiliClient Bilibili { get; }
+    public GoogleDriveClient GoogleDrive { get; }
     public CloudExporter CloudExporter { get; }
     public LibraryStore Library { get; }
     public QueueStore Queues { get; }

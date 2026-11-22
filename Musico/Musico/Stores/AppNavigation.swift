@@ -12,12 +12,37 @@ final class AppNavigation {
     var librarySection: LibraryView.Section = .songs
     var libraryPath = NavigationPath()
     var sidebarSelection: SidebarItem? = .songs
+    var sidebarDetailPath = NavigationPath()
     var showPlayer = false
     var searchQuery = ""
     var searchField: SearchField = .keyword
     var isSearchPresented = false
 
     nonisolated init() {}
+
+    func selectSidebar(_ item: SidebarItem) {
+        if sidebarSelection == item {
+            if !sidebarDetailPath.isEmpty {
+                sidebarDetailPath = NavigationPath()
+            }
+            return
+        }
+        if sidebarSelection == .songs && searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            isSearchPresented = false
+        }
+        sidebarDetailPath = NavigationPath()
+        sidebarSelection = item
+    }
+
+    func openSearchFocus() {
+        selectedTab = .library
+        librarySection = .songs
+        libraryPath = NavigationPath()
+        sidebarDetailPath = NavigationPath()
+        sidebarSelection = .songs
+        isSearchPresented = true
+        showPlayer = false
+    }
 
     func openSearch(query: String, field: SearchField) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -27,6 +52,7 @@ final class AppNavigation {
         selectedTab = .library
         librarySection = .songs
         libraryPath = NavigationPath()
+        sidebarDetailPath = NavigationPath()
         sidebarSelection = .songs
         isSearchPresented = true
         showPlayer = false

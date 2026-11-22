@@ -94,6 +94,8 @@ final class CloudSourcesTests: XCTestCase {
         XCTAssertFalse(LibraryRoot.Kind.cloudYouTube.isLocal)
         XCTAssertTrue(LibraryRoot.Kind.cloudBilibili.isCloud)
         XCTAssertFalse(LibraryRoot.Kind.cloudBilibili.isLocal)
+        XCTAssertTrue(LibraryRoot.Kind.cloudGoogleDrive.isCloud)
+        XCTAssertFalse(LibraryRoot.Kind.cloudGoogleDrive.isLocal)
         XCTAssertFalse(LibraryRoot.Kind.picked.isCloud)
         XCTAssertTrue(LibraryRoot.Kind.picked.isLocal)
         XCTAssertFalse(LibraryRoot.Kind.appFolder.isCloud)
@@ -113,8 +115,19 @@ final class CloudSourcesTests: XCTestCase {
         )
         XCTAssertEqual(
             YouTubeClient.parse("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLxyz987654321"),
-            .playlist(id: "PLxyz987654321")
+            .playlist(id: "PLxyz987654321", videoID: "dQw4w9WgXcQ")
         )
+        XCTAssertEqual(
+            YouTubeClient.parse("https://youtu.be/dQw4w9WgXcQ?list=PLxyz987654321"),
+            .playlist(id: "PLxyz987654321", videoID: "dQw4w9WgXcQ")
+        )
+        XCTAssertEqual(
+            YouTubeClient.parse("https://music.youtube.com/browse/MPREb_1234567890"),
+            .playlist(id: "MPREb_1234567890", videoID: nil)
+        )
+        XCTAssertEqual(YouTubeClient.parse("RDMM"), .playlist(id: "RDMM", videoID: nil))
+        XCTAssertEqual(YouTubeClient.parse("RDdQw4w9WgXcQ"), .playlist(id: "RDdQw4w9WgXcQ", videoID: nil))
+        XCTAssertEqual(YouTubeClient.parse("MPREb_1234567890"), .playlist(id: "MPREb_1234567890", videoID: nil))
         XCTAssertEqual(
             YouTubeClient.parse("https://youtu.be/dQw4w9WgXcQ"),
             .video(id: "dQw4w9WgXcQ")
@@ -453,7 +466,272 @@ final class CloudSourcesTests: XCTestCase {
         let beforeCount = transport.requests.count
         let cached = try await client.resolveStream(videoID: "vid00000001", cookie: nil)
         XCTAssertEqual(cached.url, stream.url)
+        XCTAssertEqual(stream.headers["Range"], "bytes=0-")
         XCTAssertEqual(transport.requests.count, beforeCount)
+    }
+
+    func testYouTubeClientHeadersLockupViewModelAndBrowsePrefix() async throws {
+        let lockupPayload: [String: Any] = [
+            "header": [
+                "pageHeaderRenderer": [
+                    "content": [
+                        "pageHeaderViewModel": [
+                            "title": [
+                                "dynamicTextViewModel": [
+                                    "text": ["content": "Night Drive Album"]
+                                ]
+                            ]
+                        ]
+                    ]
+                ]
+            ],
+            "contents": [
+                "singleColumnBrowseResultsRenderer": [
+                    "tabs": [[
+                        "tabRenderer": [
+                            "content": [
+                                "sectionListRenderer": [
+                                    "contents": [[
+                                        "lockupViewModel": [
+                                            "contentId": "vidLockup01",
+                                            "contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
+                                            "contentImage": [
+                                                "thumbnailViewModel": [
+                                                    "image": [
+                                                        "sources": [
+                                                            ["url": "https://i.ytimg.com/vi/vidLockup01/default.jpg", "width": 120],
+                                                            ["url": "//i.ytimg.com/vi/vidLockup01/maxres.jpg", "width": 1280]
+                                                        ]
+                                                    ],
+                                                    "overlays": [[
+                                                        "thumbnailOverlayBadgeViewModel": [
+                                                            "thumbnailBadges": [[
+                                                                "thumbnailBadgeViewModel": ["text": "4:12"]
+                                                            ]]
+                                                        ]
+                                                    ]]
+                                                ]
+                                            ],
+                                            "metadata": [
+                                                "lockupMetadataViewModel": [
+                                                    "title": ["content": "Midnight City"],
+                                                    "metadata": [
+                                                        "contentMetadataViewModel": [
+                                                            "metadataRows": [[
+                                                                "metadataParts": [
+                                                                    ["text": ["content": "M83"]],
+                                                                    ["text": ["content": "1.2M views"]]
+                                                                ]
+                                                            ]]
+                                                        ]
+                                                    ]
+                                                ]
+                                            ]
+                                        ]
+                                    ]]
+                                ]
+                            ]
+                        ]
+                    ]]
+                ]
+            ]
+        ]
+
+        let transport = MockCloudTransport { request in
+            let url = request.url!.absoluteString
+            XCTAssertFalse(url.contains("sw.js_data"), "/browse must not call sw.js_data")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "SOCS=CAI")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-YouTube-Client-Name"), "67")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-YouTube-Client-Version"), "1.20260707.12.00")
+            let body = try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any]
+            XCTAssertEqual(body?["browseId"] as? String, "MPREb_album12345")
+            return HTTPResponseData(
+                statusCode: 200,
+                headers: [:],
+                data: try JSONSerialization.data(withJSONObject: lockupPayload),
+                finalURL: request.url
+            )
+        }
+
+        let client = YouTubeClient(transport: transport)
+        let result = try await client.fetchPlaylist(sourceURL: "https://music.youtube.com/browse/MPREb_album12345", cookie: nil)
+        XCTAssertEqual(result.title, "Night Drive Album")
+        XCTAssertEqual(result.tracks.count, 1)
+        XCTAssertEqual(result.tracks[0].remoteTrackID, "vidLockup01")
+        XCTAssertEqual(result.tracks[0].title, "Midnight City")
+        XCTAssertEqual(result.tracks[0].artist, "M83")
+        XCTAssertEqual(result.tracks[0].album, "Night Drive Album")
+        XCTAssertEqual(result.tracks[0].duration, 252, accuracy: 0.1)
+        XCTAssertEqual(result.tracks[0].artworkURL, "https://i.ytimg.com/vi/vidLockup01/maxres.jpg")
+    }
+
+    func testYouTubeMixNextPlaylistAndHTMLAndSingleVideoFallbacks() async throws {
+        // 1. RD mix hits /youtubei/v1/next first and parses playlistPanelVideoRenderer
+        let mixTransport = MockCloudTransport { request in
+            let url = request.url!.absoluteString
+            XCTAssertTrue(url.contains("/youtubei/v1/next"))
+            XCTAssertEqual(request.value(forHTTPHeaderField: "X-YouTube-Client-Name"), "1")
+            XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "SID=user_cookie")
+            let body = try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any]
+            XCTAssertEqual(body?["playlistId"] as? String, "RDdQw4w9WgXcQ")
+            XCTAssertEqual(body?["videoId"] as? String, "dQw4w9WgXcQ")
+            let payload: [String: Any] = [
+                "contents": [
+                    "twoColumnWatchNextResults": [
+                        "playlist": [
+                            "playlist": [
+                                "title": "My Mix",
+                                "contents": [[
+                                    "playlistPanelVideoRenderer": [
+                                        "videoId": "mixTrack001",
+                                        "title": ["simpleText": "Mix Song"],
+                                        "shortBylineText": ["runs": [["text": "Mix Artist"]]],
+                                        "lengthText": ["simpleText": "2:30"],
+                                        "thumbnail": ["thumbnails": [["url": "https://i.ytimg.com/vi/mix/hq.jpg"]]]
+                                    ]
+                                ]]
+                            ]
+                        ]
+                    ]
+                ]
+            ]
+            return HTTPResponseData(statusCode: 200, headers: [:], data: try JSONSerialization.data(withJSONObject: payload), finalURL: request.url)
+        }
+        let mixClient = YouTubeClient(transport: mixTransport)
+        let mixResult = try await mixClient.fetchPlaylist(sourceURL: "RDdQw4w9WgXcQ", cookie: "SID=user_cookie")
+        XCTAssertEqual(mixResult.title, "My Mix")
+        XCTAssertEqual(mixResult.tracks.count, 1)
+        XCTAssertEqual(mixResult.tracks[0].album, "My Mix")
+        XCTAssertEqual(mixResult.tracks[0].duration, 150, accuracy: 0.1)
+
+        // 2. HTML ytInitialData fallback when /browse returns empty or fails
+        let htmlJSON: [String: Any] = [
+            "header": ["pageHeaderRenderer": ["pageTitle": "HTML Fallback Mix"]],
+            "contents": [
+                "playlistVideoRenderer": [
+                    "videoId": "htmlVid0001",
+                    "title": ["runs": [["text": "HTML Song"]]],
+                    "shortBylineText": ["runs": [["text": "HTML Artist"]]],
+                    "lengthSeconds": "180"
+                ]
+            ]
+        ]
+        let htmlJSONString = String(data: try JSONSerialization.data(withJSONObject: htmlJSON), encoding: .utf8)!
+        let htmlTransport = MockCloudTransport { request in
+            let url = request.url!.absoluteString
+            if url.contains("/youtubei/v1/browse") {
+                return HTTPResponseData(statusCode: 403, headers: [:], data: Data(), finalURL: request.url)
+            }
+            if url.contains("https://www.youtube.com/playlist?list=PLhtmlfallback1") {
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "SOCS=CAI")
+                let html = "<html><script>var ytInitialData = \(htmlJSONString);</script></html>"
+                return HTTPResponseData(statusCode: 200, headers: ["Content-Type": "text/html"], data: Data(html.utf8), finalURL: request.url)
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: request.url)
+        }
+        let htmlClient = YouTubeClient(transport: htmlTransport)
+        let htmlResult = try await htmlClient.fetchPlaylist(sourceURL: "https://www.youtube.com/playlist?list=PLhtmlfallback1", cookie: nil)
+        XCTAssertEqual(htmlResult.title, "HTML Fallback Mix")
+        XCTAssertEqual(htmlResult.tracks.count, 1)
+        XCTAssertEqual(htmlResult.tracks[0].album, "HTML Fallback Mix")
+
+        // 3. All playlist fetches fail + videoID present -> falls back to single video -> oembed fallback
+        let singleFallbackTransport = MockCloudTransport { request in
+            let url = request.url!.absoluteString
+            if url.contains("/youtubei/v1/browse") || url.contains("/youtubei/v1/next") || url.contains("/playlist?list=") || url.contains("/youtubei/v1/player") {
+                return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: request.url)
+            }
+            if url.contains("https://www.youtube.com/oembed") {
+                let oembed: [String: Any] = [
+                    "title": "OEmbed Song",
+                    "author_name": "OEmbed Artist",
+                    "thumbnail_url": "https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
+                ]
+                return HTTPResponseData(statusCode: 200, headers: [:], data: try JSONSerialization.data(withJSONObject: oembed), finalURL: request.url)
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: request.url)
+        }
+        let singleFallbackClient = YouTubeClient(transport: singleFallbackTransport)
+        let fallbackResult = try await singleFallbackClient.fetchPlaylist(
+            sourceURL: "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PLunavailable123",
+            cookie: nil
+        )
+        XCTAssertEqual(fallbackResult.remoteID, "dQw4w9WgXcQ")
+        XCTAssertEqual(fallbackResult.tracks.count, 1)
+        XCTAssertEqual(fallbackResult.tracks[0].title, "OEmbed Song")
+        XCTAssertEqual(fallbackResult.tracks[0].artist, "OEmbed Artist")
+    }
+
+    func testYouTubeVisitorDataVisionOSRetryAnd1MB403WallProbe() async throws {
+        let visitorCallCount = NSLock()
+        var swCalls = 0
+
+        let transport = MockCloudTransport { request in
+            let url = request.url!.absoluteString
+            if url.contains("sw.js_data") {
+                let count = visitorCallCount.withLock { swCalls += 1; return swCalls }
+                let visitor = count == 1 ? "CgFirstVisitorData123456" : "CgFreshVisitorData789012"
+                let body = ")]}'\n[[\"visitor\",\"\(visitor)\"]]"
+                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(body.utf8), finalURL: request.url)
+            }
+            if url.contains("/youtubei/v1/player") {
+                let body = try JSONSerialization.jsonObject(with: request.httpBody ?? Data()) as? [String: Any]
+                let clientDict = (body?["context"] as? [String: Any])?["client"] as? [String: Any]
+                let clientName = clientDict?["clientName"] as? String
+                let visitor = clientDict?["visitorData"] as? String
+
+                if clientName == "VISIONOS" {
+                    XCTAssertNil(body?["params"])
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "X-YouTube-Client-Name"), "101")
+                    XCTAssertEqual(request.value(forHTTPHeaderField: "X-Goog-Visitor-Id"), visitor)
+                    if visitor == "CgFirstVisitorData123456" {
+                        let loginReq: [String: Any] = ["playabilityStatus": ["status": "LOGIN_REQUIRED"]]
+                        return HTTPResponseData(statusCode: 200, headers: [:], data: try JSONSerialization.data(withJSONObject: loginReq), finalURL: request.url)
+                    }
+                    let okPayload: [String: Any] = [
+                        "streamingData": [
+                            "adaptiveFormats": [
+                                [
+                                    "itag": 140,
+                                    "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
+                                    "bitrate": 128000,
+                                    "contentLength": "3500000",
+                                    "url": "https://cdn.example/vision-1mb-wall"
+                                ],
+                                [
+                                    "itag": 139,
+                                    "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
+                                    "bitrate": 48000,
+                                    "contentLength": "1500000",
+                                    "url": "https://cdn.example/vision-good?expire=1900000000"
+                                ]
+                            ]
+                        ]
+                    ]
+                    return HTTPResponseData(statusCode: 200, headers: [:], data: try JSONSerialization.data(withJSONObject: okPayload), finalURL: request.url)
+                }
+                return HTTPResponseData(statusCode: 403, headers: [:], data: Data(), finalURL: request.url)
+            }
+            if url.contains("vision-1mb-wall") {
+                let range = request.value(forHTTPHeaderField: "Range")
+                if range == "bytes=0-1023" {
+                    return HTTPResponseData(statusCode: 206, headers: ["Content-Type": "audio/mp4"], data: Data([0x01]), finalURL: request.url)
+                }
+                if range == "bytes=1048576-1049599" {
+                    return HTTPResponseData(statusCode: 403, headers: [:], data: Data(), finalURL: request.url)
+                }
+            }
+            if url.contains("vision-good") {
+                return HTTPResponseData(statusCode: 206, headers: ["Content-Type": "audio/mp4"], data: Data([0x02]), finalURL: request.url)
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: request.url)
+        }
+
+        let client = YouTubeClient(transport: transport)
+        let stream = try await client.resolveStream(videoID: "vid00000099", cookie: nil)
+        XCTAssertEqual(stream.url.absoluteString, "https://cdn.example/vision-good?expire=1900000000")
+        XCTAssertEqual(stream.headers["Range"], "bytes=0-")
+        XCTAssertEqual(visitorCallCount.withLock { swCalls }, 2)
     }
 
     // MARK: - Bilibili JSON Parsing & Resolution
@@ -632,5 +910,364 @@ final class CloudSourcesTests: XCTestCase {
         XCTAssertEqual(first, second)
         XCTAssertEqual(first.pathExtension, "m4a")
         XCTAssertEqual(downloadCount.withLock { downloads }, 1)
+    }
+
+    // MARK: - Google Drive URL Parsing, Share Extraction & ResourceKey
+
+    func testGoogleDriveURLParsingAndShareTextExtraction() {
+        XCTAssertEqual(
+            GoogleDriveClient.parse("https://drive.google.com/drive/folders/1AbCdEfGhIjK?usp=sharing"),
+            .folder(id: "1AbCdEfGhIjK", resourceKey: nil)
+        )
+        XCTAssertEqual(
+            GoogleDriveClient.parse("https://drive.google.com/drive/u/0/folders/1AbCdEfGhIjK?resourcekey=0-rkAlpha123"),
+            .folder(id: "1AbCdEfGhIjK", resourceKey: "0-rkAlpha123")
+        )
+        XCTAssertEqual(
+            GoogleDriveClient.parse("https://drive.google.com/drive/mobile/folders/1MobileFolderId"),
+            .folder(id: "1MobileFolderId", resourceKey: nil)
+        )
+        XCTAssertEqual(
+            GoogleDriveClient.parse("https://drive.google.com/embeddedfolderview?id=1EmbFolderId#list"),
+            .folder(id: "1EmbFolderId", resourceKey: nil)
+        )
+        XCTAssertEqual(
+            GoogleDriveClient.parse("https://drive.google.com/folderview?id=1ViewFolderId&resourcekey=0-rkView"),
+            .folder(id: "1ViewFolderId", resourceKey: "0-rkView")
+        )
+        XCTAssertEqual(
+            GoogleDriveClient.parse("https://drive.google.com/file/d/1AudioFileId/view?usp=drive_link"),
+            .file(id: "1AudioFileId", resourceKey: nil)
+        )
+        XCTAssertEqual(
+            GoogleDriveClient.parse("https://drive.google.com/u/1/file/d/1AudioFileId/preview?resourcekey=0-rkFile"),
+            .file(id: "1AudioFileId", resourceKey: "0-rkFile")
+        )
+        XCTAssertEqual(
+            GoogleDriveClient.parse("https://drive.google.com/file/d/1AudioFileId/edit"),
+            .file(id: "1AudioFileId", resourceKey: nil)
+        )
+        XCTAssertEqual(
+            GoogleDriveClient.parse("https://drive.google.com/uc?id=1UcFileId&export=download"),
+            .file(id: "1UcFileId", resourceKey: nil)
+        )
+        XCTAssertEqual(
+            GoogleDriveClient.parse("https://drive.usercontent.google.com/download?id=1UserContentId&export=download&resourcekey=0-rkUc"),
+            .file(id: "1UserContentId", resourceKey: "0-rkUc")
+        )
+        XCTAssertEqual(
+            GoogleDriveClient.parse("https://drive.google.com/open?id=1OpenTargetId&resourcekey=0-rkOpen"),
+            .open(id: "1OpenTargetId", resourceKey: "0-rkOpen")
+        )
+
+        let shareText = "专辑分享【无损音乐】https://drive.google.com/drive/folders/1ShareFld?usp=sharing&resourcekey=0-rkShare。"
+        XCTAssertEqual(
+            CloudSourceInput.extract(from: shareText),
+            "https://drive.google.com/drive/folders/1ShareFld?usp=sharing&resourcekey=0-rkShare"
+        )
+        XCTAssertEqual(CloudSourceInput.classify(shareText), .cloudGoogleDrive)
+        XCTAssertEqual(
+            GoogleDriveClient.parse(shareText),
+            .folder(id: "1ShareFld", resourceKey: "0-rkShare")
+        )
+        XCTAssertNil(GoogleDriveClient.parse("https://example.com/drive/folders/1AbCdEfGhIjK"))
+    }
+
+    // MARK: - Google Drive Folder Listing, Recursion & Fallback
+
+    func testGoogleDriveFolderIVDParsingRecursionAndFiltering() async throws {
+        func jsEscapedIVD(_ rawJSON: String) -> String {
+            rawJSON
+                .replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\x22")
+                .replacingOccurrences(of: "[", with: "\\x5b")
+                .replacingOccurrences(of: "]", with: "\\x5d")
+        }
+
+        let rootIVD = jsEscapedIVD("""
+        [[
+          ["file_root_mp3",["fld_root"],"01 - Intro.mp3","audio/mpeg"],
+          ["file_pdf_ignored",["fld_root"],"booklet.pdf","application/pdf"],
+          ["file_noext_mime",["fld_root"],"Hidden Track","audio/flac", "0-rkHiddenFlac"],
+          ["fld_sub",["fld_root"],"Disc 2","application/vnd.google-apps.folder"]
+        ]]
+        """)
+        let subIVD = jsEscapedIVD("""
+        [[
+          ["file_sub_wav",["fld_sub"],"02 - Bonus.wav","audio/wav"],
+          ["fld_root",["fld_sub"],"Back Cycle","application/vnd.google-apps.folder"]
+        ]]
+        """)
+
+        let transport = MockCloudTransport { request in
+            let url = request.url!.absoluteString
+            if url.contains("/drive/folders/fld_root") {
+                XCTAssertTrue(url.contains("resourcekey=0-rkRoot"))
+                let html = """
+                <html><head><title>OST Collection - Google Drive</title></head>
+                <body><script>window['_DRIVE_ivd'] = '\(rootIVD)';</script></body></html>
+                """
+                return HTTPResponseData(statusCode: 200, headers: ["Content-Type": "text/html"], data: Data(html.utf8), finalURL: request.url)
+            }
+            if url.contains("/drive/folders/fld_sub") {
+                let html = """
+                <html><head><title>Disc 2 - Google Drive</title></head>
+                <body><script>window._DRIVE_ivd = '\(subIVD)';</script></body></html>
+                """
+                return HTTPResponseData(statusCode: 200, headers: ["Content-Type": "text/html"], data: Data(html.utf8), finalURL: request.url)
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: request.url)
+        }
+
+        let service = LiveCloudService(transport: transport)
+        let result = try await service.fetchPlaylist(
+            sourceURL: "https://drive.google.com/drive/folders/fld_root?resourcekey=0-rkRoot",
+            cookie: nil
+        )
+
+        XCTAssertEqual(result.kind, .cloudGoogleDrive)
+        XCTAssertEqual(result.remoteID, "fld_root")
+        XCTAssertEqual(result.title, "OST Collection")
+        XCTAssertEqual(result.tracks.count, 3)
+
+        XCTAssertEqual(result.tracks[0].remoteTrackID, "file_root_mp3")
+        XCTAssertEqual(result.tracks[0].relativePath, "gdrive/file_root_mp3.mp3")
+        XCTAssertEqual(result.tracks[0].title, "01 - Intro")
+        XCTAssertEqual(result.tracks[0].album, "OST Collection")
+        XCTAssertEqual(result.tracks[0].artist, "Google Drive")
+
+        XCTAssertEqual(result.tracks[1].remoteTrackID, "file_noext_mime#0-rkHiddenFlac")
+        XCTAssertEqual(result.tracks[1].relativePath, "gdrive/file_noext_mime.flac")
+        XCTAssertEqual(result.tracks[1].title, "Hidden Track")
+        XCTAssertEqual(result.tracks[1].album, "OST Collection")
+
+        XCTAssertEqual(result.tracks[2].remoteTrackID, "file_sub_wav")
+        XCTAssertEqual(result.tracks[2].relativePath, "gdrive/file_sub_wav.wav")
+        XCTAssertEqual(result.tracks[2].title, "02 - Bonus")
+        XCTAssertEqual(result.tracks[2].album, "Disc 2")
+
+        // Verify LibraryStore wiring (albumArtist = "Google Drive", flat cloud folderContents)
+        let state = makeTempDir()
+        let store = await MainActor.run {
+            LibraryStore(
+                directory: state,
+                documentsURL: makeTempDir(),
+                reader: StubReader(),
+                artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
+                cloudFetcher: service,
+                artworkDownloader: { _ in nil }
+            )
+        }
+        try await store.addCloudRoot(sourceURL: "https://drive.google.com/drive/folders/fld_root?resourcekey=0-rkRoot")
+        let root = try await MainActor.run { try XCTUnwrap(store.roots.last) }
+        XCTAssertEqual(root.kind, .cloudGoogleDrive)
+        let contents = await MainActor.run { store.folderContents(root: root.id, path: "") }
+        XCTAssertTrue(contents.folders.isEmpty)
+        XCTAssertEqual(contents.tracks.count, 3)
+        XCTAssertTrue(contents.tracks.allSatisfy { $0.cloudSource == "gdrive" && $0.albumArtist == "Google Drive" })
+    }
+
+    func testGoogleDriveEmbeddedFolderViewFallbackAndHTMLEntities() async throws {
+        let transport = MockCloudTransport { request in
+            let url = request.url!.absoluteString
+            if url.contains("/drive/folders/fld_emb") {
+                let shellHTML = "<html><head><title>Jazz &amp; Blues - Google 云端硬盘</title></head><body></body></html>"
+                return HTTPResponseData(statusCode: 200, headers: ["Content-Type": "text/html"], data: Data(shellHTML.utf8), finalURL: request.url)
+            }
+            if url.contains("/embeddedfolderview") && url.contains("id=fld_emb") {
+                let embHTML = """
+                <html><body>
+                  <div class="flip-entry" id="entry-f1">
+                    <a href="https://drive.google.com/file/d/file_aiff/view?usp=drive_web&amp;resourcekey=0-rkAiff">
+                      <div class="flip-entry-title">Miles&#39; Tune &amp; Co.aiff</div>
+                    </a>
+                  </div>
+                  <div class="flip-entry" id="entry-img">
+                    <a href="https://drive.google.com/file/d/file_cover/view">
+                      <div class="flip-entry-title">cover.jpg</div>
+                    </a>
+                  </div>
+                </body></html>
+                """
+                return HTTPResponseData(statusCode: 200, headers: ["Content-Type": "text/html"], data: Data(embHTML.utf8), finalURL: request.url)
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: request.url)
+        }
+
+        let client = GoogleDriveClient(transport: transport)
+        let result = try await client.fetchPlaylist(sourceURL: "https://drive.google.com/drive/folders/fld_emb", cookie: nil)
+
+        XCTAssertEqual(result.title, "Jazz & Blues")
+        XCTAssertEqual(result.tracks.count, 1)
+        XCTAssertEqual(result.tracks[0].remoteTrackID, "file_aiff#0-rkAiff")
+        XCTAssertEqual(result.tracks[0].relativePath, "gdrive/file_aiff.aiff")
+        XCTAssertEqual(result.tracks[0].title, "Miles' Tune & Co")
+        XCTAssertEqual(result.tracks[0].album, "Jazz & Blues")
+    }
+
+    func testGoogleDriveSingleFileAndOpenAutoDetection() async throws {
+        let transport = MockCloudTransport { request in
+            let url = request.url!.absoluteString
+            if url.contains("/file/d/singleFlac/view") {
+                let html = """
+                <html><head><meta property="og:title" content="03 - Sunrise.flac - Google Drive"></head></html>
+                """
+                return HTTPResponseData(statusCode: 200, headers: ["Content-Type": "text/html"], data: Data(html.utf8), finalURL: request.url)
+            }
+            if url.contains("/open?id=openFile1") {
+                return HTTPResponseData(
+                    statusCode: 200,
+                    headers: ["Content-Type": "text/html"],
+                    data: Data("<html><title>Preview</title></html>".utf8),
+                    finalURL: URL(string: "https://drive.google.com/file/d/openFile1/view")!
+                )
+            }
+            if url.contains("/file/d/openFile1/view") {
+                return HTTPResponseData(
+                    statusCode: 200,
+                    headers: ["Content-Type": "text/html"],
+                    data: Data("<html><title>Open Track.m4a - Google Drive</title></html>".utf8),
+                    finalURL: request.url
+                )
+            }
+            if url.contains("/file/d/nonAudioPdf/view") {
+                return HTTPResponseData(
+                    statusCode: 200,
+                    headers: ["Content-Type": "text/html"],
+                    data: Data("<html><title>Manual.pdf - Google Drive</title></html>".utf8),
+                    finalURL: request.url
+                )
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: request.url)
+        }
+
+        let client = GoogleDriveClient(transport: transport)
+        let single = try await client.fetchPlaylist(sourceURL: "https://drive.google.com/file/d/singleFlac/view", cookie: nil)
+        XCTAssertEqual(single.kind, .cloudGoogleDrive)
+        XCTAssertEqual(single.remoteID, "singleFlac")
+        XCTAssertEqual(single.title, "03 - Sunrise")
+        XCTAssertEqual(single.tracks.count, 1)
+        XCTAssertEqual(single.tracks[0].relativePath, "gdrive/singleFlac.flac")
+
+        let opened = try await client.fetchPlaylist(sourceURL: "https://drive.google.com/open?id=openFile1", cookie: nil)
+        XCTAssertEqual(opened.tracks.first?.relativePath, "gdrive/openFile1.m4a")
+        XCTAssertEqual(opened.tracks.first?.title, "Open Track")
+
+        do {
+            _ = try await client.fetchPlaylist(sourceURL: "https://drive.google.com/file/d/nonAudioPdf/view", cookie: nil)
+            XCTFail("Expected non-audio error")
+        } catch let error as CloudSourceError {
+            guard case .apiError = error else {
+                return XCTFail("Expected apiError, got \(error)")
+            }
+        }
+    }
+
+    func testGoogleDriveStreamResolutionConfirmFormAndAccessErrors() async throws {
+        // 1. Virus-scan HTML form with uuid + confirm + resourcekey
+        let confirmHTML = """
+        <html><body>
+          <form id="download-form" action="https://drive.usercontent.google.com/download" method="get">
+            <input type="hidden" name="id" value="bigFlacId">
+            <input type="hidden" name="export" value="download">
+            <input type="hidden" name="confirm" value="t">
+            <input type="hidden" name="uuid" value="uuid-9988-7766">
+            <input type="hidden" name="at" value="tokenXYZ">
+            <input type="hidden" name="resourcekey" value="0-rkBig">
+          </form>
+        </body></html>
+        """
+
+        let transport = MockCloudTransport { request in
+            let url = request.url!.absoluteString
+            if url.contains("id=bigFlacId") && !url.contains("uuid=uuid-9988-7766") {
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Range"), "bytes=0-0")
+                XCTAssertEqual(request.value(forHTTPHeaderField: "Cookie"), "SID=testcookie")
+                return HTTPResponseData(
+                    statusCode: 200,
+                    headers: ["Content-Type": "text/html; charset=utf-8"],
+                    data: Data(confirmHTML.utf8),
+                    finalURL: request.url
+                )
+            }
+            if url.contains("id=bigFlacId") && url.contains("uuid=uuid-9988-7766") {
+                XCTAssertTrue(url.contains("at=tokenXYZ"))
+                XCTAssertTrue(url.contains("resourcekey=0-rkBig"))
+                return HTTPResponseData(
+                    statusCode: 206,
+                    headers: [
+                        "Content-Type": "audio/flac",
+                        "Content-Disposition": "attachment;filename*=UTF-8''Big%20Symphony.flac"
+                    ],
+                    data: Data([0x66, 0x4C]),
+                    finalURL: request.url
+                )
+            }
+            if url.contains("id=privateFile") {
+                return HTTPResponseData(
+                    statusCode: 200,
+                    headers: ["Content-Type": "text/html"],
+                    data: Data("<html><title>Sign in - Google Accounts</title></html>".utf8),
+                    finalURL: URL(string: "https://accounts.google.com/ServiceLogin")!
+                )
+            }
+            return HTTPResponseData(statusCode: 403, headers: [:], data: Data(), finalURL: request.url)
+        }
+
+        let service = LiveCloudService(transport: transport)
+        let track = Track(
+            id: "gdrive-1",
+            rootID: UUID(),
+            relativePath: "gdrive/bigFlacId.flac",
+            title: "Big Symphony",
+            artist: "Google Drive",
+            album: "Symphonies",
+            albumArtist: "Google Drive",
+            duration: 0,
+            fileSize: 0,
+            modified: Date(),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(),
+            cloudSource: "gdrive",
+            remoteTrackID: "bigFlacId#0-rkBig"
+        )
+        let root = LibraryRoot(id: track.rootID, name: "Symphonies", kind: .cloudGoogleDrive, bookmark: nil, cookie: "SID=testcookie")
+
+        let stream = try await service.resolveStream(track: track, root: root, forceRefresh: false)
+        XCTAssertTrue(stream.url.absoluteString.contains("uuid=uuid-9988-7766"))
+        XCTAssertEqual(stream.fileExtension, "flac")
+        XCTAssertEqual(stream.headers["Cookie"], "SID=testcookie")
+
+        // Cached on second call
+        let before = transport.requests.count
+        _ = try await service.resolveStream(track: track, root: root, forceRefresh: false)
+        XCTAssertEqual(transport.requests.count, before)
+
+        // Sign-in redirect produces clear share error
+        let privateTrack = Track(
+            id: "gdrive-priv",
+            rootID: root.id,
+            relativePath: "gdrive/privateFile.mp3",
+            title: "Private",
+            artist: "Google Drive",
+            album: "Private",
+            albumArtist: "Google Drive",
+            duration: 0,
+            fileSize: 0,
+            modified: Date(),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(),
+            cloudSource: "gdrive",
+            remoteTrackID: "privateFile"
+        )
+        do {
+            _ = try await service.resolveStream(track: privateTrack, root: root, forceRefresh: true)
+            XCTFail("Expected access denied error")
+        } catch let error as CloudSourceError {
+            guard case .apiError(let msg) = error else {
+                return XCTFail("Expected apiError, got \(error)")
+            }
+            XCTAssertTrue(msg.contains("Anyone with the link"))
+        }
     }
 }

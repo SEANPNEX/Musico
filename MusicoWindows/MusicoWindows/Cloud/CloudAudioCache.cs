@@ -121,6 +121,14 @@ public sealed class CloudAudioCache
                 .ConfigureAwait(false);
             resp.EnsureSuccessStatusCode();
 
+            string? mediaType = resp.Content.Headers.ContentType?.MediaType;
+            if (!string.IsNullOrWhiteSpace(mediaType) &&
+                (mediaType.Equals("text/html", StringComparison.OrdinalIgnoreCase) ||
+                 mediaType.Equals("application/xhtml+xml", StringComparison.OrdinalIgnoreCase)))
+            {
+                throw new InvalidOperationException("Cloud audio stream returned an HTML page instead of audio.");
+            }
+
             await using (var remote = await resp.Content.ReadAsStreamAsync(CancellationToken.None).ConfigureAwait(false))
             await using (var local = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true))
             {

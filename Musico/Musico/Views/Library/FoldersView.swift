@@ -69,14 +69,20 @@ struct FoldersView: View {
             }
         }
         .navigationTitle(L10n.tr("Folders"))
+        #if targetEnvironment(macCatalyst)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .navigationDestination(for: FolderRef.self) { FolderDetailView(ref: $0) }
         .refreshable { await library.rescan() }
+        .animation(.easeInOut(duration: 0.2), value: library.isScanning)
+        .animation(.easeInOut(duration: 0.2), value: library.roots.map(\.id))
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button(L10n.tr("Rescan"), systemImage: "arrow.clockwise") { Task { await library.rescan() } }
                     .disabled(library.isScanning)
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
+                #if !targetEnvironment(macCatalyst)
                 Menu {
                     ForEach(AppLanguage.allCases) { lang in
                         Button {
@@ -92,6 +98,7 @@ struct FoldersView: View {
                 } label: {
                     Label(L10n.tr("Language"), systemImage: "globe")
                 }
+                #endif
                 Button(L10n.tr("Add Cloud Folder"), systemImage: "icloud.and.arrow.down") {
                     showCloudSheet = true
                 }
@@ -155,11 +162,11 @@ struct FoldersView: View {
     @MainActor
     private static var hint: String {
         #if targetEnvironment(macCatalyst)
-        L10n.tr("Your Mac’s Music folder is included to start with. Add local folders or YouTube/Bilibili cloud playlists, or remove any you don’t want.")
+        L10n.tr("Your Mac’s Music folder is included to start with. Add local folders or YouTube, Bilibili, or Google Drive cloud sources, or remove any you don’t want.")
         #else
         L10n.tr(isPad
-            ? "Add a folder from Files, link a YouTube or Bilibili playlist, or copy music into the Musico folder in Files › On My iPad."
-            : "Add a folder from Files, link a YouTube or Bilibili playlist, or copy music into the Musico folder in Files › On My iPhone.")
+            ? "Add a folder from Files, link a YouTube, Bilibili, or Google Drive source, or copy music into the Musico folder in Files › On My iPad."
+            : "Add a folder from Files, link a YouTube, Bilibili, or Google Drive source, or copy music into the Musico folder in Files › On My iPhone.")
         #endif
     }
 
@@ -177,6 +184,15 @@ struct FoldersView: View {
         case .picked: "folder.fill"
         case .cloudYouTube: "play.rectangle.fill"
         case .cloudBilibili: "play.tv.fill"
+        case .cloudGoogleDrive: "externaldrive.fill.badge.icloud"
+        }
+    }
+
+    private static func iconColor(for root: LibraryRoot) -> Color {
+        switch root.kind {
+        case .cloudYouTube, .cloudBilibili: .red
+        case .cloudGoogleDrive: .blue
+        case .picked, .appFolder: .accentColor
         }
     }
 
@@ -187,11 +203,14 @@ struct FoldersView: View {
             return "YouTube"
         case .cloudBilibili:
             return "Bilibili"
+        case .cloudGoogleDrive:
+            return L10n.tr("Google Drive")
         case .picked, .appFolder:
             guard root.isCloudTrackedLocal else { return nil }
             switch root.linkedCloudKind {
             case .cloudYouTube: return L10n.tr("YouTube · Local")
             case .cloudBilibili: return L10n.tr("Bilibili · Local")
+            case .cloudGoogleDrive: return L10n.tr("Google Drive · Local")
             default: return L10n.tr("Cloud · Local")
             }
         }
@@ -207,7 +226,7 @@ struct FoldersView: View {
         NavigationLink(value: FolderRef(root: root.id, path: "")) {
             HStack(spacing: 12) {
                 Image(systemName: Self.iconName(for: root))
-                    .foregroundStyle(root.kind.isCloud ? Color.red : Color.accentColor)
+                    .foregroundStyle(Self.iconColor(for: root))
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
@@ -310,14 +329,14 @@ struct AddCloudFolderSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField(L10n.tr("YouTube or Bilibili URL or ID"), text: $urlText)
+                    TextField(L10n.tr("YouTube, Bilibili, or Google Drive URL or ID"), text: $urlText)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
                 } header: {
-                    Text(L10n.tr("Playlist or Video Link"))
+                    Text(L10n.tr("Playlist, Folder, or Video Link"))
                 } footer: {
-                    Text(L10n.tr("Examples: youtube.com/playlist?list=…, music.youtube.com/playlist?list=…, youtu.be/…, bilibili.com/video/BV…, space.bilibili.com/…/favlist?fid=…, b23.tv/…"))
+                    Text(L10n.tr("Examples: youtube.com/playlist?list=…, bilibili.com/video/BV…, b23.tv/…, drive.google.com/drive/folders/…, drive.google.com/file/d/…"))
                 }
 
                 Section {
@@ -328,7 +347,7 @@ struct AddCloudFolderSheet: View {
                 } header: {
                     Text(L10n.tr("Authentication"))
                 } footer: {
-                    Text(L10n.tr("Public playlists work without signing in. Add a Cookie only for private playlists or higher Bilibili audio quality."))
+                    Text(L10n.tr("Public links work without signing in. Add a Cookie only for private playlists, restricted Google Drive links, or higher Bilibili audio quality."))
                 }
 
                 if let errorMessage {

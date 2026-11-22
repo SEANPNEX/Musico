@@ -36,25 +36,43 @@ struct RootView: View {
         GeometryReader { proxy in
             let layout = fixedLayout ?? AppLayout.resolve(width: proxy.size.width, compactWidth: sizeClass == .compact,
                                                           phone: UIDevice.current.userInterfaceIdiom == .phone)
-            Group {
-                switch layout {
-                case .tabs: tabs
-                case .sidebar: SidebarRootView {
-                    localShowPlayer = true
-                    navigation.showPlayer = true
+            ZStack {
+                Group {
+                    switch layout {
+                    case .tabs:
+                        tabs
+                    case .sidebar:
+                        SidebarRootView {
+                            withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
+                                localShowPlayer = true
+                                navigation.showPlayer = true
+                            }
+                        }
+                    }
                 }
+                if layout == .sidebar && localShowPlayer {
+                    fullPlayerView {
+                        withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
+                            localShowPlayer = false
+                            navigation.showPlayer = false
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(.background)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .zIndex(1)
                 }
             }
-            // The full player is a sheet over the tabs and fills the window over the sidebar layout.
+            .animation(.spring(response: 0.36, dampingFraction: 0.88), value: localShowPlayer && layout == .sidebar)
+            // The full player is a sheet over the tabs and an in-window overlay over the sidebar layout.
             .sheet(isPresented: playerShown(when: layout == .tabs)) {
                 if #available(iOS 18.0, macCatalyst 18.0, *) {
-                    fullPlayer
+                    fullPlayerView()
                         .navigationTransition(.zoom(sourceID: "nowPlaying", in: playerTransition))
                 } else {
-                    fullPlayer
+                    fullPlayerView()
                 }
             }
-            .fullScreenCover(isPresented: playerShown(when: layout == .sidebar)) { fullPlayer }
         }
         .onAppear {
             if !didApplyInitialPlayerState {
@@ -141,8 +159,8 @@ struct RootView: View {
 
     // The stores are handed over explicitly: on the Mac the player is first evaluated before it
     // inherits them from this view, and reading a missing store stops the app.
-    private var fullPlayer: some View {
-        FullPlayerView()
+    private func fullPlayerView(onClose: (() -> Void)? = nil) -> some View {
+        FullPlayerView(onClose: onClose)
             .environment(player)
             .environment(library)
             .environment(queues)

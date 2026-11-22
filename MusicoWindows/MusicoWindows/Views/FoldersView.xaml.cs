@@ -194,6 +194,7 @@ public partial class FoldersView : UserControl
                     RootKind.AppFolder => "\uE8D6",
                     RootKind.CloudYouTube => "\uE753",
                     RootKind.CloudBilibili => "\uE753",
+                    RootKind.CloudGoogleDrive => "\uE753",
                     _ => "\uE8B7"
                 },
                 FontFamily = (FontFamily)FindResource("Win10GlyphFont"),
@@ -229,7 +230,12 @@ public partial class FoldersView : UserControl
                 badge.SetResourceReference(Border.BackgroundProperty, "AccentSubtleBrush");
                 badge.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
 
-                string cloudName = root.EffectiveCloudKind == RootKind.CloudBilibili ? "Bilibili" : "YouTube";
+                string cloudName = root.EffectiveCloudKind switch
+                {
+                    RootKind.CloudBilibili => "Bilibili",
+                    RootKind.CloudGoogleDrive => "Google Drive",
+                    _ => "YouTube"
+                };
                 var badgeText = new TextBlock
                 {
                     Text = root.IsCloud ? cloudName : L.Format("Folders_CloudLocalBadge", cloudName),

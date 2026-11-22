@@ -11,6 +11,7 @@ public static class CloudSources
 {
     public const string YouTube = "youtube";
     public const string Bilibili = "bilibili";
+    public const string GoogleDrive = "gdrive";
 }
 
 public sealed record CloudPlaylistItem(
@@ -20,7 +21,8 @@ public sealed record CloudPlaylistItem(
     string Album,
     double DurationSeconds,
     string? ArtworkUrl,
-    int TrackNumber);
+    int TrackNumber,
+    string? FileExtension = null);
 
 public sealed record CloudPlaylistResult(
     RootKind Kind,
@@ -41,14 +43,14 @@ public static class CloudUrlClassifier
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly Regex SchemelessCloudUrlRegex = new(
-        @"(?:[A-Za-z0-9-]+\.)*(?:youtube\.com|youtu\.be|bilibili\.com|b23\.tv)/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
+        @"(?:[A-Za-z0-9-]+\.)*(?:youtube\.com|youtu\.be|bilibili\.com|b23\.tv|drive\.google\.com|drive\.usercontent\.google\.com)/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly char[] TrailingUrlPunctuation =
         [')', ']', '】', '」', '》', '。', ',', '.', '\'', '"', '）', '］', '”', '’', '>', ';', '；', '！', '、', '!', '?'];
 
     /// <summary>
-    /// Extracts an http(s)://... URL (or scheme-less YouTube/Bilibili URL) from pasted share text,
+    /// Extracts an http(s)://... URL (or scheme-less YouTube/Bilibili/Google Drive URL) from pasted share text,
     /// stripping surrounding title/description text and trailing punctuation while preserving bare IDs.
     /// </summary>
     public static string ExtractCloudUrl(string? input)
@@ -109,7 +111,10 @@ public static class CloudUrlClassifier
         return host.Contains("youtube.com", StringComparison.Ordinal) ||
                host.Contains("youtu.be", StringComparison.Ordinal) ||
                host.Contains("bilibili.com", StringComparison.Ordinal) ||
-               host.Contains("b23.tv", StringComparison.Ordinal);
+               host.Contains("b23.tv", StringComparison.Ordinal) ||
+               host.Equals("drive.google.com", StringComparison.Ordinal) ||
+               host.EndsWith(".drive.google.com", StringComparison.Ordinal) ||
+               host.Equals("drive.usercontent.google.com", StringComparison.Ordinal);
     }
 
     public static RootKind Classify(string input)
@@ -117,10 +122,15 @@ public static class CloudUrlClassifier
         string extracted = ExtractCloudUrl(input);
         if (string.IsNullOrWhiteSpace(extracted))
         {
-            throw new ArgumentException("Enter a YouTube or Bilibili URL or playlist ID.", nameof(input));
+            throw new ArgumentException("Enter a YouTube, Bilibili, or Google Drive URL or playlist ID.", nameof(input));
         }
 
         string lower = extracted.ToLowerInvariant();
+
+        if (lower.Contains("drive.google.com") || lower.Contains("drive.usercontent.google.com"))
+        {
+            return RootKind.CloudGoogleDrive;
+        }
 
         if (lower.Contains("bilibili.com") || lower.Contains("b23.tv") ||
             extracted.StartsWith("BV", StringComparison.OrdinalIgnoreCase) && extracted.Length >= 12 && !extracted.Contains('/') ||
@@ -136,7 +146,7 @@ public static class CloudUrlClassifier
             return RootKind.CloudYouTube;
         }
 
-        throw new ArgumentException("Unsupported URL. Paste a YouTube or Bilibili playlist or video link.");
+        throw new ArgumentException("Unsupported URL. Paste a YouTube, Bilibili, or Google Drive link.");
     }
 }
 

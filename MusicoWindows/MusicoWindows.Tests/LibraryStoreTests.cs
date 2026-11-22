@@ -454,4 +454,77 @@ public sealed class LibraryStoreTests
         Assert.Null(decoded.ExcludedPaths);
         Assert.False(decoded.IsExcluded("Any/song.mp3"));
     }
+
+    [Fact]
+    public async Task AddCloudRootAndResyncSupportGoogleDriveWithProxyAndExtensions()
+    {
+        bool failNetwork = false;
+        bool includeSecondTrack = false;
+
+        var handler = new DelegatingStubHandler(req =>
+        {
+            if (failNetwork)
+            {
+                throw new HttpRequestException("Offline");
+            }
+
+            string url = req.RequestUri!.AbsoluteUri;
+            if (url.Contains("/drive/folders/gdRoot123", StringComparison.Ordinal))
+            {
+                Assert.True(req.Headers.TryGetValues("Cookie", out var cookies));
+                Assert.Contains("NID=test", cookies);
+
+                string rows = includeSecondTrack
+                    ? """["gd_f1",["gdRoot123"],"Alpha.flac","audio/flac"],["gd_f2",["gdRoot123"],"Beta.mp3","audio/mpeg"]"""
+                    : """["gd_f1",["gdRoot123"],"Alpha.flac","audio/flac"]""";
+                string html = $"<html><head><title>Drive OST - Google Drive</title></head><body><script>window['_DRIVE_ivd'] = '[[{rows}]]';</script></body></html>";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(html, Encoding.UTF8, "text/html")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var gdrive = new GoogleDriveClient(handler);
+        var store = new LibraryStore(
+            _stateDir,
+            _musicDir,
+            _reader,
+            new ArtworkCache(Path.Combine(_stateDir, "Artwork")),
+            googleDriveClient: gdrive,
+            artworkHandler: handler);
+
+        var root = await store.AddCloudRootAsync(
+            "Shared OST https://drive.google.com/drive/folders/gdRoot123?usp=sharing】",
+            cookie: "NID=test",
+            proxyUrl: "7890");
+
+        Assert.Equal(RootKind.CloudGoogleDrive, root.Kind);
+        Assert.Equal("Drive OST", root.Name);
+        Assert.Equal("http://127.0.0.1:7890", root.ProxyUrl);
+        Assert.Equal("NID=test", root.Cookie);
+        Assert.True(store.IsAvailable(root));
+
+        var track = Assert.Single(store.Tracks);
+        Assert.True(track.IsCloud);
+        Assert.Equal(CloudSources.GoogleDrive, track.CloudSource);
+        Assert.Equal("Google Drive", track.AlbumArtist);
+        Assert.Equal("Drive OST", track.Album);
+        Assert.Equal("Alpha", track.Title);
+        Assert.EndsWith(".flac", track.RelativePath);
+
+        // Transient failure keeps existing Google Drive tracks intact.
+        failNetwork = true;
+        await store.RescanAsync();
+        Assert.Single(store.Tracks);
+
+        // Recovery + new remote track picked up on rescan.
+        failNetwork = false;
+        includeSecondTrack = true;
+        await store.RescanAsync();
+        Assert.Equal(2, store.Tracks.Count);
+        Assert.Contains(store.Tracks, t => t.Title == "Beta" && t.RelativePath.EndsWith(".mp3", StringComparison.Ordinal));
+    }
 }

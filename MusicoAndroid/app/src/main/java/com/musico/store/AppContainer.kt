@@ -8,6 +8,7 @@ import com.musico.cloud.BilibiliClient
 import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudHttpClient
 import com.musico.cloud.CloudStreamResolver
+import com.musico.cloud.GoogleDriveClient
 import com.musico.cloud.UrlConnectionCloudHttpClient
 import com.musico.cloud.YouTubeClient
 import com.musico.core.AndroidMetadataReader
@@ -36,7 +37,8 @@ class AppContainer(context: Context) {
     val cloudHttpClient: CloudHttpClient = UrlConnectionCloudHttpClient()
     val youTubeClient: YouTubeClient = YouTubeClient(cloudHttpClient)
     val bilibiliClient: BilibiliClient = BilibiliClient(cloudHttpClient)
-    val cloudStreamResolver: CloudStreamResolver = CloudStreamResolver(youTubeClient, bilibiliClient)
+    val googleDriveClient: GoogleDriveClient = GoogleDriveClient(cloudHttpClient)
+    val cloudStreamResolver: CloudStreamResolver = CloudStreamResolver(youTubeClient, bilibiliClient, googleDriveClient)
     val cloudExporter: CloudExporter = CloudExporter(
         context = appContext,
         cloudResolver = cloudStreamResolver,
@@ -50,6 +52,7 @@ class AppContainer(context: Context) {
         cloudHttpClient = cloudHttpClient,
         youTubeClient = youTubeClient,
         bilibiliClient = bilibiliClient,
+        googleDriveClient = googleDriveClient,
     )
     val queueStore: QueueStore = QueueStore(stateDir)
     val historyStore: PlayHistoryStore = PlayHistoryStore(stateDir)

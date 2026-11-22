@@ -10,10 +10,11 @@ enum class RootKind {
     APP_FOLDER,
     CLOUD_YOUTUBE,
     CLOUD_BILIBILI,
+    CLOUD_GOOGLE_DRIVE,
     ;
 
     val isCloud: Boolean
-        get() = this == CLOUD_YOUTUBE || this == CLOUD_BILIBILI
+        get() = this == CLOUD_YOUTUBE || this == CLOUD_BILIBILI || this == CLOUD_GOOGLE_DRIVE
 }
 
 @Serializable

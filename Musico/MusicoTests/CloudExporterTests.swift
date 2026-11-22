@@ -322,6 +322,115 @@ final class CloudExporterTests: XCTestCase {
         XCTAssertEqual(Set(updatedManifest.tracks.keys), ["v1", "v2", "v3"])
         XCTAssertTrue(FileManager.default.fileExists(atPath: savedFolder.appendingPathComponent("Song Three.m4a").path))
     }
+
+    @MainActor
+    func testExportAndIncrementalUpdateForGoogleDrive() async throws {
+        let driveRoot = LibraryRoot(
+            id: UUID(),
+            name: "Drive Audio",
+            kind: .cloudGoogleDrive,
+            bookmark: nil,
+            sourceURL: "https://drive.google.com/drive/folders/fld_drive_1?resourcekey=0-rk",
+            remoteID: "fld_drive_1"
+        )
+        let t1 = Track(
+            id: Track.makeID(rootID: driveRoot.id, relativePath: "gdrive/f1.flac"),
+            rootID: driveRoot.id,
+            relativePath: "gdrive/f1.flac",
+            title: "Lossless One",
+            artist: "Google Drive",
+            album: "Drive Audio",
+            albumArtist: "Google Drive",
+            trackNumber: nil,
+            discNumber: nil,
+            duration: 0,
+            fileSize: 0,
+            modified: Date(timeIntervalSince1970: 0),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(timeIntervalSince1970: 0),
+            artworkKey: nil,
+            cloudSource: "gdrive",
+            remoteTrackID: "f1#0-rk",
+            remoteArtworkURL: nil
+        )
+
+        let downloads = LockBox<[String]>([])
+        let resolver = StubCloudStreamResolver { track, _, _ in
+            let id = (track.remoteTrackID ?? "x").split(separator: "#").first.map(String.init) ?? "x"
+            let ext = id == "f1" ? "flac" : "mp3"
+            return CloudStreamResult(
+                url: URL(string: "https://drive.usercontent.google.com/download/\(id).\(ext)")!,
+                headers: [:],
+                fileExtension: ext,
+                expiresAt: Date().addingTimeInterval(600)
+            )
+        }
+        let cache = CloudAudioCache(
+            directory: makeTempDir(),
+            maxBytes: 50_000_000,
+            resolver: resolver,
+            downloader: { url, _ in
+                downloads.withLock { $0.append(url.lastPathComponent) }
+                let tmp = makeTempDir().appendingPathComponent("dl.bin")
+                try Data("audio-\(url.lastPathComponent)".utf8).write(to: tmp)
+                return (tmp, 200, "audio/flac")
+            }
+        )
+
+        let parentDir = makeTempDir()
+        let summary = try await CloudExporter.exportPlaylist(
+            root: driveRoot,
+            tracks: [t1],
+            toParentFolder: parentDir,
+            folderName: "Drive Export",
+            cache: cache
+        )
+        XCTAssertEqual(summary.savedCount, 1)
+        XCTAssertEqual(summary.failedCount, 0)
+        let exportedFile = summary.destinationURL.appendingPathComponent("Lossless One.flac")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exportedFile.path))
+
+        let manifest = try XCTUnwrap(CloudExporter.loadManifest(in: summary.destinationURL))
+        XCTAssertEqual(manifest.cloudKind, .cloudGoogleDrive)
+        XCTAssertEqual(manifest.tracks["f1#0-rk"], "Lossless One.flac")
+
+        // Incremental update adds a new mp3 track while skipping existing f1#0-rk
+        struct DriveStubFetcher: CloudPlaylistFetching {
+            let result: CloudPlaylistResult
+            func fetchPlaylist(sourceURL: String, cookie: String?, kindHint: LibraryRoot.Kind?) async throws -> CloudPlaylistResult {
+                result
+            }
+        }
+        let fetcher = DriveStubFetcher(result: CloudPlaylistResult(
+            kind: .cloudGoogleDrive,
+            remoteID: "fld_drive_1",
+            title: "Drive Audio",
+            tracks: [
+                CloudTrackInfo(remoteTrackID: "f1#0-rk", relativePath: "gdrive/f1.flac", title: "Lossless One", artist: "Google Drive", album: "Drive Audio", trackNumber: nil, duration: 0, artworkURL: nil),
+                CloudTrackInfo(remoteTrackID: "f2", relativePath: "gdrive/f2.mp3", title: "New Track", artist: "Google Drive", album: "Drive Audio", trackNumber: nil, duration: 0, artworkURL: nil)
+            ]
+        ))
+
+        let stateDir = makeTempDir()
+        let store = LibraryStore(
+            directory: stateDir,
+            documentsURL: makeTempDir(),
+            reader: StubReader(),
+            artwork: ArtworkCache(directory: stateDir.appendingPathComponent("Artwork")),
+            cloudFetcher: fetcher
+        )
+        try await store.addRoot(url: summary.destinationURL)
+        let pickedRoot = try XCTUnwrap(store.roots.first { $0.kind == .picked })
+        XCTAssertEqual(pickedRoot.linkedCloudKind, .cloudGoogleDrive)
+
+        downloads.withLock { $0.removeAll() }
+        let update = try await store.updateTrackedLocalRoot(pickedRoot.id, cache: cache)
+        XCTAssertEqual(update.addedCount, 1)
+        XCTAssertEqual(update.skippedCount, 1)
+        XCTAssertEqual(update.failedCount, 0)
+        XCTAssertEqual(downloads.value, ["f2.mp3"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: summary.destinationURL.appendingPathComponent("New Track.mp3").path))
+    }
 }
 
 private final class LockBox<Value>: @unchecked Sendable {

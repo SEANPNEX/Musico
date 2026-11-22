@@ -20,6 +20,7 @@ import java.net.URL
 object CloudSource {
     const val YOUTUBE = "youtube"
     const val BILIBILI = "bilibili"
+    const val GOOGLE_DRIVE = "gdrive"
 }
 
 data class CloudTrackMetadata(
@@ -267,7 +268,8 @@ fun extractCloudSourceInput(raw: String): String {
     return matches.firstOrNull { url ->
         val lower = url.lowercase()
         lower.contains("youtube") || lower.contains("youtu.be") ||
-            lower.contains("bilibili") || lower.contains("b23.tv")
+            lower.contains("bilibili") || lower.contains("b23.tv") ||
+            lower.contains("drive.google.com") || lower.contains("drive.usercontent.google.com")
     } ?: matches.first()
 }
 

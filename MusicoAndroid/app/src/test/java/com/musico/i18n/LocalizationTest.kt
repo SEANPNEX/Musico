@@ -92,6 +92,7 @@ class LocalizationTest {
             "getLanguageSimplifiedChinese",
             "getBadgeYouTube",
             "getBadgeBilibili",
+            "getBadgeGoogleDrive",
         )
 
         val stringGetters = AppStrings::class.java.methods

@@ -91,6 +91,75 @@ struct MusicoApp: App {
                     }
                 }
             }
+
+            CommandMenu(L10n.tr("Library")) {
+                Button(L10n.tr("Find Songs")) {
+                    model.navigation.openSearchFocus()
+                }
+                .keyboardShortcut("f", modifiers: .command)
+
+                Button(L10n.tr("Rescan Library")) {
+                    Task { await model.library.rescan() }
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(model.library.isScanning)
+            }
+
+            CommandMenu(L10n.tr("View")) {
+                Button(L10n.tr("Folders")) { model.navigation.selectSidebar(.folders) }
+                    .keyboardShortcut("1", modifiers: .command)
+                Button(L10n.tr("Songs")) { model.navigation.selectSidebar(.songs) }
+                    .keyboardShortcut("2", modifiers: .command)
+                Button(L10n.tr("Albums")) { model.navigation.selectSidebar(.albums) }
+                    .keyboardShortcut("3", modifiers: .command)
+                Button(L10n.tr("Artists")) { model.navigation.selectSidebar(.artists) }
+                    .keyboardShortcut("4", modifiers: .command)
+                Button(L10n.tr("All Playlists")) { model.navigation.selectSidebar(.playlists) }
+                    .keyboardShortcut("5", modifiers: .command)
+                Button(L10n.tr("Queues")) { model.navigation.selectSidebar(.queues) }
+                    .keyboardShortcut("6", modifiers: .command)
+                Button(L10n.tr("Stats")) { model.navigation.selectSidebar(.stats) }
+                    .keyboardShortcut("7", modifiers: .command)
+            }
+
+            CommandMenu(L10n.tr("Playback")) {
+                Button(L10n.tr("Play or Pause")) {
+                    model.player.togglePlayPause()
+                }
+                .keyboardShortcut("p", modifiers: .command)
+                .disabled(model.player.currentTrack == nil)
+
+                Button(L10n.tr("Previous")) {
+                    model.player.previous()
+                }
+                .keyboardShortcut(.leftArrow, modifiers: .command)
+                .disabled(model.player.currentTrack == nil)
+
+                Button(L10n.tr("Next")) {
+                    model.player.next()
+                }
+                .keyboardShortcut(.rightArrow, modifiers: .command)
+                .disabled(model.player.currentTrack == nil)
+
+                Divider()
+
+                Button(L10n.tr("Shuffle")) {
+                    model.player.toggleShuffle()
+                }
+                .keyboardShortcut("s", modifiers: [.command, .shift])
+
+                Button(L10n.tr("Repeat")) {
+                    model.player.cycleRepeat()
+                }
+                .keyboardShortcut("r", modifiers: [.command, .shift])
+
+                Divider()
+
+                Button(L10n.tr("Open Now Playing")) {
+                    model.navigation.showPlayer.toggle()
+                }
+                .keyboardShortcut("p", modifiers: [.command, .shift])
+            }
         }
         #endif
     }

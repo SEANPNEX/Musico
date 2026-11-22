@@ -35,7 +35,8 @@
 
 ## ✨ What Can Musico Do?
 
-- 📁 **Folder-First Library & Cloud Hangouts**: Mount your favorite local folders (`Documents` / `MyMusic` + custom folders) while keeping your precious folder hierarchy intact! Unplugged a drive? **Relocate** fixes it without losing a thing. You can even mount **YouTube** & **Bilibili** playlists, collections, and multi-part videos right inside **Folders** (anonymous public loading + Bilibili WBI signing!).
+- 📁 **Folder-First Library & Cloud Hangouts**: Mount your favorite local folders (`Documents` / `MyMusic` + custom folders) while keeping your precious folder hierarchy intact! Unplugged a drive? **Relocate** fixes it without losing a thing. You can even mount **YouTube / YouTube Music** (playlists, mixes & single tracks), **Bilibili** (videos, multi-part, favlists & collections), and **Google Drive** (shared folders with recursive audio discovery & single audio files) right inside **Folders**!
+- 🌐 **Multilingual (`English` & `简体中文`)**: Defaults to your OS system language (**Follow System**) with instant live runtime switching across Apple, Android, and Windows.
 - 🔍 **Browsing & Instant Search**: Hop around **Folders**, **Songs** (sort by title/artist/album/date added + diacritic-insensitive search), **Albums** (properly ordered by disc & track), **Artists**, and **Playlists** (built-in **Favourites** + your own custom playlists).
 - 🎶 **Multiple Independent Queues**: Spin up as many queues as your mood needs — rename, switch, reorder, clear, or delete them anytime. Every queue remembers its own track, playback position, shuffle order, and repeat mode (`Off` / `All` / `One`).
 - 🎛️ **10-Band Equalizer**: Flip the master switch, dial in preamp (`-12 dB` to `+12 dB`), tweak 10 ISO bands (`31 Hz`–`16 kHz`), or pick from 8 presets (`Flat`, `Bass Boost`, `Treble Boost`, `Rock`, `Pop`, `Jazz`, `Classical`, `Vocal`) + `Custom`.
@@ -76,12 +77,13 @@ Grab the latest builds from the [**Releases**](https://github.com/SEANPNEX/local
   - **Android (`MusicoAndroid`)**: `mp3`, `m4a`, `aac`, `flac`, `wav`, `aif`, `aiff`, `caf`, `alac`, `ogg`, `opus`, `webm`
   - **Windows (`MusicoWindows`)**: `mp3`, `m4a`, `aac`, `flac`, `wav`, `aif`, `aiff`, `wma`, `ogg`, `opus`
 
-### 2. Cloud Folders (YouTube & Bilibili)
-- **Mount a Cloud Playlist**: In **Folders**, tap **Add Cloud Folder** and paste a URL or ID:
-  - **YouTube / YouTube Music**: Playlists or videos (`youtube.com/playlist?list=…`, `music.youtube.com/playlist?list=…`, `youtu.be/…`) — public playlists work with no login!
-  - **Bilibili**: `BV` videos (including multi-part), `favlist`, collections/series, and `b23.tv` short links.
-- **Optional Cookie & Proxy**: Add a **Cookie** only if you need private playlists or higher Bilibili audio quality. On Windows, you can also set an **HTTP Proxy** for YouTube (e.g. `7890`, `127.0.0.1:7890`, or `http://127.0.0.1:7890`).
-- **Save Offline & Sync**: Open a cloud folder's menu (or track menu) and pick **Save to Local Folder…** to download tracks locally and optionally add the folder to your library. Tracked local folders get an **Update from Cloud** button to pull newly added songs incrementally!
+### 2. Cloud Folders (YouTube, Bilibili & Google Drive)
+- **Mount a Cloud Source**: In **Folders**, tap **Add Cloud Folder** and paste a URL, share text, or ID (surrounding share-sheet text is stripped automatically!):
+  - **YouTube / YouTube Music**: Playlists, `RD` radio mixes, album browse links, or single videos (`youtube.com/playlist?list=…`, `music.youtube.com/playlist?list=…`, `youtube.com/watch?v=…`, `youtu.be/…`, Shorts) — public playlists, mixes, and videos work with no login!
+  - **Bilibili**: `BV`/`av` videos (including multi-part), `favlist`, collections/series, and `b23.tv` short links.
+  - **Google Drive**: Public/shared folder links (recursively discovers all audio files across nested subfolders, including links with `resourcekey`) and single audio file links (`drive.google.com/drive/folders/…`, `drive.google.com/file/d/…`, `drive.google.com/open?id=…`, `drive.usercontent.google.com/download?id=…`), with automatic large-file confirmation handling!
+- **Optional Cookie & Proxy**: Add a **Cookie** only if you need private playlists, restricted Google Drive files, or higher Bilibili audio quality. On Windows, you can also set an **HTTP Proxy** for YouTube & Google Drive (e.g. `7890`, `127.0.0.1:7890`, or `http://127.0.0.1:7890`).
+- **Save Offline & Sync**: Open a cloud folder's menu (or track menu) and pick **Save to Local Folder…** to download tracks locally and optionally add the folder to your library. Tracked local folders keep a `.musico-cloud.json` manifest and show an **Update from Cloud** button to pull newly added songs incrementally!
 
 ### 3. Browsing, Queues & Playback
 - **Explore Your Library**: Jump between **Folders**, **Songs**, **Albums**, **Artists**, **Playlists**, **Queues**, and **Stats** (**Recent**, **Plays**, **Not Lately**, **Never**).
@@ -98,6 +100,10 @@ Grab the latest builds from the [**Releases**](https://github.com/SEANPNEX/local
   - `Ctrl+F`: Jump to **Songs** & focus search
   - `Esc`: Close Full Player or active dialog
 - **macOS / iPadOS**:
+  - `Cmd+F`: Jump to **Songs** & focus search
+  - `Cmd+R`: Rescan library
+  - `Cmd+1`–`Cmd+7`: Switch between **Folders**, **Songs**, **Albums**, **Artists**, **Playlists**, **Queues**, and **Stats**
+  - `Cmd+P` / `Cmd+Left` / `Cmd+Right`: Play / Pause, Previous / Next track (`Playback` menu also includes Shuffle, Repeat, and Show/Hide Now Playing)
   - `Esc`: Close Full Player (plus standard system media keys)
 
 ---

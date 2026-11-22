@@ -14,9 +14,9 @@ enum CloudSourceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidURL:
-            L10n.trNonisolated("Enter a valid YouTube or Bilibili playlist, collection, or video link.")
+            L10n.trNonisolated("Enter a valid YouTube, Bilibili, or Google Drive link.")
         case .unsupportedSource:
-            L10n.trNonisolated("That link isn’t a supported YouTube or Bilibili playlist or video.")
+            L10n.trNonisolated("That link isn’t a supported YouTube, Bilibili, or Google Drive link.")
         case .emptyPlaylist:
             L10n.trNonisolated("No playable tracks were found at that link.")
         case .noPlayableStream:
@@ -144,7 +144,9 @@ enum CloudSourceInput {
                 }
             }
             if let supported = candidates.first(where: {
-                YouTubeClient.parseExtracted($0) != nil || BilibiliClient.parseExtracted($0) != nil
+                YouTubeClient.parseExtracted($0) != nil
+                    || BilibiliClient.parseExtracted($0) != nil
+                    || GoogleDriveClient.parseExtracted($0) != nil
             }) {
                 return supported
             }
@@ -161,6 +163,7 @@ enum CloudSourceInput {
         guard !extracted.isEmpty else { return nil }
         if YouTubeClient.parseExtracted(extracted) != nil { return .cloudYouTube }
         if BilibiliClient.parseExtracted(extracted) != nil { return .cloudBilibili }
+        if GoogleDriveClient.parseExtracted(extracted) != nil { return .cloudGoogleDrive }
         return nil
     }
 
@@ -190,10 +193,12 @@ final class LiveCloudService: CloudPlaylistFetching, CloudStreamResolving, @unch
 
     let youtube: YouTubeClient
     let bilibili: BilibiliClient
+    let googleDrive: GoogleDriveClient
 
     init(transport: any CloudHTTPTransport = URLSessionCloudTransport()) {
         self.youtube = YouTubeClient(transport: transport)
         self.bilibili = BilibiliClient(transport: transport)
+        self.googleDrive = GoogleDriveClient(transport: transport)
     }
 
     func fetchPlaylist(sourceURL: String, cookie: String?, kindHint: LibraryRoot.Kind? = nil) async throws -> CloudPlaylistResult {
@@ -202,8 +207,11 @@ final class LiveCloudService: CloudPlaylistFetching, CloudStreamResolving, @unch
         if kindHint == .cloudYouTube || (kindHint == nil && YouTubeClient.parseExtracted(extracted) != nil) {
             return try await youtube.fetchPlaylist(sourceURL: extracted, cookie: cookie)
         }
-        if kindHint == .cloudBilibili || BilibiliClient.parseExtracted(extracted) != nil {
+        if kindHint == .cloudBilibili || (kindHint == nil && BilibiliClient.parseExtracted(extracted) != nil) {
             return try await bilibili.fetchPlaylist(sourceURL: extracted, cookie: cookie)
+        }
+        if kindHint == .cloudGoogleDrive || (kindHint == nil && GoogleDriveClient.parseExtracted(extracted) != nil) {
+            return try await googleDrive.fetchPlaylist(sourceURL: extracted, cookie: cookie, allowBareID: kindHint == .cloudGoogleDrive)
         }
         throw CloudSourceError.unsupportedSource
     }
@@ -217,6 +225,15 @@ final class LiveCloudService: CloudPlaylistFetching, CloudStreamResolving, @unch
         case "bilibili":
             let trackID = track.remoteTrackID ?? track.relativePath
             return try await bilibili.resolveStream(trackID: trackID, cookie: cookie, forceRefresh: forceRefresh)
+        case "gdrive", "googledrive":
+            let trackID = track.remoteTrackID ?? track.relativePath
+            let ext = (track.relativePath as NSString).pathExtension.lowercased()
+            return try await googleDrive.resolveStream(
+                trackID: trackID,
+                cookie: cookie,
+                fallbackExtension: ext.isEmpty ? nil : ext,
+                forceRefresh: forceRefresh
+            )
         default:
             throw CloudSourceError.unsupportedSource
         }
@@ -227,13 +244,14 @@ final class LiveCloudService: CloudPlaylistFetching, CloudStreamResolving, @unch
 
 actor YouTubeClient {
     enum Target: Equatable, Sendable {
-        case playlist(id: String)
+        case playlist(id: String, videoID: String? = nil)
         case video(id: String)
     }
 
     struct ClientProfile: Sendable {
         let name: String
         let version: String
+        let clientID: Int
         let userAgent: String
         let origin: String
         let baseURL: String
@@ -246,18 +264,20 @@ actor YouTubeClient {
 
     private let transport: any CloudHTTPTransport
     private var streamCache: [String: CachedStream] = [:]
+    private var cachedVisitorData: (value: String, fetchedAt: Date)?
 
     static let webUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
     private static let webRemixClient = ClientProfile(
         name: "WEB_REMIX",
-        version: "1.20250310.01.00",
+        version: "1.20260707.12.00",
+        clientID: 67,
         userAgent: webUserAgent,
         origin: "https://music.youtube.com",
         baseURL: "https://music.youtube.com",
         clientBody: [
             "clientName": "WEB_REMIX",
-            "clientVersion": "1.20250310.01.00",
+            "clientVersion": "1.20260707.12.00",
             "hl": "en",
             "gl": "US"
         ]
@@ -265,13 +285,33 @@ actor YouTubeClient {
 
     private static let webClient = ClientProfile(
         name: "WEB",
-        version: "2.20250310.01.00",
+        version: "2.20260708.00.00",
+        clientID: 1,
         userAgent: webUserAgent,
         origin: "https://www.youtube.com",
         baseURL: "https://www.youtube.com",
         clientBody: [
             "clientName": "WEB",
-            "clientVersion": "2.20250310.01.00",
+            "clientVersion": "2.20260708.00.00",
+            "hl": "en",
+            "gl": "US"
+        ]
+    )
+
+    private static let visionOSPlayerClient = ClientProfile(
+        name: "VISIONOS",
+        version: "1.02",
+        clientID: 101,
+        userAgent: "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+        origin: "https://www.youtube.com",
+        baseURL: "https://www.youtube.com",
+        clientBody: [
+            "clientName": "VISIONOS",
+            "clientVersion": "1.02",
+            "deviceMake": "Apple",
+            "deviceModel": "RealityDevice17,1",
+            "osName": "visionOS",
+            "osVersion": "26.5.23O471",
             "hl": "en",
             "gl": "US"
         ]
@@ -280,6 +320,7 @@ actor YouTubeClient {
     private static let androidPlayerClient = ClientProfile(
         name: "ANDROID",
         version: "20.10.38",
+        clientID: 3,
         userAgent: "com.google.android.youtube/20.10.38 (Linux; U; Android 15; en_US) gzip",
         origin: "https://www.youtube.com",
         baseURL: "https://www.youtube.com",
@@ -297,6 +338,7 @@ actor YouTubeClient {
     private static let iosPlayerClient = ClientProfile(
         name: "IOS",
         version: "20.10.4",
+        clientID: 5,
         userAgent: "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_1 like Mac OS X;)",
         origin: "https://www.youtube.com",
         baseURL: "https://www.youtube.com",
@@ -312,15 +354,36 @@ actor YouTubeClient {
         ]
     )
 
+    private static let androidVRPlayerClient = ClientProfile(
+        name: "ANDROID_VR",
+        version: "1.65.10",
+        clientID: 28,
+        userAgent: "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+        origin: "https://www.youtube.com",
+        baseURL: "https://www.youtube.com",
+        clientBody: [
+            "clientName": "ANDROID_VR",
+            "clientVersion": "1.65.10",
+            "deviceMake": "Oculus",
+            "deviceModel": "Quest 3",
+            "androidSdkVersion": 32,
+            "osName": "Android",
+            "osVersion": "12L",
+            "hl": "en",
+            "gl": "US"
+        ]
+    )
+
     private static let webEmbeddedClient = ClientProfile(
         name: "WEB_EMBEDDED_PLAYER",
-        version: "1.20250310.01.00",
+        version: "2.20260708.00.00",
+        clientID: 56,
         userAgent: webUserAgent,
         origin: "https://www.youtube.com",
         baseURL: "https://www.youtube.com",
         clientBody: [
             "clientName": "WEB_EMBEDDED_PLAYER",
-            "clientVersion": "1.20250310.01.00",
+            "clientVersion": "2.20260708.00.00",
             "hl": "en",
             "gl": "US"
         ]
@@ -343,7 +406,7 @@ actor YouTubeClient {
         // Raw playlist or video IDs (no slashes, spaces, or query separators).
         if !trimmed.contains("/"), !trimmed.contains("."), !trimmed.contains("?"), !trimmed.contains(" ") {
             if isPlaylistID(trimmed) {
-                return .playlist(id: trimmed)
+                return .playlist(id: trimmed, videoID: nil)
             }
             if isVideoID(trimmed) {
                 return .video(id: trimmed)
@@ -364,11 +427,12 @@ actor YouTubeClient {
         )
 
         if host == "youtu.be" || host.hasSuffix(".youtu.be") {
-            if let list = queryItems["list"], !list.isEmpty {
-                return .playlist(id: list)
-            }
             let segments = components.path.split(separator: "/").map(String.init)
-            if let videoID = segments.first, isVideoID(videoID) {
+            let videoID = segments.first.flatMap { isVideoID($0) ? $0 : nil }
+            if let list = queryItems["list"], !list.isEmpty {
+                return .playlist(id: list, videoID: videoID)
+            }
+            if let videoID {
                 return .video(id: videoID)
             }
             return nil
@@ -377,21 +441,28 @@ actor YouTubeClient {
         let isYouTubeHost = host == "youtube.com" || host.hasSuffix(".youtube.com") || host == "youtube-nocookie.com" || host.hasSuffix(".youtube-nocookie.com")
         guard isYouTubeHost else { return nil }
 
-        if let list = queryItems["list"], !list.isEmpty {
-            return .playlist(id: list)
-        }
-        if let v = queryItems["v"], isVideoID(v) {
-            return .video(id: v)
-        }
         let segments = components.path.split(separator: "/").map(String.init)
-        if segments.count >= 2, ["shorts", "live", "embed", "v"].contains(segments[0]), isVideoID(segments[1]) {
-            return .video(id: segments[1])
+        let queryVideoID = queryItems["v"].flatMap { isVideoID($0) ? $0 : nil }
+        let pathVideoID: String? = (segments.count >= 2 && ["shorts", "live", "embed", "v"].contains(segments[0]) && isVideoID(segments[1]))
+            ? segments[1]
+            : nil
+        let resolvedVideoID = queryVideoID ?? pathVideoID
+
+        if let list = queryItems["list"], !list.isEmpty {
+            return .playlist(id: list, videoID: resolvedVideoID)
+        }
+        if segments.count >= 2, segments[0] == "browse", !segments[1].isEmpty {
+            return .playlist(id: segments[1], videoID: nil)
+        }
+        if let resolvedVideoID {
+            return .video(id: resolvedVideoID)
         }
         return nil
     }
 
     nonisolated private static func isPlaylistID(_ value: String) -> Bool {
-        let prefixes = ["PL", "OLAK5uy_", "UU", "FL", "RD", "LL", "VL"]
+        if value == "RDMM" { return true }
+        let prefixes = ["PL", "OLAK5uy_", "MPREb_", "UU", "FL", "RD", "LL", "VL"]
         return value.count >= 10 && prefixes.contains(where: { value.hasPrefix($0) })
     }
 
@@ -424,6 +495,47 @@ actor YouTubeClient {
         return result
     }
 
+    // MARK: Visitor Data
+
+    func fetchVisitorData(forceRefresh: Bool = false) async -> String? {
+        if !forceRefresh,
+           let cached = cachedVisitorData,
+           Date().timeIntervalSince(cached.fetchedAt) < 30 * 60 {
+            return cached.value
+        }
+        guard let url = URL(string: "https://www.youtube.com/sw.js_data") else { return nil }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(Self.webUserAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue("*/*", forHTTPHeaderField: "Accept")
+        req.setValue("SOCS=CAI", forHTTPHeaderField: "Cookie")
+        do {
+            let response = try await transport.send(req)
+            guard response.statusCode == 200,
+                  let text = String(data: response.data, encoding: .utf8),
+                  let visitor = Self.extractVisitorData(from: text) else {
+                return nil
+            }
+            cachedVisitorData = (value: visitor, fetchedAt: Date())
+            return visitor
+        } catch {
+            return nil
+        }
+    }
+
+    nonisolated private static func extractVisitorData(from text: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #""(Cg[A-Za-z0-9_%-]{15,})""#) else {
+            return nil
+        }
+        let range = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = regex.firstMatch(in: text, range: range),
+              match.numberOfRanges > 1,
+              let captureRange = Range(match.range(at: 1), in: text) else {
+            return nil
+        }
+        return String(text[captureRange])
+    }
+
     // MARK: Playlist Fetching
 
     func fetchPlaylist(sourceURL: String, cookie: String?) async throws -> CloudPlaylistResult {
@@ -431,18 +543,58 @@ actor YouTubeClient {
             throw CloudSourceError.invalidURL
         }
         switch target {
-        case .playlist(let rawID):
+        case .playlist(let rawID, let videoID):
             let playlistID = rawID.hasPrefix("VL") ? String(rawID.dropFirst(2)) : rawID
-            // Try YouTube Music WEB_REMIX first (cleanest music metadata), then www.youtube.com WEB fallback.
-            do {
-                let result = try await fetchBrowsePlaylist(playlistID: playlistID, client: Self.webRemixClient, cookie: cookie)
-                if !result.tracks.isEmpty { return result }
-            } catch {
-                // Fall back to standard WEB browse below.
+            var lastError: Error?
+            var sawEmptySuccess = false
+
+            if playlistID.hasPrefix("RD") {
+                do {
+                    let nextResult = try await fetchNextPlaylist(playlistID: playlistID, videoID: videoID, cookie: cookie)
+                    if !nextResult.tracks.isEmpty { return nextResult }
+                    sawEmptySuccess = true
+                } catch {
+                    lastError = error
+                }
             }
-            let fallback = try await fetchBrowsePlaylist(playlistID: playlistID, client: Self.webClient, cookie: cookie)
-            guard !fallback.tracks.isEmpty else { throw CloudSourceError.emptyPlaylist }
-            return fallback
+
+            // Try YouTube Music WEB_REMIX first (cleanest music metadata), then www.youtube.com WEB fallback.
+            for client in [Self.webRemixClient, Self.webClient] {
+                do {
+                    let result = try await fetchBrowsePlaylist(playlistID: playlistID, client: client, cookie: cookie)
+                    if !result.tracks.isEmpty { return result }
+                    sawEmptySuccess = true
+                } catch {
+                    lastError = error
+                }
+            }
+
+            if !playlistID.hasPrefix("RD"), videoID != nil {
+                do {
+                    let nextResult = try await fetchNextPlaylist(playlistID: playlistID, videoID: videoID, cookie: cookie)
+                    if !nextResult.tracks.isEmpty { return nextResult }
+                    sawEmptySuccess = true
+                } catch {
+                    lastError = error
+                }
+            }
+
+            do {
+                let htmlResult = try await fetchPlaylistFromHTML(playlistID: playlistID, cookie: cookie)
+                if !htmlResult.tracks.isEmpty { return htmlResult }
+                sawEmptySuccess = true
+            } catch {
+                lastError = error
+            }
+
+            if let videoID {
+                return try await fetchSingleVideo(videoID: videoID, cookie: cookie)
+            }
+
+            if sawEmptySuccess {
+                throw CloudSourceError.emptyPlaylist
+            }
+            throw lastError ?? CloudSourceError.emptyPlaylist
 
         case .video(let videoID):
             return try await fetchSingleVideo(videoID: videoID, cookie: cookie)
@@ -450,7 +602,12 @@ actor YouTubeClient {
     }
 
     private func fetchBrowsePlaylist(playlistID: String, client: ClientProfile, cookie: String?) async throws -> CloudPlaylistResult {
-        let browseID = playlistID.hasPrefix("VL") ? playlistID : "VL\(playlistID)"
+        let browseID: String
+        if playlistID.hasPrefix("VL") || playlistID.hasPrefix("MPREb_") || playlistID.hasPrefix("FEmusic_") {
+            browseID = playlistID
+        } else {
+            browseID = "VL\(playlistID)"
+        }
         var allTracks: [CloudTrackInfo] = []
         var seenVideoIDs = Set<String>()
         var playlistTitle: String?
@@ -483,30 +640,183 @@ actor YouTubeClient {
                 cookie: cookie
             )
             let parsed = Self.parseBrowsePage(pageJSON, seenVideoIDs: &seenVideoIDs)
+            if playlistTitle == nil, let title = parsed.title, !title.isEmpty { playlistTitle = title }
             allTracks.append(contentsOf: parsed.tracks)
             nextToken = parsed.continuation
         }
 
+        let resolvedTitle = playlistTitle ?? "YouTube Playlist"
+        let finalTracks = Self.applyPlaylistTitle(playlistTitle, to: allTracks)
         return CloudPlaylistResult(
             kind: .cloudYouTube,
             remoteID: playlistID,
-            title: playlistTitle ?? "YouTube Playlist",
-            tracks: allTracks
+            title: resolvedTitle,
+            tracks: finalTracks
         )
+    }
+
+    private func fetchNextPlaylist(playlistID: String, videoID: String?, cookie: String?) async throws -> CloudPlaylistResult {
+        let effectiveVideoID = Self.inferMixVideoID(playlistID: playlistID, explicitVideoID: videoID)
+        var body: [String: Any] = [
+            "context": ["client": Self.webClient.clientBody],
+            "playlistId": playlistID
+        ]
+        if let effectiveVideoID {
+            body["videoId"] = effectiveVideoID
+        }
+        let json = try await postInnertube(
+            url: URL(string: "https://www.youtube.com/youtubei/v1/next?prettyPrint=false")!,
+            body: body,
+            client: Self.webClient,
+            cookie: cookie
+        )
+        var seen = Set<String>()
+        let parsed = Self.parseBrowsePage(json, seenVideoIDs: &seen)
+        let resolvedTitle = parsed.title ?? (playlistID.hasPrefix("RD") ? "YouTube Mix" : "YouTube Playlist")
+        let finalTracks = Self.applyPlaylistTitle(parsed.title, to: parsed.tracks)
+        return CloudPlaylistResult(
+            kind: .cloudYouTube,
+            remoteID: playlistID,
+            title: resolvedTitle,
+            tracks: finalTracks
+        )
+    }
+
+    private func fetchPlaylistFromHTML(playlistID: String, cookie: String?) async throws -> CloudPlaylistResult {
+        guard var components = URLComponents(string: "https://www.youtube.com/playlist") else {
+            throw CloudSourceError.invalidURL
+        }
+        components.queryItems = [URLQueryItem(name: "list", value: playlistID)]
+        guard let url = components.url else { throw CloudSourceError.invalidURL }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(Self.webUserAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        if let cookie, !cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            req.setValue(cookie, forHTTPHeaderField: "Cookie")
+        } else {
+            req.setValue("SOCS=CAI", forHTTPHeaderField: "Cookie")
+        }
+        let response = try await transport.send(req)
+        guard (200..<300).contains(response.statusCode),
+              let html = String(data: response.data, encoding: .utf8),
+              let initialData = Self.extractInitialDataJSON(from: html) else {
+            throw CloudSourceError.emptyPlaylist
+        }
+        var seen = Set<String>()
+        let parsed = Self.parseBrowsePage(initialData, seenVideoIDs: &seen)
+        let resolvedTitle = parsed.title ?? "YouTube Playlist"
+        let finalTracks = Self.applyPlaylistTitle(parsed.title, to: parsed.tracks)
+        return CloudPlaylistResult(
+            kind: .cloudYouTube,
+            remoteID: playlistID,
+            title: resolvedTitle,
+            tracks: finalTracks
+        )
+    }
+
+    nonisolated private static func inferMixVideoID(playlistID: String, explicitVideoID: String?) -> String? {
+        if let explicitVideoID, !explicitVideoID.isEmpty {
+            return explicitVideoID
+        }
+        if playlistID.hasPrefix("RDAMVM") {
+            let suffix = String(playlistID.dropFirst(6))
+            if isVideoID(suffix) { return suffix }
+        }
+        if playlistID.hasPrefix("RD") {
+            let suffix = String(playlistID.dropFirst(2))
+            if isVideoID(suffix) { return suffix }
+        }
+        return nil
+    }
+
+    nonisolated private static func applyPlaylistTitle(_ title: String?, to tracks: [CloudTrackInfo]) -> [CloudTrackInfo] {
+        guard let title = title?.trimmingCharacters(in: .whitespacesAndNewlines), !title.isEmpty else {
+            return tracks
+        }
+        return tracks.map { track in
+            var copy = track
+            if copy.album.isEmpty || copy.album == "YouTube" {
+                copy.album = title
+            }
+            return copy
+        }
+    }
+
+    nonisolated static func extractInitialDataJSON(from html: String) -> [String: Any]? {
+        let markers = [
+            "var ytInitialData = ",
+            "window[\"ytInitialData\"] = ",
+            "window['ytInitialData'] = ",
+            "ytInitialData = ",
+            "ytInitialData="
+        ]
+        var startSearch: String.Index?
+        for marker in markers {
+            if let range = html.range(of: marker) {
+                startSearch = range.upperBound
+                break
+            }
+        }
+        guard let searchFrom = startSearch,
+              let openBrace = html[searchFrom...].firstIndex(of: "{") else {
+            return nil
+        }
+
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var idx = openBrace
+        while idx < html.endIndex {
+            let ch = html[idx]
+            if inString {
+                if escaped {
+                    escaped = false
+                } else if ch == "\\" {
+                    escaped = true
+                } else if ch == "\"" {
+                    inString = false
+                }
+            } else {
+                if ch == "\"" {
+                    inString = true
+                } else if ch == "{" {
+                    depth += 1
+                } else if ch == "}" {
+                    depth -= 1
+                    if depth == 0 {
+                        let jsonText = String(html[openBrace...idx])
+                        guard let data = jsonText.data(using: .utf8),
+                              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                            return nil
+                        }
+                        return obj
+                    }
+                }
+            }
+            idx = html.index(after: idx)
+        }
+        return nil
     }
 
     private func fetchSingleVideo(videoID: String, cookie: String?) async throws -> CloudPlaylistResult {
         var lastError: Error?
-        for client in [Self.webClient, Self.androidPlayerClient] {
+        let visitorData = await fetchVisitorData()
+        for client in [Self.visionOSPlayerClient, Self.androidPlayerClient, Self.iosPlayerClient, Self.webClient] {
             do {
+                var clientBody = client.clientBody
+                if let visitorData {
+                    clientBody["visitorData"] = visitorData
+                }
                 let json = try await postInnertube(
                     url: URL(string: "\(client.baseURL)/youtubei/v1/player?prettyPrint=false")!,
                     body: [
-                        "context": ["client": client.clientBody],
+                        "context": ["client": clientBody],
                         "videoId": videoID
                     ],
                     client: client,
-                    cookie: cookie
+                    cookie: cookie,
+                    visitorData: visitorData
                 )
                 if let details = json["videoDetails"] as? [String: Any],
                    let title = details["title"] as? String, !title.isEmpty {
@@ -530,7 +840,42 @@ actor YouTubeClient {
                 lastError = error
             }
         }
+
+        if let oembed = try? await fetchVideoOEmbed(videoID: videoID) {
+            return oembed
+        }
         throw lastError ?? CloudSourceError.emptyPlaylist
+    }
+
+    private func fetchVideoOEmbed(videoID: String) async throws -> CloudPlaylistResult {
+        var components = URLComponents(string: "https://www.youtube.com/oembed")!
+        components.queryItems = [
+            URLQueryItem(name: "url", value: "https://www.youtube.com/watch?v=\(videoID)"),
+            URLQueryItem(name: "format", value: "json")
+        ]
+        var req = URLRequest(url: components.url!)
+        req.httpMethod = "GET"
+        req.setValue(Self.webUserAgent, forHTTPHeaderField: "User-Agent")
+        let response = try await transport.send(req)
+        guard (200..<300).contains(response.statusCode),
+              let json = try JSONSerialization.jsonObject(with: response.data) as? [String: Any],
+              let title = (json["title"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !title.isEmpty else {
+            throw CloudSourceError.emptyPlaylist
+        }
+        let author = (json["author_name"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let art = (json["thumbnail_url"] as? String).flatMap(Self.normalizeHTTPS)
+        let track = CloudTrackInfo(
+            remoteTrackID: videoID,
+            relativePath: videoID,
+            title: title,
+            artist: (author?.isEmpty == false) ? author! : "YouTube",
+            album: "YouTube",
+            trackNumber: 1,
+            duration: 0,
+            artworkURL: art
+        )
+        return CloudPlaylistResult(kind: .cloudYouTube, remoteID: videoID, title: title, tracks: [track])
     }
 
     // MARK: Stream Resolution
@@ -540,65 +885,110 @@ actor YouTubeClient {
             return cached.result
         }
 
-        let clients = [Self.androidPlayerClient, Self.iosPlayerClient, Self.webEmbeddedClient]
+        let clients = [
+            Self.visionOSPlayerClient,
+            Self.androidPlayerClient,
+            Self.iosPlayerClient,
+            Self.androidVRPlayerClient,
+            Self.webEmbeddedClient
+        ]
+        var visitorData = await fetchVisitorData(forceRefresh: forceRefresh)
+        var didRefreshVisitorForLogin = false
         var lastError: Error = CloudSourceError.noPlayableStream
 
         for client in clients {
-            do {
-                var clientBody = client.clientBody
-                var thirdParty: [String: Any]?
-                if client.name == "WEB_EMBEDDED_PLAYER" {
-                    thirdParty = ["embedUrl": "https://www.youtube.com/"]
-                }
-                var body: [String: Any] = [
-                    "context": thirdParty != nil
-                        ? ["client": clientBody, "thirdParty": thirdParty!]
-                        : ["client": clientBody],
-                    "videoId": videoID,
-                    "contentCheckOk": true,
-                    "racyCheckOk": true
-                ]
-                if client.name == "ANDROID" || client.name == "IOS" {
-                    clientBody["hl"] = "en"
-                    body["params"] = "CgIIAQ=="
-                }
-
-                let json = try await postInnertube(
-                    url: URL(string: "\(client.baseURL)/youtubei/v1/player?prettyPrint=false")!,
-                    body: body,
-                    client: client,
-                    cookie: nil // Android/iOS Innertube clients work best anonymously for audio streams.
-                )
-                let candidates = Self.extractStreamCandidates(from: json)
-                for candidate in candidates.prefix(3) {
-                    let headers = [
-                        "User-Agent": client.userAgent,
-                        "Accept": "*/*"
-                    ]
-                    if await probeStreamReadable(url: candidate.url, headers: headers) {
-                        let expiresAt = Self.streamExpiration(for: candidate.url)
-                        let result = CloudStreamResult(
-                            url: candidate.url,
-                            headers: headers,
-                            fileExtension: candidate.fileExtension,
-                            expiresAt: expiresAt
-                        )
-                        streamCache[videoID] = CachedStream(result: result)
-                        return result
+            var attempt = 0
+            while attempt < 2 {
+                attempt += 1
+                do {
+                    var clientBody = client.clientBody
+                    if let visitorData {
+                        clientBody["visitorData"] = visitorData
                     }
+                    var thirdParty: [String: Any]?
+                    if client.name == "WEB_EMBEDDED_PLAYER" {
+                        thirdParty = ["embedUrl": "https://www.reddit.com/"]
+                    }
+                    var body: [String: Any] = [
+                        "context": thirdParty != nil
+                            ? ["client": clientBody, "thirdParty": thirdParty!]
+                            : ["client": clientBody],
+                        "videoId": videoID,
+                        "contentCheckOk": true,
+                        "racyCheckOk": true
+                    ]
+                    if client.name == "ANDROID" || client.name == "IOS" || client.name == "ANDROID_VR" {
+                        clientBody["hl"] = "en"
+                        body["params"] = "CgIIAQ=="
+                    }
+
+                    let json = try await postInnertube(
+                        url: URL(string: "\(client.baseURL)/youtubei/v1/player?prettyPrint=false")!,
+                        body: body,
+                        client: client,
+                        cookie: nil, // Anonymous Innertube player requests avoid user-cookie playback blocks.
+                        visitorData: visitorData
+                    )
+
+                    if client.name == "VISIONOS",
+                       !didRefreshVisitorForLogin,
+                       let playability = json["playabilityStatus"] as? [String: Any],
+                       (playability["status"] as? String) == "LOGIN_REQUIRED" {
+                        didRefreshVisitorForLogin = true
+                        if let refreshed = await fetchVisitorData(forceRefresh: true), !refreshed.isEmpty {
+                            visitorData = refreshed
+                            continue
+                        }
+                    }
+
+                    let candidates = Self.extractStreamCandidates(from: json)
+                    for candidate in candidates.prefix(3) {
+                        let probeHeaders = [
+                            "User-Agent": client.userAgent,
+                            "Accept": "*/*"
+                        ]
+                        if await probeStreamReadable(url: candidate.url, headers: probeHeaders, contentLength: candidate.contentLength) {
+                            let expiresAt = Self.streamExpiration(for: candidate.url)
+                            let headers = [
+                                "User-Agent": client.userAgent,
+                                "Accept": "*/*",
+                                "Range": "bytes=0-"
+                            ]
+                            let result = CloudStreamResult(
+                                url: candidate.url,
+                                headers: headers,
+                                fileExtension: candidate.fileExtension,
+                                expiresAt: expiresAt
+                            )
+                            streamCache[videoID] = CachedStream(result: result)
+                            return result
+                        }
+                    }
+                    break
+                } catch {
+                    lastError = error
+                    break
                 }
-            } catch {
-                lastError = error
             }
         }
         throw lastError
     }
 
-    private func probeStreamReadable(url: URL, headers: [String: String]) async -> Bool {
+    private func probeStreamReadable(url: URL, headers: [String: String], contentLength: Int64?) async -> Bool {
+        guard await sendRangeProbe(url: url, headers: headers, range: "bytes=0-1023") else {
+            return false
+        }
+        if (contentLength ?? 0) > 1_200_000 {
+            return await sendRangeProbe(url: url, headers: headers, range: "bytes=1048576-1049599")
+        }
+        return true
+    }
+
+    private func sendRangeProbe(url: URL, headers: [String: String], range: String) async -> Bool {
         var req = URLRequest(url: url)
         req.httpMethod = "GET"
         for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
-        req.setValue("bytes=0-1023", forHTTPHeaderField: "Range")
+        req.setValue(range, forHTTPHeaderField: "Range")
         do {
             let response = try await transport.send(req)
             guard response.statusCode == 200 || response.statusCode == 206 else { return false }
@@ -611,7 +1001,13 @@ actor YouTubeClient {
         }
     }
 
-    private func postInnertube(url: URL, body: [String: Any], client: ClientProfile, cookie: String?) async throws -> [String: Any] {
+    private func postInnertube(
+        url: URL,
+        body: [String: Any],
+        client: ClientProfile,
+        cookie: String?,
+        visitorData: String? = nil
+    ) async throws -> [String: Any] {
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -619,12 +1015,19 @@ actor YouTubeClient {
         req.setValue(client.userAgent, forHTTPHeaderField: "User-Agent")
         req.setValue(client.origin, forHTTPHeaderField: "Origin")
         req.setValue("\(client.origin)/", forHTTPHeaderField: "Referer")
+        req.setValue(String(client.clientID), forHTTPHeaderField: "X-YouTube-Client-Name")
+        req.setValue(client.version, forHTTPHeaderField: "X-YouTube-Client-Version")
+        if let visitorData, !visitorData.isEmpty {
+            req.setValue(visitorData, forHTTPHeaderField: "X-Goog-Visitor-Id")
+        }
         if let cookie, !cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             req.setValue(cookie, forHTTPHeaderField: "Cookie")
             if let auth = Self.sapisidHashHeader(cookie: cookie, origin: client.origin) {
                 req.setValue(auth, forHTTPHeaderField: "Authorization")
                 req.setValue(client.origin, forHTTPHeaderField: "X-Origin")
             }
+        } else {
+            req.setValue("SOCS=CAI", forHTTPHeaderField: "Cookie")
         }
         let response = try await transport.send(req)
         guard (200..<300).contains(response.statusCode) else {
@@ -650,6 +1053,7 @@ actor YouTubeClient {
         var fileExtension: String
         var priority: Int
         var bitrate: Int
+        var contentLength: Int64? = nil
     }
 
     nonisolated static func parseBrowsePage(_ json: [String: Any], seenVideoIDs: inout Set<String>) -> BrowseParseResult {
@@ -658,16 +1062,31 @@ actor YouTubeClient {
         var continuation: String?
 
         if let header = json["header"] as? [String: Any] {
-            for key in ["musicDetailHeaderRenderer", "musicResponsiveHeaderRenderer", "playlistHeaderRenderer", "musicEditablePlaylistDetailHeaderRenderer"] {
-                if let sub = header[key] as? [String: Any] {
-                    if let t = extractText(sub["title"]), !t.isEmpty {
-                        title = t
-                        break
-                    }
-                    if let inner = (sub["header"] as? [String: Any])?["musicDetailHeaderRenderer"] as? [String: Any],
-                       let t = extractText(inner["title"]), !t.isEmpty {
-                        title = t
-                        break
+            if let pageHeader = header["pageHeaderRenderer"] as? [String: Any] {
+                if let pageTitle = pageHeader["pageTitle"] as? String, !pageTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    title = pageTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                } else if let content = pageHeader["content"] as? [String: Any],
+                          let vm = content["pageHeaderViewModel"] as? [String: Any],
+                          let titleNode = vm["title"] as? [String: Any],
+                          let dynamicVM = titleNode["dynamicTextViewModel"] as? [String: Any],
+                          let textNode = dynamicVM["text"] as? [String: Any],
+                          let t = textNode["content"] as? String,
+                          !t.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    title = t.trimmingCharacters(in: .whitespacesAndNewlines)
+                }
+            }
+            if title == nil {
+                for key in ["musicDetailHeaderRenderer", "musicResponsiveHeaderRenderer", "playlistHeaderRenderer", "musicEditablePlaylistDetailHeaderRenderer"] {
+                    if let sub = header[key] as? [String: Any] {
+                        if let t = extractText(sub["title"]), !t.isEmpty {
+                            title = t
+                            break
+                        }
+                        if let inner = (sub["header"] as? [String: Any])?["musicDetailHeaderRenderer"] as? [String: Any],
+                           let t = extractText(inner["title"]), !t.isEmpty {
+                            title = t
+                            break
+                        }
                     }
                 }
             }
@@ -676,6 +1095,17 @@ actor YouTubeClient {
            let plMeta = meta["playlistMetadataRenderer"] as? [String: Any],
            let t = plMeta["title"] as? String, !t.isEmpty {
             title = t
+        }
+        if title == nil,
+           let contents = json["contents"] as? [String: Any],
+           let watchNext = contents["twoColumnWatchNextResults"] as? [String: Any],
+           let plWrapper = watchNext["playlist"] as? [String: Any],
+           let pl = plWrapper["playlist"] as? [String: Any] {
+            if let t = pl["title"] as? String, !t.isEmpty {
+                title = t
+            } else if let t = extractText(pl["title"]), !t.isEmpty {
+                title = t
+            }
         }
         if title == nil, let micro = json["microformat"] as? [String: Any],
            let renderer = micro["microformatDataRenderer"] as? [String: Any],
@@ -691,6 +1121,14 @@ actor YouTubeClient {
                     }
                 } else if let item = dict["playlistVideoRenderer"] as? [String: Any] {
                     if let track = parsePlaylistVideoItem(item), seenVideoIDs.insert(track.remoteTrackID).inserted {
+                        tracks.append(track)
+                    }
+                } else if let item = dict["lockupViewModel"] as? [String: Any] {
+                    if let track = parseLockupViewModel(item), seenVideoIDs.insert(track.remoteTrackID).inserted {
+                        tracks.append(track)
+                    }
+                } else if let item = dict["playlistPanelVideoRenderer"] as? [String: Any] {
+                    if let track = parsePlaylistPanelVideoItem(item), seenVideoIDs.insert(track.remoteTrackID).inserted {
                         tracks.append(track)
                     }
                 }
@@ -837,6 +1275,82 @@ actor YouTubeClient {
         )
     }
 
+    nonisolated private static func parsePlaylistPanelVideoItem(_ item: [String: Any]) -> CloudTrackInfo? {
+        if item["unplayableText"] != nil { return nil }
+        return parsePlaylistVideoItem(item)
+    }
+
+    nonisolated private static func parseLockupViewModel(_ item: [String: Any]) -> CloudTrackInfo? {
+        guard let contentID = item["contentId"] as? String, !contentID.isEmpty else { return nil }
+        let contentType = item["contentType"] as? String
+        guard contentType == "LOCKUP_CONTENT_TYPE_VIDEO" || isVideoID(contentID) else { return nil }
+
+        let lockupMeta = (item["metadata"] as? [String: Any])?["lockupMetadataViewModel"] as? [String: Any]
+        let rawTitle = (lockupMeta?["title"] as? [String: Any])?["content"] as? String
+            ?? extractText(lockupMeta?["title"])
+        let title = (rawTitle?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? rawTitle!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : contentID
+
+        var artist = "YouTube"
+        if let metaNode = lockupMeta?["metadata"] as? [String: Any],
+           let contentMeta = metaNode["contentMetadataViewModel"] as? [String: Any],
+           let rows = contentMeta["metadataRows"] as? [[String: Any]] {
+            outer: for row in rows {
+                guard let parts = row["metadataParts"] as? [[String: Any]] else { continue }
+                for part in parts {
+                    let candidate = ((part["text"] as? [String: Any])?["content"] as? String
+                        ?? extractText(part["text"]))?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard let text = candidate, !text.isEmpty, text != "•", text != "·" else { continue }
+                    if isMetadataNoise(text) || parseDurationString(text) != nil { continue }
+                    artist = text
+                    break outer
+                }
+            }
+        }
+
+        var duration: TimeInterval = 0
+        var artworkURL: String?
+        if let contentImage = item["contentImage"] as? [String: Any],
+           let thumbVM = contentImage["thumbnailViewModel"] as? [String: Any] {
+            if let image = thumbVM["image"] as? [String: Any],
+               let sources = image["sources"] as? [[String: Any]], !sources.isEmpty {
+                let bestSource = sources.max { ($0["width"] as? Int ?? 0) < ($1["width"] as? Int ?? 0) } ?? sources.last
+                if let urlStr = bestSource?["url"] as? String {
+                    artworkURL = normalizeHTTPS(urlStr)
+                }
+            }
+            if let overlays = thumbVM["overlays"] as? [[String: Any]] {
+                for overlay in overlays {
+                    let badges: [[String: Any]] =
+                        ((overlay["thumbnailBottomOverlayViewModel"] as? [String: Any])?["badges"] as? [[String: Any]])
+                        ?? ((overlay["thumbnailOverlayBadgeViewModel"] as? [String: Any])?["thumbnailBadges"] as? [[String: Any]])
+                        ?? []
+                    for badge in badges {
+                        if let badgeVM = badge["thumbnailBadgeViewModel"] as? [String: Any],
+                           let badgeText = badgeVM["text"] as? String,
+                           let parsed = parseDurationString(badgeText) {
+                            duration = parsed
+                            break
+                        }
+                    }
+                    if duration > 0 { break }
+                }
+            }
+        }
+
+        return CloudTrackInfo(
+            remoteTrackID: contentID,
+            relativePath: contentID,
+            title: title,
+            artist: artist,
+            album: "YouTube",
+            trackNumber: nil,
+            duration: duration,
+            artworkURL: artworkURL
+        )
+    }
+
     nonisolated static func extractStreamCandidates(from playerJSON: [String: Any]) -> [StreamCandidate] {
         guard let streamingData = playerJSON["streamingData"] as? [String: Any] else { return [] }
         let adaptive = (streamingData["adaptiveFormats"] as? [[String: Any]]) ?? []
@@ -848,6 +1362,16 @@ actor YouTubeClient {
                   let itag = format["itag"] as? Int else { continue }
             let mime = (format["mimeType"] as? String ?? "").lowercased()
             let bitrate = (format["bitrate"] as? Int) ?? (format["averageBitrate"] as? Int) ?? 0
+            let contentLength: Int64?
+            if let num = format["contentLength"] as? Int64 {
+                contentLength = num
+            } else if let intVal = format["contentLength"] as? Int {
+                contentLength = Int64(intVal)
+            } else if let strVal = format["contentLength"] as? String {
+                contentLength = Int64(strVal)
+            } else {
+                contentLength = nil
+            }
 
             let priority: Int
             let ext: String
@@ -867,7 +1391,7 @@ actor YouTubeClient {
                 continue
             }
 
-            candidates.append(StreamCandidate(itag: itag, url: url, fileExtension: ext, priority: priority, bitrate: bitrate))
+            candidates.append(StreamCandidate(itag: itag, url: url, fileExtension: ext, priority: priority, bitrate: bitrate, contentLength: contentLength))
         }
 
         return candidates.sorted {
@@ -1588,5 +2112,1173 @@ actor BilibiliClient {
             return PlayURLCandidate(url: url, backups: backups, fileExtension: "mp4")
         }
         return nil
+    }
+}
+
+// MARK: - Google Drive Client
+
+actor GoogleDriveClient {
+    enum Target: Equatable, Sendable {
+        case folder(id: String, resourceKey: String?)
+        case file(id: String, resourceKey: String?)
+        case open(id: String, resourceKey: String?)
+    }
+
+    struct DriveItem: Equatable, Sendable {
+        var id: String
+        var name: String
+        var mimeType: String
+        var resourceKey: String?
+        var isFolder: Bool {
+            mimeType.caseInsensitiveCompare("application/vnd.google-apps.folder") == .orderedSame
+        }
+    }
+
+    private struct CachedStream: Sendable {
+        let result: CloudStreamResult
+    }
+
+    private let transport: any CloudHTTPTransport
+    private var streamCache: [String: CachedStream] = [:]
+
+    static let userAgent = YouTubeClient.webUserAgent
+    private static let maxDepth = 4
+    private static let maxFolders = 30
+    static let supportedAudioExtensions: Set<String> = FolderScanner.audioExtensions.union(["mp4", "ogg"])
+
+    private static let mimeToExtension: [String: String] = [
+        "audio/mpeg": "mp3",
+        "audio/mp3": "mp3",
+        "audio/mp4": "m4a",
+        "audio/x-m4a": "m4a",
+        "audio/m4a": "m4a",
+        "audio/aac": "aac",
+        "audio/x-aac": "aac",
+        "audio/flac": "flac",
+        "audio/x-flac": "flac",
+        "audio/wav": "wav",
+        "audio/x-wav": "wav",
+        "audio/wave": "wav",
+        "audio/vnd.wave": "wav",
+        "audio/aiff": "aiff",
+        "audio/x-aiff": "aiff",
+        "audio/x-caf": "caf",
+        "audio/alac": "alac",
+        "audio/ogg": "ogg",
+        "application/ogg": "ogg"
+    ]
+
+    init(transport: any CloudHTTPTransport = URLSessionCloudTransport()) {
+        self.transport = transport
+    }
+
+    // MARK: URL & ID Parsing
+
+    nonisolated static func parse(_ input: String) -> Target? {
+        parseExtracted(CloudSourceInput.extract(from: input))
+    }
+
+    nonisolated static func parseExtracted(_ input: String) -> Target? {
+        let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        guard trimmed.contains("/") || trimmed.contains(".") || trimmed.contains("?") else { return nil }
+
+        let normalized = trimmed.contains("://") ? trimmed : "https://\(trimmed)"
+        guard let components = URLComponents(string: normalized),
+              let host = components.host?.lowercased() else { return nil }
+
+        let query = lowercasedQueryDictionary(components.queryItems)
+        let resourceKey = query["resourcekey"]
+
+        if host == "drive.usercontent.google.com" {
+            if let id = query["id"], isValidDriveID(id) {
+                return .file(id: id, resourceKey: resourceKey)
+            }
+            return nil
+        }
+
+        guard host == "drive.google.com" else { return nil }
+
+        let segments = components.path.split(separator: "/").map(String.init)
+        let lowerPath = components.path.lowercased()
+
+        // /embeddedfolderview?id=<ID> or /folderview?id=<ID>
+        if lowerPath == "/embeddedfolderview" || lowerPath == "/folderview"
+            || segments.last?.lowercased() == "embeddedfolderview"
+            || segments.last?.lowercased() == "folderview" {
+            if let id = query["id"], isValidDriveID(id) {
+                return .folder(id: id, resourceKey: resourceKey)
+            }
+            return nil
+        }
+
+        // /uc?id=<ID>
+        if lowerPath == "/uc" || segments == ["uc"] {
+            if let id = query["id"], isValidDriveID(id) {
+                return .file(id: id, resourceKey: resourceKey)
+            }
+            return nil
+        }
+
+        // /open?id=<ID>
+        if lowerPath == "/open" || segments == ["open"] {
+            if let id = query["id"], isValidDriveID(id) {
+                return .open(id: id, resourceKey: resourceKey)
+            }
+            return nil
+        }
+
+        // Folders: /drive/folders/<ID>, /drive/u/<N>/folders/<ID>, /drive/mobile/folders/<ID>
+        if segments.first?.lowercased() == "drive",
+           let foldersIdx = segments.firstIndex(where: { $0.caseInsensitiveCompare("folders") == .orderedSame }),
+           foldersIdx + 1 < segments.count {
+            let folderID = segments[foldersIdx + 1]
+            if isValidDriveID(folderID) {
+                return .folder(id: folderID, resourceKey: resourceKey)
+            }
+        }
+
+        // Files: /file/d/<ID>/view (or /edit, /preview, /u/<N>/file/d/<ID>/...)
+        if let fileIdx = segments.firstIndex(where: { $0.caseInsensitiveCompare("file") == .orderedSame }),
+           fileIdx + 2 < segments.count,
+           segments[fileIdx + 1].caseInsensitiveCompare("d") == .orderedSame {
+            let fileID = segments[fileIdx + 2]
+            if isValidDriveID(fileID) {
+                return .file(id: fileID, resourceKey: resourceKey)
+            }
+        }
+
+        return nil
+    }
+
+    nonisolated static func isValidDriveID(_ value: String) -> Bool {
+        guard value.count >= 3 else { return false }
+        return value.allSatisfy { $0.isASCII && ($0.isLetter || $0.isNumber || $0 == "-" || $0 == "_") }
+    }
+
+    nonisolated static func encodeTrackID(fileID: String, resourceKey: String?) -> String {
+        if let rk = resourceKey?.trimmingCharacters(in: .whitespacesAndNewlines), !rk.isEmpty {
+            return "\(fileID)#\(rk)"
+        }
+        return fileID
+    }
+
+    nonisolated static func decodeTrackID(_ trackID: String) -> (fileID: String, resourceKey: String?) {
+        var raw = trackID
+        if raw.hasPrefix("gdrive/") {
+            raw = String(raw.dropFirst("gdrive/".count))
+            if let dot = raw.lastIndex(of: ".") {
+                raw = String(raw[..<dot])
+            }
+        }
+        let parts = raw.split(separator: "#", maxSplits: 1).map(String.init)
+        let fileID = parts.first ?? raw
+        let rk = (parts.count > 1 && !parts[1].isEmpty) ? parts[1] : nil
+        return (fileID, rk)
+    }
+
+    // MARK: Playlist / Folder Fetching
+
+    func fetchPlaylist(sourceURL: String, cookie: String?, allowBareID: Bool = false) async throws -> CloudPlaylistResult {
+        var target = Self.parse(sourceURL)
+        if target == nil && allowBareID {
+            let trimmed = sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            if Self.isValidDriveID(trimmed) {
+                target = .folder(id: trimmed, resourceKey: nil)
+            }
+        }
+        guard let target else {
+            throw CloudSourceError.invalidURL
+        }
+
+        switch target {
+        case .folder(let id, let rk):
+            return try await fetchFolderTree(rootID: id, resourceKey: rk, cookie: cookie, prefetchedRootHTML: nil)
+
+        case .file(let id, let rk):
+            return try await fetchSingleFile(fileID: id, resourceKey: rk, cookie: cookie)
+
+        case .open(let id, let rk):
+            return try await resolveOpenTarget(id: id, resourceKey: rk, cookie: cookie)
+        }
+    }
+
+    private func resolveOpenTarget(id: String, resourceKey: String?, cookie: String?) async throws -> CloudPlaylistResult {
+        let openURL = Self.driveURL(path: "/open", queryItems: [
+            ("id", id),
+            ("resourcekey", resourceKey)
+        ])
+        let response = try await sendGET(url: openURL, cookie: cookie)
+        try Self.validateAccess(response: response)
+
+        let html = String(data: response.data, encoding: .utf8) ?? ""
+        let finalPath = response.finalURL?.path.lowercased() ?? ""
+        let isFolderResponse = finalPath.contains("/folders/")
+            || finalPath.contains("folderview")
+            || html.contains("_DRIVE_ivd")
+            || html.contains("flip-entry")
+
+        if isFolderResponse {
+            let resolvedFolderID: String
+            if let finalURL = response.finalURL,
+               case .folder(let parsedID, _) = Self.parseExtracted(finalURL.absoluteString) {
+                resolvedFolderID = parsedID
+            } else {
+                resolvedFolderID = id
+            }
+            let prefetched = (html.contains("_DRIVE_ivd") || html.contains("flip-entry")) ? html : nil
+            return try await fetchFolderTree(
+                rootID: resolvedFolderID,
+                resourceKey: resourceKey,
+                cookie: cookie,
+                prefetchedRootHTML: prefetched
+            )
+        }
+        return try await fetchSingleFile(fileID: id, resourceKey: resourceKey, cookie: cookie)
+    }
+
+    private func fetchFolderTree(
+        rootID: String,
+        resourceKey: String?,
+        cookie: String?,
+        prefetchedRootHTML: String?
+    ) async throws -> CloudPlaylistResult {
+        var visitedFolders = Set<String>()
+        var foldersScanned = 0
+        var seenFileIDs = Set<String>()
+        var tracks: [CloudTrackInfo] = []
+        var rootTitle: String?
+
+        struct FolderNode {
+            let id: String
+            let resourceKey: String?
+            let depth: Int
+            let albumName: String?
+        }
+
+        var queue: [FolderNode] = [FolderNode(id: rootID, resourceKey: resourceKey, depth: 0, albumName: nil)]
+        var cursor = 0
+
+        while cursor < queue.count, foldersScanned < Self.maxFolders {
+            let node = queue[cursor]
+            cursor += 1
+            guard visitedFolders.insert(node.id).inserted else { continue }
+            foldersScanned += 1
+
+            let folderResult: (title: String?, items: [DriveItem])
+            do {
+                folderResult = try await fetchSingleFolderEntries(
+                    folderID: node.id,
+                    resourceKey: node.resourceKey,
+                    cookie: cookie,
+                    prefetchedHTML: node.depth == 0 ? prefetchedRootHTML : nil
+                )
+            } catch {
+                if node.depth == 0 { throw error }
+                continue
+            }
+
+            if node.depth == 0, let parsedTitle = folderResult.title, !parsedTitle.isEmpty {
+                rootTitle = parsedTitle
+            }
+
+            let effectiveAlbum = node.albumName ?? rootTitle ?? "Google Drive"
+            for item in folderResult.items {
+                if item.isFolder {
+                    if node.depth < Self.maxDepth, !visitedFolders.contains(item.id) {
+                        queue.append(FolderNode(
+                            id: item.id,
+                            resourceKey: item.resourceKey ?? node.resourceKey,
+                            depth: node.depth + 1,
+                            albumName: item.name
+                        ))
+                    }
+                } else if Self.isSupportedAudio(name: item.name, mimeType: item.mimeType) {
+                    guard seenFileIDs.insert(item.id).inserted else { continue }
+                    let ext = Self.resolvedAudioExtension(name: item.name, mimeType: item.mimeType)
+                    let title = Self.stripAudioExtensionIfPresent(item.name)
+                    let remoteTrackID = Self.encodeTrackID(fileID: item.id, resourceKey: item.resourceKey)
+                    tracks.append(CloudTrackInfo(
+                        remoteTrackID: remoteTrackID,
+                        relativePath: "gdrive/\(item.id).\(ext)",
+                        title: title,
+                        artist: "Google Drive",
+                        album: effectiveAlbum,
+                        trackNumber: nil,
+                        duration: 0,
+                        artworkURL: nil
+                    ))
+                }
+            }
+        }
+
+        guard !tracks.isEmpty else {
+            throw CloudSourceError.apiError(L10n.trNonisolated("No supported audio files were found in this Google Drive folder."))
+        }
+
+        return CloudPlaylistResult(
+            kind: .cloudGoogleDrive,
+            remoteID: rootID,
+            title: rootTitle ?? "Google Drive",
+            tracks: tracks
+        )
+    }
+
+    private func fetchSingleFolderEntries(
+        folderID: String,
+        resourceKey: String?,
+        cookie: String?,
+        prefetchedHTML: String?
+    ) async throws -> (title: String?, items: [DriveItem]) {
+        let html: String
+        if let prefetchedHTML {
+            html = prefetchedHTML
+        } else {
+            let primaryURL = Self.driveURL(path: "/drive/folders/\(folderID)", queryItems: [
+                ("resourcekey", resourceKey)
+            ])
+            let response = try await sendGET(url: primaryURL, cookie: cookie)
+            try Self.validateAccess(response: response)
+            html = String(data: response.data, encoding: .utf8) ?? ""
+        }
+
+        var title = Self.extractTitle(from: html)
+        let ivdItems = Self.parseDriveIVD(from: html)
+        if !ivdItems.isEmpty {
+            return (title, ivdItems)
+        }
+
+        // Fallback: embeddedfolderview#list
+        let fallbackURL = Self.driveURL(path: "/embeddedfolderview", queryItems: [
+            ("id", folderID),
+            ("resourcekey", resourceKey)
+        ], fragment: "list")
+        let fallbackResponse = try await sendGET(url: fallbackURL, cookie: cookie)
+        try Self.validateAccess(response: fallbackResponse)
+        let fallbackHTML = String(data: fallbackResponse.data, encoding: .utf8) ?? ""
+        if title == nil {
+            title = Self.extractTitle(from: fallbackHTML)
+        }
+        let embeddedItems = Self.parseEmbeddedFolderView(from: fallbackHTML)
+        return (title, embeddedItems)
+    }
+
+    private func fetchSingleFile(fileID: String, resourceKey: String?, cookie: String?) async throws -> CloudPlaylistResult {
+        var fileName: String?
+        var mimeType: String?
+
+        let viewURL = Self.driveURL(path: "/file/d/\(fileID)/view", queryItems: [
+            ("resourcekey", resourceKey)
+        ])
+        let viewResponse = try await sendGET(url: viewURL, cookie: cookie)
+        try Self.validateAccess(response: viewResponse)
+        if let viewHTML = String(data: viewResponse.data, encoding: .utf8) {
+            fileName = Self.extractTitle(from: viewHTML)
+            mimeType = Self.extractHTMLMimeType(from: viewHTML)
+        }
+
+        let hasAudioExt = fileName.map { Self.supportedAudioExtension(fromFilename: $0) != nil } ?? false
+        let hasAudioMime = mimeType.map { $0.lowercased().hasPrefix("audio/") } ?? false
+        if !hasAudioExt && !hasAudioMime {
+            let probeURL = Self.downloadURL(fileID: fileID, resourceKey: resourceKey, useUserContent: true)
+            let probeResponse = try await sendGET(url: probeURL, cookie: cookie, range: "bytes=0-0")
+            try Self.validateAccess(response: probeResponse)
+            if let cd = probeResponse.header("Content-Disposition"),
+               let dispName = Self.parseContentDispositionFilename(cd), !dispName.isEmpty {
+                fileName = dispName
+            }
+            if let ct = probeResponse.header("Content-Type"),
+               !ct.lowercased().contains("text/html") {
+                mimeType = ct.split(separator: ";").first.map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            }
+        }
+
+        let resolvedName = fileName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let mimeType, !Self.isSupportedAudio(name: resolvedName ?? "", mimeType: mimeType) {
+            if !mimeType.lowercased().contains("octet-stream") || (resolvedName != nil && !(resolvedName!).isEmpty && Self.supportedAudioExtension(fromFilename: resolvedName!) == nil) {
+                throw CloudSourceError.apiError(L10n.trNonisolated("This Google Drive file is not a supported audio format."))
+            }
+        } else if let resolvedName, !resolvedName.isEmpty, !Self.isSupportedAudio(name: resolvedName, mimeType: mimeType ?? "") {
+            throw CloudSourceError.apiError(L10n.trNonisolated("This Google Drive file is not a supported audio format."))
+        }
+
+        let ext = Self.resolvedAudioExtension(name: resolvedName ?? "", mimeType: mimeType ?? "")
+        let title = Self.stripAudioExtensionIfPresent(resolvedName?.isEmpty == false ? resolvedName! : fileID)
+        let track = CloudTrackInfo(
+            remoteTrackID: Self.encodeTrackID(fileID: fileID, resourceKey: resourceKey),
+            relativePath: "gdrive/\(fileID).\(ext)",
+            title: title,
+            artist: "Google Drive",
+            album: title,
+            trackNumber: 1,
+            duration: 0,
+            artworkURL: nil
+        )
+        return CloudPlaylistResult(
+            kind: .cloudGoogleDrive,
+            remoteID: fileID,
+            title: title,
+            tracks: [track]
+        )
+    }
+
+    // MARK: Stream Resolution
+
+    func resolveStream(
+        trackID: String,
+        cookie: String?,
+        fallbackExtension: String? = nil,
+        forceRefresh: Bool = false
+    ) async throws -> CloudStreamResult {
+        if !forceRefresh, let cached = streamCache[trackID], cached.result.expiresAt > Date().addingTimeInterval(30) {
+            return cached.result
+        }
+
+        let (fileID, resourceKey) = Self.decodeTrackID(trackID)
+        var headers: [String: String] = [
+            "User-Agent": Self.userAgent,
+            "Accept": "*/*"
+        ]
+        if let cleanCookie = Self.normalizedCookie(cookie) {
+            headers["Cookie"] = cleanCookie
+        }
+
+        let candidates = [
+            Self.downloadURL(fileID: fileID, resourceKey: resourceKey, useUserContent: true),
+            Self.downloadURL(fileID: fileID, resourceKey: resourceKey, useUserContent: false)
+        ]
+
+        var lastError: Error = CloudSourceError.noPlayableStream
+        for candidate in candidates {
+            do {
+                let response = try await sendGET(url: candidate, cookie: cookie, range: "bytes=0-0")
+                try Self.validateAccess(response: response)
+
+                if let ct = response.header("Content-Type")?.lowercased(), ct.contains("text/html") {
+                    let html = String(data: response.data, encoding: .utf8) ?? ""
+                    if Self.isSignInHTML(html) {
+                        throw CloudSourceError.apiError(Self.accessDeniedMessage)
+                    }
+                    if let confirmedURL = Self.parseDownloadConfirmForm(
+                        html: html,
+                        baseURL: response.finalURL ?? candidate
+                    ) {
+                        let confirmedResponse = try await sendGET(url: confirmedURL, cookie: cookie, range: "bytes=0-0")
+                        try Self.validateAccess(response: confirmedResponse)
+                        if let cct = confirmedResponse.header("Content-Type")?.lowercased(), cct.contains("text/html") {
+                            let chtml = String(data: confirmedResponse.data, encoding: .utf8) ?? ""
+                            if Self.isSignInHTML(chtml) {
+                                throw CloudSourceError.apiError(Self.accessDeniedMessage)
+                            }
+                            continue
+                        }
+                        if confirmedResponse.statusCode == 200 || confirmedResponse.statusCode == 206 {
+                            let resolvedURL = confirmedResponse.finalURL ?? confirmedURL
+                            let ext = Self.detectStreamExtension(
+                                response: confirmedResponse,
+                                fallbackExtension: fallbackExtension
+                            )
+                            let result = CloudStreamResult(
+                                url: resolvedURL,
+                                headers: headers,
+                                fileExtension: ext,
+                                expiresAt: Date().addingTimeInterval(1800)
+                            )
+                            streamCache[trackID] = CachedStream(result: result)
+                            return result
+                        }
+                    }
+                    continue
+                }
+
+                if response.statusCode == 200 || response.statusCode == 206 {
+                    let resolvedURL = response.finalURL ?? candidate
+                    let ext = Self.detectStreamExtension(
+                        response: response,
+                        fallbackExtension: fallbackExtension
+                    )
+                    let result = CloudStreamResult(
+                        url: resolvedURL,
+                        headers: headers,
+                        fileExtension: ext,
+                        expiresAt: Date().addingTimeInterval(1800)
+                    )
+                    streamCache[trackID] = CachedStream(result: result)
+                    return result
+                }
+            } catch let error as CloudSourceError {
+                lastError = error
+                if case .apiError = error {
+                    // Preserve access denied errors if fallback also fails.
+                }
+            } catch {
+                lastError = error
+            }
+        }
+
+        throw lastError
+    }
+
+    // MARK: HTTP Helpers
+
+    private func sendGET(url: URL, cookie: String?, range: String? = nil) async throws -> HTTPResponseData {
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+        if let range {
+            req.setValue(range, forHTTPHeaderField: "Range")
+            req.setValue("*/*", forHTTPHeaderField: "Accept")
+        } else {
+            req.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", forHTTPHeaderField: "Accept")
+        }
+        if let cleanCookie = Self.normalizedCookie(cookie) {
+            req.setValue(cleanCookie, forHTTPHeaderField: "Cookie")
+        }
+        return try await transport.send(req)
+    }
+
+    nonisolated static var accessDeniedMessage: String {
+        L10n.trNonisolated("Cannot access this Google Drive link. Make sure the link is shared with 'Anyone with the link'.")
+    }
+
+    nonisolated private static func validateAccess(response: HTTPResponseData) throws {
+        if let finalHost = response.finalURL?.host?.lowercased(),
+           finalHost == "accounts.google.com" || finalHost.hasSuffix(".accounts.google.com") {
+            throw CloudSourceError.apiError(accessDeniedMessage)
+        }
+        if let location = response.header("Location")?.lowercased(),
+           location.contains("accounts.google.com") {
+            throw CloudSourceError.apiError(accessDeniedMessage)
+        }
+        if response.statusCode == 401 || response.statusCode == 403 || response.statusCode == 404 {
+            throw CloudSourceError.apiError(accessDeniedMessage)
+        }
+        guard (200..<400).contains(response.statusCode) else {
+            throw CloudSourceError.networkError(L10n.trNonisolated("Google Drive returned HTTP %@.", String(response.statusCode)))
+        }
+        if let ct = response.header("Content-Type")?.lowercased(), ct.contains("text/html"),
+           let html = String(data: response.data, encoding: .utf8),
+           isSignInHTML(html) {
+            throw CloudSourceError.apiError(accessDeniedMessage)
+        }
+    }
+
+    nonisolated private static func isSignInHTML(_ html: String) -> Bool {
+        let lower = html.lowercased()
+        return lower.contains("accounts.google.com/servicelogin")
+            || lower.contains("sign in - google accounts")
+            || lower.contains("servicelogin?")
+    }
+
+    nonisolated private static func normalizedCookie(_ cookie: String?) -> String? {
+        guard let trimmed = cookie?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
+    }
+
+    nonisolated private static func driveURL(path: String, queryItems: [(String, String?)], fragment: String? = nil) -> URL {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = "drive.google.com"
+        components.path = path
+        let items = queryItems.compactMap { name, value -> URLQueryItem? in
+            guard let value, !value.isEmpty else { return nil }
+            return URLQueryItem(name: name, value: value)
+        }
+        if !items.isEmpty { components.queryItems = items }
+        if let fragment, !fragment.isEmpty { components.fragment = fragment }
+        return components.url!
+    }
+
+    nonisolated private static func downloadURL(fileID: String, resourceKey: String?, useUserContent: Bool) -> URL {
+        var components = URLComponents()
+        components.scheme = "https"
+        components.host = useUserContent ? "drive.usercontent.google.com" : "drive.google.com"
+        components.path = useUserContent ? "/download" : "/uc"
+        var items = [
+            URLQueryItem(name: "id", value: fileID),
+            URLQueryItem(name: "export", value: "download"),
+            URLQueryItem(name: "confirm", value: "t")
+        ]
+        if let resourceKey, !resourceKey.isEmpty {
+            items.append(URLQueryItem(name: "resourcekey", value: resourceKey))
+        }
+        components.queryItems = items
+        return components.url!
+    }
+
+    nonisolated private static func lowercasedQueryDictionary(_ items: [URLQueryItem]?) -> [String: String] {
+        var result: [String: String] = [:]
+        for item in items ?? [] {
+            guard let value = item.value, !value.isEmpty else { continue }
+            let key = item.name.lowercased()
+            if result[key] == nil {
+                result[key] = value
+            }
+        }
+        return result
+    }
+
+    // MARK: HTML & JS Parsing (Static & Testable)
+
+    nonisolated static func extractTitle(from html: String) -> String? {
+        // 1. <meta property="og:title" content="...">
+        if let ogRegex = try? NSRegularExpression(
+            pattern: #"<meta\b[^>]*property=["']og:title["'][^>]*content=["']([^"']*)["']|<meta\b[^>]*content=["']([^"']*)["'][^>]*property=["']og:title["']"#,
+            options: [.caseInsensitive]
+        ) {
+            let range = NSRange(html.startIndex..<html.endIndex, in: html)
+            if let match = ogRegex.firstMatch(in: html, range: range) {
+                for g in 1...2 {
+                    if let r = Range(match.range(at: g), in: html) {
+                        let cleaned = cleanDriveTitle(decodeHTMLEntities(String(html[r])))
+                        if !cleaned.isEmpty { return cleaned }
+                    }
+                }
+            }
+        }
+
+        // 2. <title>...</title>
+        if let titleRegex = try? NSRegularExpression(pattern: #"<title\b[^>]*>([\s\S]*?)</title>"#, options: [.caseInsensitive]) {
+            let range = NSRange(html.startIndex..<html.endIndex, in: html)
+            if let match = titleRegex.firstMatch(in: html, range: range),
+               let r = Range(match.range(at: 1), in: html) {
+                let cleaned = cleanDriveTitle(decodeHTMLEntities(String(html[r])))
+                if !cleaned.isEmpty { return cleaned }
+            }
+        }
+
+        return nil
+    }
+
+    nonisolated private static func cleanDriveTitle(_ raw: String) -> String {
+        var title = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        for suffix in [" - Google Drive", " - Google 云端硬盘", " – Google Drive"] {
+            if title.hasSuffix(suffix) {
+                title = String(title.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+        let lower = title.lowercased()
+        if lower == "google drive" || lower == "meet google drive" || lower == "error" || lower.hasPrefix("sign in") {
+            return ""
+        }
+        return title
+    }
+
+    nonisolated private static func extractHTMLMimeType(from html: String) -> String? {
+        guard let regex = try? NSRegularExpression(
+            pattern: #""mimeType"\s*:\s*"([^"]+)""#,
+            options: [.caseInsensitive]
+        ) else { return nil }
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        guard let match = regex.firstMatch(in: html, range: range),
+              let r = Range(match.range(at: 1), in: html) else { return nil }
+        return String(html[r])
+    }
+
+    nonisolated static func parseDriveIVD(from html: String) -> [DriveItem] {
+        guard let jsonString = extractDriveIVDJSONString(from: html),
+              let data = jsonString.data(using: .utf8),
+              let json = try? JSONSerialization.jsonObject(with: data) else {
+            return []
+        }
+
+        var items: [DriveItem] = []
+        var seen = Set<String>()
+
+        func collect(_ node: Any, depth: Int) {
+            guard depth <= 4 else { return }
+            if let dict = node as? [String: Any],
+               let id = dict["id"] as? String, isValidDriveID(id),
+               let name = dict["name"] as? String, !name.isEmpty,
+               let mime = dict["mimeType"] as? String, mime.contains("/") {
+                if seen.insert(id).inserted {
+                    let rk = (dict["resourceKey"] as? String) ?? (dict["resourcekey"] as? String)
+                    items.append(DriveItem(id: id, name: name, mimeType: mime, resourceKey: rk))
+                }
+                return
+            }
+            guard let array = node as? [Any] else { return }
+            if array.count >= 4,
+               let id = array[0] as? String, isValidDriveID(id),
+               let name = array[2] as? String, !name.isEmpty,
+               let mime = array[3] as? String, mime.contains("/") {
+                if seen.insert(id).inserted {
+                    let rk = extractResourceKey(fromItemArray: array)
+                    items.append(DriveItem(id: id, name: name, mimeType: mime, resourceKey: rk))
+                }
+                return
+            }
+            for element in array {
+                collect(element, depth: depth + 1)
+            }
+        }
+
+        collect(json, depth: 0)
+        return items
+    }
+
+    nonisolated private static func extractResourceKey(fromItemArray array: [Any]) -> String? {
+        guard array.count > 4 else { return nil }
+        for (offset, elem) in array.dropFirst(4).enumerated() {
+            if let dict = elem as? [String: Any],
+               let rk = (dict["resourceKey"] as? String) ?? (dict["resourcekey"] as? String),
+               !rk.isEmpty {
+                return rk
+            }
+            if let str = elem as? String, !str.isEmpty {
+                if str.hasPrefix("0-"), str.count >= 6, isValidDriveID(str) {
+                    return str
+                }
+                if array.count == 5, offset == 0, !str.contains("/"), !str.contains(" "), !str.hasPrefix("http") {
+                    return str
+                }
+            }
+        }
+        return nil
+    }
+
+    nonisolated static func extractDriveIVDJSONString(from html: String) -> String? {
+        let markers = ["window['_DRIVE_ivd']", "window[\"_DRIVE_ivd\"]", "window._DRIVE_ivd"]
+        var markerEnd: String.Index?
+        for marker in markers {
+            if let range = html.range(of: marker) {
+                markerEnd = range.upperBound
+                break
+            }
+        }
+        guard var idx = markerEnd else { return nil }
+
+        // Skip whitespace and '='
+        while idx < html.endIndex, html[idx].isWhitespace { idx = html.index(after: idx) }
+        guard idx < html.endIndex, html[idx] == "=" else { return nil }
+        idx = html.index(after: idx)
+        while idx < html.endIndex, html[idx].isWhitespace { idx = html.index(after: idx) }
+        guard idx < html.endIndex else { return nil }
+
+        let first = html[idx]
+        if first == "'" || first == "\"" {
+            let quote = first
+            var cursor = html.index(after: idx)
+            let start = cursor
+            var escaped = false
+            while cursor < html.endIndex {
+                let ch = html[cursor]
+                if escaped {
+                    escaped = false
+                } else if ch == "\\" {
+                    escaped = true
+                } else if ch == quote {
+                    let rawLiteral = String(html[start..<cursor])
+                    return unescapeJSString(rawLiteral)
+                }
+                cursor = html.index(after: cursor)
+            }
+            return nil
+        } else if first == "[" {
+            // Direct JSON array literal fallback
+            let rest = html[idx...]
+            if let semi = rest.firstIndex(of: ";") {
+                return String(rest[..<semi]).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            return String(rest).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        return nil
+    }
+
+    nonisolated static func unescapeJSString(_ raw: String) -> String {
+        var result = ""
+        result.reserveCapacity(raw.count)
+        var utf16Buffer: [UInt16] = []
+
+        func flushUTF16() {
+            if !utf16Buffer.isEmpty {
+                result.append(String(decoding: utf16Buffer, as: UTF16.self))
+                utf16Buffer.removeAll(keepingCapacity: true)
+            }
+        }
+
+        var idx = raw.startIndex
+        while idx < raw.endIndex {
+            let ch = raw[idx]
+            guard ch == "\\" else {
+                flushUTF16()
+                result.append(ch)
+                idx = raw.index(after: idx)
+                continue
+            }
+
+            let nextIdx = raw.index(after: idx)
+            guard nextIdx < raw.endIndex else {
+                flushUTF16()
+                result.append("\\")
+                break
+            }
+
+            let esc = raw[nextIdx]
+            switch esc {
+            case "x":
+                let hexStart = raw.index(after: nextIdx)
+                if let hexEnd = raw.index(hexStart, offsetBy: 2, limitedBy: raw.endIndex),
+                   let code = UInt16(raw[hexStart..<hexEnd], radix: 16) {
+                    flushUTF16()
+                    if let scalar = UnicodeScalar(code) {
+                        result.append(Character(scalar))
+                    }
+                    idx = hexEnd
+                } else {
+                    flushUTF16()
+                    result.append(esc)
+                    idx = raw.index(after: nextIdx)
+                }
+            case "u":
+                let hexStart = raw.index(after: nextIdx)
+                if let hexEnd = raw.index(hexStart, offsetBy: 4, limitedBy: raw.endIndex),
+                   let code = UInt16(raw[hexStart..<hexEnd], radix: 16) {
+                    utf16Buffer.append(code)
+                    idx = hexEnd
+                } else {
+                    flushUTF16()
+                    result.append(esc)
+                    idx = raw.index(after: nextIdx)
+                }
+            case "n":
+                flushUTF16(); result.append("\n"); idx = raw.index(after: nextIdx)
+            case "r":
+                flushUTF16(); result.append("\r"); idx = raw.index(after: nextIdx)
+            case "t":
+                flushUTF16(); result.append("\t"); idx = raw.index(after: nextIdx)
+            case "b":
+                flushUTF16(); result.append("\u{08}"); idx = raw.index(after: nextIdx)
+            case "f":
+                flushUTF16(); result.append("\u{0C}"); idx = raw.index(after: nextIdx)
+            case "\\", "'", "\"", "/":
+                flushUTF16(); result.append(esc); idx = raw.index(after: nextIdx)
+            default:
+                flushUTF16(); result.append(esc); idx = raw.index(after: nextIdx)
+            }
+        }
+        flushUTF16()
+        return result
+    }
+
+    nonisolated static func parseEmbeddedFolderView(from html: String) -> [DriveItem] {
+        var items: [DriveItem] = []
+        var seen = Set<String>()
+
+        // Match flip-entry blocks when present (either single or double quoted class).
+        if let entryRegex = try? NSRegularExpression(
+            pattern: #"class\s*=\s*["'](?:[^"']*\s)?flip-entry(?:\s[^"']*)?["']"#,
+            options: [.caseInsensitive]
+        ) {
+            let nsRange = NSRange(html.startIndex..<html.endIndex, in: html)
+            let matches = entryRegex.matches(in: html, range: nsRange)
+            for (index, match) in matches.enumerated() {
+                guard let startRange = Range(match.range, in: html) else { continue }
+                let nextStart: String.Index
+                if index + 1 < matches.count, let nextRange = Range(matches[index + 1].range, in: html) {
+                    nextStart = nextRange.lowerBound
+                } else {
+                    nextStart = html.endIndex
+                }
+                let block = String(html[startRange.lowerBound..<nextStart])
+                guard let entry = parseEmbeddedEntryBlock(block) else { continue }
+                if seen.insert(entry.id).inserted {
+                    items.append(entry)
+                }
+            }
+        }
+
+        if !items.isEmpty { return items }
+
+        // Fallback: scan anchor tags pointing to /drive/folders/<ID> or /file/d/<ID>
+        guard let anchorRegex = try? NSRegularExpression(
+            pattern: #"<a\b[^>]*href=["']([^"']*(?:/drive/(?:u/\d+/)?folders/|/file/d/)[^"']*)["'][^>]*>([\s\S]*?)</a>"#,
+            options: [.caseInsensitive]
+        ) else { return items }
+
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        for match in anchorRegex.matches(in: html, range: range) {
+            guard let hrefRange = Range(match.range(at: 1), in: html),
+                  let textRange = Range(match.range(at: 2), in: html) else { continue }
+            let href = decodeHTMLEntities(String(html[hrefRange]))
+            let title = stripHTMLTags(decodeHTMLEntities(String(html[textRange]))).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let item = driveItemFromHref(href, title: title) else { continue }
+            if seen.insert(item.id).inserted {
+                items.append(item)
+            }
+        }
+        return items
+    }
+
+    nonisolated private static func parseEmbeddedEntryBlock(_ block: String) -> DriveItem? {
+        guard let hrefRegex = try? NSRegularExpression(
+            pattern: #"href=["']([^"']*(?:/drive/(?:u/\d+/)?folders/|/file/d/)[^"']*)["']"#,
+            options: [.caseInsensitive]
+        ) else { return nil }
+        let range = NSRange(block.startIndex..<block.endIndex, in: block)
+        guard let hrefMatch = hrefRegex.firstMatch(in: block, range: range),
+              let hrefRange = Range(hrefMatch.range(at: 1), in: block) else { return nil }
+        let href = decodeHTMLEntities(String(block[hrefRange]))
+
+        var title = ""
+        if let titleRegex = try? NSRegularExpression(
+            pattern: #"class=["'][^"']*flip-entry-title[^"']*["'][^>]*>([\s\S]*?)</(?:div|span|a)>"#,
+            options: [.caseInsensitive]
+        ),
+           let titleMatch = titleRegex.firstMatch(in: block, range: range),
+           let titleRange = Range(titleMatch.range(at: 1), in: block) {
+            title = stripHTMLTags(decodeHTMLEntities(String(block[titleRange]))).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        if title.isEmpty,
+           let anchorRegex = try? NSRegularExpression(pattern: #"<a\b[^>]*>([\s\S]*?)</a>"#, options: [.caseInsensitive]),
+           let anchorMatch = anchorRegex.firstMatch(in: block, range: range),
+           let textRange = Range(anchorMatch.range(at: 1), in: block) {
+            title = stripHTMLTags(decodeHTMLEntities(String(block[textRange]))).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+
+        return driveItemFromHref(href, title: title)
+    }
+
+    nonisolated private static func driveItemFromHref(_ href: String, title: String) -> DriveItem? {
+        let normalized = href.hasPrefix("/") ? "https://drive.google.com\(href)" : href
+        guard let target = parseExtracted(normalized) else { return nil }
+        switch target {
+        case .folder(let id, let rk):
+            let resolvedTitle = title.isEmpty ? id : title
+            return DriveItem(id: id, name: resolvedTitle, mimeType: "application/vnd.google-apps.folder", resourceKey: rk)
+        case .file(let id, let rk):
+            let resolvedTitle = title.isEmpty ? id : title
+            let ext = supportedAudioExtension(fromFilename: resolvedTitle) ?? ""
+            let mime = ext.isEmpty ? "application/octet-stream" : (mimeTypeForExtension(ext) ?? "audio/mpeg")
+            return DriveItem(id: id, name: resolvedTitle, mimeType: mime, resourceKey: rk)
+        case .open:
+            return nil
+        }
+    }
+
+    nonisolated static func parseDownloadConfirmForm(html: String, baseURL: URL) -> URL? {
+        guard let formRegex = try? NSRegularExpression(
+            pattern: #"<form\b([^>]*)>([\s\S]*?)</form>"#,
+            options: [.caseInsensitive]
+        ) else { return nil }
+
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        for match in formRegex.matches(in: html, range: range) {
+            guard let attrsRange = Range(match.range(at: 1), in: html),
+                  let bodyRange = Range(match.range(at: 2), in: html) else { continue }
+            let formAttrs = parseHTMLAttributes(String(html[attrsRange]))
+            guard let rawAction = formAttrs["action"] else { continue }
+            let decodedAction = decodeHTMLEntities(rawAction)
+            let actionLower = decodedAction.lowercased()
+            guard actionLower.contains("download") || actionLower.contains("/uc") else { continue }
+
+            guard let actionURL = URL(string: decodedAction, relativeTo: baseURL)?.absoluteURL,
+                  var components = URLComponents(url: actionURL, resolvingAgainstBaseURL: true) else {
+                continue
+            }
+
+            let body = String(html[bodyRange])
+            guard let inputRegex = try? NSRegularExpression(pattern: #"<input\b([^>]*)>"#, options: [.caseInsensitive]) else {
+                continue
+            }
+            let bodyNSRange = NSRange(body.startIndex..<body.endIndex, in: body)
+            var queryItems = components.queryItems ?? []
+            var existingKeys = Set(queryItems.map { $0.name.lowercased() })
+
+            for inputMatch in inputRegex.matches(in: body, range: bodyNSRange) {
+                guard let inputAttrRange = Range(inputMatch.range(at: 1), in: body) else { continue }
+                let attrs = parseHTMLAttributes(String(body[inputAttrRange]))
+                let inputType = attrs["type"]?.lowercased() ?? "text"
+                if inputType == "submit" || inputType == "button" || inputType == "reset" { continue }
+                guard let name = attrs["name"], !name.isEmpty,
+                      let rawValue = attrs["value"] else { continue }
+                let value = decodeHTMLEntities(rawValue)
+                if existingKeys.contains(name.lowercased()) {
+                    queryItems.removeAll { $0.name.caseInsensitiveCompare(name) == .orderedSame }
+                }
+                existingKeys.insert(name.lowercased())
+                queryItems.append(URLQueryItem(name: name, value: value))
+            }
+
+            components.queryItems = queryItems.isEmpty ? nil : queryItems
+            if let url = components.url {
+                return url
+            }
+        }
+        return nil
+    }
+
+    nonisolated private static func parseHTMLAttributes(_ raw: String) -> [String: String] {
+        var result: [String: String] = [:]
+        guard let regex = try? NSRegularExpression(
+            pattern: #"([A-Za-z0-9_-]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))"#,
+            options: []
+        ) else { return result }
+        let range = NSRange(raw.startIndex..<raw.endIndex, in: raw)
+        for match in regex.matches(in: raw, range: range) {
+            guard let nameRange = Range(match.range(at: 1), in: raw) else { continue }
+            let name = String(raw[nameRange]).lowercased()
+            var value = ""
+            for g in 2...4 {
+                if let valRange = Range(match.range(at: g), in: raw) {
+                    value = String(raw[valRange])
+                    break
+                }
+            }
+            result[name] = value
+        }
+        return result
+    }
+
+    nonisolated static func decodeHTMLEntities(_ text: String) -> String {
+        var result = text
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&lt;", with: "<")
+            .replacingOccurrences(of: "&gt;", with: ">")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&#x27;", with: "'", options: .caseInsensitive)
+            .replacingOccurrences(of: "&apos;", with: "'")
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+
+        if let numRegex = try? NSRegularExpression(pattern: #"&#(x[0-9A-Fa-f]+|\d+);"#, options: []) {
+            let matches = numRegex.matches(in: result, range: NSRange(result.startIndex..<result.endIndex, in: result))
+            for match in matches.reversed() {
+                guard let fullRange = Range(match.range(at: 0), in: result),
+                      let codeRange = Range(match.range(at: 1), in: result) else { continue }
+                let token = String(result[codeRange])
+                let codePoint: UInt32? = token.hasPrefix("x") || token.hasPrefix("X")
+                    ? UInt32(token.dropFirst(), radix: 16)
+                    : UInt32(token, radix: 10)
+                if let codePoint, let scalar = UnicodeScalar(codePoint) {
+                    result.replaceSubrange(fullRange, with: String(Character(scalar)))
+                }
+            }
+        }
+        return result
+    }
+
+    nonisolated private static func stripHTMLTags(_ html: String) -> String {
+        html.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+    }
+
+    // MARK: Audio Type & Extension Helpers
+
+    nonisolated static func isSupportedAudio(name: String, mimeType: String) -> Bool {
+        if supportedAudioExtension(fromFilename: name) != nil {
+            return true
+        }
+        let lowerMime = mimeType.lowercased().split(separator: ";").first.map {
+            String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+        } ?? ""
+        if lowerMime.hasPrefix("audio/") || lowerMime == "application/ogg" {
+            return true
+        }
+        return false
+    }
+
+    nonisolated static func supportedAudioExtension(fromFilename name: String) -> String? {
+        let ext = (name as NSString).pathExtension.lowercased()
+        return supportedAudioExtensions.contains(ext) ? ext : nil
+    }
+
+    nonisolated static func resolvedAudioExtension(name: String, mimeType: String) -> String {
+        if let ext = supportedAudioExtension(fromFilename: name) {
+            return ext
+        }
+        let lowerMime = mimeType.lowercased().split(separator: ";").first.map {
+            String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+        } ?? ""
+        if let mapped = mimeToExtension[lowerMime] {
+            return mapped
+        }
+        if lowerMime.hasPrefix("audio/") {
+            let sub = String(lowerMime.dropFirst("audio/".count))
+            let cleaned = sub.replacingOccurrences(of: "x-", with: "")
+            if supportedAudioExtensions.contains(cleaned) {
+                return cleaned
+            }
+        }
+        return "m4a"
+    }
+
+    nonisolated static func stripAudioExtensionIfPresent(_ name: String) -> String {
+        if supportedAudioExtension(fromFilename: name) != nil {
+            let stripped = (name as NSString).deletingPathExtension
+            if !stripped.isEmpty { return stripped }
+        }
+        return name
+    }
+
+    nonisolated private static func mimeTypeForExtension(_ ext: String) -> String? {
+        switch ext.lowercased() {
+        case "mp3": "audio/mpeg"
+        case "m4a", "mp4": "audio/mp4"
+        case "aac": "audio/aac"
+        case "flac": "audio/flac"
+        case "wav": "audio/wav"
+        case "aif", "aiff": "audio/aiff"
+        case "alac": "audio/alac"
+        case "caf": "audio/x-caf"
+        case "ogg": "audio/ogg"
+        default: nil
+        }
+    }
+
+    nonisolated static func parseContentDispositionFilename(_ header: String) -> String? {
+        // Prefer RFC 5987 filename*=UTF-8''...
+        if let starRegex = try? NSRegularExpression(
+            pattern: #"filename\*\s*=\s*(?:UTF-8''|utf-8'')([^;\r\n]+)"#,
+            options: []
+        ) {
+            let range = NSRange(header.startIndex..<header.endIndex, in: header)
+            if let match = starRegex.firstMatch(in: header, range: range),
+               let r = Range(match.range(at: 1), in: header) {
+                let raw = String(header[r]).trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+                if let decoded = raw.removingPercentEncoding, !decoded.isEmpty {
+                    return decoded
+                }
+                if !raw.isEmpty { return raw }
+            }
+        }
+        // Fallback: filename="..." or filename=...
+        if let plainRegex = try? NSRegularExpression(
+            pattern: #"filename\s*=\s*(?:"([^"]+)"|([^;\r\n]+))"#,
+            options: [.caseInsensitive]
+        ) {
+            let range = NSRange(header.startIndex..<header.endIndex, in: header)
+            if let match = plainRegex.firstMatch(in: header, range: range) {
+                for g in 1...2 {
+                    if let r = Range(match.range(at: g), in: header) {
+                        let name = String(header[r]).trimmingCharacters(in: CharacterSet(charactersIn: "\"' "))
+                        if !name.isEmpty { return name }
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
+    nonisolated private static func detectStreamExtension(response: HTTPResponseData, fallbackExtension: String?) -> String {
+        if let cd = response.header("Content-Disposition"),
+           let filename = parseContentDispositionFilename(cd),
+           let ext = supportedAudioExtension(fromFilename: filename) {
+            return ext
+        }
+        if let ct = response.header("Content-Type") {
+            let cleanCT = ct.lowercased().split(separator: ";").first.map {
+                String($0).trimmingCharacters(in: .whitespacesAndNewlines)
+            } ?? ""
+            if let mapped = mimeToExtension[cleanCT] {
+                return mapped
+            }
+        }
+        if let fallbackExtension, supportedAudioExtensions.contains(fallbackExtension.lowercased()) {
+            return fallbackExtension.lowercased()
+        }
+        return "m4a"
     }
 }

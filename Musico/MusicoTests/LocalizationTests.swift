@@ -93,6 +93,10 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(L10n.tr("Sleep Timer"), "睡眠定时")
         XCTAssertEqual(L10n.tr("Check for Updates"), "检查更新")
         XCTAssertEqual(L10n.tr("Language"), "语言")
+        XCTAssertEqual(L10n.tr("Find Songs"), "搜索歌曲")
+        XCTAssertEqual(L10n.tr("Rescan Library"), "重新扫描资料库")
+        XCTAssertEqual(L10n.tr("View"), "视图")
+        XCTAssertEqual(L10n.tr("Playback"), "播放")
 
         XCTAssertEqual(TrackSortOrder.custom.localizedTitle, "自定义顺序")
         XCTAssertEqual(SearchField.artist.localizedTitle, "艺术家")
@@ -109,7 +113,8 @@ final class LocalizationTests: XCTestCase {
 
         XCTAssertEqual(LibraryError.duplicateRoot.errorDescription, "该位置已在你的资料库中。")
         XCTAssertEqual(LyricsError.unreadable.errorDescription, "无法将该文件读取为歌词文本。")
-        XCTAssertEqual(CloudSourceError.invalidURL.errorDescription, "请输入有效的 YouTube 或 Bilibili 歌单、合集或视频链接。")
+        XCTAssertEqual(CloudSourceError.invalidURL.errorDescription, "请输入有效的 YouTube、Bilibili 或 Google Drive 链接。")
+        XCTAssertEqual(L10n.tr("Google Drive · Local"), "Google Drive · 本地")
         XCTAssertTrue(UpdateError.checksumMismatch(expected: "abcdef123456", actual: "123456abcdef").errorDescription?.contains("SHA-256") == true)
 
         LanguageManager.shared.setLanguage(.english)

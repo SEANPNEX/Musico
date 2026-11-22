@@ -73,7 +73,12 @@ public sealed class CloudExporterTests
             Title: title,
             Artist: artist,
             Album: album,
-            AlbumArtist: source == CloudSources.Bilibili ? "Bilibili" : "YouTube",
+            AlbumArtist: source switch
+            {
+                CloudSources.Bilibili => "Bilibili",
+                CloudSources.GoogleDrive => "Google Drive",
+                _ => "YouTube"
+            },
             TrackNumber: trackNumber,
             DiscNumber: 1,
             DurationSeconds: 180,
@@ -522,6 +527,104 @@ public sealed class CloudExporterTests
         Assert.Equal("https://www.bilibili.com/video/BV1xx411c7mD", added.SourceUrl);
         Assert.Equal("BV1xx411c7mD", added.RemoteId);
         Assert.Null(added.Cookie);
+    }
+
+    [Fact]
+    public async Task ExportPlaylistAndIncrementalUpdateWorkForGoogleDrive()
+    {
+        string cacheDir = TestHelpers.MakeTempDir();
+        string parentDir = TestHelpers.MakeTempDir();
+
+        var cloudId = Guid.NewGuid();
+        string folderUrl = "https://drive.google.com/drive/folders/gdFolder1?resourcekey=0-rkFolder";
+        var cloudRoot = new LibraryRoot(
+            Id: cloudId,
+            Name: "Drive Jazz",
+            Kind: RootKind.CloudGoogleDrive,
+            Path: folderUrl,
+            SourceUrl: folderUrl,
+            RemoteId: "gdFolder1");
+
+        var t1 = MakeCloudTrack(cloudId, "gd_file_1?resourcekey=0-rk1", "Blue Note", artist: "Google Drive", album: "Drive Jazz", trackNumber: 1, source: CloudSources.GoogleDrive);
+        var t2 = MakeCloudTrack(cloudId, "gd_file_2", "Autumn Leaves", artist: "Google Drive", album: "SubDisc", trackNumber: 2, source: CloudSources.GoogleDrive);
+        byte[] mp3Bytes = MakeMinimalMp3Bytes();
+
+        var downloadedIds = new List<string>();
+        bool includeThirdTrack = false;
+
+        var handler = new StubHttpHandler(req =>
+        {
+            string uri = req.RequestUri!.AbsoluteUri;
+            if (uri.Contains("/drive/folders/gdFolder1", StringComparison.Ordinal))
+            {
+                string rows = includeThirdTrack
+                    ? """["gd_file_1",["gdFolder1"],"Blue Note.mp3","audio/mpeg","https://drive.google.com/file/d/gd_file_1/view?resourcekey=0-rk1"],["gd_file_2",["gdFolder1"],"Autumn Leaves.mp3","audio/mpeg"],["gd_file_3",["gdFolder1"],"Night Train.mp3","audio/mpeg"]"""
+                    : """["gd_file_1",["gdFolder1"],"Blue Note.mp3","audio/mpeg","https://drive.google.com/file/d/gd_file_1/view?resourcekey=0-rk1"],["gd_file_2",["gdFolder1"],"Autumn Leaves.mp3","audio/mpeg"]""";
+                string html = $"<html><head><title>Drive Jazz - Google Drive</title></head><body><script>window['_DRIVE_ivd'] = '[[{rows}]]';</script></body></html>";
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(html, Encoding.UTF8, "text/html") };
+            }
+
+            if (uri.StartsWith("https://drive.usercontent.google.com/download", StringComparison.Ordinal))
+            {
+                string fileId = uri.Contains("id=gd_file_1", StringComparison.Ordinal) ? "gd_file_1"
+                    : uri.Contains("id=gd_file_2", StringComparison.Ordinal) ? "gd_file_2"
+                    : "gd_file_3";
+                if (req.Headers.Range is null)
+                {
+                    downloadedIds.Add(fileId);
+                }
+
+                var resp = new HttpResponseMessage(req.Headers.Range is not null ? HttpStatusCode.PartialContent : HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(mp3Bytes)
+                };
+                resp.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("audio/mpeg");
+                return resp;
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var exporter = new CloudExporter(
+            new CloudAudioCache(cacheDir, handler: handler),
+            new YouTubeClient(handler),
+            new BilibiliClient(handler),
+            googleDriveClient: new GoogleDriveClient(handler));
+
+        var exportResult = await exporter.ExportPlaylistAsync(cloudRoot, [t1, t2], parentDir, "Drive Jazz");
+        Assert.Equal(2, exportResult.SavedCount);
+        Assert.Equal(0, exportResult.FailedCount);
+        Assert.True(File.Exists(Path.Combine(exportResult.DestinationFolder, "Blue Note.mp3")));
+        Assert.True(File.Exists(Path.Combine(exportResult.DestinationFolder, "Autumn Leaves.mp3")));
+
+        var manifest = CloudExporter.LoadManifest(exportResult.DestinationFolder);
+        Assert.NotNull(manifest);
+        Assert.Equal(RootKind.CloudGoogleDrive.ToString(), manifest!.CloudKind);
+        Assert.Equal(2, manifest.Tracks.Count);
+
+        // Delete Autumn Leaves locally, add gd_file_3 remotely, and run incremental update via _googleDrive client.
+        File.Delete(Path.Combine(exportResult.DestinationFolder, "Autumn Leaves.mp3"));
+        includeThirdTrack = true;
+        downloadedIds.Clear();
+
+        var trackedLocalRoot = new LibraryRoot(
+            Id: Guid.NewGuid(),
+            Name: "Drive Jazz",
+            Kind: RootKind.Picked,
+            Path: exportResult.DestinationFolder,
+            SourceUrl: cloudRoot.SourceUrl,
+            RemoteId: cloudRoot.RemoteId,
+            LinkedCloudKind: RootKind.CloudGoogleDrive);
+
+        var updateResult = await exporter.UpdateLocalFolderAsync(trackedLocalRoot);
+        Assert.Equal(2, updateResult.AddedCount);
+        Assert.Equal(1, updateResult.SkippedCount);
+        Assert.Equal(0, updateResult.FailedCount);
+        Assert.Equal(3, updateResult.TotalRemoteCount);
+        Assert.Equal(["gd_file_2", "gd_file_3"], downloadedIds);
+        Assert.True(File.Exists(Path.Combine(exportResult.DestinationFolder, "Blue Note.mp3")));
+        Assert.True(File.Exists(Path.Combine(exportResult.DestinationFolder, "Autumn Leaves.mp3")));
+        Assert.True(File.Exists(Path.Combine(exportResult.DestinationFolder, "Night Train.mp3")));
     }
 
     private sealed class SynchronousProgress<T> : IProgress<T>

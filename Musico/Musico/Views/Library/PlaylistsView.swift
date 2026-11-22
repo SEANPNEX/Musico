@@ -34,6 +34,9 @@ struct PlaylistsView: View {
             }
         }
         .navigationTitle(L10n.tr("Playlists"))
+        #if targetEnvironment(macCatalyst)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .navigationDestination(for: PlaylistRef.self) { PlaylistDetailView(ref: $0) }
         .toolbar {
             Button(L10n.tr("New Playlist"), systemImage: "plus") {

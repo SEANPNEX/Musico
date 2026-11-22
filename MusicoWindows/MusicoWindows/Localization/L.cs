@@ -446,13 +446,13 @@ public static class L
 
         // AddCloudFolderDialog
         ["AddCloud_Title"] = "Add Cloud Folder",
-        ["AddCloud_UrlLabel"] = "Playlist or Video URL",
-        ["AddCloud_UrlHint"] = "Supports YouTube / YouTube Music playlists & videos (no login required), Bilibili favlists, collections, series, b23.tv & BV links.",
+        ["AddCloud_UrlLabel"] = "Playlist, Folder, or File URL",
+        ["AddCloud_UrlHint"] = "Supports YouTube / YouTube Music playlists & videos (no login required), Bilibili favlists/collections/series/b23.tv/BV links, and public Google Drive folders or audio files.",
         ["AddCloud_CookieLabel"] = "Cookie (Optional)",
-        ["AddCloud_CookieHint"] = "Only needed for private/authenticated playlists or higher Bilibili audio quality.",
-        ["AddCloud_ProxyLabel"] = "HTTP Proxy (Optional — YouTube)",
+        ["AddCloud_CookieHint"] = "Only needed for private/authenticated playlists, higher Bilibili audio quality, or restricted Google Drive links.",
+        ["AddCloud_ProxyLabel"] = "HTTP Proxy (Optional — YouTube / Google Drive)",
         ["AddCloud_ProxyHint"] = "e.g. 7890, 127.0.0.1:7890, or http://127.0.0.1:7890",
-        ["AddCloud_Fetching"] = "Fetching playlist tracks...",
+        ["AddCloud_Fetching"] = "Fetching cloud tracks...",
 
         // SaveCloudFolderDialog
         ["SaveCloud_Title"] = "Save Cloud Playlist to Local Folder",
@@ -822,13 +822,13 @@ public static class L
 
         // AddCloudFolderDialog
         ["AddCloud_Title"] = "添加云端文件夹",
-        ["AddCloud_UrlLabel"] = "播放列表或视频链接",
-        ["AddCloud_UrlHint"] = "支持 YouTube / YouTube Music 播放列表与视频（无需登录），以及 Bilibili 收藏夹、合集、系列、b23.tv 与 BV 链接。",
+        ["AddCloud_UrlLabel"] = "播放列表、文件夹或文件链接",
+        ["AddCloud_UrlHint"] = "支持 YouTube / YouTube Music 播放列表与视频（无需登录）、Bilibili 收藏夹/合集/系列/b23.tv/BV 链接，以及公开分享的 Google Drive 文件夹或音频文件。",
         ["AddCloud_CookieLabel"] = "Cookie（可选）",
-        ["AddCloud_CookieHint"] = "仅在访问私有/需登录的播放列表或获取更高音质的 Bilibili 音频时需要。",
-        ["AddCloud_ProxyLabel"] = "HTTP 代理（可选 — YouTube）",
+        ["AddCloud_CookieHint"] = "仅在访问私有/需登录的播放列表、获取更高音质的 Bilibili 音频或受限的 Google Drive 链接时需要。",
+        ["AddCloud_ProxyLabel"] = "HTTP 代理（可选 — YouTube / Google Drive）",
         ["AddCloud_ProxyHint"] = "例如：7890、127.0.0.1:7890 或 http://127.0.0.1:7890",
-        ["AddCloud_Fetching"] = "正在获取播放列表歌曲...",
+        ["AddCloud_Fetching"] = "正在获取云端歌曲...",
 
         // SaveCloudFolderDialog
         ["SaveCloud_Title"] = "将云端播放列表保存到本地文件夹",

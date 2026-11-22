@@ -62,18 +62,21 @@ public sealed class CloudExporter
     private readonly CloudAudioCache _cloudCache;
     private readonly YouTubeClient _youtube;
     private readonly BilibiliClient _bilibili;
+    private readonly GoogleDriveClient _googleDrive;
     private readonly ArtworkCache? _artworkCache;
 
     public CloudExporter(
         CloudAudioCache cloudCache,
         YouTubeClient youtubeClient,
         BilibiliClient bilibiliClient,
-        ArtworkCache? artworkCache = null)
+        ArtworkCache? artworkCache = null,
+        GoogleDriveClient? googleDriveClient = null)
     {
         _cloudCache = cloudCache ?? throw new ArgumentNullException(nameof(cloudCache));
         _youtube = youtubeClient ?? throw new ArgumentNullException(nameof(youtubeClient));
         _bilibili = bilibiliClient ?? throw new ArgumentNullException(nameof(bilibiliClient));
         _artworkCache = artworkCache;
+        _googleDrive = googleDriveClient ?? new GoogleDriveClient();
     }
 
     public static string SanitizeFileName(string? raw, string fallback = "Untitled")
@@ -278,17 +281,30 @@ public sealed class CloudExporter
         else
         {
             RootKind resolvedKind = kindHint ?? CloudUrlClassifier.Classify(rawSource);
-            playlist = resolvedKind == RootKind.CloudBilibili
-                ? await _bilibili.FetchPlaylistAsync(rawSource, root.Cookie, root.ProxyUrl, ct).ConfigureAwait(false)
-                : await _youtube.FetchPlaylistAsync(rawSource, root.Cookie, root.ProxyUrl, ct).ConfigureAwait(false);
+            playlist = resolvedKind switch
+            {
+                RootKind.CloudBilibili => await _bilibili.FetchPlaylistAsync(rawSource, root.Cookie, root.ProxyUrl, ct).ConfigureAwait(false),
+                RootKind.CloudGoogleDrive => await _googleDrive.FetchPlaylistAsync(rawSource, root.Cookie, root.ProxyUrl, ct).ConfigureAwait(false),
+                _ => await _youtube.FetchPlaylistAsync(rawSource, root.Cookie, root.ProxyUrl, ct).ConfigureAwait(false)
+            };
         }
 
         var trackedMap = existingManifest?.Tracks is not null
             ? new Dictionary<string, string>(existingManifest.Tracks, StringComparer.Ordinal)
             : new Dictionary<string, string>(StringComparer.Ordinal);
 
-        string cloudSource = playlist.Kind == RootKind.CloudBilibili ? CloudSources.Bilibili : CloudSources.YouTube;
-        string albumArtist = playlist.Kind == RootKind.CloudBilibili ? "Bilibili" : "YouTube";
+        string cloudSource = playlist.Kind switch
+        {
+            RootKind.CloudBilibili => CloudSources.Bilibili,
+            RootKind.CloudGoogleDrive => CloudSources.GoogleDrive,
+            _ => CloudSources.YouTube
+        };
+        string albumArtist = playlist.Kind switch
+        {
+            RootKind.CloudBilibili => "Bilibili",
+            RootKind.CloudGoogleDrive => "Google Drive",
+            _ => "YouTube"
+        };
         var lookupRoot = root with
         {
             Kind = playlist.Kind,
@@ -469,9 +485,15 @@ public sealed class CloudExporter
     private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct)
     {
         string remoteId = track.RemoteTrackId ?? throw new InvalidOperationException("Missing remote track ID.");
-        return string.Equals(track.CloudSource, CloudSources.Bilibili, StringComparison.OrdinalIgnoreCase)
-            ? _bilibili.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct)
-            : _youtube.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
+        if (string.Equals(track.CloudSource, CloudSources.Bilibili, StringComparison.OrdinalIgnoreCase))
+        {
+            return _bilibili.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
+        }
+        if (string.Equals(track.CloudSource, CloudSources.GoogleDrive, StringComparison.OrdinalIgnoreCase))
+        {
+            return _googleDrive.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
+        }
+        return _youtube.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
     }
 
     private void TryWriteTags(string destPath, Track track)

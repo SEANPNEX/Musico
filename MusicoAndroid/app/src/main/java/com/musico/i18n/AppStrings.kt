@@ -118,8 +118,10 @@ interface AppStrings {
     val foldersFooterHint: String
     val badgeYouTube: String
     val badgeBilibili: String
+    val badgeGoogleDrive: String
     val badgeYouTubeLocal: String
     val badgeBilibiliLocal: String
+    val badgeGoogleDriveLocal: String
     val badgeCloudLocal: String
     val folderUnavailable: String
     val folderPermissionLost: String
@@ -484,12 +486,12 @@ object EnStrings : AppStrings {
     override val couldNotRelocateFolderFallback = "Could not relocate that folder."
     override val errorDuplicateRoot = "That folder is already in your library."
     override val errorNotAFolder = "That location could not be opened as a folder."
-    override val errorUnsupportedCloudUrl = "Enter a valid YouTube or Bilibili playlist, collection, or video URL."
+    override val errorUnsupportedCloudUrl = "Enter a valid YouTube, Bilibili, or Google Drive URL."
     override val removeLocalFolderConfirmMessage = "Its songs leave your library, playlists and queues. The files themselves are not deleted."
     override val removeCloudFolderConfirmMessage = "Its songs leave your library, playlists and queues."
-    override val cloudUrlLabel = "YouTube or Bilibili URL"
-    override val cloudUrlPlaceholder = "Playlist, collection, or video URL"
-    override val cloudUrlSupportingText = "Supports YouTube / YT Music playlists & videos, Bilibili favlists, collections, series, and BV / b23.tv links."
+    override val cloudUrlLabel = "YouTube, Bilibili, or Google Drive URL"
+    override val cloudUrlPlaceholder = "Playlist, video, or Google Drive link"
+    override val cloudUrlSupportingText = "Supports YouTube / YT Music playlists & videos, Bilibili favlists, collections, series & BV / b23.tv links, and Google Drive shared folders or audio files."
     override val cookieOptionalLabel = "Cookie (optional)"
     override val cookiePlaceholder = "Only needed for private playlists"
     override val cloudPlaylistLoadErrorFallback = "Could not load that cloud playlist."
@@ -512,12 +514,14 @@ object EnStrings : AppStrings {
     override val fetchingLatestCloudPlaylist = "Fetching latest cloud playlist…"
     override val lookingForMusic = "Looking for music…"
     override val addYourMusicFoldersTitle = "Add Your Music Folders"
-    override val addYourMusicFoldersDesc = "Pick folders on your device, add a YouTube or Bilibili playlist, or copy songs into the Musico Folder and pull down to rescan."
-    override val foldersFooterHint = "Add local folders, link YouTube or Bilibili playlists, or copy music into the Musico Folder and pull down to rescan."
+    override val addYourMusicFoldersDesc = "Pick folders on your device, add a YouTube, Bilibili, or Google Drive link, or copy songs into the Musico Folder and pull down to rescan."
+    override val foldersFooterHint = "Add local folders, link YouTube, Bilibili, or Google Drive folders, or copy music into the Musico Folder and pull down to rescan."
     override val badgeYouTube = "YouTube"
     override val badgeBilibili = "Bilibili"
+    override val badgeGoogleDrive = "Google Drive"
     override val badgeYouTubeLocal = "YouTube · Local"
     override val badgeBilibiliLocal = "Bilibili · Local"
+    override val badgeGoogleDriveLocal = "Google Drive · Local"
     override val badgeCloudLocal = "Cloud · Local"
     override val folderUnavailable = "Unavailable — folder moved or disconnected"
     override val folderPermissionLost = "Folder permission lost or moved."
@@ -855,12 +859,12 @@ object ZhHansStrings : AppStrings {
     override val couldNotRelocateFolderFallback = "无法重新定位该文件夹。"
     override val errorDuplicateRoot = "该文件夹已在你的音乐库中。"
     override val errorNotAFolder = "无法将该位置作为文件夹打开。"
-    override val errorUnsupportedCloudUrl = "请输入有效的 YouTube 或 Bilibili 歌单、合集或视频链接。"
+    override val errorUnsupportedCloudUrl = "请输入有效的 YouTube、Bilibili 或 Google Drive 链接。"
     override val removeLocalFolderConfirmMessage = "其中的歌曲将从音乐库、歌单和队列中移除，但本地文件本身不会被删除。"
     override val removeCloudFolderConfirmMessage = "其中的歌曲将从音乐库、歌单和队列中移除。"
-    override val cloudUrlLabel = "YouTube 或 Bilibili 链接"
-    override val cloudUrlPlaceholder = "歌单、合集或视频链接"
-    override val cloudUrlSupportingText = "支持 YouTube / YT Music 歌单与视频，以及 Bilibili 收藏夹、合集、系列和 BV / b23.tv 链接。"
+    override val cloudUrlLabel = "YouTube、Bilibili 或 Google Drive 链接"
+    override val cloudUrlPlaceholder = "歌单、视频或 Google Drive 分享链接"
+    override val cloudUrlSupportingText = "支持 YouTube / YT Music 歌单与视频、Bilibili 收藏夹/合集/系列与 BV / b23.tv 链接，以及 Google Drive 共享文件夹或音频文件。"
     override val cookieOptionalLabel = "Cookie（可选）"
     override val cookiePlaceholder = "仅私密歌单需要填写"
     override val cloudPlaylistLoadErrorFallback = "无法加载该云端歌单。"
@@ -883,12 +887,14 @@ object ZhHansStrings : AppStrings {
     override val fetchingLatestCloudPlaylist = "正在获取最新云端歌单…"
     override val lookingForMusic = "正在查找音乐…"
     override val addYourMusicFoldersTitle = "添加你的音乐文件夹"
-    override val addYourMusicFoldersDesc = "选择设备上的本地文件夹、添加 YouTube 或 Bilibili 歌单，或将歌曲复制到 Musico 文件夹后下拉重新扫描。"
-    override val foldersFooterHint = "添加本地文件夹、关联 YouTube 或 Bilibili 歌单，或将音乐复制到 Musico 文件夹后下拉重新扫描。"
+    override val addYourMusicFoldersDesc = "选择设备上的本地文件夹、添加 YouTube、Bilibili 或 Google Drive 链接，或将歌曲复制到 Musico 文件夹后下拉重新扫描。"
+    override val foldersFooterHint = "添加本地文件夹、关联 YouTube、Bilibili 或 Google Drive 文件夹，或将音乐复制到 Musico 文件夹后下拉重新扫描。"
     override val badgeYouTube = "YouTube"
     override val badgeBilibili = "Bilibili"
+    override val badgeGoogleDrive = "Google Drive"
     override val badgeYouTubeLocal = "YouTube · 本地"
     override val badgeBilibiliLocal = "Bilibili · 本地"
+    override val badgeGoogleDriveLocal = "Google Drive · 本地"
     override val badgeCloudLocal = "云端 · 本地"
     override val folderUnavailable = "不可用 — 文件夹已移动或断开连接"
     override val folderPermissionLost = "文件夹权限已失效或位置已移动。"

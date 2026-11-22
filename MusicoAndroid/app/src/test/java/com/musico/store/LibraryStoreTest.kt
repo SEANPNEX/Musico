@@ -5,6 +5,7 @@ import com.musico.cloud.BilibiliClient
 import com.musico.cloud.CloudHttpClient
 import com.musico.cloud.CloudHttpResponse
 import com.musico.cloud.CloudSource
+import com.musico.cloud.GoogleDriveClient
 import com.musico.cloud.YouTubeClient
 import com.musico.core.ArtworkCache
 import com.musico.core.MetadataReading
@@ -799,6 +800,85 @@ class LibraryStoreTest {
         assertEquals(
             listOf("Bili Two", "Bili Three", "Bili One", "Bili Four"),
             reloaded.tracksUnder(biliRoot.id, "").map { it.title },
+        )
+    }
+
+    @Test
+    fun googleDriveCloudFolderFlattensAndPreservesDragReorderAndSync() = runBlocking {
+        var includeFourth = false
+        val fakeHttp = object : CloudHttpClient {
+            override suspend fun get(url: String, headers: Map<String, String>, followRedirects: Boolean): CloudHttpResponse {
+                if (!url.contains("drive.google.com/drive/folders/1DriveMix")) {
+                    return CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+                }
+                val fourth = if (includeFourth) {
+                    """,["g_id_4",["1DriveMix"],"04 Delta.mp3","audio/mpeg"]"""
+                } else ""
+                val ivd = """[[["g_id_1",["1DriveMix"],"01 Alpha.flac","audio/flac"],["g_id_2",["1DriveMix"],"02 Beta.mp3","audio/mpeg"],["g_id_3",["1DriveMix"],"03 Gamma.m4a","audio/mp4"]$fourth]]"""
+                val html = """
+                    <html><head><title>Drive Mix - Google Drive</title></head><body>
+                    <script>window['_DRIVE_ivd'] = '${ivd.replace("\"", "\\x22").replace("[", "\\x5b").replace("]", "\\x5d")}';</script>
+                    </body></html>
+                """.trimIndent()
+                return CloudHttpResponse(200, url, emptyMap(), html.toByteArray())
+            }
+
+            override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse =
+                CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+
+            override suspend fun probeRange(url: String, headers: Map<String, String>): Int = 206
+        }
+
+        fun makeDriveStore(): LibraryStore = LibraryStore(
+            directory = stateDir,
+            appFolderDir = docsDir,
+            reader = reader,
+            artwork = ArtworkCache(File(stateDir, "artwork")),
+            context = null,
+            cloudHttpClient = fakeHttp,
+            youTubeClient = YouTubeClient(fakeHttp),
+            bilibiliClient = BilibiliClient(fakeHttp),
+            googleDriveClient = GoogleDriveClient(fakeHttp),
+        )
+
+        val store = makeDriveStore()
+        val addRes = store.addCloudRoot("Shared Drive: https://drive.google.com/drive/folders/1DriveMix?usp=sharing。")
+        assertTrue(addRes.isSuccess)
+
+        val driveRoot = store.state.value.roots.first { it.kind == RootKind.CLOUD_GOOGLE_DRIVE }
+        assertTrue(driveRoot.kind.isCloud)
+        assertEquals("Drive Mix", driveRoot.name)
+        assertEquals(listOf("gdrive/g_id_1.flac", "gdrive/g_id_2.mp3", "gdrive/g_id_3.m4a"), store.state.value.tracks.map { it.relativePath }.sorted())
+
+        // Drag-reorder at root "" flattens gdrive/<id>.<ext> tracks cleanly without disappearing.
+        val (folders, initial) = store.folderContents(driveRoot.id, "")
+        assertTrue(folders.isEmpty())
+        assertEquals(listOf("01 Alpha", "02 Beta", "03 Gamma"), initial.map { it.title })
+
+        store.moveFolderTrack(driveRoot.id, "", fromIndex = 2, toIndex = 0, currentOrderedIds = initial.map { it.id })
+        assertEquals(TrackSortOrder.CUSTOM, store.folderSortOrder(driveRoot.id, ""))
+        assertEquals(listOf("03 Gamma", "01 Alpha", "02 Beta"), store.folderContents(driveRoot.id, "").second.map { it.title })
+        assertEquals(listOf("03 Gamma", "01 Alpha", "02 Beta"), store.tracksUnder(driveRoot.id, "").map { it.title })
+        // Canonicalization also normalizes "gdrive" path to root "".
+        assertEquals(TrackSortOrder.CUSTOM, store.folderSortOrder(driveRoot.id, "gdrive"))
+
+        // Sync appends new track while preserving custom order.
+        includeFourth = true
+        store.rescan()
+        assertEquals(
+            listOf("03 Gamma", "01 Alpha", "02 Beta", "04 Delta"),
+            store.folderContents(driveRoot.id, "").second.map { it.title },
+        )
+
+        // Reloading from disk preserves all tracks and custom order.
+        val reloaded = makeDriveStore()
+        assertEquals(
+            listOf("03 Gamma", "01 Alpha", "02 Beta", "04 Delta"),
+            reloaded.folderContents(driveRoot.id, "").second.map { it.title },
+        )
+        assertEquals(
+            listOf("03 Gamma", "01 Alpha", "02 Beta", "04 Delta"),
+            reloaded.tracksUnder(driveRoot.id, "").map { it.title },
         )
     }
 

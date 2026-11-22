@@ -163,7 +163,12 @@ public partial class SaveCloudFolderDialog : UserControl
         _completedFile = null;
         ResetCts();
 
-        string sourceLabel = root.EffectiveCloudKind == RootKind.CloudBilibili ? "Bilibili" : "YouTube";
+        string sourceLabel = root.EffectiveCloudKind switch
+        {
+            RootKind.CloudBilibili => "Bilibili",
+            RootKind.CloudGoogleDrive => "Google Drive",
+            _ => "YouTube"
+        };
         TitleText.Text = L.Get("Folders_UpdateFromCloud");
         SourceSummaryText.Text = string.IsNullOrWhiteSpace(root.SourceUrl)
             ? $"{root.Name} · {sourceLabel}"

@@ -145,6 +145,7 @@ class CloudExporterTest {
         assertEquals("audio:https://cdn.example.com/t2", File(targetDir, "Song_ One (2).m4a").readText())
         assertEquals("audio:https://cdn.example.com/t3", File(targetDir, "Track_Three.webm").readText())
         assertTrue(recordedHeaders.all { it["Referer"] == "https://www.youtube.com/" })
+        assertTrue(recordedHeaders.all { it["Range"] == "bytes=0-" })
         assertTrue(progressEvents.contains(Triple(0, 3, "Song: One")))
         assertTrue(progressEvents.contains(Triple(3, 3, "Track/Three")))
     }
@@ -303,5 +304,73 @@ class CloudExporterTest {
         assertNotNull(updatedManifest)
         assertEquals(3, updatedManifest!!.tracks.size)
         assertEquals("Song Three.m4a", updatedManifest.tracks["vid_3"])
+    }
+
+    @Test
+    fun exportAndUpdateLocalFolderSupportGoogleDriveSource() = runBlocking {
+        val parent = tempFolder.newFolder("gdrive_exports")
+        val gdriveRoot = LibraryRoot(
+            id = "gdrive_1",
+            name = "Drive Album",
+            kind = RootKind.CLOUD_GOOGLE_DRIVE,
+            sourceUrl = "https://drive.google.com/drive/folders/1DriveFolder",
+            remoteId = "1DriveFolder",
+        )
+        val initialTracks = listOf(
+            cloudTrack("g1", "Track One", remoteId = "file1.flac", source = CloudSource.GOOGLE_DRIVE),
+        )
+        val exporter = CloudExporter(
+            context = null,
+            cloudResolver = FakeCloudStreamResolver { track, _, _ ->
+                ResolvedStream(
+                    url = "https://drive.usercontent.google.com/download?id=${track.remoteTrackId}",
+                    mimeType = "audio/flac",
+                )
+            },
+            downloader = CloudStreamDownloader { url, _, output ->
+                output.write("flac:$url".toByteArray(Charsets.UTF_8))
+            },
+        )
+
+        val exportSummary = exporter.exportPlaylist(initialTracks, gdriveRoot, parent, "Drive Album")
+        val targetDir = exportSummary.targetDir!!
+        assertEquals(1, exportSummary.savedCount)
+        assertTrue(File(targetDir, "Track One.flac").exists())
+
+        val manifest = CloudExporter.loadManifest(targetDir)!!
+        assertEquals(RootKind.CLOUD_GOOGLE_DRIVE.name, manifest.cloudKind)
+        assertEquals("Track One.flac", manifest.tracks["file1.flac"])
+
+        val trackedRoot = LibraryRoot(
+            id = "local_gdrive",
+            name = "Drive Album",
+            kind = RootKind.PICKED,
+            treeUri = targetDir.toURI().toString(),
+            sourceUrl = gdriveRoot.sourceUrl,
+            remoteId = gdriveRoot.remoteId,
+            linkedCloudKind = RootKind.CLOUD_GOOGLE_DRIVE,
+        )
+        val updateSummary = exporter.updateLocalFolder(
+            root = trackedRoot,
+            targetDir = targetDir,
+            fetchPlaylist = { _, _, kindHint ->
+                assertEquals(RootKind.CLOUD_GOOGLE_DRIVE, kindHint)
+                CloudPlaylistResult(
+                    source = CloudSource.GOOGLE_DRIVE,
+                    remoteId = "1DriveFolder",
+                    title = "Drive Album",
+                    tracks = listOf(
+                        CloudTrackMetadata("file1.flac", "Track One", "Google Drive", "Drive Album", 0.0),
+                        CloudTrackMetadata("file2.flac", "Track Two", "Google Drive", "Drive Album", 0.0),
+                    ),
+                )
+            },
+        )
+        assertEquals(1, updateSummary.addedCount)
+        assertEquals(1, updateSummary.skippedCount)
+        assertTrue(File(targetDir, "Track Two.flac").exists())
+        val updatedManifest = CloudExporter.loadManifest(targetDir)!!
+        assertEquals(RootKind.CLOUD_GOOGLE_DRIVE.name, updatedManifest.cloudKind)
+        assertEquals("Track Two.flac", updatedManifest.tracks["file2.flac"])
     }
 }

@@ -174,13 +174,13 @@
 
     <!-- AddCloudFolderDialog -->
     <sys:String x:Key="Str_AddCloud_Title">Add Cloud Folder</sys:String>
-    <sys:String x:Key="Str_AddCloud_UrlLabel">Playlist or Video URL</sys:String>
-    <sys:String x:Key="Str_AddCloud_UrlHint">Supports YouTube / YouTube Music playlists &amp; videos (no login required), Bilibili favlists, collections, series, b23.tv &amp; BV links.</sys:String>
+    <sys:String x:Key="Str_AddCloud_UrlLabel">Playlist, Folder, or File URL</sys:String>
+    <sys:String x:Key="Str_AddCloud_UrlHint">Supports YouTube / YouTube Music playlists &amp; videos (no login required), Bilibili favlists/collections/series/b23.tv/BV links, and public Google Drive folders or audio files.</sys:String>
     <sys:String x:Key="Str_AddCloud_CookieLabel">Cookie (Optional)</sys:String>
-    <sys:String x:Key="Str_AddCloud_CookieHint">Only needed for private/authenticated playlists or higher Bilibili audio quality.</sys:String>
-    <sys:String x:Key="Str_AddCloud_ProxyLabel">HTTP Proxy (Optional — YouTube)</sys:String>
+    <sys:String x:Key="Str_AddCloud_CookieHint">Only needed for private/authenticated playlists, higher Bilibili audio quality, or restricted Google Drive links.</sys:String>
+    <sys:String x:Key="Str_AddCloud_ProxyLabel">HTTP Proxy (Optional — YouTube / Google Drive)</sys:String>
     <sys:String x:Key="Str_AddCloud_ProxyHint">e.g. 7890, 127.0.0.1:7890, or http://127.0.0.1:7890</sys:String>
-    <sys:String x:Key="Str_AddCloud_Fetching">Fetching playlist tracks...</sys:String>
+    <sys:String x:Key="Str_AddCloud_Fetching">Fetching cloud tracks...</sys:String>
 
     <!-- SaveCloudFolderDialog -->
     <sys:String x:Key="Str_SaveCloud_Title">Save Cloud Playlist to Local Folder</sys:String>

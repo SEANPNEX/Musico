@@ -29,6 +29,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
     private readonly CloudAudioCache _cloudCache;
     private readonly YouTubeClient _youtube;
     private readonly BilibiliClient _bilibili;
+    private readonly GoogleDriveClient _googleDrive;
     private readonly Timer _ticker;
 
     private Track? _currentTrack;
@@ -64,7 +65,8 @@ public sealed class PlayerController : ObservableStore, IDisposable
         bool enableTicker = true,
         CloudAudioCache? cloudCache = null,
         YouTubeClient? youtubeClient = null,
-        BilibiliClient? bilibiliClient = null)
+        BilibiliClient? bilibiliClient = null,
+        GoogleDriveClient? googleDriveClient = null)
     {
         Library = library;
         Queues = queues;
@@ -77,6 +79,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
         _cloudCache = cloudCache ?? new CloudAudioCache(Path.Combine(stateDir, "CloudCache"));
         _youtube = youtubeClient ?? new YouTubeClient();
         _bilibili = bilibiliClient ?? new BilibiliClient();
+        _googleDrive = googleDriveClient ?? new GoogleDriveClient();
 
         _eq = Persistence.Load<EqSettings>(_settingsPath) ?? new EqSettings();
         _engine.ApplyEq(_eq);
@@ -391,9 +394,15 @@ public sealed class PlayerController : ObservableStore, IDisposable
     private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct)
     {
         string remoteId = track.RemoteTrackId ?? throw new InvalidOperationException("Missing remote track ID.");
-        return string.Equals(track.CloudSource, CloudSources.Bilibili, StringComparison.OrdinalIgnoreCase)
-            ? _bilibili.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct)
-            : _youtube.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
+        if (string.Equals(track.CloudSource, CloudSources.Bilibili, StringComparison.OrdinalIgnoreCase))
+        {
+            return _bilibili.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
+        }
+        if (string.Equals(track.CloudSource, CloudSources.GoogleDrive, StringComparison.OrdinalIgnoreCase))
+        {
+            return _googleDrive.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
+        }
+        return _youtube.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
     }
 
     private void PrefetchNextCloudTrack()

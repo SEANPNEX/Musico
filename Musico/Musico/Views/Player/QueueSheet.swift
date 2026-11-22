@@ -20,6 +20,9 @@ struct QueueSheet: View {
 
 /// All queues and the songs of the active one. Shown as its own tab and from the player.
 struct QueuesView: View {
+    var embeddedInInspector: Bool = false
+    var onDone: (() -> Void)? = nil
+
     @Environment(PlayerController.self) private var player
     @Environment(LibraryStore.self) private var library
     @Environment(QueueStore.self) private var queues
@@ -80,6 +83,11 @@ struct QueuesView: View {
             }
         }
         .navigationTitle(L10n.tr("Queues"))
+        #if targetEnvironment(macCatalyst)
+        .navigationBarTitleDisplayMode(.inline)
+        #else
+        .navigationBarTitleDisplayMode(embeddedInInspector ? .inline : .automatic)
+        #endif
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { EditButton() }
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -89,6 +97,9 @@ struct QueuesView: View {
                 .disabled(queues.active.trackIDs.count < 2)
                 Button(L10n.tr("Clear This Queue"), systemImage: "trash") { confirmClear = true }
                     .disabled(queues.active.trackIDs.isEmpty)
+                if let onDone {
+                    Button(L10n.tr("Done")) { onDone() }
+                }
             }
         }
         .confirmationDialog(L10n.tr("Remove every song from “%@”?", L10n.displayQueueName(queues.active.name)), isPresented: $confirmClear, titleVisibility: .visible) {

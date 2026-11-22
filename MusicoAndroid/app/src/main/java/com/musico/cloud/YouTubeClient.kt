@@ -11,7 +11,7 @@ import java.net.URLDecoder
 import java.security.MessageDigest
 
 sealed interface YouTubeTarget {
-    data class Playlist(val listId: String) : YouTubeTarget
+    data class Playlist(val listId: String, val videoId: String? = null) : YouTubeTarget
     data class Video(val videoId: String) : YouTubeTarget
 }
 
@@ -21,6 +21,7 @@ class YouTubeClient(
     private data class InnertubeClientConfig(
         val name: String,
         val version: String,
+        val clientId: Int,
         val userAgent: String,
         val androidSdkVersion: Int? = null,
         val deviceMake: String? = null,
@@ -28,7 +29,11 @@ class YouTubeClient(
         val osName: String? = null,
         val osVersion: String? = null,
         val thirdPartyEmbedUrl: String? = null,
+        val userAgentFieldInClient: Boolean = false,
     )
+
+    @Volatile
+    private var cachedVisitorData: Pair<String, Long>? = null
 
     suspend fun fetchPlaylist(sourceUrl: String, cookie: String? = null): CloudPlaylistResult {
         val target = parseTarget(sourceUrl)
@@ -36,44 +41,140 @@ class YouTubeClient(
 
         return when (target) {
             is YouTubeTarget.Video -> fetchSingleVideo(target.videoId, cookie)
-            is YouTubeTarget.Playlist -> fetchPlaylistInternal(target.listId, cookie)
+            is YouTubeTarget.Playlist -> fetchPlaylistInternal(target, cookie)
         }
     }
 
-    private suspend fun fetchSingleVideo(videoId: String, cookie: String?): CloudPlaylistResult {
-        val playerJson = requestPlayer(ANDROID_CLIENT, videoId, cookie)
-            ?: requestPlayer(WEB_CLIENT, videoId, cookie)
-            ?: throw IOException("Could not load YouTube video details.")
-
-        val details = playerJson.obj("videoDetails")
-            ?: throw IOException("YouTube video details missing.")
-        val title = details.str("title").orEmpty().ifBlank { "YouTube ($videoId)" }
-        val author = details.str("author").orEmpty().ifBlank { "YouTube" }
-        val durationSec = details.str("lengthSeconds")?.toDoubleOrNull()
-            ?: details.double("lengthSeconds")?.takeIf { !it.isNaN() }
-            ?: 0.0
-        val artworkUrl = bestThumbnailUrl(details.obj("thumbnail"))
-
-        return CloudPlaylistResult(
-            source = CloudSource.YOUTUBE,
-            remoteId = videoId,
-            title = title,
-            tracks = listOf(
-                CloudTrackMetadata(
-                    remoteTrackId = videoId,
-                    title = title,
-                    artist = author,
-                    album = title,
-                    durationSec = durationSec,
-                    artworkUrl = artworkUrl,
-                    trackNumber = 1,
-                )
-            ),
-        )
+    private suspend fun fetchVisitorData(forceRefresh: Boolean = false): String? {
+        if (!forceRefresh) {
+            val cached = cachedVisitorData
+            if (cached != null && System.currentTimeMillis() - cached.second < VISITOR_DATA_TTL_MS) {
+                return cached.first
+            }
+        }
+        val visitor = runCatching {
+            val resp = httpClient.get(
+                url = "https://www.youtube.com/sw.js_data",
+                headers = mapOf(
+                    "User-Agent" to WEB_CLIENT.userAgent,
+                    "Cookie" to ANONYMOUS_COOKIE,
+                ),
+            )
+            if (resp.statusCode !in 200..299) return@runCatching null
+            VISITOR_DATA_REGEX.find(resp.bodyText)?.groupValues?.getOrNull(1)
+        }.getOrNull()
+        if (!visitor.isNullOrBlank()) {
+            cachedVisitorData = visitor to System.currentTimeMillis()
+        }
+        return visitor
     }
 
-    private suspend fun fetchPlaylistInternal(listId: String, cookie: String?): CloudPlaylistResult {
-        val browseId = if (listId.startsWith("VL")) listId else "VL$listId"
+    private suspend fun fetchSingleVideo(videoId: String, cookie: String?): CloudPlaylistResult {
+        val visitorData = fetchVisitorData()
+        val clients = listOf(VISIONOS_CLIENT, ANDROID_CLIENT, IOS_CLIENT, WEB_CLIENT)
+        var details: JsonObject? = null
+        for (client in clients) {
+            val playerJson = runCatching { requestPlayer(client, videoId, cookie, visitorData) }.getOrNull()
+            val candidate = playerJson?.obj("videoDetails")
+            if (candidate != null && !candidate.str("title").isNullOrBlank()) {
+                details = candidate
+                break
+            }
+            if (candidate != null && details == null) {
+                details = candidate
+            }
+        }
+
+        if (details != null) {
+            val title = details.str("title").orEmpty().ifBlank { "YouTube ($videoId)" }
+            val author = details.str("author").orEmpty().ifBlank { "YouTube" }
+            val durationSec = details.str("lengthSeconds")?.toDoubleOrNull()
+                ?: details.double("lengthSeconds")?.takeIf { !it.isNaN() }
+                ?: 0.0
+            val artworkUrl = bestThumbnailUrl(details.obj("thumbnail"))
+
+            return CloudPlaylistResult(
+                source = CloudSource.YOUTUBE,
+                remoteId = videoId,
+                title = title,
+                tracks = listOf(
+                    CloudTrackMetadata(
+                        remoteTrackId = videoId,
+                        title = title,
+                        artist = author,
+                        album = title,
+                        durationSec = durationSec,
+                        artworkUrl = artworkUrl,
+                        trackNumber = 1,
+                    )
+                ),
+            )
+        }
+
+        val oembed = fetchSingleVideoOEmbed(videoId, cookie)
+        if (oembed != null) return oembed
+        throw IOException("Could not load YouTube video details.")
+    }
+
+    private suspend fun fetchSingleVideoOEmbed(videoId: String, cookie: String?): CloudPlaylistResult? {
+        return runCatching {
+            val trimmedCookie = cookie?.trim()?.takeIf { it.isNotEmpty() } ?: ANONYMOUS_COOKIE
+            val resp = httpClient.get(
+                url = "https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=$videoId&format=json",
+                headers = mapOf(
+                    "User-Agent" to WEB_CLIENT.userAgent,
+                    "Cookie" to trimmedCookie,
+                ),
+            )
+            if (resp.statusCode !in 200..299) return@runCatching null
+            val json = resp.bodyText.parseJsonObject()
+            val title = json.str("title")?.takeIf { it.isNotBlank() } ?: return@runCatching null
+            val author = json.str("author_name")?.takeIf { it.isNotBlank() } ?: "YouTube"
+            val artworkUrl = normalizeHttpsUrl(json.str("thumbnail_url"))
+            CloudPlaylistResult(
+                source = CloudSource.YOUTUBE,
+                remoteId = videoId,
+                title = title,
+                tracks = listOf(
+                    CloudTrackMetadata(
+                        remoteTrackId = videoId,
+                        title = title,
+                        artist = author,
+                        album = title,
+                        durationSec = 0.0,
+                        artworkUrl = artworkUrl,
+                        trackNumber = 1,
+                    )
+                ),
+            )
+        }.getOrNull()
+    }
+
+    private suspend fun fetchPlaylistInternal(
+        target: YouTubeTarget.Playlist,
+        cookie: String?,
+    ): CloudPlaylistResult {
+        val listId = target.listId
+        val isMix = listId.startsWith("RD")
+        val browseId = if (
+            listId.startsWith("VL") ||
+            listId.startsWith("MPREb_") ||
+            listId.startsWith("FEmusic_")
+        ) {
+            listId
+        } else {
+            "VL$listId"
+        }
+
+        var nextMixResult: CloudPlaylistResult? = null
+        if (isMix) {
+            nextMixResult = runCatching {
+                fetchNextMix(listId, target.videoId, cookie)
+            }.getOrNull()
+            if (nextMixResult != null && nextMixResult.tracks.isNotEmpty()) {
+                return nextMixResult
+            }
+        }
 
         val remixResult = runCatching {
             browsePlaylistWithClient(
@@ -105,9 +206,168 @@ class YouTubeClient(
             return webResult
         }
 
+        if (!isMix && target.videoId != null) {
+            nextMixResult = runCatching {
+                fetchNextMix(listId, target.videoId, cookie)
+            }.getOrNull()
+            if (nextMixResult != null && nextMixResult.tracks.isNotEmpty()) {
+                return nextMixResult
+            }
+        }
+
+        val htmlResult = runCatching {
+            fetchPlaylistFromHtml(listId, cookie)
+        }.getOrNull()
+        if (htmlResult != null && htmlResult.tracks.isNotEmpty()) {
+            return htmlResult
+        }
+
+        if (target.videoId != null) {
+            val single = runCatching { fetchSingleVideo(target.videoId, cookie) }.getOrNull()
+            if (single != null) return single
+        }
+
         if (remixResult != null) return remixResult
         if (webResult != null) return webResult
+        if (nextMixResult != null) return nextMixResult
+        if (htmlResult != null) return htmlResult
         throw IOException("Could not fetch YouTube playlist $listId.")
+    }
+
+    private suspend fun fetchNextMix(
+        listId: String,
+        explicitVideoId: String?,
+        cookie: String?,
+    ): CloudPlaylistResult {
+        val inferredVideoId = explicitVideoId ?: inferVideoIdFromMixListId(listId)
+        val endpoint = "https://www.youtube.com/youtubei/v1/next?prettyPrint=false"
+        val headers = buildHeaders(
+            origin = "https://www.youtube.com",
+            client = WEB_CLIENT,
+            cookie = cookie,
+        )
+        val body = buildJsonObject {
+            put("context", buildContextJson(WEB_CLIENT))
+            put("playlistId", listId)
+            inferredVideoId?.let { put("videoId", it) }
+        }.toString()
+
+        val resp = httpClient.postJson(endpoint, body, headers)
+        if (resp.statusCode !in 200..299) {
+            throw IOException("YouTube next failed with HTTP ${resp.statusCode}")
+        }
+
+        val json = resp.bodyText.parseJsonObject()
+        val parsedTitle = extractPlaylistTitle(json)
+        val collected = LinkedHashMap<String, CloudTrackMetadata>()
+        for (track in parsePlaylistTracksFromJson(json, fallbackAlbum = parsedTitle)) {
+            collected.putIfAbsent(track.remoteTrackId, track)
+        }
+        val finalTitle = parsedTitle?.takeIf { it.isNotBlank() } ?: "YouTube Playlist ($listId)"
+        val numbered = collected.values.mapIndexed { idx, track ->
+            track.copy(
+                album = track.album.ifBlank { finalTitle },
+                trackNumber = idx + 1,
+            )
+        }
+        return CloudPlaylistResult(
+            source = CloudSource.YOUTUBE,
+            remoteId = listId,
+            title = finalTitle,
+            tracks = numbered,
+        )
+    }
+
+    private fun inferVideoIdFromMixListId(listId: String): String? {
+        if (listId.startsWith("RDAMVM") && listId.length >= 17) {
+            val candidate = listId.substring(6, 17)
+            if (VIDEO_ID_REGEX.matches(candidate)) return candidate
+        }
+        if (listId.startsWith("RD") && listId.length == 13) {
+            val candidate = listId.substring(2)
+            if (VIDEO_ID_REGEX.matches(candidate)) return candidate
+        }
+        return null
+    }
+
+    private suspend fun fetchPlaylistFromHtml(listId: String, cookie: String?): CloudPlaylistResult? {
+        val trimmedCookie = cookie?.trim()?.takeIf { it.isNotEmpty() } ?: ANONYMOUS_COOKIE
+        val resp = httpClient.get(
+            url = "https://www.youtube.com/playlist?list=$listId",
+            headers = mapOf(
+                "User-Agent" to WEB_CLIENT.userAgent,
+                "Cookie" to trimmedCookie,
+                "Accept-Language" to "en-US,en;q=0.9",
+            ),
+        )
+        if (resp.statusCode !in 200..299) return null
+        val json = extractYtInitialData(resp.bodyText) ?: return null
+        val parsedTitle = extractPlaylistTitle(json)
+        val collected = LinkedHashMap<String, CloudTrackMetadata>()
+        for (track in parsePlaylistTracksFromJson(json, fallbackAlbum = parsedTitle)) {
+            collected.putIfAbsent(track.remoteTrackId, track)
+        }
+        val finalTitle = parsedTitle?.takeIf { it.isNotBlank() } ?: "YouTube Playlist ($listId)"
+        val numbered = collected.values.mapIndexed { idx, track ->
+            track.copy(
+                album = track.album.ifBlank { finalTitle },
+                trackNumber = idx + 1,
+            )
+        }
+        return CloudPlaylistResult(
+            source = CloudSource.YOUTUBE,
+            remoteId = listId,
+            title = finalTitle,
+            tracks = numbered,
+        )
+    }
+
+    private fun extractYtInitialData(html: String): JsonObject? {
+        var searchFrom = 0
+        while (searchFrom < html.length) {
+            val markerIdx = html.indexOf("ytInitialData", searchFrom)
+            if (markerIdx < 0) return null
+            searchFrom = markerIdx + "ytInitialData".length
+            val eqIdx = html.indexOf('=', searchFrom)
+            if (eqIdx < 0 || eqIdx - searchFrom > 16) continue
+            var startIdx = eqIdx + 1
+            while (startIdx < html.length && html[startIdx].isWhitespace()) startIdx++
+            if (startIdx >= html.length || html[startIdx] != '{') continue
+
+            var depth = 0
+            var inString = false
+            var escaped = false
+            var endIdx = -1
+            for (i in startIdx until html.length) {
+                val ch = html[i]
+                if (inString) {
+                    if (escaped) {
+                        escaped = false
+                    } else if (ch == '\\') {
+                        escaped = true
+                    } else if (ch == '"') {
+                        inString = false
+                    }
+                } else {
+                    when (ch) {
+                        '"' -> inString = true
+                        '{' -> depth++
+                        '}' -> {
+                            depth--
+                            if (depth == 0) {
+                                endIdx = i
+                                break
+                            }
+                        }
+                    }
+                }
+            }
+            if (endIdx > startIdx) {
+                val parsed = runCatching { html.substring(startIdx, endIdx + 1).parseJsonObject() }.getOrNull()
+                if (parsed != null) return parsed
+            }
+        }
+        return null
     }
 
     private suspend fun browsePlaylistWithClient(
@@ -119,7 +379,7 @@ class YouTubeClient(
         cookie: String?,
     ): CloudPlaylistResult {
         val endpoint = "$baseUrl/youtubei/v1/browse?prettyPrint=false"
-        val headers = buildHeaders(origin = origin, userAgent = client.userAgent, cookie = cookie)
+        val headers = buildHeaders(origin = origin, client = client, cookie = cookie)
 
         val initialBody = buildJsonObject {
             put("context", buildContextJson(client))
@@ -174,11 +434,18 @@ class YouTubeClient(
     }
 
     suspend fun resolveStream(videoId: String, cookie: String? = null): ResolvedStream {
-        val clients = listOf(ANDROID_CLIENT, IOS_CLIENT, WEB_EMBEDDED_CLIENT)
+        val visitorData = fetchVisitorData()
+        val clients = listOf(
+            VISIONOS_CLIENT,
+            ANDROID_CLIENT,
+            IOS_CLIENT,
+            ANDROID_VR_CLIENT,
+            WEB_EMBEDDED_CLIENT,
+        )
         var lastError: Throwable? = null
 
         for (client in clients) {
-            val playerJson = runCatching { requestPlayer(client, videoId, cookie) }
+            val playerJson = runCatching { requestPlayer(client, videoId, cookie, visitorData) }
                 .onFailure { lastError = it }
                 .getOrNull() ?: continue
 
@@ -187,8 +454,9 @@ class YouTubeClient(
 
             val headers = buildHeaders(
                 origin = "https://www.youtube.com",
-                userAgent = client.userAgent,
+                client = client,
                 cookie = cookie,
+                visitorData = visitorData,
             )
             val expiresInSec = playerJson.obj("streamingData")
                 ?.str("expiresInSeconds")
@@ -202,6 +470,16 @@ class YouTubeClient(
                 }.getOrDefault(-1)
 
                 if (probeCode == 200 || probeCode == 206) {
+                    if (candidate.contentLength > POST_1MB_PROBE_THRESHOLD_BYTES) {
+                        val post1MbHeaders = headers + ("Range" to "bytes=1048576-1049599")
+                        val post1MbCode = runCatching {
+                            httpClient.probeRange(candidate.url, post1MbHeaders)
+                        }.getOrDefault(-1)
+                        if (post1MbCode != 200 && post1MbCode != 206) {
+                            continue
+                        }
+                    }
+
                     val ttlMs = ((expiresInSec - 120L).coerceAtLeast(300L)) * 1000L
                     return ResolvedStream(
                         url = candidate.url,
@@ -220,15 +498,17 @@ class YouTubeClient(
         client: InnertubeClientConfig,
         videoId: String,
         cookie: String?,
+        visitorData: String? = null,
     ): JsonObject? {
         val endpoint = "https://www.youtube.com/youtubei/v1/player?prettyPrint=false"
         val headers = buildHeaders(
             origin = "https://www.youtube.com",
-            userAgent = client.userAgent,
+            client = client,
             cookie = cookie,
+            visitorData = visitorData,
         )
         val body = buildJsonObject {
-            put("context", buildContextJson(client))
+            put("context", buildContextJson(client, visitorData))
             put("videoId", videoId)
             put("contentCheckOk", true)
             put("racyCheckOk", true)
@@ -239,7 +519,10 @@ class YouTubeClient(
         return runCatching { resp.bodyText.parseJsonObject() }.getOrNull()
     }
 
-    private fun buildContextJson(client: InnertubeClientConfig): JsonObject = buildJsonObject {
+    private fun buildContextJson(
+        client: InnertubeClientConfig,
+        visitorData: String? = null,
+    ): JsonObject = buildJsonObject {
         put(
             "client",
             buildJsonObject {
@@ -247,6 +530,10 @@ class YouTubeClient(
                 put("clientVersion", client.version)
                 put("hl", "en")
                 put("gl", "US")
+                if (client.userAgentFieldInClient) {
+                    put("userAgent", client.userAgent)
+                }
+                visitorData?.takeIf { it.isNotBlank() }?.let { put("visitorData", it) }
                 client.androidSdkVersion?.let { put("androidSdkVersion", it) }
                 client.deviceMake?.let { put("deviceMake", it) }
                 client.deviceModel?.let { put("deviceModel", it) }
@@ -261,21 +548,29 @@ class YouTubeClient(
 
     private fun buildHeaders(
         origin: String,
-        userAgent: String,
+        client: InnertubeClientConfig,
         cookie: String?,
+        visitorData: String? = null,
     ): Map<String, String> {
         val headers = linkedMapOf(
-            "User-Agent" to userAgent,
+            "User-Agent" to client.userAgent,
             "Origin" to origin,
             "X-Origin" to origin,
             "Referer" to "$origin/",
+            "X-YouTube-Client-Name" to client.clientId.toString(),
+            "X-YouTube-Client-Version" to client.version,
         )
+        visitorData?.takeIf { it.isNotBlank() }?.let {
+            headers["X-Goog-Visitor-Id"] = it
+        }
         val trimmedCookie = cookie?.trim()?.takeIf { it.isNotEmpty() }
         if (trimmedCookie != null) {
             headers["Cookie"] = trimmedCookie
             computeSapisidHash(trimmedCookie, origin)?.let { hash ->
                 headers["Authorization"] = hash
             }
+        } else {
+            headers["Cookie"] = ANONYMOUS_COOKIE
         }
         return headers
     }
@@ -285,6 +580,7 @@ class YouTubeClient(
         val url: String,
         val mimeType: String?,
         val bitrate: Int,
+        val contentLength: Long = 0L,
     )
 
     internal fun parseAudioCandidates(playerJson: JsonObject): List<AudioCandidate> {
@@ -299,9 +595,20 @@ class YouTubeClient(
                 val itag = obj.int("itag") ?: -1
                 val mimeType = obj.str("mimeType")?.takeIf { it.isNotBlank() }
                 val bitrate = obj.int("bitrate") ?: 0
+                val contentLength = obj.str("contentLength")?.toLongOrNull()
+                    ?: obj.long("contentLength")
+                    ?: 0L
                 val isAudio = mimeType?.startsWith("audio/", ignoreCase = true) == true || itag == 18
                 if (isAudio) {
-                    raw.add(AudioCandidate(itag = itag, url = url, mimeType = mimeType, bitrate = bitrate))
+                    raw.add(
+                        AudioCandidate(
+                            itag = itag,
+                            url = url,
+                            mimeType = mimeType,
+                            bitrate = bitrate,
+                            contentLength = contentLength,
+                        )
+                    )
                 }
             }
         }
@@ -334,8 +641,14 @@ class YouTubeClient(
                     node.obj("playlistVideoRenderer")?.let { renderer ->
                         parsePlaylistVideoRenderer(renderer, albumName)?.let(out::add)
                     }
+                    node.obj("playlistPanelVideoRenderer")?.let { renderer ->
+                        parsePlaylistVideoRenderer(renderer, albumName)?.let(out::add)
+                    }
+                    node.obj("lockupViewModel")?.let { vm ->
+                        parseLockupViewModel(vm, albumName)?.let(out::add)
+                    }
                     for ((key, value) in node) {
-                        if (key != "musicResponsiveListItemRenderer" && key != "playlistVideoRenderer") {
+                        if (key !in RENDERER_KEYS) {
                             visit(value)
                         }
                     }
@@ -463,6 +776,78 @@ class YouTubeClient(
         )
     }
 
+    private fun parseLockupViewModel(
+        vm: JsonObject,
+        fallbackAlbum: String,
+    ): CloudTrackMetadata? {
+        val contentId = vm.str("contentId")?.takeIf { it.isNotBlank() } ?: return null
+        val contentType = vm.str("contentType")
+        if (contentType != "LOCKUP_CONTENT_TYPE_VIDEO" && !VIDEO_ID_REGEX.matches(contentId)) {
+            return null
+        }
+
+        val lockupMeta = vm.obj("metadata")?.obj("lockupMetadataViewModel")
+        val title = lockupMeta?.obj("title")?.str("content")?.takeIf { it.isNotBlank() }
+            ?: return null
+
+        val metadataRows = lockupMeta.obj("metadata")
+            ?.obj("contentMetadataViewModel")
+            ?.arr("metadataRows")
+            ?: lockupMeta.arr("metadataRows")
+        var artist = ""
+        if (metadataRows != null) {
+            for (i in 0 until metadataRows.size) {
+                val candidate = metadataRows.objAt(i)
+                    ?.arr("metadataParts")
+                    ?.objAt(0)
+                    ?.obj("text")
+                    ?.str("content")
+                    ?.trim()
+                if (!candidate.isNullOrEmpty() && !isClockDuration(candidate)) {
+                    artist = candidate
+                    break
+                }
+            }
+        }
+        if (artist.isBlank()) artist = "YouTube"
+
+        val thumbVm = vm.obj("contentImage")?.obj("thumbnailViewModel")
+        var durationSec = 0.0
+        val overlays = thumbVm?.arr("overlays")
+        if (overlays != null) {
+            for (i in 0 until overlays.size) {
+                val overlay = overlays.objAt(i) ?: continue
+                val directText = overlay.obj("thumbnailBadgeViewModel")?.str("text")
+                if (directText != null && isClockDuration(directText)) {
+                    durationSec = parseClockDurationSec(directText)
+                    break
+                }
+                val badges = overlay.obj("thumbnailOverlayBadgeViewModel")?.arr("thumbnailBadges")
+                if (badges != null) {
+                    for (j in 0 until badges.size) {
+                        val badgeText = badges.objAt(j)?.obj("thumbnailBadgeViewModel")?.str("text")
+                        if (badgeText != null && isClockDuration(badgeText)) {
+                            durationSec = parseClockDurationSec(badgeText)
+                            break
+                        }
+                    }
+                    if (durationSec > 0.0) break
+                }
+            }
+        }
+
+        val artworkUrl = bestThumbnailUrlFromArray(thumbVm?.obj("image")?.arr("sources"))
+
+        return CloudTrackMetadata(
+            remoteTrackId = contentId,
+            title = title,
+            artist = artist,
+            album = fallbackAlbum,
+            durationSec = durationSec,
+            artworkUrl = artworkUrl,
+        )
+    }
+
     private fun findFirstVideoIdInFlexColumns(flexColumns: JsonArray?): String? {
         if (flexColumns == null) return null
         for (i in 0 until flexColumns.size) {
@@ -484,8 +869,21 @@ class YouTubeClient(
 
     private fun extractPlaylistTitle(root: JsonObject): String? {
         val header = root.obj("header")
-        val fromHeader = header?.obj("musicDetailHeaderRenderer")?.obj("title")
-            ?.let(::runsText)
+        val pageHeader = header?.obj("pageHeaderRenderer")
+        val fromHeader = pageHeader?.str("pageTitle")?.takeIf { it.isNotBlank() }
+            ?: pageHeader?.obj("content")
+                ?.obj("pageHeaderViewModel")
+                ?.obj("title")
+                ?.obj("dynamicTextViewModel")
+                ?.obj("text")
+                ?.str("content")
+                ?.takeIf { it.isNotBlank() }
+            ?: root.obj("metadata")
+                ?.obj("playlistMetadataRenderer")
+                ?.str("title")
+                ?.takeIf { it.isNotBlank() }
+            ?: header?.obj("musicDetailHeaderRenderer")?.obj("title")
+                ?.let(::runsText)
             ?: header?.obj("musicResponsiveHeaderRenderer")?.obj("title")
                 ?.let(::runsText)
             ?: header?.obj("playlistHeaderRenderer")?.obj("title")
@@ -495,12 +893,25 @@ class YouTubeClient(
                 ?.obj("musicDetailHeaderRenderer")
                 ?.obj("title")
                 ?.let(::runsText)
+            ?: header?.obj("musicEditablePlaylistDetailHeaderRenderer")
+                ?.obj("header")
+                ?.obj("musicResponsiveHeaderRenderer")
+                ?.obj("title")
+                ?.let(::runsText)
         if (!fromHeader.isNullOrBlank()) return fromHeader
 
-        return root.obj("microformat")
+        val fromMicroformat = root.obj("microformat")
             ?.obj("microformatDataRenderer")
             ?.str("title")
             ?.takeIf { it.isNotBlank() }
+        if (fromMicroformat != null) return fromMicroformat
+
+        val watchPlaylist = root.obj("contents")
+            ?.obj("twoColumnWatchNextResults")
+            ?.obj("playlist")
+            ?.obj("playlist")
+        return watchPlaylist?.str("title")?.takeIf { it.isNotBlank() }
+            ?: watchPlaylist?.obj("title")?.let(::runsText)
     }
 
     private fun findContinuationToken(root: JsonObject): String? {
@@ -564,8 +975,11 @@ class YouTubeClient(
     private fun isClockDuration(text: String): Boolean =
         CLOCK_DURATION_REGEX.matches(text.trim())
 
-    private fun bestThumbnailUrl(thumbnailObj: JsonObject?): String? {
-        val array = thumbnailObj?.arr("thumbnails") ?: return null
+    private fun bestThumbnailUrl(thumbnailObj: JsonObject?): String? =
+        bestThumbnailUrlFromArray(thumbnailObj?.arr("thumbnails"))
+
+    private fun bestThumbnailUrlFromArray(array: JsonArray?): String? {
+        if (array == null) return null
         var bestUrl: String? = null
         var bestWidth = -1
         for (i in 0 until array.size) {
@@ -583,46 +997,84 @@ class YouTubeClient(
     companion object {
         private const val MAX_BROWSE_PAGES = 20
         private const val DEFAULT_EXPIRE_SEC = 18_000L
+        private const val VISITOR_DATA_TTL_MS = 30L * 60L * 1000L
+        private const val POST_1MB_PROBE_THRESHOLD_BYTES = 1_200_000L
+        private const val ANONYMOUS_COOKIE = "SOCS=CAI"
+        private val VISITOR_DATA_REGEX = Regex("\"(Cg[A-Za-z0-9_%-]{15,})\"")
         private val CLOCK_DURATION_REGEX = Regex("^\\d{1,2}:\\d{2}(:\\d{2})?$")
         private val VIDEO_ID_REGEX = Regex("^[A-Za-z0-9_-]{11}$")
-        private val PLAYLIST_ID_PREFIXES = listOf("PL", "OLAK5uy_", "RD", "UU", "LL", "FL", "WL")
+        private val PLAYLIST_ID_PREFIXES = listOf("PL", "OLAK5uy_", "RD", "UU", "LL", "FL", "WL", "MPREb_")
+        private val RENDERER_KEYS = setOf(
+            "musicResponsiveListItemRenderer",
+            "playlistVideoRenderer",
+            "playlistPanelVideoRenderer",
+            "lockupViewModel",
+        )
 
         private val WEB_REMIX_CLIENT = InnertubeClientConfig(
             name = "WEB_REMIX",
-            version = "1.20241120.01.00",
+            version = "1.20260707.12.00",
+            clientId = 67,
             userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
         )
 
         private val WEB_CLIENT = InnertubeClientConfig(
             name = "WEB",
-            version = "2.20241120.01.00",
+            version = "2.20260708.00.00",
+            clientId = 1,
             userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        )
+
+        private val VISIONOS_CLIENT = InnertubeClientConfig(
+            name = "VISIONOS",
+            version = "1.02",
+            clientId = 101,
+            userAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 15_7_3) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.0 Safari/605.1.15",
+            deviceMake = "Apple",
+            deviceModel = "RealityDevice17,1",
+            osName = "visionOS",
+            osVersion = "26.5.23O471",
         )
 
         private val ANDROID_CLIENT = InnertubeClientConfig(
             name = "ANDROID",
-            version = "19.44.38",
-            userAgent = "com.google.android.youtube/19.44.38 (Linux; U; Android 14) gzip",
-            androidSdkVersion = 34,
+            version = "20.10.38",
+            clientId = 3,
+            userAgent = "com.google.android.youtube/20.10.38 (Linux; U; Android 15; en_US) gzip",
+            androidSdkVersion = 35,
             osName = "Android",
-            osVersion = "14",
+            osVersion = "15",
         )
 
         private val IOS_CLIENT = InnertubeClientConfig(
             name = "IOS",
-            version = "19.45.4",
-            userAgent = "com.google.ios.youtube/19.45.4 (iPhone16,2; U; CPU iOS 18_1_0 like Mac OS X)",
+            version = "20.10.4",
+            clientId = 5,
+            userAgent = "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_1 like Mac OS X;)",
             deviceMake = "Apple",
             deviceModel = "iPhone16,2",
             osName = "iPhone",
-            osVersion = "18.1.0.22B83",
+            osVersion = "18.3.1",
+        )
+
+        private val ANDROID_VR_CLIENT = InnertubeClientConfig(
+            name = "ANDROID_VR",
+            version = "1.65.10",
+            clientId = 28,
+            userAgent = "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+            deviceMake = "Oculus",
+            deviceModel = "Quest 3",
+            androidSdkVersion = 32,
+            osName = "Android",
+            osVersion = "12L",
         )
 
         private val WEB_EMBEDDED_CLIENT = InnertubeClientConfig(
             name = "WEB_EMBEDDED_PLAYER",
-            version = "1.20241120.01.00",
+            version = "2.20260708.00.00",
+            clientId = 56,
             userAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            thirdPartyEmbedUrl = "https://www.youtube.com/",
+            thirdPartyEmbedUrl = "https://www.reddit.com/",
         )
 
         fun canHandle(input: String): Boolean = parseTarget(input) != null
@@ -632,12 +1084,8 @@ class YouTubeClient(
             if (trimmed.isEmpty()) return null
 
             if (!trimmed.contains("://") && !trimmed.contains('/')) {
-                val stripped = if (trimmed.startsWith("VL") && trimmed.length > 4) {
-                    trimmed.substring(2)
-                } else {
-                    trimmed
-                }
-                if (PLAYLIST_ID_PREFIXES.any { stripped.startsWith(it) } && stripped.length >= 10) {
+                val stripped = stripVlPrefix(trimmed)
+                if ((PLAYLIST_ID_PREFIXES.any { stripped.startsWith(it) } && stripped.length >= 10) || stripped == "RDMM") {
                     return YouTubeTarget.Playlist(stripped)
                 }
                 if (VIDEO_ID_REGEX.matches(trimmed)) {
@@ -649,40 +1097,50 @@ class YouTubeClient(
             val withScheme = if (trimmed.contains("://")) trimmed else "https://$trimmed"
             val uri = runCatching { URI(withScheme) }.getOrNull() ?: return null
             val host = uri.host?.lowercase()?.removePrefix("www.")?.removePrefix("m.") ?: return null
+            val query = parseQueryParams(uri.rawQuery)
+            val listId = query["list"]?.takeIf { it.isNotBlank() }?.let(::stripVlPrefix)
 
             if (host == "youtu.be") {
                 val id = uri.path?.trim('/')?.substringBefore('/')?.takeIf { VIDEO_ID_REGEX.matches(it) }
-                    ?: return null
-                return YouTubeTarget.Video(id)
+                if (listId != null) {
+                    return YouTubeTarget.Playlist(listId, id)
+                }
+                return id?.let { YouTubeTarget.Video(it) }
             }
 
             if (host != "youtube.com" && host != "music.youtube.com" && host != "youtube-nocookie.com") {
                 return null
             }
 
-            val query = parseQueryParams(uri.rawQuery)
-            val listId = query["list"]?.takeIf { it.isNotBlank() }?.let { raw ->
-                if (raw.startsWith("VL") && raw.length > 4) raw.substring(2) else raw
-            }
-            if (listId != null) {
-                return YouTubeTarget.Playlist(listId)
-            }
-
             val videoFromQuery = query["v"]?.takeIf { VIDEO_ID_REGEX.matches(it) }
-            if (videoFromQuery != null) {
-                return YouTubeTarget.Video(videoFromQuery)
+            val segments = uri.path?.trim('/')?.split('/')?.filter { it.isNotEmpty() }.orEmpty()
+            val videoFromPath = if (segments.size >= 2 && segments[0] in setOf("shorts", "live", "embed", "v")) {
+                segments[1].takeIf { VIDEO_ID_REGEX.matches(it) }
+            } else {
+                null
+            }
+            val videoId = videoFromQuery ?: videoFromPath
+
+            if (listId != null) {
+                return YouTubeTarget.Playlist(listId, videoId)
             }
 
-            val segments = uri.path?.trim('/')?.split('/')?.filter { it.isNotEmpty() }.orEmpty()
-            if (segments.size >= 2 && segments[0] in setOf("shorts", "live", "embed", "v")) {
-                val vid = segments[1]
-                if (VIDEO_ID_REGEX.matches(vid)) {
-                    return YouTubeTarget.Video(vid)
+            if (segments.size >= 2 && segments[0] == "browse") {
+                val browseId = stripVlPrefix(segments[1])
+                if (browseId.isNotBlank()) {
+                    return YouTubeTarget.Playlist(browseId)
                 }
+            }
+
+            if (videoId != null) {
+                return YouTubeTarget.Video(videoId)
             }
 
             return null
         }
+
+        private fun stripVlPrefix(raw: String): String =
+            if (raw.startsWith("VL") && raw.length > 4) raw.substring(2) else raw
 
         internal fun computeSapisidHash(
             cookie: String,

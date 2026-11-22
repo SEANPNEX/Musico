@@ -317,11 +317,11 @@ class CloudExporter(
             throw IOException("Could not access target folder: ${targetDir.absolutePath}")
         }
 
-        val cloudKind = if (playlist.source == CloudSource.YOUTUBE) RootKind.CLOUD_YOUTUBE else RootKind.CLOUD_BILIBILI
+        val cloudKind = cloudKindForSource(playlist.source)
         val lookupRoot = root.copy(kind = cloudKind, sourceUrl = rawSource, remoteId = playlist.remoteId)
         val existingNames = targetDir.list()?.toMutableSet() ?: mutableSetOf()
         val trackedMap = (existingManifest?.tracks ?: emptyMap()).toMutableMap()
-        val sourceSlug = cloudKind.name.lowercase()
+        val sourceSlug = sourceSlugForKind(cloudKind)
         val nowMs = System.currentTimeMillis()
         val errors = mutableListOf<String>()
         var addedCount = 0
@@ -425,11 +425,11 @@ class CloudExporter(
                 ?: existingManifest?.cloudKind?.let { raw -> runCatching { RootKind.valueOf(raw) }.getOrNull() }
 
             val playlist = fetchPlaylist(rawSource, root.cookie, kindHint)
-            val cloudKind = if (playlist.source == CloudSource.YOUTUBE) RootKind.CLOUD_YOUTUBE else RootKind.CLOUD_BILIBILI
+            val cloudKind = cloudKindForSource(playlist.source)
             val lookupRoot = root.copy(kind = cloudKind, sourceUrl = rawSource, remoteId = playlist.remoteId)
             val existingNames = targetDoc.listFiles().mapNotNullTo(mutableSetOf()) { it.name }
             val trackedMap = (existingManifest?.tracks ?: emptyMap()).toMutableMap()
-            val sourceSlug = cloudKind.name.lowercase()
+            val sourceSlug = sourceSlugForKind(cloudKind)
             val nowMs = System.currentTimeMillis()
             val errors = mutableListOf<String>()
             var addedCount = 0
@@ -553,7 +553,7 @@ class CloudExporter(
             val partFile = File(targetDir, ".$fileName.part")
             try {
                 FileOutputStream(partFile).use { out ->
-                    downloader.download(stream.url, stream.headers, out)
+                    downloader.download(stream.url, downloadHeadersFor(track, stream), out)
                 }
                 if (!partFile.renameTo(targetFile)) {
                     partFile.copyTo(targetFile, overwrite = true)
@@ -585,7 +585,7 @@ class CloudExporter(
                 val out = ctx.contentResolver.openOutputStream(doc.uri)
                     ?: throw IOException("Could not open output stream for $fileName.")
                 out.use { streamOut ->
-                    downloader.download(stream.url, stream.headers, streamOut)
+                    downloader.download(stream.url, downloadHeadersFor(track, stream), streamOut)
                 }
                 doc.name ?: fileName
             } catch (t: Throwable) {
@@ -593,6 +593,12 @@ class CloudExporter(
                 throw t
             }
         }
+    }
+
+    private fun downloadHeadersFor(track: Track, stream: ResolvedStream): Map<String, String> {
+        if (track.cloudSource != CloudSource.YOUTUBE) return stream.headers
+        val hasRange = stream.headers.keys.any { it.equals("Range", ignoreCase = true) }
+        return if (hasRange) stream.headers else stream.headers + ("Range" to "bytes=0-")
     }
 
     private suspend fun <T> withStreamRetry(
@@ -709,6 +715,18 @@ class CloudExporter(
             }
         }
 
+        internal fun cloudKindForSource(source: String): RootKind = when (source) {
+            CloudSource.YOUTUBE -> RootKind.CLOUD_YOUTUBE
+            CloudSource.BILIBILI -> RootKind.CLOUD_BILIBILI
+            CloudSource.GOOGLE_DRIVE -> RootKind.CLOUD_GOOGLE_DRIVE
+            else -> RootKind.CLOUD_BILIBILI
+        }
+
+        internal fun sourceSlugForKind(kind: RootKind): String = when (kind) {
+            RootKind.CLOUD_GOOGLE_DRIVE -> CloudSource.GOOGLE_DRIVE
+            else -> kind.name.lowercase()
+        }
+
         internal fun extensionAndMimeFor(stream: ResolvedStream): Pair<String, String> {
             val rawMime = stream.mimeType?.substringBefore(';')?.trim()?.lowercase().orEmpty()
             return when {
@@ -719,6 +737,9 @@ class CloudExporter(
                 rawMime.contains("mpeg") || rawMime.contains("mp3") -> "mp3" to "audio/mpeg"
                 rawMime.contains("aac") -> "aac" to "audio/aac"
                 rawMime.contains("wav") -> "wav" to "audio/wav"
+                rawMime.contains("aiff") || rawMime.contains("aif") -> "aiff" to "audio/aiff"
+                rawMime.contains("alac") -> "alac" to "audio/alac"
+                rawMime.contains("caf") -> "caf" to "audio/x-caf"
                 rawMime.contains("mp4") || rawMime.contains("m4a") -> "m4a" to "audio/mp4"
                 else -> extensionFromUrl(stream.url)
             }
@@ -734,6 +755,10 @@ class CloudExporter(
                 path.endsWith(".mp3") -> "mp3" to "audio/mpeg"
                 path.endsWith(".aac") -> "aac" to "audio/aac"
                 path.endsWith(".wav") -> "wav" to "audio/wav"
+                path.endsWith(".aiff") -> "aiff" to "audio/aiff"
+                path.endsWith(".aif") -> "aif" to "audio/aiff"
+                path.endsWith(".alac") -> "alac" to "audio/alac"
+                path.endsWith(".caf") -> "caf" to "audio/x-caf"
                 else -> "m4a" to "audio/mp4"
             }
         }

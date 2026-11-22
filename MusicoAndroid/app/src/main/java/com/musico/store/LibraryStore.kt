@@ -11,6 +11,7 @@ import com.musico.cloud.CloudHttpClient
 import com.musico.cloud.CloudPlaylistResult
 import com.musico.cloud.CloudSource
 import com.musico.cloud.CloudTrackMetadata
+import com.musico.cloud.GoogleDriveClient
 import com.musico.cloud.UrlConnectionCloudHttpClient
 import com.musico.cloud.YouTubeClient
 import com.musico.cloud.extractCloudSourceInput
@@ -47,7 +48,7 @@ import kotlin.math.abs
 sealed class LibraryException(message: String) : Exception(message) {
     data object DuplicateRoot : LibraryException("That folder is already in your library.")
     data object NotAFolder : LibraryException("That location could not be opened as a folder.")
-    data object UnsupportedCloudUrl : LibraryException("Enter a valid YouTube or Bilibili playlist, collection, or video URL.")
+    data object UnsupportedCloudUrl : LibraryException("Enter a valid YouTube, Bilibili, or Google Drive URL.")
 }
 
 data class LibraryUiState(
@@ -76,6 +77,7 @@ class LibraryStore(
     private val cloudHttpClient: CloudHttpClient = UrlConnectionCloudHttpClient(),
     private val youTubeClient: YouTubeClient = YouTubeClient(cloudHttpClient),
     private val bilibiliClient: BilibiliClient = BilibiliClient(cloudHttpClient),
+    private val googleDriveClient: GoogleDriveClient = GoogleDriveClient(cloudHttpClient),
 ) {
     @Serializable
     private data class LibraryFile(
@@ -339,7 +341,7 @@ class LibraryStore(
             when (root.kind) {
                 RootKind.APP_FOLDER -> appCanonical == candidateKey
                 RootKind.PICKED -> root.treeUri?.let { canonicalUriKey(it) == candidateKey } == true
-                RootKind.CLOUD_YOUTUBE, RootKind.CLOUD_BILIBILI -> false
+                RootKind.CLOUD_YOUTUBE, RootKind.CLOUD_BILIBILI, RootKind.CLOUD_GOOGLE_DRIVE -> false
             }
         }
         if (duplicateIndex >= 0) {
@@ -431,12 +433,12 @@ class LibraryStore(
         when (kindHint) {
             RootKind.CLOUD_BILIBILI -> bilibiliClient.fetchPlaylist(cleanUrl, cookie)
             RootKind.CLOUD_YOUTUBE -> youTubeClient.fetchPlaylist(cleanUrl, cookie)
-            else -> {
-                if (cleanUrl.contains("bilibili", ignoreCase = true) || cleanUrl.contains("b23.tv", ignoreCase = true)) {
+            RootKind.CLOUD_GOOGLE_DRIVE -> googleDriveClient.fetchPlaylist(cleanUrl, cookie)
+            else -> when {
+                GoogleDriveClient.canHandle(cleanUrl) -> googleDriveClient.fetchPlaylist(cleanUrl, cookie)
+                cleanUrl.contains("bilibili", ignoreCase = true) || cleanUrl.contains("b23.tv", ignoreCase = true) ->
                     bilibiliClient.fetchPlaylist(cleanUrl, cookie)
-                } else {
-                    youTubeClient.fetchPlaylist(cleanUrl, cookie)
-                }
+                else -> youTubeClient.fetchPlaylist(cleanUrl, cookie)
             }
         }
     }
@@ -486,34 +488,33 @@ class LibraryStore(
         }
         val cleanCookie = cookie?.trim()?.takeIf { it.isNotEmpty() }
 
+        val isGoogleDrive = GoogleDriveClient.canHandle(trimmedUrl)
         val isBilibili = BilibiliClient.canHandle(trimmedUrl)
         val isYouTube = YouTubeClient.canHandle(trimmedUrl)
-        if (!isBilibili && !isYouTube) {
+        if (!isGoogleDrive && !isBilibili && !isYouTube) {
             return Result.failure(LibraryException.UnsupportedCloudUrl)
         }
 
         val playlist = try {
             withContext(Dispatchers.IO) {
-                if (isBilibili && !isYouTube) {
-                    bilibiliClient.fetchPlaylist(trimmedUrl, cleanCookie)
-                } else if (isYouTube && !isBilibili) {
-                    youTubeClient.fetchPlaylist(trimmedUrl, cleanCookie)
-                } else {
-                    if (trimmedUrl.contains("bilibili", ignoreCase = true) || trimmedUrl.contains("b23.tv", ignoreCase = true)) {
+                when {
+                    isGoogleDrive -> googleDriveClient.fetchPlaylist(trimmedUrl, cleanCookie)
+                    isBilibili && !isYouTube -> bilibiliClient.fetchPlaylist(trimmedUrl, cleanCookie)
+                    isYouTube && !isBilibili -> youTubeClient.fetchPlaylist(trimmedUrl, cleanCookie)
+                    trimmedUrl.contains("bilibili", ignoreCase = true) || trimmedUrl.contains("b23.tv", ignoreCase = true) ->
                         bilibiliClient.fetchPlaylist(trimmedUrl, cleanCookie)
-                    } else {
-                        youTubeClient.fetchPlaylist(trimmedUrl, cleanCookie)
-                    }
+                    else -> youTubeClient.fetchPlaylist(trimmedUrl, cleanCookie)
                 }
             }
         } catch (err: Exception) {
             return Result.failure(err)
         }
 
-        val kind = if (playlist.source == CloudSource.YOUTUBE) {
-            RootKind.CLOUD_YOUTUBE
-        } else {
-            RootKind.CLOUD_BILIBILI
+        val kind = when (playlist.source) {
+            CloudSource.YOUTUBE -> RootKind.CLOUD_YOUTUBE
+            CloudSource.BILIBILI -> RootKind.CLOUD_BILIBILI
+            CloudSource.GOOGLE_DRIVE -> RootKind.CLOUD_GOOGLE_DRIVE
+            else -> RootKind.CLOUD_YOUTUBE
         }
 
         val duplicate = _state.value.roots.any {
@@ -713,6 +714,7 @@ class LibraryStore(
                         when (root.kind) {
                             RootKind.CLOUD_YOUTUBE -> youTubeClient.fetchPlaylist(url, root.cookie)
                             RootKind.CLOUD_BILIBILI -> bilibiliClient.fetchPlaylist(url, root.cookie)
+                            RootKind.CLOUD_GOOGLE_DRIVE -> googleDriveClient.fetchPlaylist(url, root.cookie)
                             else -> null
                         }
                     }
@@ -876,7 +878,10 @@ class LibraryStore(
         val artKeysByUrl = HashMap<String, String?>()
         val seenRel = HashSet<String>()
         val result = ArrayList<Track>(items.size)
-        val sourceSlug = root.kind.name.lowercase()
+        val sourceSlug = when (root.kind) {
+            RootKind.CLOUD_GOOGLE_DRIVE -> CloudSource.GOOGLE_DRIVE
+            else -> root.kind.name.lowercase()
+        }
         val artHeaders = buildMap {
             if (root.kind == RootKind.CLOUD_BILIBILI) {
                 put("Referer", "https://www.bilibili.com/")
@@ -909,10 +914,11 @@ class LibraryStore(
                 else -> old?.artworkKey
             }
 
-            val cloudSource = if (root.kind == RootKind.CLOUD_YOUTUBE) {
-                CloudSource.YOUTUBE
-            } else {
-                CloudSource.BILIBILI
+            val cloudSource = when (root.kind) {
+                RootKind.CLOUD_YOUTUBE -> CloudSource.YOUTUBE
+                RootKind.CLOUD_BILIBILI -> CloudSource.BILIBILI
+                RootKind.CLOUD_GOOGLE_DRIVE -> CloudSource.GOOGLE_DRIVE
+                else -> CloudSource.YOUTUBE
             }
 
             result.add(
@@ -1324,7 +1330,15 @@ class LibraryStore(
     private fun migrateCloudFolderKeys(roots: List<LibraryRoot>) {
         val cloudRoots = roots.filter { it.kind.isCloud }
         if (cloudRoots.isEmpty()) return
-        val legacySubfolders = listOf("cloud_youtube", "cloud_bilibili", "youtube", "bilibili")
+        val legacySubfolders = listOf(
+            "cloud_youtube",
+            "cloud_bilibili",
+            "cloud_google_drive",
+            "youtube",
+            "bilibili",
+            "gdrive",
+            "google_drive",
+        )
         for (root in cloudRoots) {
             val rootKey = "${root.id}\u001F"
             for (sub in legacySubfolders) {
@@ -1351,8 +1365,11 @@ class LibraryStore(
                 norm.equals(root.kind.name, ignoreCase = true) ||
                 norm.equals("cloud_youtube", ignoreCase = true) ||
                 norm.equals("cloud_bilibili", ignoreCase = true) ||
+                norm.equals("cloud_google_drive", ignoreCase = true) ||
                 norm.equals("youtube", ignoreCase = true) ||
-                norm.equals("bilibili", ignoreCase = true)
+                norm.equals("bilibili", ignoreCase = true) ||
+                norm.equals("gdrive", ignoreCase = true) ||
+                norm.equals("google_drive", ignoreCase = true)
             ) {
                 return ""
             }

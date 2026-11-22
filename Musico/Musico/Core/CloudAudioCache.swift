@@ -9,7 +9,7 @@ actor CloudAudioCache {
         return CloudAudioCache(directory: caches.appendingPathComponent("CloudAudio"))
     }()
 
-    private static let supportedExtensions = ["m4a", "mp4", "flac", "mp3", "aac", "wav", "ogg"]
+    private static let supportedExtensions = ["m4a", "mp4", "flac", "mp3", "aac", "wav", "ogg", "aif", "aiff", "alac", "caf"]
 
     let directory: URL
     let maxBytes: Int64

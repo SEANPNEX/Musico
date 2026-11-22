@@ -77,8 +77,13 @@ struct SongsView: View {
         }
         .listStyle(.plain)
         .navigationTitle(L10n.tr("Songs"))
+        #if targetEnvironment(macCatalyst)
+        .navigationBarTitleDisplayMode(.inline)
+        #endif
         .searchable(text: searchTextBinding, isPresented: $navigation.isSearchPresented, prompt: L10n.tr("Songs, artists, albums, genres"))
         .refreshable { await library.rescan() }
+        .animation(.easeInOut(duration: 0.18), value: sort)
+        .animation(.easeInOut(duration: 0.18), value: trimmedQuery)
         .toolbar {
             Menu(L10n.tr("Sort"), systemImage: "arrow.up.arrow.down") {
                 Picker(L10n.tr("Sort By"), selection: $sort) {

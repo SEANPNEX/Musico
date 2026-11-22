@@ -29,6 +29,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
+import androidx.compose.material.icons.rounded.AddToDrive
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.CloudQueue
@@ -1375,6 +1376,7 @@ private fun RootItemRow(
                         root.kind == RootKind.APP_FOLDER -> Icons.Rounded.LibraryMusic
                         root.kind == RootKind.CLOUD_YOUTUBE -> Icons.Rounded.PlayCircle
                         root.kind == RootKind.CLOUD_BILIBILI -> Icons.Rounded.LiveTv
+                        root.kind == RootKind.CLOUD_GOOGLE_DRIVE -> Icons.Rounded.AddToDrive
                         else -> Icons.Rounded.Folder
                     },
                     contentDescription = null,
@@ -1395,9 +1397,11 @@ private fun RootItemRow(
                     val badgeLabel = when {
                         root.kind == RootKind.CLOUD_YOUTUBE -> strings.badgeYouTube
                         root.kind == RootKind.CLOUD_BILIBILI -> strings.badgeBilibili
+                        root.kind == RootKind.CLOUD_GOOGLE_DRIVE -> strings.badgeGoogleDrive
                         root.isCloudTrackedLocal -> when (root.linkedCloudKind) {
                             RootKind.CLOUD_YOUTUBE -> strings.badgeYouTubeLocal
                             RootKind.CLOUD_BILIBILI -> strings.badgeBilibiliLocal
+                            RootKind.CLOUD_GOOGLE_DRIVE -> strings.badgeGoogleDriveLocal
                             else -> strings.badgeCloudLocal
                         }
                         else -> null

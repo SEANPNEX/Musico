@@ -35,7 +35,8 @@
 
 ## ✨ 它都能做些什么
 
-- 📁 **文件夹优先的曲库与云端小窝**：自由挂载多个本地音乐文件夹（`Documents` / `MyMusic` + 自选文件夹），重启后目录层级原封不动！移动了硬盘或文件夹？点一下 **Relocate（重新定位）** 就乖乖找回来。还能在 **Folders** 里直接挂载 **YouTube** 与 **Bilibili** 播放列表、合集和分 P 视频（公开列表免登录加载 + B 站 WBI 签名加持！）。
+- 📁 **文件夹优先的曲库与云端小窝**：自由挂载多个本地音乐文件夹（`Documents` / `MyMusic` + 自选文件夹），重启后目录层级原封不动！移动了硬盘或文件夹？点一下 **Relocate（重新定位）** 就乖乖找回来。还能在 **Folders** 里直接挂载 **YouTube / YouTube Music**（歌单、Mix 合集与单曲）、**Bilibili**（单 P / 多 P 视频、收藏夹与合集）以及 **Google Drive**（公开分享文件夹递归扫描与单曲音频链接）！
+- 🌐 **多语言支持（`English` & `简体中文`）**：默认随操作系统语言自动切换（**跟随系统**），也支持在 Apple、Android 和 Windows 应用内随时实时切换语言。
 - 🔍 **花式浏览与秒搜**：支持 **Folders（文件夹）**、**Songs（歌曲）**（支持按标题/艺人/专辑/添加时间排序，以及忽略变音符号的即时搜索）、**Albums（专辑）**（按碟片与音轨号排排坐）、**Artists（艺人）** 和 **Playlists（播放列表）**（自带 **Favourites** 收藏夹 + 随意创建/重命名/删除/排序的自定义歌单）。
 - 🎶 **多独立播放队列**：想开几个队列就开几个！创建、重命名、切换、排序、清空、删除随心所欲，每个队列都会贴心记住自己的当前曲目、播放进度、随机顺序和循环模式（`Off` / `All` / `One`）。
 - 🎛️ **10 段均衡器**：总开关、前级增益（`-12 dB` 至 `+12 dB`）、10 个 ISO 频段（`31 Hz`–`16 kHz`），内置 8 套预设（`Flat`、`Bass Boost`、`Treble Boost`、`Rock`、`Pop`、`Jazz`、`Classical`、`Vocal`）外加 `Custom` 自定义模式。
@@ -76,12 +77,13 @@
   - **Android (`MusicoAndroid`)**：`mp3`、`m4a`、`aac`、`flac`、`wav`、`aif`、`aiff`、`caf`、`alac`、`ogg`、`opus`、`webm`
   - **Windows (`MusicoWindows`)**：`mp3`、`m4a`、`aac`、`flac`、`wav`、`aif`、`aiff`、`wma`、`ogg`、`opus`
 
-### 2. 云端文件夹（YouTube 与 Bilibili）
-- **挂载云端歌单**：在 **Folders** 里选 **Add Cloud Folder**，贴上链接或 ID：
-  - **YouTube / YouTube Music**：播放列表或单曲视频链接（`youtube.com/playlist?list=…`、`music.youtube.com/playlist?list=…`、`youtu.be/…`），公开列表免登录直接听！
-  - **Bilibili**：`BV` 视频链接（支持多 P）、收藏夹（`favlist`）、合集/系列以及 `b23.tv` 短链。
-- **可选 Cookie 与代理**：只有访问私有播放列表或想要更高的 B 站音质时才需要填 **Cookie**。Windows 端还贴心地为 YouTube 准备了 **HTTP Proxy** 选项（例如 `7890`、`127.0.0.1:7890` 或 `http://127.0.0.1:7890`）。
-- **离线存本地 & 增量同步**：在云端文件夹菜单（或单曲菜单）点 **Save to Local Folder…** 就能把歌下载到本地并顺手加入曲库。已关联云端源的本地文件夹会出现 **Update from Cloud**，一键增量拉取新歌！
+### 2. 云端文件夹（YouTube、Bilibili 与 Google Drive）
+- **挂载云端音源**：在 **Folders** 里选 **Add Cloud Folder（添加云端文件夹）**，直接粘贴链接、分享文案或 ID（会自动剥离前后附带的分享文字与标点！）：
+  - **YouTube / YouTube Music**：播放列表、`RD` 混音歌单（Mix）、专辑浏览链接或单曲视频链接（`youtube.com/playlist?list=…`、`music.youtube.com/playlist?list=…`、`youtube.com/watch?v=…`、`youtu.be/…`、Shorts），公开内容免登录直接听！
+  - **Bilibili**：`BV`/`av` 视频链接（支持多 P）、收藏夹（`favlist`）、合集/系列以及 `b23.tv` 短链。
+  - **Google Drive**：公开分享文件夹链接（支持 `resourcekey` 并自动递归发现所有嵌套子目录中的音频文件）与单曲音频链接（`drive.google.com/drive/folders/…`、`drive.google.com/file/d/…`、`drive.google.com/open?id=…`、`drive.usercontent.google.com/download?id=…`），大文件病毒扫描确认页也会自动处理！
+- **可选 Cookie 与代理**：只有访问私有播放列表、受限 Google Drive 文件或想要更高的 B 站音质时才需要填 **Cookie**。Windows 端还贴心地为 YouTube 与 Google Drive 准备了 **HTTP Proxy** 选项（例如 `7890`、`127.0.0.1:7890` 或 `http://127.0.0.1:7890`）。
+- **离线存本地 & 增量同步**：在云端文件夹菜单（或单曲菜单）点 **Save to Local Folder…** 就能把歌下载到本地并顺手加入曲库。已关联云端源的本地文件夹会保存 `.musico-cloud.json` 清单，并出现 **Update from Cloud（从云端更新）**，一键增量拉取新歌！
 
 ### 3. 浏览、队列与播放控制
 - **逛逛曲库**：在 **Folders**、**Songs**、**Albums**、**Artists**、**Playlists**、**Queues** 和 **Stats**（**Recent**、**Plays**、**Not Lately**、**Never**）之间自由穿梭。
@@ -98,6 +100,10 @@
   - `Ctrl+F`：跳转到 **Songs** 并聚焦搜索框
   - `Esc`：关闭全屏播放器或当前弹窗
 - **macOS / iPadOS**：
+  - `Cmd+F`：跳转到 **歌曲（Songs）** 并聚焦搜索框
+  - `Cmd+R`：重新扫描曲库
+  - `Cmd+1`–`Cmd+7`：在 **文件夹**、**歌曲**、**专辑**、**艺人**、**播放列表**、**队列** 与 **统计** 之间快速切换
+  - `Cmd+P` / `Cmd+Left` / `Cmd+Right`：播放 / 暂停、上一曲 / 下一曲（顶部 **播放 / Playback** 菜单还提供随机播放、循环模式与显示/隐藏正在播放）
   - `Esc`：关闭全屏播放器（同时支持系统媒体键）
 
 ---

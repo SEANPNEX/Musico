@@ -177,6 +177,9 @@ final class SheetEnvironmentTests: XCTestCase {
             MiniPlayerView(isGlassAccessory: false, onOpen: {})
             MiniPlayerView(isGlassAccessory: true, onOpen: {})
             PlayerBar(sidePanel: .constant(nil), onOpen: {})
+            PlayerBar(sidePanel: .constant(.queue), isQueueMainActive: true, onOpen: {})
+            QueuesView(embeddedInInspector: true, onDone: {})
+            FullPlayerView(onClose: {})
         }
         .onAppear { rendered.fulfill() }
         .environment(library)

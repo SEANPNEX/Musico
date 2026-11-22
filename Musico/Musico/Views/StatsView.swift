@@ -79,12 +79,15 @@ struct StatsView: View {
         .listStyle(.plain)
         .navigationTitle(L10n.tr("Stats"))
         .navigationBarTitleDisplayMode(.inline)
+        .animation(.easeInOut(duration: 0.18), value: section)
+        .animation(.easeInOut(duration: 0.18), value: order)
         .toolbar {
             ToolbarItem(placement: .principal) {
                 Picker(L10n.tr("Show"), selection: $section) {
                     ForEach(Section.allCases) { Text($0.localizedTitle).tag($0) }
                 }
                 .pickerStyle(.segmented)
+                .frame(maxWidth: 340)
             }
         }
     }

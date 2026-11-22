@@ -9,13 +9,14 @@ public enum RootKind
     Picked,
     AppFolder,
     CloudYouTube,
-    CloudBilibili
+    CloudBilibili,
+    CloudGoogleDrive
 }
 
 public static class RootKindExtensions
 {
     public static bool IsCloud(this RootKind kind) =>
-        kind is RootKind.CloudYouTube or RootKind.CloudBilibili;
+        kind is RootKind.CloudYouTube or RootKind.CloudBilibili or RootKind.CloudGoogleDrive;
 
     public static bool IsLocal(this RootKind kind) =>
         kind is RootKind.Picked or RootKind.AppFolder;

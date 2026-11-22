@@ -49,7 +49,16 @@ ln -s /Applications "$DMG_STAGE/Applications"
 
 echo "==> Packaging macOS DMG..."
 hdiutil create -volname "Musico" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG_OUT"
-hdiutil verify "$DMG_OUT"
+for attempt in 1 2 3; do
+  if hdiutil verify "$DMG_OUT"; then
+    break
+  fi
+  if [[ "$attempt" -eq 3 ]]; then
+    echo "hdiutil verify failed after 3 attempts" >&2
+    exit 1
+  fi
+  sleep 2
+done
 
 echo "==> Building iOS (Release, unsigned)..."
 xcodebuild -project Musico.xcodeproj -scheme Musico \

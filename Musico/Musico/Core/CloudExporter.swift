@@ -204,7 +204,7 @@ enum CloudExporter {
         cloudLookupRoot.remoteID = fetched.remoteID
 
         let now = Date()
-        let sourceSlug = fetched.kind == .cloudYouTube ? "youtube" : "bilibili"
+        let sourceSlug = fetched.kind.cloudSourceSlug ?? "bilibili"
         let total = fetched.tracks.count
         var addedCount = 0
         var skippedCount = 0
@@ -228,7 +228,7 @@ enum CloudExporter {
                 title: item.title,
                 artist: item.artist,
                 album: item.album,
-                albumArtist: item.artist,
+                albumArtist: fetched.kind == .cloudGoogleDrive ? "Google Drive" : item.artist,
                 trackNumber: item.trackNumber,
                 discNumber: nil,
                 duration: item.duration,
