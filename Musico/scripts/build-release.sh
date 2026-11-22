@@ -40,7 +40,7 @@ fi
 mkdir -p "$DMG_STAGE"
 ditto "$CATALYST_APP" "$DMG_STAGE/Musico.app"
 
-if ! codesign --force --deep --sign - --entitlements "$ROOT_DIR/Musico.entitlements" "$DMG_STAGE/Musico.app"; then
+if ! codesign --force --deep --sign - --entitlements "$ROOT_DIR/Musico-DMG.entitlements" "$DMG_STAGE/Musico.app"; then
   codesign --force --deep --sign - "$DMG_STAGE/Musico.app"
 fi
 codesign --verify --deep --strict "$DMG_STAGE/Musico.app"

@@ -106,7 +106,7 @@ struct SidebarRootView: View {
         let button = Button {
             showUpdateSheet = true
             switch updateManager.state {
-            case .available, .downloading, .readyToInstall:
+            case .available, .downloading, .readyToInstall, .installing:
                 break
             default:
                 Task { await updateManager.checkForUpdates(manual: true) }

@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 import Observation
 import SwiftUI
@@ -94,6 +95,7 @@ enum UpdateError: LocalizedError, Equatable {
     case noDmgAsset(String)
     case checksumMismatch(expected: String, actual: String)
     case downloadFailed(String)
+    case installFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -109,8 +111,137 @@ enum UpdateError: LocalizedError, Equatable {
             return "SHA-256 verification failed (expected \(expected.prefix(12))…, got \(actual.prefix(12))…)."
         case .downloadFailed(let detail):
             return detail
+        case .installFailed(let detail):
+            return detail
         }
     }
+}
+
+/// Detached macOS self-updater helper that mounts the verified DMG, atomically swaps the
+/// running `.app` bundle after Musico exits, strips quarantine, and relaunches it.
+enum MacSelfUpdater {
+    static var isSandboxed: Bool {
+        ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
+    }
+
+    static func makeInstallScript() -> String {
+        """
+        #!/bin/sh
+        set -eu
+        exec >/tmp/musico-update.log 2>&1
+
+        DMG_PATH="$1"
+        APP_PATH="$2"
+        OLD_PID="$3"
+
+        # Wait up to 30 seconds for the running Musico process to exit cleanly.
+        i=0
+        while kill -0 "$OLD_PID" >/dev/null 2>&1; do
+          i=$((i + 1))
+          if [ "$i" -ge 150 ]; then
+            break
+          fi
+          sleep 0.2
+        done
+
+        MOUNT_DIR=$(mktemp -d /tmp/musico-dmg.XXXXXX)
+        STAGE_DIR=$(mktemp -d /tmp/musico-stage.XXXXXX)
+        cleanup() {
+          hdiutil detach "$MOUNT_DIR" -quiet -force >/dev/null 2>&1 || true
+          rmdir "$MOUNT_DIR" >/dev/null 2>&1 || true
+          rm -rf "$STAGE_DIR" >/dev/null 2>&1 || true
+          rm -f "$DMG_PATH" >/dev/null 2>&1 || true
+          rm -f "$0" >/dev/null 2>&1 || true
+        }
+        trap cleanup EXIT
+
+        hdiutil attach "$DMG_PATH" -nobrowse -readonly -mountpoint "$MOUNT_DIR"
+
+        SRC_APP="$MOUNT_DIR/Musico.app"
+        if [ ! -d "$SRC_APP" ]; then
+          SRC_APP=$(find "$MOUNT_DIR" -maxdepth 2 -name "*.app" -type d | head -n 1 || true)
+        fi
+        if [ -z "$SRC_APP" ] || [ ! -d "$SRC_APP" ]; then
+          echo "No .app bundle found inside $DMG_PATH"
+          exit 1
+        fi
+
+        STAGED_APP="$STAGE_DIR/Musico.app"
+        ditto "$SRC_APP" "$STAGED_APP"
+        xattr -dr com.apple.quarantine "$STAGED_APP" >/dev/null 2>&1 || true
+
+        APP_PARENT=$(dirname "$APP_PATH")
+        NEW_APP="${APP_PATH}.new.$$"
+        OLD_APP="${APP_PATH}.old.$$"
+
+        if [ -w "$APP_PARENT" ] && { [ ! -e "$APP_PATH" ] || [ -w "$APP_PATH" ]; }; then
+          rm -rf "$NEW_APP" "$OLD_APP"
+          ditto "$STAGED_APP" "$NEW_APP"
+          if [ -e "$APP_PATH" ]; then
+            mv "$APP_PATH" "$OLD_APP"
+          fi
+          if ! mv "$NEW_APP" "$APP_PATH"; then
+            if [ -e "$OLD_APP" ] && [ ! -e "$APP_PATH" ]; then
+              mv "$OLD_APP" "$APP_PATH" || true
+            fi
+            exit 1
+          fi
+          rm -rf "$OLD_APP" >/dev/null 2>&1 || true
+        else
+          ESCAPED_STAGED=$(printf '%s' "$STAGED_APP" | sed "s/'/'\\\\\\\\''/g")
+          ESCAPED_APP=$(printf '%s' "$APP_PATH" | sed "s/'/'\\\\\\\\''/g")
+          ESCAPED_NEW=$(printf '%s' "$NEW_APP" | sed "s/'/'\\\\\\\\''/g")
+          ESCAPED_OLD=$(printf '%s' "$OLD_APP" | sed "s/'/'\\\\\\\\''/g")
+          SHELL_CMD="rm -rf '$ESCAPED_NEW' '$ESCAPED_OLD' && ditto '$ESCAPED_STAGED' '$ESCAPED_NEW' && ([ ! -e '$ESCAPED_APP' ] || mv '$ESCAPED_APP' '$ESCAPED_OLD') && mv '$ESCAPED_NEW' '$ESCAPED_APP' && rm -rf '$ESCAPED_OLD'"
+          osascript -e "do shell script \\"$(printf '%s' "$SHELL_CMD" | sed 's/\\\\/\\\\\\\\/g; s/"/\\\\"/g')\\" with administrator privileges"
+        fi
+
+        hdiutil detach "$MOUNT_DIR" -quiet >/dev/null 2>&1 || true
+        open -n "$APP_PATH"
+        """
+    }
+
+    #if targetEnvironment(macCatalyst)
+    static func launchInstaller(dmgURL: URL, appBundleURL: URL, currentPID: pid_t) throws {
+        guard !isSandboxed else {
+            throw UpdateError.installFailed(
+                "This build is sandboxed and cannot replace itself automatically. Use \"Open Release Page\" or install the DMG build from GitHub Releases."
+            )
+        }
+        guard dmgURL.isFileURL, appBundleURL.isFileURL else {
+            throw UpdateError.installFailed("Invalid installer file or application bundle path.")
+        }
+        if appBundleURL.path.hasPrefix("/Volumes/") {
+            throw UpdateError.installFailed("Move Musico to your Applications folder first, then try updating again.")
+        }
+
+        let scriptURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("musico-updater-\(UUID().uuidString).sh")
+        try Data(makeInstallScript().utf8).write(to: scriptURL, options: .atomic)
+        try FileManager.default.setAttributes([.posixPermissions: NSNumber(value: 0o700)], ofItemAtPath: scriptURL.path)
+
+        var attr: posix_spawnattr_t?
+        posix_spawnattr_init(&attr)
+        defer { posix_spawnattr_destroy(&attr) }
+        // POSIX_SPAWN_SETSID (0x0400) detaches the updater into its own session so it survives app exit.
+        posix_spawnattr_setflags(&attr, Int16(0x0400))
+
+        let args = ["/bin/sh", scriptURL.path, dmgURL.path, appBundleURL.path, String(currentPID)]
+        let cArgs: [UnsafeMutablePointer<CChar>?] = args.map { strdup($0) } + [nil]
+        defer { cArgs.forEach { if let p = $0 { free(p) } } }
+
+        let envPairs = ProcessInfo.processInfo.environment.map { "\($0.key)=\($0.value)" }
+        let cEnv: [UnsafeMutablePointer<CChar>?] = envPairs.map { strdup($0) } + [nil]
+        defer { cEnv.forEach { if let p = $0 { free(p) } } }
+
+        var childPID: pid_t = 0
+        let status = posix_spawn(&childPID, "/bin/sh", nil, &attr, cArgs, cEnv)
+        guard status == 0 else {
+            try? FileManager.default.removeItem(at: scriptURL)
+            throw UpdateError.installFailed("Failed to launch updater helper (errno \(status)).")
+        }
+    }
+    #endif
 }
 
 enum SHA256SumsParser {
@@ -277,12 +408,14 @@ final class UpdateManager {
         case available(ReleaseInfo)
         case downloading(ReleaseInfo, progress: Double)
         case readyToInstall(ReleaseInfo, fileURL: URL)
+        case installing(ReleaseInfo)
         case error(String)
     }
 
     typealias FileDownloader = @Sendable (URL, URL, @escaping @Sendable (Double) async -> Void) async throws -> Void
     typealias DataFetcher = @Sendable (URL) async throws -> Data
     typealias URLOpener = @MainActor @Sendable (URL) async -> Bool
+    typealias UpdateInstaller = @MainActor @Sendable (URL) async throws -> Void
 
     static let skippedVersionKey = "skippedUpdateVersion"
 
@@ -296,6 +429,7 @@ final class UpdateManager {
     private let downloadFile: FileDownloader
     private let fetchData: DataFetcher
     private let openURL: URLOpener
+    private let installUpdate: UpdateInstaller?
 
     nonisolated init(
         checker: UpdateChecker = UpdateChecker(),
@@ -304,7 +438,8 @@ final class UpdateManager {
         cacheDirectory: URL? = nil,
         downloadFile: FileDownloader? = nil,
         fetchData: DataFetcher? = nil,
-        openURL: URLOpener? = nil
+        openURL: URLOpener? = nil,
+        installUpdate: UpdateInstaller? = nil
     ) {
         self.checker = checker
         self.defaults = defaults
@@ -317,6 +452,20 @@ final class UpdateManager {
         self.openURL = openURL ?? { url in
             await UIApplication.shared.open(url)
         }
+        #if targetEnvironment(macCatalyst)
+        self.installUpdate = installUpdate ?? { dmgURL in
+            try MacSelfUpdater.launchInstaller(
+                dmgURL: dmgURL,
+                appBundleURL: Bundle.main.bundleURL,
+                currentPID: ProcessInfo.processInfo.processIdentifier
+            )
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                Darwin.exit(0)
+            }
+        }
+        #else
+        self.installUpdate = installUpdate
+        #endif
     }
 
     var skippedUpdateVersion: String? {
@@ -325,7 +474,7 @@ final class UpdateManager {
 
     var hasAvailableUpdate: Bool {
         switch state {
-        case .available, .downloading, .readyToInstall:
+        case .available, .downloading, .readyToInstall, .installing:
             return true
         case .idle, .checking, .upToDate, .error:
             return false
@@ -334,7 +483,7 @@ final class UpdateManager {
 
     var activeRelease: ReleaseInfo? {
         switch state {
-        case .available(let info), .downloading(let info, _), .readyToInstall(let info, _):
+        case .available(let info), .downloading(let info, _), .readyToInstall(let info, _), .installing(let info):
             return info
         case .idle, .checking, .upToDate, .error:
             return lastCheckedRelease
@@ -343,7 +492,7 @@ final class UpdateManager {
 
     func checkForUpdates(manual: Bool) async {
         switch state {
-        case .checking, .downloading:
+        case .checking, .downloading, .installing:
             return
         default:
             break
@@ -385,10 +534,7 @@ final class UpdateManager {
     func downloadAndOpenUpdate() async {
         if case .readyToInstall(let info, let existingURL) = state,
            FileManager.default.fileExists(atPath: existingURL.path) {
-            let opened = await openURL(existingURL)
-            if !opened {
-                state = .error("Downloaded \(existingURL.lastPathComponent), but could not open it automatically. Use \"Open Release Page\" to install manually.")
-            }
+            await performInstallOrOpen(info: info, dmgURL: existingURL)
             return
         }
 
@@ -443,14 +589,28 @@ final class UpdateManager {
                 }
             }
 
-            state = .readyToInstall(info, fileURL: destinationURL)
-            let opened = await openURL(destinationURL)
-            if !opened {
-                state = .error("Downloaded \(dmgAsset.name), but could not open it automatically. Use \"Open Release Page\" to install manually.")
-            }
+            await performInstallOrOpen(info: info, dmgURL: destinationURL)
         } catch {
             try? FileManager.default.removeItem(at: tempURL)
             state = .error(error.localizedDescription)
+        }
+    }
+
+    private func performInstallOrOpen(info: ReleaseInfo, dmgURL: URL) async {
+        if let installUpdate {
+            state = .installing(info)
+            do {
+                try await installUpdate(dmgURL)
+            } catch {
+                state = .error(error.localizedDescription)
+            }
+            return
+        }
+
+        state = .readyToInstall(info, fileURL: dmgURL)
+        let opened = await openURL(dmgURL)
+        if !opened {
+            state = .error("Downloaded \(dmgURL.lastPathComponent), but could not open it automatically. Use \"Open Release Page\" to install manually.")
         }
     }
 

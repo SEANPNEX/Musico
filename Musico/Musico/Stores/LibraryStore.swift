@@ -135,7 +135,10 @@ final class LibraryStore {
     /// as a security-scoped one; iOS bookmarks of picked folders carry that implicitly.
     private static func makeBookmark(_ url: URL) -> Data? {
         #if targetEnvironment(macCatalyst)
-        try? url.bookmarkData(options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess])
+        if let scoped = try? url.bookmarkData(options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess]) {
+            return scoped
+        }
+        return try? url.bookmarkData()
         #else
         try? url.bookmarkData()
         #endif
@@ -143,7 +146,10 @@ final class LibraryStore {
 
     private static func resolveBookmark(_ data: Data, isStale: inout Bool) -> URL? {
         #if targetEnvironment(macCatalyst)
-        try? URL(resolvingBookmarkData: data, options: .withSecurityScope, bookmarkDataIsStale: &isStale)
+        if let scoped = try? URL(resolvingBookmarkData: data, options: .withSecurityScope, bookmarkDataIsStale: &isStale) {
+            return scoped
+        }
+        return try? URL(resolvingBookmarkData: data, bookmarkDataIsStale: &isStale)
         #else
         try? URL(resolvingBookmarkData: data, bookmarkDataIsStale: &isStale)
         #endif

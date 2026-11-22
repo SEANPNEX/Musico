@@ -62,7 +62,7 @@ struct UpdateSheet: View {
             releaseHeader(release, subtitle: "Update Available")
             releaseNotes(release)
             HStack(spacing: 12) {
-                Button("Download & Open DMG") {
+                Button("Download & Install Update") {
                     Task { await updateManager.downloadAndOpenUpdate() }
                 }
                 .buttonStyle(.borderedProminent)
@@ -107,14 +107,24 @@ struct UpdateSheet: View {
             }
             .buttonStyle(.bordered)
 
+        case .installing(let release):
+            releaseHeader(release, subtitle: "Installing Update…")
+            HStack(spacing: 12) {
+                ProgressView()
+                Text("Replacing application bundle and relaunching Musico \(release.version.description)…")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+            }
+            releaseNotes(release)
+
         case .readyToInstall(let release, _):
             releaseHeader(release, subtitle: "Ready to Install")
-            Label("Disk image verified and opened in Finder.", systemImage: "checkmark.circle.fill")
+            Label("Update verified and ready.", systemImage: "checkmark.circle.fill")
                 .font(.subheadline)
                 .foregroundStyle(.green)
             releaseNotes(release)
             HStack(spacing: 12) {
-                Button("Download & Open DMG") {
+                Button("Install & Relaunch") {
                     Task { await updateManager.downloadAndOpenUpdate() }
                 }
                 .buttonStyle(.borderedProminent)

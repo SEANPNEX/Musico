@@ -330,4 +330,98 @@ final class UpdateServiceTests: XCTestCase {
         }
         XCTAssertTrue(message.contains("SHA-256"))
     }
+
+    @MainActor
+    func testMacSelfUpdaterScriptAndInstallHook() async throws {
+        let script = MacSelfUpdater.makeInstallScript()
+        XCTAssertTrue(script.hasPrefix("#!/bin/sh"))
+        XCTAssertTrue(script.contains("hdiutil attach"))
+        XCTAssertTrue(script.contains("hdiutil detach"))
+        XCTAssertTrue(script.contains("xattr -dr com.apple.quarantine"))
+        XCTAssertTrue(script.contains("open -n \"$APP_PATH\""))
+        XCTAssertTrue(script.contains("with administrator privileges"))
+
+        let suiteName = "UpdateServiceTests.inst.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let dmgPayload = Data("self-update-dmg-payload".utf8)
+        let dmgHash = SHA256SumsParser.sha256Hex(of: dmgPayload)
+        let sumsText = "\(dmgHash)  Musico-1.2.0-macOS.dmg\n"
+        let releaseJSON = """
+        {
+          "tag_name": "v1.2.0",
+          "name": "Musico 1.2.0",
+          "body": "Self updater",
+          "draft": false,
+          "prerelease": false,
+          "html_url": "https://github.com/SEANPNEX/local_music_player/releases/tag/v1.2.0",
+          "assets": [
+            {
+              "name": "Musico-1.2.0-macOS.dmg",
+              "browser_download_url": "https://example.com/Musico-1.2.0-macOS.dmg",
+              "size": \(dmgPayload.count)
+            },
+            {
+              "name": "SHA256SUMS.txt",
+              "browser_download_url": "https://example.com/SHA256SUMS.txt",
+              "size": \(sumsText.utf8.count)
+            }
+          ]
+        }
+        """
+
+        let checker = UpdateChecker { request in
+            let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
+            return (Data(releaseJSON.utf8), response)
+        }
+
+        let cacheDir = makeTempDir()
+        var installedURLs: [URL] = []
+        let manager = UpdateManager(
+            checker: checker,
+            defaults: defaults,
+            currentVersion: AppVersion(major: 1, minor: 1, patch: 3),
+            cacheDirectory: cacheDir,
+            downloadFile: { _, dest, progress in
+                try dmgPayload.write(to: dest)
+                await progress(1.0)
+            },
+            fetchData: { _ in Data(sumsText.utf8) },
+            installUpdate: { url in
+                installedURLs.append(url)
+            }
+        )
+
+        await manager.checkForUpdates(manual: true)
+        await manager.downloadAndOpenUpdate()
+
+        let expectedPath = cacheDir.appendingPathComponent("Musico-1.2.0-macOS.dmg")
+        XCTAssertEqual(installedURLs, [expectedPath])
+        if case .installing(let info) = manager.state {
+            XCTAssertEqual(info.version, AppVersion(major: 1, minor: 2, patch: 0))
+        } else {
+            XCTFail("Expected .installing, got \(manager.state)")
+        }
+
+        let failManager = UpdateManager(
+            checker: checker,
+            defaults: defaults,
+            currentVersion: AppVersion(major: 1, minor: 1, patch: 3),
+            cacheDirectory: makeTempDir(),
+            downloadFile: { _, dest, _ in
+                try dmgPayload.write(to: dest)
+            },
+            fetchData: { _ in Data(sumsText.utf8) },
+            installUpdate: { _ in
+                throw UpdateError.installFailed("Helper failed")
+            }
+        )
+        await failManager.checkForUpdates(manual: true)
+        await failManager.downloadAndOpenUpdate()
+        guard case .error(let errMsg) = failManager.state else {
+            return XCTFail("Expected .error when installUpdate throws, got \(failManager.state)")
+        }
+        XCTAssertEqual(errMsg, "Helper failed")
+    }
 }

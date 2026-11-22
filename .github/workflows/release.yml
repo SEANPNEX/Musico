@@ -32,14 +32,33 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
 
       - name: Build and test Android APKs
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           TAG="${{ inputs.tag || github.ref_name }}"
           VERSION="${TAG#v}"
           chmod +x gradlew
+          KEYSTORE_TMP=""
+          cleanup_keystore() {
+            if [ -n "$KEYSTORE_TMP" ] && [ -f "$KEYSTORE_TMP" ]; then
+              rm -f "$KEYSTORE_TMP"
+            fi
+          }
+          trap cleanup_keystore EXIT
+          if [ -n "${ANDROID_KEYSTORE_BASE64:-}" ]; then
+            KEYSTORE_TMP="${RUNNER_TEMP}/musico-release.jks"
+            printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_TMP"
+            export ANDROID_KEYSTORE_PATH="$KEYSTORE_TMP"
+          fi
           ./gradlew testDebugUnitTest assembleDebug assembleRelease --stacktrace
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk "dist/MusicoAndroid-${VERSION}-debug.apk"
-          if [ -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk "dist/MusicoAndroid-${VERSION}-release.apk"
+          elif [ -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
             cp app/build/outputs/apk/release/app-release-unsigned.apk "dist/MusicoAndroid-${VERSION}-release-unsigned.apk"
           fi
 
@@ -176,7 +195,7 @@ jobs:
           ### Downloads
           - **Windows 10/11 Installer**: \`MusicoWindows-${VERSION}-win-x64-Setup.exe\` (self-contained x64, Start Menu & uninstaller)
           - **Windows 10/11 Portable**: \`MusicoWindows-${VERSION}-win-x64-portable.zip\` (self-contained single-file EXE + \`portable.txt\` using \`.\Data\\\`)
-          - **Android (API 26+)**: \`MusicoAndroid-${VERSION}-debug.apk\` (directly sideloadable) & \`MusicoAndroid-${VERSION}-release-unsigned.apk\`
+          - **Android (API 26+)**: \`MusicoAndroid-${VERSION}-release.apk\` (persistently signed release build for seamless in-app updates) & \`MusicoAndroid-${VERSION}-debug.apk\`
           - **macOS (Catalyst)**: \`Musico-${VERSION}-macOS.dmg\` (ad-hoc signed disk image with \`Applications\` drag-install shortcut)
           - **iOS (17+)**: \`Musico-${VERSION}-iOS-unsigned.ipa\` (unsigned IPA for sideloading via AltStore, SideStore, Sideloadly, or Xcode)
 
