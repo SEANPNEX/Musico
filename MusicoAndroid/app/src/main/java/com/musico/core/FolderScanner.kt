@@ -16,7 +16,7 @@ data class ScannedFile(
 
 object FolderScanner {
     val AUDIO_EXTENSIONS: Set<String> = setOf(
-        "mp3", "m4a", "aac", "flac", "wav", "aif", "aiff", "caf", "alac", "ogg", "opus",
+        "mp3", "m4a", "aac", "flac", "wav", "aif", "aiff", "caf", "alac", "ogg", "opus", "webm",
     )
 
     fun isAudioFileName(name: String): Boolean {

@@ -110,7 +110,8 @@ public partial class PlaylistDetailView : UserControl
                     menu.Items.Add(new Separator());
                     menu.Items.Add(TrackMenuHelper.CreateItem("Remove from Playlist", "\uE74D",
                         () => lib.RemoveFromPlaylist(userPlaylistId, idx)));
-                } : null);
+                } : null,
+                _ctx.OpenSaveCloudTrack);
 
             if (isUser)
             {

@@ -38,7 +38,9 @@ private struct InnerSheetHost: View {
     var body: some View {
         Text("Player")
             .sheet(isPresented: $show) {
-                Text("Queue").onAppear(perform: onInnerAppear).modifier(NewPlaylistAlert())
+                Text("Queue").onAppear(perform: onInnerAppear)
+                    .modifier(NewPlaylistAlert())
+                    .modifier(CloudExportHostModifier())
             }
             .task {
                 try? await Task.sleep(for: .milliseconds(600))

@@ -12,6 +12,7 @@ struct SidebarRootView: View {
     @Environment(PlayerController.self) private var player
     @Environment(QueueStore.self) private var queues
     @Environment(NewPlaylistPrompt.self) private var newPlaylist
+    @Environment(CloudExportPrompt.self) private var cloudExport
     #if targetEnvironment(macCatalyst)
     @Environment(\.updateManager) private var updateManager
     @State private var showUpdateSheet = false
@@ -20,26 +21,40 @@ struct SidebarRootView: View {
     @State private var sidePanel: SidePanel?
 
     var body: some View {
-        VStack(spacing: 0) {
-            NavigationSplitView {
-                sidebar
-            } detail: {
-                // A fresh stack per item, so one section's pushed pages never show under another.
-                NavigationStack { detail }
-                    .id(selection)
+        Group {
+            if #available(iOS 26.0, macCatalyst 26.0, *) {
+                splitView
+                    .safeAreaInset(edge: .bottom, spacing: 0) {
+                        PlayerBar(sidePanel: $sidePanel, onOpen: openPlayer)
+                    }
+            } else {
+                VStack(spacing: 0) {
+                    splitView
+                    PlayerBar(sidePanel: $sidePanel, onOpen: openPlayer)
+                }
             }
-            .inspector(isPresented: Binding(get: { sidePanel != nil }, set: { if !$0 { sidePanel = nil } })) {
-                panel
-                    .inspectorColumnWidth(min: 300, ideal: 360, max: 460)
-                    .environment(library)
-                    .environment(player)
-                    .environment(queues)
-                    .environment(newPlaylist)
-            }
-            PlayerBar(sidePanel: $sidePanel, onOpen: openPlayer)
         }
         .onChange(of: library.playlists.map(\.id)) { _, ids in
             if case .playlist(let id) = selection, !ids.contains(id) { selection = .playlists }
+        }
+    }
+
+    private var splitView: some View {
+        NavigationSplitView {
+            sidebar
+        } detail: {
+            // A fresh stack per item, so one section's pushed pages never show under another.
+            NavigationStack { detail }
+                .id(selection)
+        }
+        .inspector(isPresented: Binding(get: { sidePanel != nil }, set: { if !$0 { sidePanel = nil } })) {
+            panel
+                .inspectorColumnWidth(min: 300, ideal: 360, max: 460)
+                .environment(library)
+                .environment(player)
+                .environment(queues)
+                .environment(newPlaylist)
+                .environment(cloudExport)
         }
     }
 
@@ -86,8 +101,9 @@ struct SidebarRootView: View {
     }
 
     #if targetEnvironment(macCatalyst)
+    @ViewBuilder
     private var updateFooter: some View {
-        Button {
+        let button = Button {
             showUpdateSheet = true
             switch updateManager.state {
             case .available, .downloading, .readyToInstall:
@@ -114,7 +130,16 @@ struct SidebarRootView: View {
         }
         .buttonStyle(.plain)
         .foregroundStyle(.secondary)
-        .background(.bar)
+
+        if #available(iOS 26.0, macCatalyst 26.0, *) {
+            button
+                .glassEffect(.regular.interactive(), in: Capsule())
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+        } else {
+            button
+                .background(.bar)
+        }
     }
     #endif
 

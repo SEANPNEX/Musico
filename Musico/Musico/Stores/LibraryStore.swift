@@ -172,6 +172,16 @@ final class LibraryStore {
         a.resolvingSymlinksInPath().standardizedFileURL.path == b.resolvingSymlinksInPath().standardizedFileURL.path
     }
 
+    /// True when `url` is an existing local root or resides inside one.
+    func containsLocalURL(_ url: URL) -> Bool {
+        let targetPath = url.resolvingSymlinksInPath().standardizedFileURL.path
+        return rootURLs.values.contains { rootURL in
+            let rootPath = rootURL.resolvingSymlinksInPath().standardizedFileURL.path
+            let prefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+            return targetPath == rootPath || targetPath.hasPrefix(prefix)
+        }
+    }
+
     func addRoot(url: URL) async throws {
         let scoped = url.startAccessingSecurityScopedResource()
         func fail(_ error: LibraryError) -> LibraryError {

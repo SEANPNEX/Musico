@@ -1,9 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Microsoft.Win32;
+using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
 namespace MusicoWindows.Controls;
@@ -19,7 +22,8 @@ public static class TrackMenuHelper
         IReadOnlyList<string> trackIds,
         string? favouriteTrackId,
         Action<string, string, string, string, Action<string>> openTextPrompt,
-        Action<ContextMenu>? appendExtra = null)
+        Action<ContextMenu>? appendExtra = null,
+        Action<Track, string>? openSaveCloudTrack = null)
     {
         var menu = new ContextMenu();
         var ids = trackIds.ToList();
@@ -91,8 +95,42 @@ public static class TrackMenuHelper
                 true));
         }
 
+        if (ids.Count == 1 && services.Library.GetTrack(ids[0]) is { IsCloud: true } cloudTrack)
+        {
+            menu.Items.Add(new Separator());
+            menu.Items.Add(CreateItem(
+                "Save to Local Folder...",
+                "\uE896",
+                () => PromptAndExportCloudTrack(services, cloudTrack, openSaveCloudTrack)));
+        }
+
         appendExtra?.Invoke(menu);
         return menu;
+    }
+
+    private static void PromptAndExportCloudTrack(
+        AppServices services,
+        Track track,
+        Action<Track, string>? openSaveCloudTrack)
+    {
+        var dlg = new OpenFolderDialog
+        {
+            Title = $"Save \"{track.Title}\" to Local Folder"
+        };
+        if (!string.IsNullOrWhiteSpace(services.MusicDirectory) && Directory.Exists(services.MusicDirectory))
+        {
+            dlg.InitialDirectory = services.MusicDirectory;
+        }
+        if (dlg.ShowDialog() != true) return;
+
+        if (openSaveCloudTrack is not null)
+        {
+            openSaveCloudTrack(track, dlg.FolderName);
+        }
+        else if (Application.Current?.MainWindow is MainWindow mw)
+        {
+            mw.StartSingleTrackExport(track, dlg.FolderName);
+        }
     }
 
     public static MenuItem CreateItem(string header, string? mdl2Glyph, Action onClick, bool isEnabled = true)

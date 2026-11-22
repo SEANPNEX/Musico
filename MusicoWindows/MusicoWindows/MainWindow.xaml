@@ -362,6 +362,7 @@
             <controls:TextInputDialog x:Name="PromptDialog" />
             <controls:ConfirmDialog x:Name="ConfirmOverlay" />
             <controls:AddCloudFolderDialog x:Name="CloudDialog" />
+            <controls:SaveCloudFolderDialog x:Name="SaveCloudDialog" />
             <controls:UpdateDialog x:Name="UpdateDialog" />
         </Grid>
     </Grid>

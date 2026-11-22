@@ -89,6 +89,7 @@ fun MusicoApp(
     val lyricsStore = appContainer.lyricsStore
     val playerController = appContainer.playerController
     val updateManager = appContainer.updateManager
+    val cloudExporter = appContainer.cloudExporter
 
     LaunchedEffect(updateManager) {
         updateManager.checkForUpdates(silent = true)
@@ -99,7 +100,7 @@ fun MusicoApp(
     val historyState by historyStore.state.collectAsStateWithLifecycle()
     val playerState by playerController.state.collectAsStateWithLifecycle()
 
-    val trackActions = rememberTrackActionState(libraryStore, playerController)
+    val trackActions = rememberTrackActionState(libraryStore, playerController, cloudExporter, onPickFolder)
 
     var selectedDestination by rememberSaveable { mutableStateOf(TopDestination.LIBRARY) }
     var showFullPlayer by rememberSaveable { mutableStateOf(false) }
@@ -381,6 +382,7 @@ private fun DestinationContent(
                     activeQueue = queueState.active,
                     trackActions = trackActions,
                     updateManager = appContainer.updateManager,
+                    cloudExporter = appContainer.cloudExporter,
                     onPickFolder = onPickFolder,
                     modifier = Modifier.fillMaxSize()
                 )

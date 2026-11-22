@@ -13,6 +13,7 @@ struct QueueSheet: View {
                 }
         }
         .modifier(NewPlaylistAlert())
+        .modifier(CloudExportHostModifier())
     }
 }
 

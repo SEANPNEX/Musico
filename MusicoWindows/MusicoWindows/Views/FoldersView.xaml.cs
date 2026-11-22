@@ -243,6 +243,39 @@ public partial class FoldersView : UserControl
                 actions.Children.Add(locateBtn);
             }
 
+            if (root.IsCloud)
+            {
+                var saveBtn = new Button
+                {
+                    Style = (Style)FindResource("Win10ButtonStyle"),
+                    ToolTip = "Save Cloud Playlist to Local Folder",
+                    Margin = new Thickness(0, 0, 8, 0),
+                    IsEnabled = count > 0
+                };
+                var saveContent = new StackPanel { Orientation = Orientation.Horizontal };
+                saveContent.Children.Add(new TextBlock
+                {
+                    Text = "\uE896",
+                    FontFamily = (FontFamily)FindResource("Win10GlyphFont"),
+                    FontSize = 12,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 6, 0)
+                });
+                saveContent.Children.Add(new TextBlock
+                {
+                    Text = "Save to Local Folder...",
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+                saveBtn.Content = saveContent;
+                saveBtn.Click += (_, e) =>
+                {
+                    e.Handled = true;
+                    var tracksToSave = lib.GetTracksUnder(rootId, string.Empty);
+                    _ctx.OpenSaveCloudPlaylist?.Invoke(root, tracksToSave);
+                };
+                actions.Children.Add(saveBtn);
+            }
+
             var removeBtn = new Button
             {
                 Style = (Style)FindResource("Win10ButtonStyle"),
@@ -294,7 +327,8 @@ public partial class FoldersView : UserControl
                 Win10Animations.AnimateSlideX(ContentStack, 24);
             };
 
-            var rootTrackIds = lib.GetTracksUnder(rootId, string.Empty).Select(t => t.Id).ToList();
+            var rootTracks = lib.GetTracksUnder(rootId, string.Empty);
+            var rootTrackIds = rootTracks.Select(t => t.Id).ToList();
             card.ContextMenu = TrackMenuHelper.BuildTrackMenu(
                 _ctx.Services,
                 rootTrackIds,
@@ -303,6 +337,14 @@ public partial class FoldersView : UserControl
                 menu =>
                 {
                     menu.Items.Add(new Separator());
+                    if (root.IsCloud)
+                    {
+                        menu.Items.Add(TrackMenuHelper.CreateItem(
+                            "Save to Local Folder...",
+                            "\uE896",
+                            () => _ctx.OpenSaveCloudPlaylist?.Invoke(root, rootTracks),
+                            rootTracks.Count > 0));
+                    }
                     if (root.Kind == RootKind.Picked)
                     {
                         menu.Items.Add(TrackMenuHelper.CreateItem("Locate Again...", "\uE8DA", async () => await PickAndRelocateAsync(rootId)));
@@ -358,6 +400,7 @@ public partial class FoldersView : UserControl
         TitleText.Text = leafName;
         SubtitleText.Text = root.IsCloud ? (root.SourceUrl ?? root.Path ?? string.Empty) : (root.Path ?? string.Empty);
         DrillBar.Visibility = Visibility.Visible;
+        SaveCloudFolderButton.Visibility = root.IsCloud ? Visibility.Visible : Visibility.Collapsed;
         RemoveRootButton.Visibility = Visibility.Visible;
 
         BuildBreadcrumbs(root);
@@ -367,6 +410,7 @@ public partial class FoldersView : UserControl
 
         PlayFolderButton.IsEnabled = allTracksUnder.Count > 0;
         ShuffleFolderButton.IsEnabled = allTracksUnder.Count > 0;
+        SaveCloudFolderButton.IsEnabled = root.IsCloud && allTracksUnder.Count > 0;
 
         ContentStack.Children.Clear();
 
@@ -545,7 +589,9 @@ public partial class FoldersView : UserControl
                 isPlaying,
                 isAvail,
                 () => _ctx.Services.Player.Play(directIds, idx),
-                _ctx.OpenTextPrompt);
+                _ctx.OpenTextPrompt,
+                null,
+                _ctx.OpenSaveCloudTrack);
             ContentStack.Children.Add(row);
         }
     }
@@ -686,6 +732,16 @@ public partial class FoldersView : UserControl
     private void AddCloudFolder_Click(object sender, RoutedEventArgs e)
     {
         _ctx?.OpenAddCloudFolder?.Invoke();
+    }
+
+    private void SaveCloudFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ctx is null || _currentRootId is not Guid rid) return;
+        var root = _ctx.Services.Library.GetRoot(rid);
+        if (root is null || !root.IsCloud) return;
+        var tracks = _ctx.Services.Library.GetTracksUnder(rid, _currentPath);
+        if (tracks.Count == 0) return;
+        _ctx.OpenSaveCloudPlaylist?.Invoke(root, tracks);
     }
 
     private void RemoveRoot_Click(object sender, RoutedEventArgs e)

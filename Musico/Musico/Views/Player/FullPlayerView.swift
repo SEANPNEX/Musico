@@ -22,20 +22,24 @@ struct FullPlayerView: View {
 
     var body: some View {
         GeometryReader { proxy in
-            if proxy.size.width >= Self.twoColumnWidth {
-                HStack(spacing: 0) {
-                    PlayerPage(panel: columnPanel, showsClose: true)
-                        .frame(maxWidth: .infinity)
-                    Divider()
-                    sideColumn
-                        .frame(maxWidth: .infinity)
+            Group {
+                if proxy.size.width >= Self.twoColumnWidth {
+                    HStack(spacing: 0) {
+                        PlayerPage(panel: columnPanel, showsClose: true)
+                            .frame(maxWidth: .infinity)
+                        Divider()
+                        sideColumn
+                            .frame(maxWidth: .infinity)
+                    }
+                } else {
+                    PlayerPage(panel: $panel, showsClose: false)
                 }
-            } else {
-                PlayerPage(panel: $panel, showsClose: false)
             }
+            .background { AmbientPlayerBackdrop() }
         }
         .presentationDragIndicator(.visible)
         .modifier(NewPlaylistAlert())
+        .modifier(CloudExportHostModifier())
         .sheet(item: $panel) { panel in
             switch panel {
             case .queue: QueueSheet()
@@ -91,17 +95,18 @@ private struct PlayerPage: View {
     var body: some View {
         VStack(spacing: 20) {
             if showsClose {
-                Button("Close", systemImage: "chevron.down") { dismiss() }
-                    .labelStyle(.iconOnly)
-                    .font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 32)
+                closeButton
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .keyboardShortcut(.cancelAction)
             }
             if let track = player.currentTrack {
                 ArtworkView(artworkKey: track.artworkKey)
                     .padding(.horizontal, 12)
-                    .shadow(color: .black.opacity(0.2), radius: 16, y: 8)
+                    .shadow(color: .black.opacity(player.isPlaying ? 0.28 : 0.14),
+                            radius: player.isPlaying ? 22 : 12,
+                            y: player.isPlaying ? 12 : 6)
+                    .scaleEffect(player.isPlaying ? 1.0 : 0.92)
+                    .animation(.spring(response: 0.45, dampingFraction: 0.72), value: player.isPlaying)
                     .frame(maxHeight: .infinity)
                     .onTapGesture { panel = .lyrics }
                     .accessibilityAddTraits(.isButton)
@@ -113,11 +118,15 @@ private struct PlayerPage: View {
                         Text("\(track.artist) — \(track.album)").foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer()
-                    Button("Favourite", systemImage: library.isFavourite(track.id) ? "heart.fill" : "heart") {
+                    let isFavourite = library.isFavourite(track.id)
+                    Button("Favourite", systemImage: isFavourite ? "heart.fill" : "heart") {
                         library.toggleFavourite(track.id)
                     }
                     .font(.title2)
                     .labelStyle(.iconOnly)
+                    .foregroundStyle(isFavourite ? Color.red : Color.secondary)
+                    .contentTransition(.symbolEffect(.replace))
+                    .symbolEffect(.bounce, value: isFavourite)
                 }
 
                 PlaybackScrubber()
@@ -138,6 +147,22 @@ private struct PlayerPage: View {
         .padding(.horizontal, 24)
         .padding(.top, showsClose ? 12 : 28)
         .padding(.bottom, 16)
+    }
+
+    @ViewBuilder
+    private var closeButton: some View {
+        if #available(iOS 26.0, macCatalyst 26.0, *) {
+            Button("Close", systemImage: "chevron.down") { dismiss() }
+                .labelStyle(.iconOnly)
+                .font(.body.weight(.semibold))
+                .frame(width: 38, height: 38)
+                .glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            Button("Close", systemImage: "chevron.down") { dismiss() }
+                .labelStyle(.iconOnly)
+                .font(.title3.weight(.semibold))
+                .frame(width: 44, height: 32)
+        }
     }
 
     private var positionText: String {
@@ -162,11 +187,14 @@ private struct PlayerPage: View {
                     player.togglePlayPause()
                 }
                 .font(.system(size: 68))
+                .contentTransition(.symbolEffect(.replace))
+                .symbolEffect(.bounce, value: player.isPlaying)
             }
             Spacer()
             Button("Next", systemImage: "forward.fill") { player.next() }.font(.title)
             Spacer()
             Button("Repeat", systemImage: queue.repeatMode == .one ? "repeat.1" : "repeat") { player.cycleRepeat() }
+                .contentTransition(.symbolEffect(.replace))
                 .foregroundStyle(queue.repeatMode == .off ? .secondary : Color.accentColor)
         }
         .labelStyle(.iconOnly)
@@ -174,29 +202,92 @@ private struct PlayerPage: View {
         .tint(.primary)
     }
 
+    @ViewBuilder
     private var panelButtons: some View {
-        HStack {
-            panelButton("Queue", "list.bullet", .queue, active: false)
-            Spacer()
-            panelButton("Lyrics", "quote.bubble", .lyrics, active: false)
-            Spacer()
-            panelButton("Equalizer", "slider.vertical.3", .equalizer, active: player.eq.enabled)
-            Spacer()
-            panelButton("Sleep Timer", "moon.zzz", .sleep, active: player.sleepMode != .off)
+        if #available(iOS 26.0, macCatalyst 26.0, *) {
+            GlassEffectContainer(spacing: 10) {
+                HStack(spacing: 8) {
+                    panelButton("Queue", "list.bullet", .queue, active: false)
+                    panelButton("Lyrics", "quote.bubble", .lyrics, active: false)
+                    panelButton("Equalizer", "slider.vertical.3", .equalizer, active: player.eq.enabled)
+                    panelButton("Sleep Timer", "moon.zzz", .sleep, active: player.sleepMode != .off)
+                }
+            }
+            .padding(.top, 4)
+        } else {
+            HStack {
+                panelButton("Queue", "list.bullet", .queue, active: false)
+                Spacer()
+                panelButton("Lyrics", "quote.bubble", .lyrics, active: false)
+                Spacer()
+                panelButton("Equalizer", "slider.vertical.3", .equalizer, active: player.eq.enabled)
+                Spacer()
+                panelButton("Sleep Timer", "moon.zzz", .sleep, active: player.sleepMode != .off)
+            }
+            .padding(.top, 4)
         }
-        .padding(.top, 4)
     }
 
+    @ViewBuilder
     private func panelButton(_ title: String, _ icon: String, _ target: Panel, active: Bool) -> some View {
-        Button {
-            panel = target
-        } label: {
-            VStack(spacing: 4) {
-                Image(systemName: icon).font(.title3).frame(height: 26)
-                Text(title).font(.caption2)
+        if #available(iOS 26.0, macCatalyst 26.0, *) {
+            Button {
+                panel = target
+            } label: {
+                VStack(spacing: 4) {
+                    Image(systemName: icon).font(.title3).frame(height: 24)
+                    Text(title).font(.caption2).lineLimit(1).minimumScaleFactor(0.85)
+                }
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 6)
             }
-            .frame(minWidth: 64, minHeight: 44)
+            .buttonStyle(.plain)
+            .foregroundStyle(active ? Color.accentColor : .primary)
+            .glassEffect(.regular.interactive(), in: Capsule())
+        } else {
+            Button {
+                panel = target
+            } label: {
+                VStack(spacing: 4) {
+                    Image(systemName: icon).font(.title3).frame(height: 26)
+                    Text(title).font(.caption2)
+                }
+                .frame(minWidth: 64, minHeight: 44)
+            }
+            .foregroundStyle(active ? Color.accentColor : .primary)
         }
-        .foregroundStyle(active ? Color.accentColor : .primary)
+    }
+}
+
+/// Soft ambient glow tinted from the active track's artwork.
+private struct AmbientPlayerBackdrop: View {
+    @Environment(PlayerController.self) private var player
+    @Environment(LibraryStore.self) private var library
+    @State private var image: UIImage?
+
+    var body: some View {
+        let key = player.currentTrack?.artworkKey
+        Group {
+            if let image {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
+                    .blur(radius: 72)
+                    .saturation(1.25)
+                    .opacity(0.24)
+                    .scaleEffect(1.25)
+                    .transition(.opacity)
+            }
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+        .animation(.easeInOut(duration: 0.6), value: key)
+        .task(id: key) {
+            guard let key else { image = nil; return }
+            let cache = library.artwork
+            image = await Task.detached { cache.image(forKey: key) }.value
+        }
     }
 }

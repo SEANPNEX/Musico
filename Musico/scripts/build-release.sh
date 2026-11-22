@@ -18,6 +18,11 @@ cd "$ROOT_DIR"
 mkdir -p "$DIST_DIR"
 rm -rf "$DMG_STAGE" "$IPA_STAGE" "$DMG_OUT" "$IPA_OUT"
 
+echo "==> Xcode & SDK versions:"
+xcodebuild -version
+echo "macOS SDK: $(xcrun --sdk macosx --show-sdk-version)"
+echo "iOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
+
 echo "==> Building macOS (Mac Catalyst, Release)..."
 xcodebuild -project Musico.xcodeproj -scheme Musico \
   -configuration Release \

@@ -134,6 +134,7 @@ struct TrackMenuItems: View {
     @Environment(QueueStore.self) private var queues
     @Environment(PlayerController.self) private var player
     @Environment(NewPlaylistPrompt.self) private var newPlaylist
+    @Environment(CloudExportPrompt.self) private var cloudExport
 
     var body: some View {
         Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") { player.playNext(ids) }
@@ -163,6 +164,17 @@ struct TrackMenuItems: View {
                 library.toggleFavourite(favouriteID)
             }
         }
+        if ids.count == 1, let trackID = ids.first, let track = library.track(trackID), track.isCloud {
+            Divider()
+            Button("Save to Local Folder…", systemImage: "square.and.arrow.down") {
+                let root = library.root(track.rootID)
+                cloudExport.request = CloudExportPrompt.Request(track: track, root: root) { [library] savedURL in
+                    if library.containsLocalURL(savedURL) {
+                        await library.rescan()
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -173,22 +185,41 @@ struct PlayShuffleButtons: View {
     @Environment(QueueStore.self) private var queues
 
     var body: some View {
-        HStack(spacing: 12) {
-            Button {
-                if queues.active.shuffle { player.toggleShuffle() }
-                player.play(ids, startAt: 0)
-            } label: {
-                Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity)
-            }
-            Button {
-                if !queues.active.shuffle { player.toggleShuffle() }
-                player.play(ids, startAt: Int.random(in: 0..<max(ids.count, 1)))
-            } label: {
-                Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity)
+        Group {
+            if #available(iOS 26.0, macCatalyst 26.0, *) {
+                HStack(spacing: 12) {
+                    playButton
+                        .buttonStyle(.glassProminent)
+                    shuffleButton
+                        .buttonStyle(.glass)
+                }
+            } else {
+                HStack(spacing: 12) {
+                    playButton
+                    shuffleButton
+                }
+                .buttonStyle(.bordered)
             }
         }
-        .buttonStyle(.bordered)
         .disabled(ids.isEmpty)
         .listRowSeparator(.hidden)
+    }
+
+    private var playButton: some View {
+        Button {
+            if queues.active.shuffle { player.toggleShuffle() }
+            player.play(ids, startAt: 0)
+        } label: {
+            Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity)
+        }
+    }
+
+    private var shuffleButton: some View {
+        Button {
+            if !queues.active.shuffle { player.toggleShuffle() }
+            player.play(ids, startAt: Int.random(in: 0..<max(ids.count, 1)))
+        } label: {
+            Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity)
+        }
     }
 }

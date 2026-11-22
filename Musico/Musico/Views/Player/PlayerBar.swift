@@ -9,10 +9,13 @@ struct PlayerBar: View {
 
     var body: some View {
         let track = player.currentTrack
-        HStack(spacing: 16) {
+        let barContent = HStack(spacing: 16) {
             Button(action: onOpen) {
                 HStack(spacing: 12) {
                     ArtworkView(artworkKey: track?.artworkKey, size: 46)
+                        .id(track?.id)
+                        .transition(.opacity)
+                        .animation(.easeInOut(duration: 0.2), value: track?.id)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(track?.title ?? "Not Playing").font(.subheadline.weight(.medium)).lineLimit(1)
                         Text(track?.artist ?? "Pick a song from your library").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
@@ -37,29 +40,51 @@ struct PlayerBar: View {
             }
             .frame(minWidth: 80, maxWidth: .infinity, alignment: .trailing)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
+
+        if #available(iOS 26.0, macCatalyst 26.0, *) {
+            GlassEffectContainer(spacing: 12) {
+                barContent
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 10)
+                    .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            }
+            .padding(.horizontal, 16)
+            .padding(.bottom, 10)
+        } else {
+            barContent
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+                .background(.bar)
+                .overlay(alignment: .top) { Divider() }
+        }
     }
 
     private var transport: some View {
         let queue = queues.active
         return HStack(spacing: 22) {
-            Button("Shuffle", systemImage: "shuffle") { player.toggleShuffle() }
-                .foregroundStyle(queue.shuffle ? Color.accentColor : .secondary)
+            Button("Shuffle", systemImage: "shuffle") {
+                withAnimation(.spring(duration: 0.25)) { player.toggleShuffle() }
+            }
+            .foregroundStyle(queue.shuffle ? Color.accentColor : .secondary)
             Button("Previous", systemImage: "backward.fill") { player.previous() }
             if player.isBuffering {
                 ProgressView()
                     .frame(width: 32)
             } else {
-                Button("Play or Pause", systemImage: player.isPlaying ? "pause.fill" : "play.fill") { player.togglePlayPause() }
-                    .font(.title2)
-                    .frame(width: 32)
+                Button("Play or Pause", systemImage: player.isPlaying ? "pause.fill" : "play.fill") {
+                    player.togglePlayPause()
+                }
+                .font(.title2)
+                .contentTransition(.symbolEffect(.replace))
+                .animation(.spring(duration: 0.25), value: player.isPlaying)
+                .frame(width: 32)
             }
             Button("Next", systemImage: "forward.fill") { player.next() }
-            Button("Repeat", systemImage: queue.repeatMode == .one ? "repeat.1" : "repeat") { player.cycleRepeat() }
-                .foregroundStyle(queue.repeatMode == .off ? .secondary : Color.accentColor)
+            Button("Repeat", systemImage: queue.repeatMode == .one ? "repeat.1" : "repeat") {
+                withAnimation(.spring(duration: 0.25)) { player.cycleRepeat() }
+            }
+            .contentTransition(.symbolEffect(.replace))
+            .foregroundStyle(queue.repeatMode == .off ? .secondary : Color.accentColor)
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.plain)
@@ -69,13 +94,19 @@ struct PlayerBar: View {
 
     private func panelToggle(_ title: String, _ icon: String, _ panel: SidePanel) -> some View {
         let isOn = sidePanel == panel
-        return Button(title, systemImage: icon) { sidePanel = isOn ? nil : panel }
-            .labelStyle(.iconOnly)
-            .buttonStyle(.plain)
-            .font(.body)
-            .frame(width: 36, height: 32)
-            .foregroundStyle(isOn ? Color.accentColor : .primary)
-            .background(isOn ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 7))
-            .accessibilityAddTraits(isOn ? .isSelected : [])
+        return Button(title, systemImage: icon) {
+            withAnimation(.spring(duration: 0.25)) {
+                sidePanel = isOn ? nil : panel
+            }
+        }
+        .labelStyle(.iconOnly)
+        .buttonStyle(.plain)
+        .font(.body)
+        .contentTransition(.symbolEffect(.replace))
+        .frame(width: 36, height: 32)
+        .foregroundStyle(isOn ? Color.accentColor : .primary)
+        .background(isOn ? Color.accentColor.opacity(0.15) : .clear, in: RoundedRectangle(cornerRadius: 7))
+        .animation(.spring(duration: 0.25), value: isOn)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }

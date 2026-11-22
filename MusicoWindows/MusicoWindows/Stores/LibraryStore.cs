@@ -177,6 +177,36 @@ public sealed class LibraryStore : ObservableStore
         return full.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
     }
 
+    public bool IsFolderIndexed(string folderPath)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath)) return false;
+
+        string target = NormalizeDirPath(folderPath);
+        foreach (var root in _roots)
+        {
+            if (!root.IsLocal || !_rootPaths.TryGetValue(root.Id, out string? rootPath)) continue;
+
+            string normRoot = NormalizeDirPath(rootPath);
+            if (string.Equals(target, normRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            string prefix = Path.EndsInDirectorySeparator(normRoot)
+                ? normRoot
+                : normRoot + Path.DirectorySeparatorChar;
+            if (target.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                string rel = Path.GetRelativePath(normRoot, target).Replace('\\', '/');
+                if (!root.IsExcluded(rel))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
     public async Task AddRootAsync(string path)
     {
         if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))

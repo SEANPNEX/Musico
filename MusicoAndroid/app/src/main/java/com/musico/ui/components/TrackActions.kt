@@ -1,45 +1,68 @@
 package com.musico.ui.components
 
+import android.net.Uri
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.AddToQueue
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Queue
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
 import com.musico.audio.PlayerController
+import com.musico.cloud.CloudExporter
 import com.musico.model.PlayQueue
 import com.musico.model.Playlist
+import com.musico.model.Track
 import com.musico.store.LibraryStore
+import kotlinx.coroutines.CancellationException
 
 @Stable
 class TrackActionState(
     val libraryStore: LibraryStore,
-    val playerController: PlayerController
+    val playerController: PlayerController,
+    val cloudExporter: CloudExporter,
+    val onPickFolder: ((Uri) -> Unit) -> Unit,
 ) {
     var queuePickerIds: List<String>? by mutableStateOf(null)
     var playlistPickerIds: List<String>? by mutableStateOf(null)
     var newPlaylistIds: List<String>? by mutableStateOf(null)
+    var savingCloudTrack: Pair<Track, Uri>? by mutableStateOf(null)
 }
 
 @Composable
 fun rememberTrackActionState(
     libraryStore: LibraryStore,
-    playerController: PlayerController
+    playerController: PlayerController,
+    cloudExporter: CloudExporter,
+    onPickFolder: ((Uri) -> Unit) -> Unit,
 ): TrackActionState {
-    return remember(libraryStore, playerController) {
-        TrackActionState(libraryStore, playerController)
+    return remember(libraryStore, playerController, cloudExporter, onPickFolder) {
+        TrackActionState(libraryStore, playerController, cloudExporter, onPickFolder)
     }
 }
 
@@ -116,6 +139,23 @@ fun TrackMenuItems(
             }
         )
     }
+    val singleCloudTrack = if (ids.size == 1) {
+        actionState.libraryStore.track(ids[0])?.takeIf { it.isCloud }
+    } else {
+        null
+    }
+    if (singleCloudTrack != null) {
+        DropdownMenuItem(
+            text = { Text("Save to Local Folder…") },
+            leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) },
+            onClick = {
+                onDismiss()
+                actionState.onPickFolder { uri ->
+                    actionState.savingCloudTrack = singleCloudTrack to uri
+                }
+            }
+        )
+    }
 }
 
 @Composable
@@ -180,4 +220,122 @@ fun TrackActionDialogs(
             }
         )
     }
+
+    val saveTarget = state.savingCloudTrack
+    if (saveTarget != null) {
+        SaveSingleCloudTrackDialog(
+            track = saveTarget.first,
+            targetUri = saveTarget.second,
+            libraryStore = state.libraryStore,
+            cloudExporter = state.cloudExporter,
+            onDismiss = { state.savingCloudTrack = null },
+        )
+    }
+}
+
+@Composable
+private fun SaveSingleCloudTrackDialog(
+    track: Track,
+    targetUri: Uri,
+    libraryStore: LibraryStore,
+    cloudExporter: CloudExporter,
+    onDismiss: () -> Unit,
+) {
+    var isExporting by remember(track.id, targetUri) { mutableStateOf(true) }
+    var savedFileName by remember(track.id, targetUri) { mutableStateOf<String?>(null) }
+    var libraryUpdated by remember(track.id, targetUri) { mutableStateOf(false) }
+    var errorMessage by remember(track.id, targetUri) { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(track.id, targetUri) {
+        isExporting = true
+        savedFileName = null
+        libraryUpdated = false
+        errorMessage = null
+        try {
+            val fileName = cloudExporter.exportTrack(
+                track = track,
+                root = libraryStore.rootFor(track),
+                targetTreeUri = targetUri,
+            )
+            savedFileName = fileName
+            if (libraryStore.isUriInsideIndexedRoot(targetUri)) {
+                libraryStore.rescan()
+                libraryUpdated = true
+            }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (err: Exception) {
+            errorMessage = err.message ?: "Could not save song."
+        } finally {
+            isExporting = false
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!isExporting) onDismiss() },
+        icon = { Icon(Icons.Rounded.Download, contentDescription = null) },
+        title = {
+            Text(
+                when {
+                    isExporting -> "Saving Song"
+                    errorMessage != null -> "Save Failed"
+                    else -> "Song Saved"
+                }
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                when {
+                    isExporting -> {
+                        Text(
+                            text = "Downloading ${track.title}…",
+                            style = MaterialTheme.typography.bodyMedium,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                    errorMessage != null -> {
+                        Text(
+                            text = errorMessage ?: "Unknown error",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                    }
+                    else -> {
+                        Text(
+                            text = "Saved as “${savedFileName.orEmpty()}”.",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                        if (libraryUpdated) {
+                            Text(
+                                text = "Library updated.",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (!isExporting) {
+                TextButton(onClick = onDismiss) {
+                    Text(if (errorMessage != null) "Close" else "OK")
+                }
+            }
+        },
+        dismissButton = {
+            if (isExporting) {
+                TextButton(onClick = onDismiss) {
+                    Text("Cancel")
+                }
+            }
+        },
+    )
 }

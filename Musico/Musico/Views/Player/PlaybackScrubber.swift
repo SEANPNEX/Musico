@@ -31,7 +31,9 @@ struct PlaybackScrubber: View {
             }
         }
         let elapsed = Text(formatTime(shown))
+            .contentTransition(.numericText())
         let remaining = Text("-" + formatTime(max(player.duration - shown, 0)))
+            .contentTransition(.numericText())
         Group {
             switch style {
             case .stacked:

@@ -15,6 +15,8 @@ struct FoldersView: View {
     @State private var importError: String?
     /// The folder the user asked to remove, awaiting confirmation.
     @State private var removing: LibraryRoot?
+    /// Cloud root queued for local export.
+    @State private var exportingRoot: LibraryRoot?
 
     var body: some View {
         List {
@@ -82,6 +84,9 @@ struct FoldersView: View {
         }
         .sheet(isPresented: $showCloudSheet) {
             AddCloudFolderSheet()
+        }
+        .sheet(item: $exportingRoot) { root in
+            SaveCloudPlaylistSheet(root: root)
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
             guard case .success(let url) = result else { return }
@@ -204,6 +209,11 @@ struct FoldersView: View {
             }
         }
         .contextMenu {
+            if root.kind.isCloud {
+                Button("Save to Local Folder…", systemImage: "square.and.arrow.down") {
+                    exportingRoot = root
+                }
+            }
             if root.kind == .picked {
                 Button("Locate Again…", systemImage: "folder.badge.questionmark") {
                     relocating = root.id
@@ -307,6 +317,7 @@ struct FolderDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var confirmRemove = false
     @State private var removingSubfolder: FolderRef?
+    @State private var showExportSheet = false
 
     var body: some View {
         let root = library.root(ref.root)
@@ -365,6 +376,12 @@ struct FolderDetailView: View {
         .refreshable { await library.rescan() }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                if ref.path.isEmpty, let root, root.kind.isCloud {
+                    Button("Save to Local Folder…", systemImage: "square.and.arrow.down") {
+                        showExportSheet = true
+                    }
+                    .help("Save to Local Folder…")
+                }
                 if excludedCount > 0 {
                     Button("Restore Removed Subfolders (\(excludedCount))", systemImage: "arrow.uturn.backward") {
                         Task { await library.restoreExcludedFolders(ref.root) }
@@ -377,6 +394,11 @@ struct FolderDetailView: View {
                     }
                     .help("Remove Folder")
                 }
+            }
+        }
+        .sheet(isPresented: $showExportSheet) {
+            if let root {
+                SaveCloudPlaylistSheet(root: root)
             }
         }
         .confirmationDialog("Remove “\(currentName)” from your library?",
@@ -411,6 +433,186 @@ struct FolderDetailView: View {
                 Text("Its songs leave your library, playlists and queues.")
             } else {
                 Text("Its songs leave your library, playlists and queues. The files themselves are not deleted.")
+            }
+        }
+    }
+}
+
+private struct SaveCloudPlaylistSheet: View {
+    let root: LibraryRoot
+    @Environment(LibraryStore.self) private var library
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var folderName: String
+    @State private var parentFolderURL: URL?
+    @State private var addToLibrary = true
+    @State private var showLocationPicker = false
+    @State private var isExporting = false
+    @State private var progress: (done: Int, total: Int, title: String) = (0, 0, "")
+    @State private var exportTask: Task<Void, Never>?
+    @State private var summary: CloudExporter.ExportSummary?
+    @State private var errorMessage: String?
+
+    init(root: LibraryRoot) {
+        self.root = root
+        _folderName = State(initialValue: CloudExporter.sanitizeFileName(root.name, fallback: "Cloud Playlist"))
+    }
+
+    private var cloudTracks: [Track] {
+        library.tracks(under: root.id, path: "").filter(\.isCloud)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Destination") {
+                    TextField("Folder Name", text: $folderName)
+                        .disabled(isExporting || summary != nil)
+                    HStack {
+                        Text("Location")
+                        Spacer()
+                        Button(parentFolderURL?.lastPathComponent ?? "Choose Folder…") {
+                            showLocationPicker = true
+                        }
+                        .disabled(isExporting || summary != nil)
+                    }
+                    Toggle("Add saved folder to Library", isOn: $addToLibrary)
+                        .disabled(isExporting || summary != nil)
+                }
+
+                if isExporting {
+                    Section("Progress") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            let currentStep = min(progress.done + (progress.done < progress.total ? 1 : 0), max(progress.total, 1))
+                            ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+                            Text("Saving \(currentStep) of \(progress.total) songs…")
+                                .font(.subheadline)
+                            if !progress.title.isEmpty {
+                                Text(progress.title)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                if let summary {
+                    Section("Summary") {
+                        Label(
+                            "Saved \(summary.savedCount) \(summary.savedCount == 1 ? "song" : "songs") to “\(summary.destinationURL.lastPathComponent)”",
+                            systemImage: summary.failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
+                        )
+                        .foregroundStyle(summary.failedCount == 0 ? Color.green : Color.orange)
+
+                        if summary.failedCount > 0 {
+                            Text("\(summary.failedCount) \(summary.failedCount == 1 ? "song" : "songs") failed to download.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            ForEach(Array(summary.errors.prefix(5).enumerated()), id: \.offset) { _, errorText in
+                                Text(errorText)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                if let errorMessage {
+                    Section {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Save Cloud Playlist")
+            .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(isExporting)
+            .fileImporter(isPresented: $showLocationPicker, allowedContentTypes: [.folder]) { result in
+                switch result {
+                case .success(let url):
+                    parentFolderURL = url
+                    errorMessage = nil
+                case .failure(let error):
+                    errorMessage = error.localizedDescription
+                }
+            }
+            .onDisappear {
+                exportTask?.cancel()
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    if isExporting {
+                        Button("Cancel", role: .cancel) {
+                            exportTask?.cancel()
+                        }
+                    } else {
+                        Button(summary == nil ? "Cancel" : "Done") {
+                            dismiss()
+                        }
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if summary == nil && !isExporting {
+                        Button("Save") {
+                            startExport()
+                        }
+                        .disabled(
+                            parentFolderURL == nil
+                            || cloudTracks.isEmpty
+                            || folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private func startExport() {
+        guard let parentURL = parentFolderURL else { return }
+        let tracksToSave = cloudTracks
+        let requestedFolderName = folderName
+        errorMessage = nil
+        summary = nil
+        isExporting = true
+        progress = (0, tracksToSave.count, tracksToSave.first?.title ?? "")
+
+        exportTask = Task { @MainActor in
+            let scoped = parentURL.startAccessingSecurityScopedResource()
+            defer {
+                if scoped { parentURL.stopAccessingSecurityScopedResource() }
+            }
+            do {
+                let result = try await CloudExporter.exportPlaylist(
+                    root: root,
+                    tracks: tracksToSave,
+                    toParentFolder: parentURL,
+                    folderName: requestedFolderName
+                ) { done, total, title in
+                    progress = (done, total, title)
+                }
+                summary = result
+                isExporting = false
+                if addToLibrary, FileManager.default.fileExists(atPath: result.destinationURL.path) {
+                    if library.containsLocalURL(result.destinationURL) {
+                        await library.rescan()
+                    } else {
+                        do {
+                            try await library.addRoot(url: result.destinationURL)
+                        } catch LibraryError.duplicateRoot {
+                            await library.rescan()
+                        } catch {
+                            errorMessage = "Saved songs, but couldn’t add folder to library: \(error.localizedDescription)"
+                        }
+                    }
+                }
+            } catch is CancellationError {
+                isExporting = false
+                errorMessage = "Export cancelled."
+            } catch {
+                isExporting = false
+                errorMessage = error.localizedDescription
             }
         }
     }

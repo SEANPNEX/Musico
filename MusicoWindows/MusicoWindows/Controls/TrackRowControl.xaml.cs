@@ -29,7 +29,8 @@ public partial class TrackRowControl : UserControl
         bool isAvailable,
         Action onClick,
         Action<string, string, string, string, Action<string>> openTextPrompt,
-        Action<ContextMenu>? extraMenuItems = null)
+        Action<ContextMenu>? extraMenuItems = null,
+        Action<Track, string>? openSaveCloudTrack = null)
     {
         _onClick = onClick;
         _isAvailable = isAvailable;
@@ -63,7 +64,8 @@ public partial class TrackRowControl : UserControl
             [track.Id],
             track.Id,
             openTextPrompt,
-            extraMenuItems);
+            extraMenuItems,
+            openSaveCloudTrack);
     }
 
     public void AddRowActionButton(string mdl2Glyph, string tooltip, Action onClick, bool isEnabled = true)

@@ -94,7 +94,9 @@ public partial class ArtistDetailView : UserControl
                 isPlaying,
                 lib.IsAvailable(track),
                 () => _ctx.Services.Player.Play(ids, idx),
-                _ctx.OpenTextPrompt);
+                _ctx.OpenTextPrompt,
+                null,
+                _ctx.OpenSaveCloudTrack);
             TracksStack.Children.Add(row);
         }
     }

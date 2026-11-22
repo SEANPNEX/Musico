@@ -255,7 +255,9 @@ public partial class SongsView : UserControl
             _ctx.Services,
             [item.Track.Id],
             item.Track.Id,
-            _ctx.OpenTextPrompt);
+            _ctx.OpenTextPrompt,
+            null,
+            _ctx.OpenSaveCloudTrack);
         menu.PlacementTarget = border;
         menu.IsOpen = true;
         e.Handled = true;

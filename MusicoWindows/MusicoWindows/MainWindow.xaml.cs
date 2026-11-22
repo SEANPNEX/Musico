@@ -40,7 +40,9 @@ public partial class MainWindow : Window
             OpenAlbum = ShowAlbumDetail,
             OpenArtist = ShowArtistDetail,
             OpenPlaylist = ShowPlaylistDetail,
-            OpenAddCloudFolder = () => CloudDialog.Show(_services)
+            OpenAddCloudFolder = () => CloudDialog.Show(_services),
+            OpenSaveCloudPlaylist = (root, tracks) => SaveCloudDialog.Show(_services, root, tracks),
+            OpenSaveCloudTrack = StartSingleTrackExport
         };
 
         BottomPlayerBar.Initialize(_services);
@@ -201,7 +203,8 @@ public partial class MainWindow : Window
                             () => _services.Library.DeletePlaylist(pid),
                             true);
                     }));
-                });
+                },
+                _ctx.OpenSaveCloudTrack);
 
             DynamicPlaylistsStack.Children.Add(rb);
             _dynamicPlaylistButtons.Add(rb);
@@ -351,6 +354,11 @@ public partial class MainWindow : Window
         BottomPlayerBar.SetActiveSidePanel(_sidePanel);
     }
 
+    internal void StartSingleTrackExport(MusicoWindows.Models.Track track, string destinationDirectory)
+    {
+        SaveCloudDialog.ShowSingleTrackExport(_services, track, destinationDirectory);
+    }
+
     private void ShowTextPrompt(string title, string message, string initialText, string confirmLabel, Action<string> onConfirm)
     {
         PromptDialog.Show(title, message, initialText, confirmLabel, onConfirm);
@@ -463,6 +471,7 @@ public partial class MainWindow : Window
         {
             if (ConfirmOverlay.IsOpen) { ConfirmOverlay.Close(); e.Handled = true; return; }
             if (UpdateDialog.IsOpen) { UpdateDialog.Close(); e.Handled = true; return; }
+            if (SaveCloudDialog.IsOpen) { SaveCloudDialog.Close(); e.Handled = true; return; }
             if (CloudDialog.IsOpen) { CloudDialog.Close(); e.Handled = true; return; }
             if (PromptDialog.IsOpen) { PromptDialog.Close(); e.Handled = true; return; }
             if (EqDialog.IsOpen) { EqDialog.Close(); e.Handled = true; return; }
@@ -501,7 +510,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
         {
             if (Keyboard.FocusedElement is TextBoxBase) return;
-            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || UpdateDialog.IsOpen) return;
+            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || SaveCloudDialog.IsOpen || UpdateDialog.IsOpen) return;
             _services.Player.TogglePlayPause();
             e.Handled = true;
         }

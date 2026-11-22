@@ -5,6 +5,7 @@ import android.os.Environment
 import com.musico.audio.AudioEngine
 import com.musico.audio.PlayerController
 import com.musico.cloud.BilibiliClient
+import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudHttpClient
 import com.musico.cloud.CloudStreamResolver
 import com.musico.cloud.UrlConnectionCloudHttpClient
@@ -35,6 +36,10 @@ class AppContainer(context: Context) {
     val youTubeClient: YouTubeClient = YouTubeClient(cloudHttpClient)
     val bilibiliClient: BilibiliClient = BilibiliClient(cloudHttpClient)
     val cloudStreamResolver: CloudStreamResolver = CloudStreamResolver(youTubeClient, bilibiliClient)
+    val cloudExporter: CloudExporter = CloudExporter(
+        context = appContext,
+        cloudResolver = cloudStreamResolver,
+    )
     val libraryStore: LibraryStore = LibraryStore(
         directory = stateDir,
         appFolderDir = appMusicDir,

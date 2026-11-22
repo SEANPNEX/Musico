@@ -5,7 +5,7 @@ import com.musico.model.Track
 import java.io.IOException
 import java.util.concurrent.ConcurrentHashMap
 
-class CloudStreamResolver(
+open class CloudStreamResolver(
     private val youTubeClient: YouTubeClient = YouTubeClient(),
     private val bilibiliClient: BilibiliClient = BilibiliClient(),
 ) {
@@ -16,7 +16,7 @@ class CloudStreamResolver(
         return "${track.cloudSource}:${track.remoteTrackId}:$cookieTag"
     }
 
-    suspend fun resolve(
+    open suspend fun resolve(
         track: Track,
         root: LibraryRoot?,
         forceRefresh: Boolean = false,
@@ -42,7 +42,7 @@ class CloudStreamResolver(
         return resolved
     }
 
-    fun invalidate(track: Track, root: LibraryRoot? = null) {
+    open fun invalidate(track: Track, root: LibraryRoot? = null) {
         if (root != null) {
             cache.remove(cacheKey(track, root.cookie))
         } else {

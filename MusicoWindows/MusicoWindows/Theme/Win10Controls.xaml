@@ -807,4 +807,52 @@
         </Setter>
     </Style>
 
+    <!-- Windows 10 Sharp CheckBox -->
+    <Style x:Key="Win10CheckBoxStyle" TargetType="CheckBox">
+        <Setter Property="FontFamily" Value="{StaticResource Win10Font}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimaryBrush}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border x:Name="Box"
+                                Width="18"
+                                Height="18"
+                                Background="Transparent"
+                                BorderBrush="{DynamicResource TextSecondaryBrush}"
+                                BorderThickness="2"
+                                CornerRadius="0"
+                                VerticalAlignment="Center">
+                            <TextBlock x:Name="CheckGlyph"
+                                       Text="&#xE73E;"
+                                       FontFamily="{StaticResource Win10GlyphFont}"
+                                       FontSize="11"
+                                       Foreground="#FFFFFF"
+                                       HorizontalAlignment="Center"
+                                       VerticalAlignment="Center"
+                                       Visibility="Collapsed" />
+                        </Border>
+                        <ContentPresenter Margin="10,0,0,0" VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Box" Property="Background" Value="{DynamicResource AccentBrush}" />
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                            <Setter TargetName="CheckGlyph" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource TextPrimaryBrush}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
 </ResourceDictionary>

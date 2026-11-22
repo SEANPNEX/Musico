@@ -23,6 +23,7 @@ public sealed class AppServices : IDisposable
         CloudCache = new CloudAudioCache(Path.Combine(StateDirectory, "CloudCache"));
         YouTube = new YouTubeClient();
         Bilibili = new BilibiliClient();
+        CloudExporter = new CloudExporter(CloudCache, YouTube, Bilibili, artwork);
 
         Library = new LibraryStore(
             stateDirectory: StateDirectory,
@@ -57,6 +58,7 @@ public sealed class AppServices : IDisposable
     public CloudAudioCache CloudCache { get; }
     public YouTubeClient YouTube { get; }
     public BilibiliClient Bilibili { get; }
+    public CloudExporter CloudExporter { get; }
     public LibraryStore Library { get; }
     public QueueStore Queues { get; }
     public PlayHistoryStore History { get; }

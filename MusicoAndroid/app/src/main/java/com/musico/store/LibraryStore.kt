@@ -905,6 +905,40 @@ class LibraryStore(
 
     fun isAvailable(track: Track): Boolean = track.rootId in _state.value.availableRootIds
 
+    /** Returns true if [uri] matches or resides inside an already-indexed local root. */
+    fun isUriInsideIndexedRoot(uri: Uri): Boolean {
+        if (uri.scheme == "file") {
+            val candidate = uri.path?.let { runCatching { File(it).canonicalPath }.getOrNull() }
+                ?: return false
+            val appPath = runCatching { appFolderDir.canonicalPath }.getOrNull()
+            if (appPath != null && (candidate == appPath || candidate.startsWith("$appPath${File.separator}"))) {
+                return true
+            }
+            return _state.value.roots.any { root ->
+                if (root.kind != RootKind.PICKED) return@any false
+                val rUri = root.treeUri?.let { runCatching { Uri.parse(it) }.getOrNull() } ?: return@any false
+                if (rUri.scheme != "file" || rUri.path == null) return@any false
+                val rootPath = runCatching { File(rUri.path!!).canonicalPath }.getOrNull() ?: return@any false
+                candidate == rootPath || candidate.startsWith("$rootPath${File.separator}")
+            }
+        }
+        val candidateKey = canonicalUriKey(uri)
+        val candidateDocId = runCatching { DocumentsContract.getTreeDocumentId(uri) }.getOrNull()
+        return _state.value.roots.any { root ->
+            if (root.kind != RootKind.PICKED) return@any false
+            val rStr = root.treeUri ?: return@any false
+            val rUri = runCatching { Uri.parse(rStr) }.getOrNull() ?: return@any false
+            if (canonicalUriKey(rUri) == candidateKey) return@any true
+            if (candidateDocId != null && rUri.scheme == "content" && rUri.authority == uri.authority) {
+                val rootDocId = runCatching { DocumentsContract.getTreeDocumentId(rUri) }.getOrNull()
+                if (rootDocId != null && (candidateDocId == rootDocId || candidateDocId.startsWith("$rootDocId/"))) {
+                    return@any true
+                }
+            }
+            false
+        }
+    }
+
     suspend fun embeddedLyrics(track: Track): String? {
         if (!track.hasEmbeddedLyrics) return null
         val uri = uriFor(track) ?: return null

@@ -221,7 +221,8 @@ public partial class QueuesView : UserControl
                     menu.Items.Add(new Separator());
                     menu.Items.Add(TrackMenuHelper.CreateItem("Remove from Queue", "\uE74D",
                         () => services.Player.RemoveFromQueue(index)));
-                });
+                },
+                _ctx.OpenSaveCloudTrack);
 
             row.AddRowActionButton("\uE74A", "Move Up", () => services.Player.MoveInQueue(index, index - 1), index > 0);
             row.AddRowActionButton("\uE74B", "Move Down", () => services.Player.MoveInQueue(index, index + 1), index < active.TrackIds.Count - 1);

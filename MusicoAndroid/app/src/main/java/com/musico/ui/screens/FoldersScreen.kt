@@ -22,12 +22,14 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.CloudQueue
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOff
 import androidx.compose.material.icons.rounded.LibraryMusic
@@ -41,7 +43,9 @@ import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
+import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
@@ -54,6 +58,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -66,19 +71,26 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.documentfile.provider.DocumentFile
 import com.musico.audio.PlayerUiState
+import com.musico.cloud.CloudExportSummary
+import com.musico.cloud.CloudExporter
 import com.musico.model.LibraryRoot
 import com.musico.model.PlayQueue
 import com.musico.model.RootKind
+import com.musico.model.Track
+import com.musico.store.LibraryException
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
 import com.musico.ui.components.ConfirmDialog
@@ -93,7 +105,10 @@ import com.musico.update.UpdateManager
 import com.musico.update.UpdateUiState
 import com.musico.update.hasAvailableUpdate
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import java.io.File
 import kotlin.random.Random
 
 data class FolderRef(
@@ -117,6 +132,7 @@ fun FoldersScreen(
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
     updateManager: UpdateManager,
+    cloudExporter: CloudExporter,
     onPickFolder: ((Uri) -> Unit) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -126,6 +142,7 @@ fun FoldersScreen(
     var importError by remember { mutableStateOf<String?>(null) }
     var removingRoot by remember { mutableStateOf<LibraryRoot?>(null) }
     var removingSubfolder by remember { mutableStateOf<FolderRef?>(null) }
+    var savingCloudTarget by remember { mutableStateOf<Pair<LibraryRoot, List<Track>>?>(null) }
     var showAddCloudDialog by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
     var detailMenuExpanded by remember { mutableStateOf(false) }
@@ -217,7 +234,8 @@ fun FoldersScreen(
                     currentRoot.kind != RootKind.APP_FOLDER
                 val hasExcluded = activeRef.path.isEmpty() &&
                     (currentRoot?.excludedPaths?.isNotEmpty() == true)
-                val showDetailMenu = activeRef.path.isNotEmpty() || isRemovableRootDetail || hasExcluded
+                val isCloudRootDetail = currentRoot?.kind?.isCloud == true
+                val showDetailMenu = activeRef.path.isNotEmpty() || isRemovableRootDetail || hasExcluded || isCloudRootDetail
 
                 TopAppBar(
                     navigationIcon = {
@@ -260,6 +278,18 @@ fun FoldersScreen(
                                     expanded = detailMenuExpanded,
                                     onDismissRequest = { detailMenuExpanded = false }
                                 ) {
+                                    if (rootForMenu != null && rootForMenu.kind.isCloud) {
+                                        val cloudTracks = libraryStore.tracksUnder(rootForMenu.id, activeRef.path)
+                                        DropdownMenuItem(
+                                            text = { Text("Save to Local Folder…") },
+                                            leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) },
+                                            enabled = cloudTracks.isNotEmpty(),
+                                            onClick = {
+                                                detailMenuExpanded = false
+                                                savingCloudTarget = rootForMenu to cloudTracks
+                                            }
+                                        )
+                                    }
                                     if (activeRef.path.isNotEmpty()) {
                                         DropdownMenuItem(
                                             text = { Text("Remove Folder") },
@@ -356,6 +386,10 @@ fun FoldersScreen(
                         onOpenRoot = { rootId -> currentFolder = FolderRef(rootId, "") },
                         onRelocateRoot = ::launchRelocateFolder,
                         onRequestRemove = { removingRoot = it },
+                        onSaveCloudRoot = { root ->
+                            val tracks = libraryStore.tracksUnder(root.id, "")
+                            savingCloudTarget = root to tracks
+                        },
                         onRestoreExcluded = { rootId -> scope.launch { libraryStore.restoreExcludedFolders(rootId) } },
                         onAddFolder = ::launchAddFolder,
                         onAddCloudFolder = { showAddCloudDialog = true }
@@ -392,6 +426,18 @@ fun FoldersScreen(
         UpdateDialog(
             updateManager = updateManager,
             onDismiss = { showUpdateDialog = false }
+        )
+    }
+
+    val pendingSaveCloud = savingCloudTarget
+    if (pendingSaveCloud != null) {
+        SaveCloudPlaylistDialog(
+            root = pendingSaveCloud.first,
+            tracks = pendingSaveCloud.second,
+            libraryStore = libraryStore,
+            cloudExporter = cloudExporter,
+            onPickFolder = onPickFolder,
+            onDismiss = { savingCloudTarget = null },
         )
     }
 
@@ -473,8 +519,8 @@ private fun AddCloudFolderDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .animateContentSize(),
-                verticalArrangement = Arrangement.spacedBy(10.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 OutlinedTextField(
                     value = url,
@@ -496,6 +542,7 @@ private fun AddCloudFolderDialog(
                     onValueChange = { cookie = it },
                     label = { Text("Cookie (optional)") },
                     placeholder = { Text("Only needed for private playlists") },
+                    minLines = 2,
                     maxLines = 3,
                     enabled = !isAdding,
                     modifier = Modifier.fillMaxWidth()
@@ -544,6 +591,290 @@ private fun AddCloudFolderDialog(
     )
 }
 
+@Composable
+private fun SaveCloudPlaylistDialog(
+    root: LibraryRoot,
+    tracks: List<Track>,
+    libraryStore: LibraryStore,
+    cloudExporter: CloudExporter,
+    onPickFolder: ((Uri) -> Unit) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val defaultName = remember(root.id, root.name) {
+        CloudExporter.sanitizeFileName(root.name, "Cloud Playlist")
+    }
+    var folderName by remember(root.id) { mutableStateOf(defaultName) }
+    var pickedParentUri by remember(root.id) { mutableStateOf<Uri?>(null) }
+    var addToLibrary by remember(root.id) { mutableStateOf(true) }
+    var isExporting by remember(root.id) { mutableStateOf(false) }
+    var progressDone by remember(root.id) { mutableIntStateOf(0) }
+    var progressTotal by remember(root.id) { mutableIntStateOf(tracks.size) }
+    var progressTitle by remember(root.id) { mutableStateOf("") }
+    var summary by remember(root.id) { mutableStateOf<CloudExportSummary?>(null) }
+    var libraryStatusText by remember(root.id) { mutableStateOf<String?>(null) }
+    var errorText by remember(root.id) { mutableStateOf<String?>(null) }
+    var exportJob by remember(root.id) { mutableStateOf<Job?>(null) }
+
+    val pickedLocationLabel = remember(pickedParentUri) {
+        val uri = pickedParentUri ?: return@remember "No folder selected"
+        if (uri.scheme == "file" && uri.path != null) {
+            File(uri.path!!).name.ifBlank { uri.path!! }
+        } else {
+            runCatching { DocumentFile.fromTreeUri(context, uri)?.name }.getOrNull()
+                ?.takeIf { it.isNotBlank() }
+                ?: uri.lastPathSegment
+                ?: uri.toString()
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!isExporting) onDismiss() },
+        icon = { Icon(Icons.Rounded.Download, contentDescription = null) },
+        title = {
+            Text(
+                when {
+                    isExporting -> "Saving Playlist"
+                    summary != null -> "Save Complete"
+                    else -> "Save to Local Folder"
+                }
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (summary == null) {
+                    OutlinedTextField(
+                        value = folderName,
+                        onValueChange = { folderName = it },
+                        label = { Text("Folder Name") },
+                        singleLine = true,
+                        enabled = !isExporting,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "Location",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            Text(
+                                text = pickedLocationLabel,
+                                style = MaterialTheme.typography.bodyMedium,
+                                color = if (pickedParentUri != null) {
+                                    MaterialTheme.colorScheme.onSurface
+                                } else {
+                                    MaterialTheme.colorScheme.onSurfaceVariant
+                                },
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                            OutlinedButton(
+                                enabled = !isExporting,
+                                onClick = {
+                                    onPickFolder { uri ->
+                                        pickedParentUri = uri
+                                        errorText = null
+                                    }
+                                },
+                            ) {
+                                Text("Choose Folder")
+                            }
+                        }
+                    }
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable(enabled = !isExporting) {
+                                addToLibrary = !addToLibrary
+                            },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Checkbox(
+                            checked = addToLibrary,
+                            enabled = !isExporting,
+                            onCheckedChange = { addToLibrary = it },
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = "Add saved folder to Library",
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
+                    }
+                }
+
+                if (isExporting) {
+                    val fraction = if (progressTotal > 0) {
+                        (progressDone.toFloat() / progressTotal.toFloat()).coerceIn(0f, 1f)
+                    } else {
+                        0f
+                    }
+                    LinearProgressIndicator(
+                        progress = { fraction },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    val statusLine = if (progressTitle.isNotBlank()) {
+                        "Saving $progressDone of $progressTotal: $progressTitle"
+                    } else {
+                        "Saving $progressDone of $progressTotal…"
+                    }
+                    Text(
+                        text = statusLine,
+                        style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                val result = summary
+                if (result != null) {
+                    val summaryMsg = buildString {
+                        append("Saved ${result.savedCount} of ${tracks.size} songs.")
+                        if (result.failedCount > 0) {
+                            append(" ${result.failedCount} failed.")
+                        }
+                    }
+                    Text(
+                        text = summaryMsg,
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    val libNote = libraryStatusText
+                    if (libNote != null) {
+                        Text(
+                            text = libNote,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    if (result.errors.isNotEmpty()) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            result.errors.take(5).forEach { msg ->
+                                Text(
+                                    text = "• $msg",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.error,
+                                    maxLines = 2,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            if (result.errors.size > 5) {
+                                Text(
+                                    text = "…and ${result.errors.size - 5} more.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+
+                val err = errorText
+                if (err != null) {
+                    Text(
+                        text = err,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (summary != null) {
+                Button(onClick = onDismiss) {
+                    Text("Done")
+                }
+            } else if (!isExporting) {
+                Button(
+                    enabled = pickedParentUri != null && folderName.trim().isNotEmpty() && tracks.isNotEmpty(),
+                    onClick = {
+                        val parentUri = pickedParentUri ?: return@Button
+                        isExporting = true
+                        errorText = null
+                        progressDone = 0
+                        progressTotal = tracks.size
+                        progressTitle = tracks.firstOrNull()?.title.orEmpty()
+                        exportJob = scope.launch {
+                            try {
+                                val res = cloudExporter.exportPlaylist(
+                                    tracks = tracks,
+                                    root = root,
+                                    parentTreeUri = parentUri,
+                                    folderName = folderName,
+                                    onProgress = { done, total, title ->
+                                        progressDone = done
+                                        progressTotal = total
+                                        progressTitle = title
+                                    },
+                                )
+                                if (addToLibrary && res.savedCount > 0) {
+                                    val savedUri = if (parentUri.scheme == "file" && res.targetDir != null) {
+                                        Uri.fromFile(res.targetDir)
+                                    } else {
+                                        parentUri
+                                    }
+                                    if (libraryStore.isUriInsideIndexedRoot(savedUri)) {
+                                        libraryStore.rescan()
+                                        libraryStatusText = "Library updated."
+                                    } else {
+                                        val addResult = libraryStore.addPickedRoot(savedUri)
+                                        if (addResult.isSuccess) {
+                                            libraryStatusText = "Added saved folder to Library."
+                                        } else if (addResult.exceptionOrNull() is LibraryException.DuplicateRoot) {
+                                            libraryStore.rescan()
+                                            libraryStatusText = "Library updated."
+                                        } else {
+                                            libraryStatusText = addResult.exceptionOrNull()?.message
+                                                ?: "Could not add folder to Library."
+                                        }
+                                    }
+                                }
+                                summary = res
+                            } catch (cancel: CancellationException) {
+                                throw cancel
+                            } catch (err: Exception) {
+                                errorText = err.message ?: "Could not save playlist."
+                            } finally {
+                                isExporting = false
+                                exportJob = null
+                            }
+                        }
+                    },
+                ) {
+                    Text("Save")
+                }
+            }
+        },
+        dismissButton = {
+            if (summary == null) {
+                TextButton(
+                    onClick = {
+                        if (isExporting) {
+                            exportJob?.cancel()
+                            exportJob = null
+                            isExporting = false
+                        }
+                        onDismiss()
+                    },
+                ) {
+                    Text("Cancel")
+                }
+            }
+        },
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FolderRootList(
@@ -555,6 +886,7 @@ private fun FolderRootList(
     onOpenRoot: (String) -> Unit,
     onRelocateRoot: (String) -> Unit,
     onRequestRemove: (LibraryRoot) -> Unit,
+    onSaveCloudRoot: (LibraryRoot) -> Unit,
     onRestoreExcluded: (String) -> Unit,
     onAddFolder: () -> Unit,
     onAddCloudFolder: () -> Unit
@@ -647,6 +979,7 @@ private fun FolderRootList(
                             trackActions = trackActions,
                             onOpen = { onOpenRoot(root.id) },
                             onRelocate = { onRelocateRoot(root.id) },
+                            onSaveCloudRoot = { onSaveCloudRoot(root) },
                             onRestoreExcluded = { onRestoreExcluded(root.id) },
                             onRemove = { onRequestRemove(root) }
                         )
@@ -662,6 +995,7 @@ private fun FolderRootList(
                         trackActions = trackActions,
                         onOpen = { onOpenRoot(root.id) },
                         onRelocate = {},
+                        onSaveCloudRoot = {},
                         onRestoreExcluded = { onRestoreExcluded(root.id) },
                         onRemove = {}
                     )
@@ -724,6 +1058,7 @@ private fun RootItemRow(
     trackActions: TrackActionState,
     onOpen: () -> Unit,
     onRelocate: () -> Unit,
+    onSaveCloudRoot: () -> Unit,
     onRestoreExcluded: () -> Unit,
     onRemove: () -> Unit
 ) {
@@ -792,6 +1127,17 @@ private fun RootItemRow(
                         expanded = menuExpanded,
                         onDismissRequest = { menuExpanded = false }
                     ) {
+                        if (root.kind.isCloud) {
+                            DropdownMenuItem(
+                                text = { Text("Save to Local Folder…") },
+                                leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) },
+                                enabled = rootTrackIds.isNotEmpty(),
+                                onClick = {
+                                    menuExpanded = false
+                                    onSaveCloudRoot()
+                                }
+                            )
+                        }
                         if (root.kind == RootKind.PICKED) {
                             DropdownMenuItem(
                                 text = { Text("Locate Again…") },

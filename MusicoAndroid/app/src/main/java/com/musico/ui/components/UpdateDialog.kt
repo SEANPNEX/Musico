@@ -2,7 +2,6 @@ package com.musico.ui.components
 
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.animation.animateContentSize
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,6 +33,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.musico.update.UpdateManager
@@ -88,7 +88,7 @@ fun UpdateDialog(
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .animateContentSize(),
+                    .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
                 when (val current = state) {
@@ -160,8 +160,10 @@ fun UpdateDialog(
                             )
                             Text(
                                 text = "Downloading ${release.apkAsset.name} (${(current.progress * 100).toInt()}%)…",
-                                style = MaterialTheme.typography.bodySmall,
+                                style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         } else {
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -169,6 +171,8 @@ fun UpdateDialog(
                                 text = "Downloading ${release.apkAsset.name}…",
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
                             )
                         }
                     }
@@ -355,7 +359,7 @@ private fun ReleaseNotesBox(notes: String) {
         Column(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 200.dp)
+                .heightIn(max = 180.dp)
                 .verticalScroll(rememberScrollState())
                 .padding(12.dp),
         ) {
