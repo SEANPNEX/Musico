@@ -7,6 +7,7 @@
 [![CI](https://github.com/SEANPNEX/local_music_player/actions/workflows/ci.yml/badge.svg)](https://github.com/SEANPNEX/local_music_player/actions/workflows/ci.yml)
 [![Release](https://github.com/SEANPNEX/local_music_player/actions/workflows/release.yml/badge.svg)](https://github.com/SEANPNEX/local_music_player/actions/workflows/release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/SEANPNEX/local_music_player)](https://github.com/SEANPNEX/local_music_player/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **An offline, folder-loving, multi-queue local music player — built 100% natively for every platform, zero web wrappers allowed! (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧**
 
@@ -153,5 +154,13 @@ cd MusicoWindows
 ├── MusicoAndroid/          # Native Kotlin + Compose Material 3 + Media3 app
 ├── MusicoWindows/          # Native C# + WPF Windows 10 Fluent Design app + NSIS installer
 ├── README.md
-└── README.zh-CN.md
+├── README.zh-CN.md
+├── LICENSE
+└── THIRD_PARTY_NOTICES.md
 ```
+
+---
+
+## 📄 License
+
+This project is licensed under the [MIT License](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for attributions and licenses of third-party dependencies.

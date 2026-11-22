@@ -7,6 +7,7 @@
 [![CI](https://github.com/SEANPNEX/local_music_player/actions/workflows/ci.yml/badge.svg)](https://github.com/SEANPNEX/local_music_player/actions/workflows/ci.yml)
 [![Release](https://github.com/SEANPNEX/local_music_player/actions/workflows/release.yml/badge.svg)](https://github.com/SEANPNEX/local_music_player/actions/workflows/release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/SEANPNEX/local_music_player)](https://github.com/SEANPNEX/local_music_player/releases/latest)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **一款离线、超爱文件夹、支持多播放队列的本地音乐播放器——全平台 100% 原生开发，拒绝 Web 套壳！(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧**
 
@@ -153,5 +154,13 @@ cd MusicoWindows
 ├── MusicoAndroid/          # 原生 Kotlin + Compose Material 3 + Media3 应用
 ├── MusicoWindows/          # 原生 C# + WPF Windows 10 Fluent Design 应用 + NSIS 安装程序
 ├── README.md
-└── README.zh-CN.md
+├── README.zh-CN.md
+├── LICENSE
+└── THIRD_PARTY_NOTICES.md
 ```
+
+---
+
+## 📄 开源协议
+
+本项目基于 [MIT License](LICENSE) 开源。第三方依赖的许可与致谢信息请参阅 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
