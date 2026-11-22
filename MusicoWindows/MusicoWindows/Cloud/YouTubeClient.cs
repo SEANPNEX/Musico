@@ -1154,7 +1154,11 @@ public sealed class YouTubeClient
                         ["User-Agent"] = client.UserAgent,
                         ["Range"] = "bytes=0-"
                     };
-                    return new CloudAudioStream(candidate.Url, candidate.Extension, headers);
+                    return new CloudAudioStream(
+                        candidate.Url,
+                        candidate.Extension,
+                        headers,
+                        candidate.ContentLength > 0 ? candidate.ContentLength : null);
                 }
             }
             catch (OperationCanceledException)

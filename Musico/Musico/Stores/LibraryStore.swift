@@ -302,6 +302,34 @@ final class LibraryStore {
         cache: CloudAudioCache = .shared,
         onProgress: (@MainActor @Sendable (Int, Int, String) -> Void)? = nil
     ) async throws -> CloudExporter.CloudUpdateSummary {
+        try await performUpdateTrackedLocalRoot(
+            rootID,
+            cache: cache,
+            onDetailedProgress: onProgress.map { callback in
+                { progress in
+                    callback(progress.completedTracks, progress.totalTracks, progress.currentTrackTitle)
+                }
+            }
+        )
+    }
+
+    func updateTrackedLocalRoot(
+        _ rootID: UUID,
+        cache: CloudAudioCache = .shared,
+        onDetailedProgress: @escaping @MainActor @Sendable (CloudExporter.ExportProgress) -> Void
+    ) async throws -> CloudExporter.CloudUpdateSummary {
+        try await performUpdateTrackedLocalRoot(
+            rootID,
+            cache: cache,
+            onDetailedProgress: onDetailedProgress
+        )
+    }
+
+    private func performUpdateTrackedLocalRoot(
+        _ rootID: UUID,
+        cache: CloudAudioCache,
+        onDetailedProgress: (@MainActor @Sendable (CloudExporter.ExportProgress) -> Void)?
+    ) async throws -> CloudExporter.CloudUpdateSummary {
         guard let index = roots.firstIndex(where: { $0.id == rootID }),
               let folderURL = rootURLs[rootID] else {
             throw LibraryError.notAFolder
@@ -310,13 +338,24 @@ final class LibraryStore {
         guard targetRoot.isCloudTrackedLocal else {
             throw LibraryError.invalidCloudURL
         }
-        let summary = try await CloudExporter.updateLocalFolder(
-            root: targetRoot,
-            folderURL: folderURL,
-            fetcher: cloudFetcher,
-            cache: cache,
-            onProgress: onProgress
-        )
+        let summary: CloudExporter.CloudUpdateSummary
+        if let onDetailedProgress {
+            summary = try await CloudExporter.updateLocalFolder(
+                root: targetRoot,
+                folderURL: folderURL,
+                fetcher: cloudFetcher,
+                cache: cache,
+                onDetailedProgress: onDetailedProgress
+            )
+        } else {
+            summary = try await CloudExporter.updateLocalFolder(
+                root: targetRoot,
+                folderURL: folderURL,
+                fetcher: cloudFetcher,
+                cache: cache,
+                onProgress: nil
+            )
+        }
         if let updatedIdx = roots.firstIndex(where: { $0.id == rootID }) {
             roots[updatedIdx].lastSynced = Date()
             saveLibrary()

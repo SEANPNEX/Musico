@@ -548,6 +548,7 @@ class CloudClientsTest {
 
         val stream = YouTubeClient(http).resolveStream("dQw4w9WgXcQ")
         assertEquals("https://cdn.example.com/android-clean", stream.url)
+        assertEquals(3_500_000L, stream.contentLength)
         assertFalse(stream.headers.containsKey("Range"))
         assertTrue(
             http.recordedProbes.any {
@@ -1153,5 +1154,58 @@ class CloudClientsTest {
         }.exceptionOrNull()
         assertNotNull(folder403)
         assertTrue(folder403!!.message!!.contains("Anyone with the link"))
+    }
+
+    @Test
+    fun youTubeResolveStreamPopulatesContentLengthFromStringLongOrNull() = runBlocking {
+        val http = FakeCloudHttpClient()
+        http.postHandlers.add { url, body, _ ->
+            if (!url.contains("/youtubei/v1/player")) return@add null
+            val vid = body.parseJsonObject().str("videoId")
+            when (vid) {
+                "strLen00001" -> http.jsonResponse(
+                    """
+                    {
+                      "streamingData": {
+                        "expiresInSeconds": "3600",
+                        "adaptiveFormats": [
+                          { "itag": 140, "url": "https://cdn.example.com/str", "mimeType": "audio/mp4", "bitrate": 128000, "contentLength": "9437184" }
+                        ]
+                      }
+                    }
+                    """.trimIndent()
+                )
+                "numLen00002" -> http.jsonResponse(
+                    """
+                    {
+                      "streamingData": {
+                        "expiresInSeconds": "3600",
+                        "adaptiveFormats": [
+                          { "itag": 251, "url": "https://cdn.example.com/num", "mimeType": "audio/webm", "bitrate": 160000, "contentLength": 5242880 }
+                        ]
+                      }
+                    }
+                    """.trimIndent()
+                )
+                else -> http.jsonResponse(
+                    """
+                    {
+                      "streamingData": {
+                        "expiresInSeconds": "3600",
+                        "adaptiveFormats": [
+                          { "itag": 140, "url": "https://cdn.example.com/missing", "mimeType": "audio/mp4", "bitrate": 128000 }
+                        ]
+                      }
+                    }
+                    """.trimIndent()
+                )
+            }
+        }
+        http.probeHandlers.add { _, _ -> 206 }
+
+        val client = YouTubeClient(http)
+        assertEquals(9_437_184L, client.resolveStream("strLen00001").contentLength)
+        assertEquals(5_242_880L, client.resolveStream("numLen00002").contentLength)
+        assertNull(client.resolveStream("noLen000003").contentLength)
     }
 }

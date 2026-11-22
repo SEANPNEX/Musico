@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http;
+using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -16,6 +18,7 @@ public sealed class CloudClientsTests
     private sealed class StubHttpHandler : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder;
+        private readonly object _lock = new();
         public List<HttpRequestMessage> Requests { get; } = new();
 
         public StubHttpHandler(Func<HttpRequestMessage, HttpResponseMessage> responder)
@@ -26,9 +29,25 @@ public sealed class CloudClientsTests
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            Requests.Add(request);
+            lock (_lock)
+            {
+                Requests.Add(request);
+            }
             return Task.FromResult(_responder(request));
         }
+    }
+
+    private sealed class AsyncStubHttpHandler : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> _responder;
+
+        public AsyncStubHttpHandler(Func<HttpRequestMessage, CancellationToken, Task<HttpResponseMessage>> responder)
+        {
+            _responder = responder;
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            _responder(request, cancellationToken);
     }
 
     private static HttpResponseMessage JsonResponse(string json, HttpStatusCode code = HttpStatusCode.OK) =>
@@ -534,7 +553,7 @@ public sealed class CloudClientsTests
                 "url": "https://cdn.example/good-256k.m4a",
                 "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
                 "bitrate": 256000,
-                "contentLength": "8000000"
+                "contentLength": "2000000"
               }
             ]
           }
@@ -609,6 +628,7 @@ public sealed class CloudClientsTests
         Assert.Equal("https://cdn.example/good-256k.m4a", stream.Url);
         Assert.Equal(".m4a", stream.Extension);
         Assert.Equal("bytes=0-", stream.Headers!["Range"]);
+        Assert.Equal(2_000_000L, stream.ContentLength);
 
         // Second resolve reuses cached visitorData without re-fetching sw.js_data
         var stream2 = await client.ResolveAudioStreamAsync("dQw4w9WgXcQ");
@@ -1623,5 +1643,307 @@ public sealed class CloudClientsTests
             client.FetchPlaylistAsync("https://drive.google.com/u/1/file/d/doc_pdf/preview"));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             client.FetchPlaylistAsync("https://drive.google.com/file/d/doc_mime/view"));
+    }
+
+    [Fact]
+    public async Task YouTubeResolveAudioStreamPopulatesContentLengthWhenPresentAndNullWhenMissing()
+    {
+        string withLengthJson = """
+        {
+          "streamingData": {
+            "adaptiveFormats": [
+              {
+                "itag": 140,
+                "url": "https://cdn.example/large.m4a",
+                "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
+                "bitrate": 129000,
+                "contentLength": "10485760"
+              }
+            ]
+          }
+        }
+        """;
+
+        string withoutLengthJson = """
+        {
+          "streamingData": {
+            "adaptiveFormats": [
+              {
+                "itag": 140,
+                "url": "https://cdn.example/unknown.m4a",
+                "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
+                "bitrate": 129000
+              }
+            ]
+          }
+        }
+        """;
+
+        bool returnWithLength = true;
+        var handler = new StubHttpHandler(req =>
+        {
+            string url = req.RequestUri!.AbsoluteUri;
+            if (url == "https://www.youtube.com/sw.js_data")
+            {
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            }
+            if (url.Contains("/youtubei/v1/player", StringComparison.Ordinal))
+            {
+                return JsonResponse(returnWithLength ? withLengthJson : withoutLengthJson);
+            }
+            if (url.StartsWith("https://cdn.example/", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.PartialContent);
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var client = new YouTubeClient(handler);
+
+        var largeStream = await client.ResolveAudioStreamAsync("vidWithLen1");
+        Assert.Equal(10_485_760L, largeStream.ContentLength);
+        Assert.Equal(".m4a", largeStream.Extension);
+
+        returnWithLength = false;
+        var unknownStream = await client.ResolveAudioStreamAsync("vidNoLen002");
+        Assert.Null(unknownStream.ContentLength);
+        Assert.Equal(".m4a", unknownStream.Extension);
+    }
+
+    [Fact]
+    public async Task CloudAudioCacheDownloadsLargeStreamsInParallel4MbRangeChunks()
+    {
+        const long chunkSize = 4L * 1024L * 1024L;
+        const int totalBytes = (int)(4 * chunkSize + 777); // 5 chunks -> exercises 4x parallel worker cap
+        byte[] expectedPayload = new byte[totalBytes];
+        for (int i = 0; i < totalBytes; i++)
+        {
+            expectedPayload[i] = (byte)((i * 31 + (i >> 8)) & 0xFF);
+        }
+
+        var observedRanges = new ConcurrentBag<(long From, long? To)>();
+        int inFlight = 0;
+        int maxConcurrent = 0;
+        var overlapGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var handler = new AsyncStubHttpHandler(async (req, ct) =>
+        {
+            var range = req.Headers.Range?.Ranges.Single();
+            Assert.NotNull(range);
+            Assert.True(range!.From.HasValue);
+            observedRanges.Add((range.From!.Value, range.To));
+
+            // Ensure caller's "Range: bytes=0-" was replaced by bounded chunk range, never duplicated.
+            Assert.Single(req.Headers.Range!.Ranges);
+            Assert.True(range.To.HasValue);
+
+            int current = Interlocked.Increment(ref inFlight);
+            while (true)
+            {
+                int prev = Volatile.Read(ref maxConcurrent);
+                if (current <= prev || Interlocked.CompareExchange(ref maxConcurrent, current, prev) == prev)
+                {
+                    break;
+                }
+            }
+
+            try
+            {
+                if (current >= 4)
+                {
+                    overlapGate.TrySetResult();
+                }
+                else
+                {
+                    // Brief wait so parallel workers overlap cleanly without hanging if fewer than 4 remain.
+                    await Task.WhenAny(overlapGate.Task, Task.Delay(100, ct)).ConfigureAwait(false);
+                }
+
+                // Force chunk 0 to finish after other chunks to verify offset-exact RandomAccess writes.
+                if (range.From.Value == 0)
+                {
+                    await Task.Delay(30, ct).ConfigureAwait(false);
+                }
+
+                int start = (int)range.From.Value;
+                int end = (int)range.To!.Value;
+                int len = end - start + 1;
+                var slice = new byte[len];
+                Buffer.BlockCopy(expectedPayload, start, slice, 0, len);
+
+                var resp = new HttpResponseMessage(HttpStatusCode.PartialContent)
+                {
+                    Content = new ByteArrayContent(slice)
+                };
+                resp.Content.Headers.ContentType = new MediaTypeHeaderValue("audio/mp4");
+                resp.Content.Headers.ContentRange = new ContentRangeHeaderValue(start, end, totalBytes);
+                return resp;
+            }
+            finally
+            {
+                Interlocked.Decrement(ref inFlight);
+            }
+        });
+
+        string cacheDir = TestHelpers.MakeTempDir();
+        var cache = new CloudAudioCache(cacheDir, maxBytes: 64L * 1024 * 1024, handler: handler);
+        var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["User-Agent"] = "MusicoTest/1.0",
+            ["Range"] = "bytes=0-"
+        };
+
+        string path = await cache.GetOrDownloadAsync(
+            "yt_large_chunked",
+            _ => Task.FromResult(new CloudAudioStream("https://cdn.example/large.m4a", ".m4a", headers, totalBytes)));
+
+        Assert.True(File.Exists(path));
+        byte[] actual = File.ReadAllBytes(path);
+        Assert.Equal(expectedPayload.Length, actual.Length);
+        Assert.True(expectedPayload.AsSpan().SequenceEqual(actual));
+
+        Assert.InRange(maxConcurrent, 2, 4);
+        var sortedRanges = observedRanges.OrderBy(r => r.From).ToList();
+        Assert.Equal(5, sortedRanges.Count);
+        Assert.Equal((0L, chunkSize - 1), sortedRanges[0]);
+        Assert.Equal((chunkSize, 2 * chunkSize - 1), sortedRanges[1]);
+        Assert.Equal((2 * chunkSize, 3 * chunkSize - 1), sortedRanges[2]);
+        Assert.Equal((3 * chunkSize, 4 * chunkSize - 1), sortedRanges[3]);
+        Assert.Equal((4 * chunkSize, (long)totalBytes - 1), sortedRanges[4]);
+        Assert.Empty(Directory.EnumerateFiles(cacheDir, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task CloudAudioCacheRetriesTransientChunkErrorAndRejectsHtmlChunkWithCleanup()
+    {
+        const long chunkSize = 4L * 1024L * 1024L;
+        const int totalBytes = (int)(chunkSize + 1024); // 2 chunks
+        byte[] expectedPayload = new byte[totalBytes];
+        for (int i = 0; i < totalBytes; i++)
+        {
+            expectedPayload[i] = (byte)(i % 251);
+        }
+
+        int chunk1Attempts = 0;
+        var retryHandler = new StubHttpHandler(req =>
+        {
+            var range = req.Headers.Range!.Ranges.Single();
+            long start = range.From!.Value;
+            long end = range.To!.Value;
+
+            if (start == chunkSize && Interlocked.Increment(ref chunk1Attempts) == 1)
+            {
+                return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+            }
+
+            int len = (int)(end - start + 1);
+            var slice = new byte[len];
+            Buffer.BlockCopy(expectedPayload, (int)start, slice, 0, len);
+            var resp = new HttpResponseMessage(HttpStatusCode.PartialContent)
+            {
+                Content = new ByteArrayContent(slice)
+            };
+            resp.Content.Headers.ContentType = new MediaTypeHeaderValue("audio/mp4");
+            return resp;
+        });
+
+        string retryDir = TestHelpers.MakeTempDir();
+        var retryCache = new CloudAudioCache(retryDir, maxBytes: 32L * 1024 * 1024, handler: retryHandler);
+        string retryPath = await retryCache.GetOrDownloadAsync(
+            "yt_retry_chunk",
+            _ => Task.FromResult(new CloudAudioStream("https://cdn.example/retry.m4a", ".m4a", ContentLength: totalBytes)));
+
+        Assert.Equal(2, chunk1Attempts);
+        Assert.True(expectedPayload.AsSpan().SequenceEqual(File.ReadAllBytes(retryPath)));
+
+        // HTML response on a chunk must fail and clean up any .tmp files
+        var htmlHandler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("<html><body>Blocked</body></html>", Encoding.UTF8, "text/html")
+        });
+
+        string htmlDir = TestHelpers.MakeTempDir();
+        var htmlCache = new CloudAudioCache(htmlDir, maxBytes: 32L * 1024 * 1024, handler: htmlHandler);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            htmlCache.GetOrDownloadAsync(
+                "yt_html_chunk",
+                _ => Task.FromResult(new CloudAudioStream("https://cdn.example/html.m4a", ".m4a", ContentLength: totalBytes))));
+        Assert.Empty(Directory.EnumerateFiles(htmlDir, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task CloudAudioCachePropagatesCancellationAndRespectsCoalescedWaiters()
+    {
+        const long totalBytes = 5L * 1024L * 1024L;
+        var chunkStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var observedDownloadCancel = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var cancelHandler = new AsyncStubHttpHandler(async (_, ct) =>
+        {
+            chunkStarted.TrySetResult();
+            using var reg = ct.Register(() => observedDownloadCancel.TrySetResult());
+            await Task.Delay(Timeout.Infinite, ct).ConfigureAwait(false);
+            return new HttpResponseMessage(HttpStatusCode.PartialContent);
+        });
+
+        string cancelDir = TestHelpers.MakeTempDir();
+        var cancelCache = new CloudAudioCache(cancelDir, maxBytes: 32L * 1024 * 1024, handler: cancelHandler);
+        using var soleCts = new CancellationTokenSource();
+
+        var soleTask = cancelCache.GetOrDownloadAsync(
+            "yt_cancel_sole",
+            _ => Task.FromResult(new CloudAudioStream("https://cdn.example/slow.m4a", ".m4a", ContentLength: totalBytes)),
+            ct: soleCts.Token);
+
+        await chunkStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        soleCts.Cancel();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => soleTask);
+        await observedDownloadCancel.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        for (int i = 0; i < 40 && Directory.EnumerateFiles(cancelDir, "*.tmp").Any(); i++)
+        {
+            await Task.Delay(25);
+        }
+        Assert.Empty(Directory.EnumerateFiles(cancelDir, "*.tmp"));
+
+        // Coalesced: cancelling waiter 1 must NOT abort the download for waiter 2
+        byte[] smallPayload = Encoding.UTF8.GetBytes("coalesced-audio-ok");
+        var releaseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var downloadStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int httpCalls = 0;
+
+        var coalescedHandler = new AsyncStubHttpHandler(async (_, ct) =>
+        {
+            Interlocked.Increment(ref httpCalls);
+            downloadStarted.TrySetResult();
+            await releaseGate.Task.WaitAsync(ct).ConfigureAwait(false);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new ByteArrayContent(smallPayload)
+            };
+        });
+
+        string coalescedDir = TestHelpers.MakeTempDir();
+        var coalescedCache = new CloudAudioCache(coalescedDir, maxBytes: 32L * 1024 * 1024, handler: coalescedHandler);
+        using var waiter1Cts = new CancellationTokenSource();
+        using var waiter2Cts = new CancellationTokenSource();
+
+        var waiter1 = coalescedCache.GetOrDownloadAsync(
+            "yt_coalesced",
+            _ => Task.FromResult(new CloudAudioStream("https://cdn.example/small.m4a", ".m4a")),
+            ct: waiter1Cts.Token);
+        var waiter2 = coalescedCache.GetOrDownloadAsync(
+            "yt_coalesced",
+            _ => Task.FromResult(new CloudAudioStream("https://cdn.example/small.m4a", ".m4a")),
+            ct: waiter2Cts.Token);
+
+        await downloadStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        waiter1Cts.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiter1);
+
+        releaseGate.TrySetResult();
+        string completedPath = await waiter2;
+        Assert.Equal(1, httpCalls);
+        Assert.Equal(smallPayload, File.ReadAllBytes(completedPath));
     }
 }

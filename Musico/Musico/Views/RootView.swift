@@ -13,6 +13,7 @@ struct RootView: View {
     @Environment(QueueStore.self) private var queues
     @Environment(PlayHistoryStore.self) private var history
     @Environment(\.appNavigation) private var navigation
+    @Environment(\.downloadManager) private var downloadManager
     @Environment(\.lyricsStore) private var lyricsStore
     @Environment(\.languageManager) private var languageManager
     @Environment(\.horizontalSizeClass) private var sizeClass
@@ -166,6 +167,7 @@ struct RootView: View {
             .environment(queues)
             .environment(history)
             .environment(\.appNavigation, navigation)
+            .environment(\.downloadManager, downloadManager)
             .environment(\.lyricsStore, lyricsStore)
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)

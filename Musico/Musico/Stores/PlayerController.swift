@@ -16,6 +16,7 @@ final class PlayerController {
     private(set) var currentTrack: Track?
     private(set) var isPlaying = false
     private(set) var isBuffering = false
+    private(set) var bufferingProgress: CloudDownloadProgress?
     private(set) var duration: TimeInterval = 0
     private(set) var currentTime: TimeInterval = 0
     var errorMessage: String?
@@ -102,10 +103,15 @@ final class PlayerController {
         cloudLoadTask?.cancel()
         cloudLoadTask = nil
         isBuffering = false
+        bufferingProgress = nil
+        engine.onStreamReady = nil
+        engine.onStreamBufferingChanged = nil
+        engine.onStreamFailed = nil
     }
 
     /// Loads the active queue's current track. Returns false if there is none or it cannot be opened.
     private func loadCurrent(autoplay: Bool, at position: TimeInterval) -> Bool {
+        bufferingProgress = nil
         isLoaded = false
         guard let id = queues.active.currentTrackID, let track = library.track(id) else { return false }
         currentTrack = track
@@ -193,6 +199,7 @@ final class PlayerController {
         duration = track.duration
         currentTime = min(max(position, 0), track.duration)
         errorMessage = nil
+        bufferingProgress = nil
         isBuffering = true
         updateNowPlaying()
 
@@ -202,7 +209,52 @@ final class PlayerController {
         cloudLoadTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                var cachedURL = try await cache.resolveAndCache(track: track, root: root, forceRefresh: false)
+                if let cachedURL = await cache.cachedURLIfPresent(for: track.id) {
+                    try await self.loadCachedCloudFile(
+                        cachedURL,
+                        track: track,
+                        root: root,
+                        cache: cache,
+                        autoplay: autoplay,
+                        position: position,
+                        gen: gen
+                    )
+                    return
+                }
+
+                if !cache.usesCustomDownloader {
+                    let stream = try await cache.resolveStream(track: track, root: root, forceRefresh: false)
+                    guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
+
+                    let shouldStream = (stream.contentLength ?? 0) > CloudAudioCache.streamingThresholdBytes
+                        || track.duration > 600
+                    if shouldStream {
+                        self.startProgressiveStream(
+                            stream,
+                            track: track,
+                            root: root,
+                            cache: cache,
+                            autoplay: autoplay,
+                            position: position,
+                            failures: failures,
+                            gen: gen,
+                            hasRetried: false
+                        )
+                        return
+                    }
+                }
+
+                var cachedURL = try await cache.resolveAndCache(
+                    track: track,
+                    root: root,
+                    forceRefresh: false,
+                    onProgress: { [weak self] progress in
+                        Task { @MainActor [weak self] in
+                            guard let self, self.cloudLoadGeneration == gen else { return }
+                            self.bufferingProgress = progress
+                        }
+                    }
+                )
                 guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
 
                 do {
@@ -210,47 +262,175 @@ final class PlayerController {
                 } catch {
                     // Cached file may be corrupt or incomplete; re-resolve once before failing over.
                     await cache.remove(trackID: track.id)
-                    cachedURL = try await cache.resolveAndCache(track: track, root: root, forceRefresh: true)
+                    cachedURL = try await cache.resolveAndCache(
+                        track: track,
+                        root: root,
+                        forceRefresh: true,
+                        onProgress: { [weak self] progress in
+                            Task { @MainActor [weak self] in
+                                guard let self, self.cloudLoadGeneration == gen else { return }
+                                self.bufferingProgress = progress
+                            }
+                        }
+                    )
                     guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
                     try self.engine.load(url: cachedURL)
                 }
 
                 guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
-                self.isBuffering = false
-                self.isLoaded = true
-                self.listened = 0
-                self.playCounted = false
-                self.markedRecent = false
-                self.duration = self.engine.duration > 0 ? self.engine.duration : track.duration
-                if position > 0, position < self.engine.duration - 1 {
-                    self.engine.seek(to: position)
-                }
-                self.currentTime = self.engine.currentTime
-                if autoplay { self.startEngine() }
-                self.isPlaying = self.engine.isPlaying
-                self.updateNowPlaying()
-                self.prefetchNextCloudTrack()
+                self.finishCloudFileLoad(track: track, autoplay: autoplay, position: position)
             } catch is CancellationError {
                 return
             } catch {
                 guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
-                self.isBuffering = false
-                let nextFailures = failures + 1
-                var advanced: String?
-                if nextFailures < Self.maxConsecutiveFailures {
-                    self.queues.updateActive { advanced = $0.next(auto: false) }
-                }
-                if advanced != nil {
-                    self.startCurrent(autoplay: autoplay, at: 0, startingFailures: nextFailures)
-                } else {
-                    self.engine.unload()
-                    self.isPlaying = false
-                    self.errorMessage = nextFailures > 1
-                        ? L10n.tr("Playback stopped: %@ songs in a row could not be played.", String(nextFailures))
-                        : L10n.tr("“%@” could not be played.", track.title)
-                    self.updateNowPlaying()
-                }
+                self.handleCloudTrackFailure(track: track, autoplay: autoplay, failures: failures)
             }
+        }
+    }
+
+    private func loadCachedCloudFile(
+        _ initialURL: URL,
+        track: Track,
+        root: LibraryRoot?,
+        cache: CloudAudioCache,
+        autoplay: Bool,
+        position: TimeInterval,
+        gen: Int
+    ) async throws {
+        var cachedURL = initialURL
+        do {
+            try engine.load(url: cachedURL)
+        } catch {
+            await cache.remove(trackID: track.id)
+            cachedURL = try await cache.resolveAndCache(
+                track: track,
+                root: root,
+                forceRefresh: true,
+                onProgress: { [weak self] progress in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.cloudLoadGeneration == gen else { return }
+                        self.bufferingProgress = progress
+                    }
+                }
+            )
+            guard !Task.isCancelled, cloudLoadGeneration == gen else { return }
+            try engine.load(url: cachedURL)
+        }
+        guard !Task.isCancelled, cloudLoadGeneration == gen else { return }
+        finishCloudFileLoad(track: track, autoplay: autoplay, position: position)
+    }
+
+    private func finishCloudFileLoad(track: Track, autoplay: Bool, position: TimeInterval) {
+        isBuffering = false
+        bufferingProgress = nil
+        isLoaded = true
+        listened = 0
+        playCounted = false
+        markedRecent = false
+        duration = engine.duration > 0 ? engine.duration : track.duration
+        if position > 0, position < engine.duration - 1 {
+            engine.seek(to: position)
+        }
+        currentTime = engine.currentTime
+        if autoplay { startEngine() }
+        isPlaying = engine.isPlaying
+        updateNowPlaying()
+        prefetchNextCloudTrack()
+    }
+
+    private func startProgressiveStream(
+        _ stream: CloudStreamResult,
+        track: Track,
+        root: LibraryRoot?,
+        cache: CloudAudioCache,
+        autoplay: Bool,
+        position: TimeInterval,
+        failures: Int,
+        gen: Int,
+        hasRetried: Bool
+    ) {
+        engine.onStreamReady = { [weak self] dur in
+            guard let self, self.cloudLoadGeneration == gen else { return }
+            if dur > 0 { self.duration = dur }
+            self.isBuffering = false
+            self.bufferingProgress = nil
+            self.isLoaded = true
+            self.currentTime = self.engine.currentTime
+            self.isPlaying = self.engine.isPlaying
+            self.updateNowPlaying()
+        }
+        engine.onStreamBufferingChanged = { [weak self] buffering in
+            guard let self, self.cloudLoadGeneration == gen else { return }
+            if self.isLoaded {
+                self.isBuffering = buffering
+            }
+        }
+        engine.onStreamFailed = { [weak self] _ in
+            guard let self, self.cloudLoadGeneration == gen else { return }
+            if !hasRetried {
+                self.cloudLoadTask = Task { @MainActor [weak self] in
+                    guard let self else { return }
+                    do {
+                        let refreshed = try await cache.resolveStream(track: track, root: root, forceRefresh: true)
+                        guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
+                        self.startProgressiveStream(
+                            refreshed,
+                            track: track,
+                            root: root,
+                            cache: cache,
+                            autoplay: autoplay,
+                            position: position,
+                            failures: failures,
+                            gen: gen,
+                            hasRetried: true
+                        )
+                    } catch is CancellationError {
+                        return
+                    } catch {
+                        guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
+                        self.handleCloudTrackFailure(track: track, autoplay: autoplay, failures: failures)
+                    }
+                }
+            } else {
+                self.handleCloudTrackFailure(track: track, autoplay: autoplay, failures: failures)
+            }
+        }
+
+        engine.loadStream(
+            url: stream.url,
+            headers: stream.headers,
+            contentLength: stream.contentLength,
+            fileExtension: stream.fileExtension,
+            estimatedDuration: track.duration
+        )
+        listened = 0
+        playCounted = false
+        markedRecent = false
+        if position > 0, (track.duration == 0 || position < track.duration - 1) {
+            engine.seek(to: position)
+        }
+        if autoplay { startEngine() }
+        isPlaying = engine.isPlaying
+        updateNowPlaying()
+    }
+
+    private func handleCloudTrackFailure(track: Track, autoplay: Bool, failures: Int) {
+        isBuffering = false
+        bufferingProgress = nil
+        let nextFailures = failures + 1
+        var advanced: String?
+        if nextFailures < Self.maxConsecutiveFailures {
+            queues.updateActive { advanced = $0.next(auto: false) }
+        }
+        if advanced != nil {
+            startCurrent(autoplay: autoplay, at: 0, startingFailures: nextFailures)
+        } else {
+            engine.unload()
+            isPlaying = false
+            errorMessage = nextFailures > 1
+                ? L10n.tr("Playback stopped: %@ songs in a row could not be played.", String(nextFailures))
+                : L10n.tr("“%@” could not be played.", track.title)
+            updateNowPlaying()
         }
     }
 
@@ -258,7 +438,8 @@ final class PlayerController {
         guard let nextIndex = queues.active.upcomingIndices.first,
               queues.active.trackIDs.indices.contains(nextIndex),
               let nextTrack = library.track(queues.active.trackIDs[nextIndex]),
-              nextTrack.isCloud else { return }
+              nextTrack.isCloud,
+              nextTrack.duration <= 900 else { return }
         let root = library.root(nextTrack.rootID)
         let cache = cloudAudio
         Task.detached(priority: .utility) {
@@ -346,7 +527,17 @@ final class PlayerController {
     func pause() {
         resumeAfterInterruption = false
         if isBuffering {
-            cancelCloudLoad()
+            if isLoaded {
+                engine.pause()
+                isBuffering = false
+                isPlaying = false
+                currentTime = engine.currentTime
+                persistPosition()
+            } else {
+                cancelCloudLoad()
+                engine.unload()
+                isPlaying = false
+            }
             updateNowPlaying()
             return
         }

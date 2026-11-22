@@ -53,6 +53,7 @@ struct CloudStreamResult: Sendable, Equatable {
     var fileExtension: String
     var expiresAt: Date
     var fallbackURLs: [URL] = []
+    var contentLength: Int64? = nil
 }
 
 struct HTTPResponseData: Sendable {
@@ -958,7 +959,8 @@ actor YouTubeClient {
                                 url: candidate.url,
                                 headers: headers,
                                 fileExtension: candidate.fileExtension,
-                                expiresAt: expiresAt
+                                expiresAt: expiresAt,
+                                contentLength: candidate.contentLength
                             )
                             streamCache[videoID] = CachedStream(result: result)
                             return result

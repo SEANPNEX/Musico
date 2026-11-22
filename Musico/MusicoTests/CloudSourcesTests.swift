@@ -470,6 +470,48 @@ final class CloudSourcesTests: XCTestCase {
         XCTAssertEqual(transport.requests.count, beforeCount)
     }
 
+    func testYouTubeClientPropagatesContentLengthInStreamResult() async throws {
+        let payload: [String: Any] = [
+            "streamingData": [
+                "adaptiveFormats": [
+                    [
+                        "itag": 140,
+                        "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
+                        "bitrate": 128000,
+                        "contentLength": "9437184",
+                        "url": "https://cdn.example/yt-140-len?expire=1900000000"
+                    ]
+                ]
+            ]
+        ]
+
+        let transport = MockCloudTransport { request in
+            let url = request.url!.absoluteString
+            if url.contains("/youtubei/v1/player") {
+                return HTTPResponseData(
+                    statusCode: 200,
+                    headers: [:],
+                    data: try JSONSerialization.data(withJSONObject: payload),
+                    finalURL: request.url
+                )
+            }
+            if url.contains("yt-140-len") {
+                return HTTPResponseData(
+                    statusCode: 206,
+                    headers: ["Content-Type": "audio/mp4"],
+                    data: Data([0x00, 0x01]),
+                    finalURL: request.url
+                )
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: request.url)
+        }
+
+        let client = YouTubeClient(transport: transport)
+        let stream = try await client.resolveStream(videoID: "vidLen00001", cookie: nil)
+        XCTAssertEqual(stream.contentLength, 9_437_184)
+        XCTAssertEqual(stream.headers["Range"], "bytes=0-")
+    }
+
     func testYouTubeClientHeadersLockupViewModelAndBrowsePrefix() async throws {
         let lockupPayload: [String: Any] = [
             "header": [

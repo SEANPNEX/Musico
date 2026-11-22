@@ -5,6 +5,7 @@ import com.musico.model.RootKind
 import com.musico.model.Track
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
+import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -12,9 +13,16 @@ import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.rules.TemporaryFolder
+import java.io.BufferedReader
+import java.io.ByteArrayOutputStream
+import java.io.Closeable
 import java.io.File
 import java.io.IOException
+import java.io.InputStreamReader
 import java.io.OutputStream
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.util.concurrent.Executors
 
 class CloudExporterTest {
 
@@ -372,5 +380,208 @@ class CloudExporterTest {
         val updatedManifest = CloudExporter.loadManifest(targetDir)!!
         assertEquals(RootKind.CLOUD_GOOGLE_DRIVE.name, updatedManifest.cloudKind)
         assertEquals("Track Two.flac", updatedManifest.tracks["file2.flac"])
+    }
+
+    private class LocalTestHttpServer(
+        private val handler: (path: String, headers: Map<String, String>) -> HttpReply,
+    ) : Closeable {
+        data class HttpReply(
+            val statusCode: Int,
+            val headers: Map<String, String> = emptyMap(),
+            val body: ByteArray,
+            val offset: Int = 0,
+            val length: Int = body.size,
+        )
+
+        private val socket = ServerSocket(0, 50, InetAddress.getByName("127.0.0.1"))
+        private val executor = Executors.newSingleThreadExecutor()
+        val port: Int = socket.localPort
+
+        init {
+            executor.submit {
+                while (!socket.isClosed) {
+                    val client = runCatching { socket.accept() }.getOrNull() ?: break
+                    try {
+                        client.use { conn ->
+                            val reader = BufferedReader(InputStreamReader(conn.getInputStream(), Charsets.ISO_8859_1))
+                            val requestLine = reader.readLine() ?: return@use
+                            val path = requestLine.split(' ').getOrNull(1) ?: "/"
+                            val reqHeaders = linkedMapOf<String, String>()
+                            while (true) {
+                                val line = reader.readLine() ?: break
+                                if (line.isEmpty()) break
+                                val colon = line.indexOf(':')
+                                if (colon > 0) {
+                                    reqHeaders[line.substring(0, colon).trim().lowercase()] =
+                                        line.substring(colon + 1).trim()
+                                }
+                            }
+                            val reply = handler(path, reqHeaders)
+                            val out = conn.getOutputStream()
+                            val statusText = if (reply.statusCode == 206) "Partial Content" else "OK"
+                            val headerText = buildString {
+                                append("HTTP/1.1 ").append(reply.statusCode).append(' ').append(statusText).append("\r\n")
+                                append("Content-Length: ").append(reply.length).append("\r\n")
+                                append("Connection: close\r\n")
+                                for ((k, v) in reply.headers) {
+                                    append(k).append(": ").append(v).append("\r\n")
+                                }
+                                append("\r\n")
+                            }
+                            out.write(headerText.toByteArray(Charsets.ISO_8859_1))
+                            out.write(reply.body, reply.offset, reply.length)
+                            out.flush()
+                        }
+                    } catch (_: Throwable) {
+                        // Ignore socket teardown races on close()
+                    }
+                }
+            }
+        }
+
+        override fun close() {
+            runCatching { socket.close() }
+            executor.shutdownNow()
+        }
+    }
+
+    @Test
+    fun exportTrackUsesBounded4MbRangeChunksForLargeYouTubeStreams() = runBlocking {
+        val totalSize = 9 * 1024 * 1024 + 123
+        val payload = ByteArray(totalSize) { index -> ((index * 31 + 7) and 0xFF).toByte() }
+        val recordedRanges = mutableListOf<String?>()
+
+        LocalTestHttpServer { _, headers ->
+            val rangeHeader = headers["range"]
+            recordedRanges.add(rangeHeader)
+            val rangeSpec = rangeHeader?.removePrefix("bytes=")?.split('-')
+            val start = rangeSpec?.getOrNull(0)?.toIntOrNull() ?: 0
+            val requestedEnd = rangeSpec?.getOrNull(1)?.takeIf { it.isNotEmpty() }?.toIntOrNull()
+                ?: (totalSize - 1)
+            val end = minOf(requestedEnd, totalSize - 1)
+            val length = end - start + 1
+            LocalTestHttpServer.HttpReply(
+                statusCode = 206,
+                headers = mapOf("Content-Range" to "bytes $start-$end/$totalSize"),
+                body = payload,
+                offset = start,
+                length = length,
+            )
+        }.use { server ->
+            val baseUrl = "http://127.0.0.1:${server.port}/audio"
+            val dir = tempFolder.newFolder("chunked_export")
+            val root = cloudRoot()
+            val track = cloudTrack("big1", "Large YouTube Mix")
+            val resolver = FakeCloudStreamResolver { _, _, _ ->
+                ResolvedStream(
+                    url = baseUrl,
+                    headers = mapOf(
+                        "User-Agent" to "TestAgent",
+                        "X-YouTube-Client-Name" to "101",
+                    ),
+                    mimeType = "audio/mp4",
+                    contentLength = totalSize.toLong(),
+                )
+            }
+
+            val exporter = CloudExporter(context = null, cloudResolver = resolver)
+            val savedName = exporter.exportTrack(track, root, dir)
+
+            assertEquals("Large YouTube Mix.m4a", savedName)
+            assertEquals(
+                listOf(
+                    "bytes=0-4194303",
+                    "bytes=4194304-8388607",
+                    "bytes=8388608-${totalSize - 1}",
+                ),
+                recordedRanges,
+            )
+            assertArrayEquals(payload, File(dir, savedName).readBytes())
+        }
+    }
+
+    @Test
+    fun urlConnectionDownloaderHandlesSmall200FallbackAndAuthorizationGuards() = runBlocking {
+        val largeSize = 5 * 1024 * 1024 + 50
+        val largePayload = ByteArray(largeSize) { index -> (index % 251).toByte() }
+        val smallPayload = "small-audio-bytes".toByteArray(Charsets.UTF_8)
+        val recordedRanges = mutableListOf<Pair<String, String?>>()
+
+        LocalTestHttpServer { path, headers ->
+            val rangeHeader = headers["range"]
+            recordedRanges.add(path to rangeHeader)
+            when (path) {
+                "/small" -> LocalTestHttpServer.HttpReply(statusCode = 200, body = smallPayload)
+                "/no-range-200" -> LocalTestHttpServer.HttpReply(statusCode = 200, body = largePayload)
+                "/range-partial" -> {
+                    if (rangeHeader != null && rangeHeader != "bytes=0-") {
+                        val parts = rangeHeader.removePrefix("bytes=").split('-')
+                        val start = parts[0].toInt()
+                        val end = minOf(parts[1].toInt(), largeSize - 1)
+                        val len = end - start + 1
+                        LocalTestHttpServer.HttpReply(
+                            statusCode = 206,
+                            headers = mapOf("Content-Range" to "bytes $start-$end/$largeSize"),
+                            body = largePayload,
+                            offset = start,
+                            length = len,
+                        )
+                    } else {
+                        LocalTestHttpServer.HttpReply(statusCode = 200, body = largePayload)
+                    }
+                }
+                else -> LocalTestHttpServer.HttpReply(statusCode = 404, body = ByteArray(0))
+            }
+        }.use { server ->
+            val base = "http://127.0.0.1:${server.port}"
+            val downloader = UrlConnectionCloudStreamDownloader()
+
+            // <= 4 MB stays single-GET
+            val smallOut = ByteArrayOutputStream()
+            downloader.download("$base/small", mapOf("Range" to "bytes=0-"), smallPayload.size.toLong(), smallOut)
+            assertArrayEquals(smallPayload, smallOut.toByteArray())
+            assertEquals(listOf("/small" to "bytes=0-"), recordedRanges)
+
+            // Server ignoring Range (returning 200 on chunk 0) completes in 1 request without duplicating bytes
+            recordedRanges.clear()
+            val fallbackOut = ByteArrayOutputStream()
+            downloader.download("$base/no-range-200", emptyMap(), largeSize.toLong(), fallbackOut)
+            assertArrayEquals(largePayload, fallbackOut.toByteArray())
+            assertEquals(listOf("/no-range-200" to "bytes=0-4194303"), recordedRanges)
+
+            // Non-YouTube Authorization header skips chunking
+            recordedRanges.clear()
+            val authOut = ByteArrayOutputStream()
+            downloader.download(
+                "$base/range-partial",
+                mapOf("Authorization" to "Bearer token"),
+                largeSize.toLong(),
+                authOut,
+            )
+            assertArrayEquals(largePayload, authOut.toByteArray())
+            assertEquals(listOf("/range-partial" to null), recordedRanges)
+
+            // Signed-in YouTube stream (X-YouTube-Client-Name + Authorization) still chunks in 4 MB pieces
+            recordedRanges.clear()
+            val ytSignedOut = ByteArrayOutputStream()
+            downloader.download(
+                "$base/range-partial",
+                mapOf(
+                    "Authorization" to "SAPISIDHASH 123_abc",
+                    "X-YouTube-Client-Name" to "101",
+                    "Range" to "bytes=0-",
+                ),
+                largeSize.toLong(),
+                ytSignedOut,
+            )
+            assertArrayEquals(largePayload, ytSignedOut.toByteArray())
+            assertEquals(
+                listOf(
+                    "/range-partial" to "bytes=0-4194303",
+                    "/range-partial" to "bytes=4194304-${largeSize - 1}",
+                ),
+                recordedRanges,
+            )
+        }
     }
 }

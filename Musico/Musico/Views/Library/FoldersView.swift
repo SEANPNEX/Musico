@@ -9,9 +9,11 @@ struct FolderRef: Hashable {
 struct FoldersView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
+    @Environment(\.downloadManager) private var downloadManager
     @Environment(\.languageManager) private var languageManager
     @State private var showImporter = false
     @State private var showCloudSheet = false
+    @State private var showDownloadsSheet = false
     /// When set, the next picked folder replaces this unavailable root instead of adding a new one.
     @State private var relocating: UUID?
     @State private var importError: String?
@@ -106,7 +108,22 @@ struct FoldersView: View {
                     relocating = nil
                     showImporter = true
                 }
+                if !downloadManager.jobs.isEmpty {
+                    Button(
+                        L10n.tr("Downloads"),
+                        systemImage: downloadManager.hasActiveDownloads ? "arrow.down.circle.fill" : "arrow.down.circle"
+                    ) {
+                        showDownloadsSheet = true
+                    }
+                    .help(L10n.tr("Downloads"))
+                }
             }
+        }
+        .sheet(isPresented: $showDownloadsSheet) {
+            DownloadsListView(downloadManager: downloadManager)
+                .environment(\.downloadManager, downloadManager)
+                .environment(\.languageManager, languageManager)
+                .environment(\.locale, languageManager.effectiveLocale)
         }
         .sheet(isPresented: $showCloudSheet) {
             AddCloudFolderSheet(library: library)
@@ -114,13 +131,15 @@ struct FoldersView: View {
                 .environment(\.locale, languageManager.effectiveLocale)
         }
         .sheet(item: $exportingRoot) { root in
-            SaveCloudPlaylistSheet(root: root, library: library)
+            SaveCloudPlaylistSheet(root: root, library: library, downloadManager: downloadManager)
                 .environment(library)
+                .environment(\.downloadManager, downloadManager)
                 .environment(\.locale, languageManager.effectiveLocale)
         }
         .sheet(item: $updatingTrackedRoot) { root in
-            UpdateTrackedFolderSheet(root: root, library: library)
+            UpdateTrackedFolderSheet(root: root, library: library, downloadManager: downloadManager)
                 .environment(library)
+                .environment(\.downloadManager, downloadManager)
                 .environment(\.locale, languageManager.effectiveLocale)
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
@@ -399,6 +418,7 @@ struct FolderDetailView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
     @Environment(PlayHistoryStore.self) private var history
+    @Environment(\.downloadManager) private var downloadManager
     @Environment(\.languageManager) private var languageManager
     @Environment(\.dismiss) private var dismiss
     @State private var confirmRemove = false
@@ -539,15 +559,17 @@ struct FolderDetailView: View {
         }
         .sheet(isPresented: $showExportSheet) {
             if let root {
-                SaveCloudPlaylistSheet(root: root, library: library)
+                SaveCloudPlaylistSheet(root: root, library: library, downloadManager: downloadManager)
                     .environment(library)
+                    .environment(\.downloadManager, downloadManager)
                     .environment(\.locale, languageManager.effectiveLocale)
             }
         }
         .sheet(isPresented: $showUpdateTrackedSheet) {
             if let root {
-                UpdateTrackedFolderSheet(root: root, library: library)
+                UpdateTrackedFolderSheet(root: root, library: library, downloadManager: downloadManager)
                     .environment(library)
+                    .environment(\.downloadManager, downloadManager)
                     .environment(\.locale, languageManager.effectiveLocale)
             }
         }
@@ -591,26 +613,51 @@ struct FolderDetailView: View {
 struct SaveCloudPlaylistSheet: View {
     let root: LibraryRoot
     private let explicitLibrary: LibraryStore?
+    private let explicitDownloadManager: DownloadManager?
     @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
+    @Environment(\.downloadManager) private var envDownloadManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var folderName: String
     @State private var parentFolderURL: URL?
     @State private var addToLibrary = true
     @State private var showLocationPicker = false
-    @State private var isExporting = false
-    @State private var progress: (done: Int, total: Int, title: String) = (0, 0, "")
-    @State private var exportTask: Task<Void, Never>?
-    @State private var summary: CloudExporter.ExportSummary?
-    @State private var errorMessage: String?
+    @State private var activeJobID: UUID?
+    @State private var pickerErrorMessage: String?
 
-    init(root: LibraryRoot, library: LibraryStore? = nil) {
+    init(root: LibraryRoot, library: LibraryStore? = nil, downloadManager: DownloadManager? = nil) {
         self.root = root
         self.explicitLibrary = library
+        self.explicitDownloadManager = downloadManager
         _folderName = State(initialValue: CloudExporter.sanitizeFileName(root.name, fallback: "Cloud Playlist"))
     }
 
     private var library: LibraryStore? { explicitLibrary ?? envLibrary }
+    private var downloadManager: DownloadManager { explicitDownloadManager ?? envDownloadManager }
+
+    private var activeJob: DownloadJob? {
+        activeJobID.flatMap { id in downloadManager.jobs.first(where: { $0.id == id }) }
+    }
+
+    private var isExporting: Bool {
+        activeJob?.state == .running
+    }
+
+    private var summary: CloudExporter.ExportSummary? {
+        activeJob?.exportSummary
+    }
+
+    private var errorMessage: String? {
+        if let pickerErrorMessage { return pickerErrorMessage }
+        switch activeJob?.state {
+        case .cancelled:
+            return activeJob?.summaryMessage ?? L10n.tr("Export cancelled.")
+        case .failed(let message):
+            return message
+        default:
+            return nil
+        }
+    }
 
     private var cloudTracks: [Track] {
         library?.tracks(under: root.id, path: "").filter(\.isCloud) ?? []
@@ -634,21 +681,26 @@ struct SaveCloudPlaylistSheet: View {
                         .disabled(isExporting || summary != nil)
                 }
 
-                if isExporting {
+                if isExporting, let job = activeJob {
                     Section(L10n.tr("Progress")) {
                         VStack(alignment: .leading, spacing: 8) {
-                            let currentStep = min(progress.done + (progress.done < progress.total ? 1 : 0), max(progress.total, 1))
-                            ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
-                            Text(L10n.tr("Saving %@ of %@ songs…", String(currentStep), String(progress.total)))
-                                .font(.subheadline)
-                            if !progress.title.isEmpty {
-                                Text(progress.title)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
+                            let total = max(job.totalTracks, 1)
+                            let currentStep = min(job.completedTracks + (job.completedTracks < job.totalTracks ? 1 : 0), total)
+                            if let fraction = job.overallFraction {
+                                ProgressView(value: fraction)
+                            } else {
+                                ProgressView(value: Double(job.completedTracks), total: Double(total))
                             }
+                            DownloadProgressMetricsView(
+                                job: job,
+                                stepText: L10n.tr("Saving %@ of %@ songs…", String(currentStep), String(job.totalTracks))
+                            )
                         }
                         .padding(.vertical, 4)
+
+                        Button(L10n.tr("Run in Background")) {
+                            dismiss()
+                        }
                     }
                 }
 
@@ -682,24 +734,20 @@ struct SaveCloudPlaylistSheet: View {
             }
             .navigationTitle(L10n.tr("Save Cloud Playlist"))
             .navigationBarTitleDisplayMode(.inline)
-            .interactiveDismissDisabled(isExporting)
             .fileImporter(isPresented: $showLocationPicker, allowedContentTypes: [.folder]) { result in
                 switch result {
                 case .success(let url):
                     parentFolderURL = url
-                    errorMessage = nil
+                    pickerErrorMessage = nil
                 case .failure(let error):
-                    errorMessage = error.localizedDescription
+                    pickerErrorMessage = error.localizedDescription
                 }
-            }
-            .onDisappear {
-                exportTask?.cancel()
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    if isExporting {
+                    if isExporting, let jobID = activeJobID {
                         Button(L10n.tr("Cancel"), role: .cancel) {
-                            exportTask?.cancel()
+                            downloadManager.cancel(jobID: jobID)
                         }
                     } else {
                         Button(summary == nil ? L10n.tr("Cancel") : L10n.tr("Done")) {
@@ -708,7 +756,11 @@ struct SaveCloudPlaylistSheet: View {
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    if summary == nil && !isExporting {
+                    if isExporting {
+                        Button(L10n.tr("Run in Background")) {
+                            dismiss()
+                        }
+                    } else if summary == nil {
                         Button(L10n.tr("Save")) {
                             startExport()
                         }
@@ -725,69 +777,61 @@ struct SaveCloudPlaylistSheet: View {
 
     private func startExport() {
         guard let parentURL = parentFolderURL else { return }
-        let tracksToSave = cloudTracks
-        let requestedFolderName = folderName
-        errorMessage = nil
-        summary = nil
-        isExporting = true
-        progress = (0, tracksToSave.count, tracksToSave.first?.title ?? "")
-
-        exportTask = Task { @MainActor in
-            let scoped = parentURL.startAccessingSecurityScopedResource()
-            defer {
-                if scoped { parentURL.stopAccessingSecurityScopedResource() }
-            }
-            do {
-                let result = try await CloudExporter.exportPlaylist(
-                    root: root,
-                    tracks: tracksToSave,
-                    toParentFolder: parentURL,
-                    folderName: requestedFolderName
-                ) { done, total, title in
-                    progress = (done, total, title)
-                }
-                summary = result
-                isExporting = false
-                if addToLibrary, let library, FileManager.default.fileExists(atPath: result.destinationURL.path) {
-                    do {
-                        try await library.addRoot(url: result.destinationURL)
-                    } catch LibraryError.duplicateRoot {
-                        await library.rescan()
-                        library.notifyFolderQueueSync(folderURL: result.destinationURL)
-                    } catch {
-                        errorMessage = L10n.tr("Saved songs, but couldn’t add folder to library: %@", error.localizedDescription)
-                    }
-                    library.attachCloudTracking(toFolderURL: result.destinationURL, from: root)
-                }
-            } catch is CancellationError {
-                isExporting = false
-                errorMessage = L10n.tr("Export cancelled.")
-            } catch {
-                isExporting = false
-                errorMessage = error.localizedDescription
-            }
-        }
+        pickerErrorMessage = nil
+        let job = downloadManager.startPlaylistExport(
+            root: root,
+            tracks: cloudTracks,
+            parentURL: parentURL,
+            folderName: folderName,
+            addToLibrary: addToLibrary,
+            library: library
+        )
+        activeJobID = job.id
     }
 }
 
 struct UpdateTrackedFolderSheet: View {
     let root: LibraryRoot
     private let explicitLibrary: LibraryStore?
+    private let explicitDownloadManager: DownloadManager?
     @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
+    @Environment(\.downloadManager) private var envDownloadManager
     @Environment(\.dismiss) private var dismiss
 
-    @State private var isUpdating = true
-    @State private var progress: (done: Int, total: Int, title: String) = (0, 0, "")
-    @State private var summary: CloudExporter.CloudUpdateSummary?
-    @State private var errorMessage: String?
-    @State private var syncTask: Task<Void, Never>?
+    @State private var activeJobID: UUID?
+    @State private var didAttemptStart = false
 
-    init(root: LibraryRoot, library: LibraryStore? = nil) {
+    init(root: LibraryRoot, library: LibraryStore? = nil, downloadManager: DownloadManager? = nil) {
         self.root = root
         self.explicitLibrary = library
+        self.explicitDownloadManager = downloadManager
     }
 
     private var library: LibraryStore? { explicitLibrary ?? envLibrary }
+    private var downloadManager: DownloadManager { explicitDownloadManager ?? envDownloadManager }
+
+    private var activeJob: DownloadJob? {
+        activeJobID.flatMap { id in downloadManager.jobs.first(where: { $0.id == id }) }
+    }
+
+    private var isUpdating: Bool {
+        activeJob?.state == .running
+    }
+
+    private var summary: CloudExporter.CloudUpdateSummary? {
+        activeJob?.updateSummary
+    }
+
+    private var errorMessage: String? {
+        switch activeJob?.state {
+        case .cancelled:
+            return activeJob?.summaryMessage ?? L10n.tr("Update cancelled.")
+        case .failed(let message):
+            return message
+        default:
+            return nil
+        }
+    }
 
     var body: some View {
         NavigationStack {
@@ -801,27 +845,31 @@ struct UpdateTrackedFolderSheet: View {
                     }
                 }
 
-                if isUpdating {
+                if isUpdating, let job = activeJob {
                     Section(L10n.tr("Syncing")) {
                         VStack(alignment: .leading, spacing: 8) {
-                            if progress.total > 0 {
-                                let step = min(progress.done + (progress.done < progress.total ? 1 : 0), max(progress.total, 1))
-                                ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
-                                Text(L10n.tr("Checking %@ of %@ songs…", String(step), String(progress.total)))
-                                    .font(.subheadline)
+                            if job.totalTracks > 0 {
+                                let step = min(job.completedTracks + (job.completedTracks < job.totalTracks ? 1 : 0), job.totalTracks)
+                                if let fraction = job.overallFraction {
+                                    ProgressView(value: fraction)
+                                } else {
+                                    ProgressView(value: Double(job.completedTracks), total: Double(max(job.totalTracks, 1)))
+                                }
+                                DownloadProgressMetricsView(
+                                    job: job,
+                                    stepText: L10n.tr("Checking %@ of %@ songs…", String(step), String(job.totalTracks))
+                                )
                             } else {
                                 ProgressView()
                                 Text(L10n.tr("Fetching latest cloud playlist…"))
                                     .font(.subheadline)
                             }
-                            if !progress.title.isEmpty {
-                                Text(progress.title)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
                         }
                         .padding(.vertical, 4)
+
+                        Button(L10n.tr("Run in Background")) {
+                            dismiss()
+                        }
                     }
                 }
 
@@ -857,47 +905,34 @@ struct UpdateTrackedFolderSheet: View {
             }
             .navigationTitle(L10n.tr("Update “%@”", L10n.displayRootName(root)))
             .navigationBarTitleDisplayMode(.inline)
-            .interactiveDismissDisabled(isUpdating)
-            .onDisappear { syncTask?.cancel() }
             .task {
-                await startUpdate()
+                startUpdateIfNeeded()
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    if isUpdating {
+                    if isUpdating, let jobID = activeJobID {
                         Button(L10n.tr("Cancel"), role: .cancel) {
-                            syncTask?.cancel()
+                            downloadManager.cancel(jobID: jobID)
                         }
                     } else {
                         Button(L10n.tr("Done")) { dismiss() }
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    if isUpdating {
+                        Button(L10n.tr("Run in Background")) {
+                            dismiss()
+                        }
                     }
                 }
             }
         }
     }
 
-    private func startUpdate() async {
-        guard let library else {
-            isUpdating = false
-            return
-        }
-        isUpdating = true
-        summary = nil
-        errorMessage = nil
-        let task = Task { @MainActor in
-            do {
-                let result = try await library.updateTrackedLocalRoot(root.id) { done, total, title in
-                    progress = (done, total, title)
-                }
-                summary = result
-            } catch is CancellationError {
-                errorMessage = L10n.tr("Update cancelled.")
-            } catch {
-                errorMessage = error.localizedDescription
-            }
-            isUpdating = false
-        }
-        syncTask = task
-        await task.value
+    private func startUpdateIfNeeded() {
+        guard !didAttemptStart else { return }
+        didAttemptStart = true
+        guard let library else { return }
+        activeJobID = downloadManager.startTrackedFolderUpdate(root: root, library: library).id
     }
 }

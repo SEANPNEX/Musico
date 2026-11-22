@@ -53,6 +53,15 @@ fun interface CloudStreamDownloader {
         headers: Map<String, String>,
         output: OutputStream,
     )
+
+    suspend fun download(
+        url: String,
+        headers: Map<String, String>,
+        contentLength: Long?,
+        output: OutputStream,
+    ) {
+        download(url, headers, output)
+    }
 }
 
 class UrlConnectionCloudStreamDownloader(
@@ -60,11 +69,71 @@ class UrlConnectionCloudStreamDownloader(
     private val readTimeoutMs: Int = 30_000,
 ) : CloudStreamDownloader {
 
+    private data class DownloadResult(
+        val statusCode: Int,
+        val bytesWritten: Long,
+        val contentRangeTotal: Long?,
+    )
+
     override suspend fun download(
         url: String,
         headers: Map<String, String>,
         output: OutputStream,
+    ) = download(url, headers, contentLength = null, output = output)
+
+    override suspend fun download(
+        url: String,
+        headers: Map<String, String>,
+        contentLength: Long?,
+        output: OutputStream,
     ) = withContext(Dispatchers.IO) {
+        val hasAuth = headers.keys.any { it.equals("Authorization", ignoreCase = true) }
+        val isYouTube = headers.keys.any { it.equals("X-YouTube-Client-Name", ignoreCase = true) }
+        if (contentLength != null && contentLength > CHUNK_SIZE_BYTES && (!hasAuth || isYouTube)) {
+            downloadChunked(url, headers, contentLength, output)
+        } else {
+            executeDownloadRequest(url, headers, output)
+            output.flush()
+        }
+    }
+
+    private suspend fun downloadChunked(
+        url: String,
+        headers: Map<String, String>,
+        contentLength: Long,
+        output: OutputStream,
+    ) {
+        val baseHeaders = headers.filterKeys { !it.equals("Range", ignoreCase = true) }
+        var offset = 0L
+        while (offset < contentLength) {
+            currentCoroutineContext().ensureActive()
+            val end = minOf(offset + CHUNK_SIZE_BYTES - 1L, contentLength - 1L)
+            val chunkHeaders = baseHeaders + ("Range" to "bytes=$offset-$end")
+            val result = executeDownloadRequest(url, chunkHeaders, output)
+            if (offset == 0L && result.statusCode == HttpURLConnection.HTTP_OK) {
+                output.flush()
+                return
+            }
+            if (result.statusCode != HttpURLConnection.HTTP_PARTIAL) {
+                throw IOException("Expected HTTP 206 for range bytes=$offset-$end, got HTTP ${result.statusCode}")
+            }
+            if (result.bytesWritten <= 0L) {
+                throw IOException("Empty response body for range bytes=$offset-$end")
+            }
+            offset += result.bytesWritten
+            val reportedTotal = result.contentRangeTotal
+            if (reportedTotal != null && offset >= reportedTotal) {
+                break
+            }
+        }
+        output.flush()
+    }
+
+    private suspend fun executeDownloadRequest(
+        url: String,
+        headers: Map<String, String>,
+        output: OutputStream,
+    ): DownloadResult {
         var currentUrl = url
         for (hop in 0 until MAX_REDIRECTS) {
             currentCoroutineContext().ensureActive()
@@ -78,20 +147,21 @@ class UrlConnectionCloudStreamDownloader(
                     setRequestProperty(k, v)
                 }
             }
-            var redirected = false
             try {
                 val code = conn.responseCode
                 if (isRedirect(code)) {
                     val location = conn.getHeaderField("Location")
                     if (!location.isNullOrBlank()) {
                         currentUrl = URL(URL(currentUrl), location).toString()
-                        redirected = true
                         continue
                     }
                 }
                 if (code !in 200..299) {
                     throw IOException("HTTP $code downloading stream")
                 }
+                val expectedLength = conn.contentLengthLong
+                val contentRangeTotal = parseContentRangeTotal(conn.getHeaderField("Content-Range"))
+                var totalRead = 0L
                 val buffer = ByteArray(16 * 1024)
                 conn.inputStream.use { input ->
                     while (true) {
@@ -100,18 +170,30 @@ class UrlConnectionCloudStreamDownloader(
                         if (read < 0) break
                         if (read > 0) {
                             output.write(buffer, 0, read)
+                            totalRead += read
                         }
                     }
                 }
-                output.flush()
-                return@withContext
-            } finally {
-                if (redirected || true) {
-                    conn.disconnect()
+                if (expectedLength > 0L && totalRead < expectedLength) {
+                    throw IOException("Truncated stream: expected $expectedLength bytes, got $totalRead")
                 }
+                return DownloadResult(
+                    statusCode = code,
+                    bytesWritten = totalRead,
+                    contentRangeTotal = contentRangeTotal,
+                )
+            } finally {
+                conn.disconnect()
             }
         }
         throw IOException("Too many redirects downloading $url")
+    }
+
+    private fun parseContentRangeTotal(header: String?): Long? {
+        if (header.isNullOrBlank()) return null
+        val slashIdx = header.lastIndexOf('/')
+        if (slashIdx < 0) return null
+        return header.substring(slashIdx + 1).trim().toLongOrNull()?.takeIf { it > 0L }
     }
 
     private fun isRedirect(code: Int): Boolean =
@@ -123,6 +205,7 @@ class UrlConnectionCloudStreamDownloader(
 
     companion object {
         private const val MAX_REDIRECTS = 6
+        internal const val CHUNK_SIZE_BYTES = 4L * 1024L * 1024L
     }
 }
 
@@ -553,7 +636,12 @@ class CloudExporter(
             val partFile = File(targetDir, ".$fileName.part")
             try {
                 FileOutputStream(partFile).use { out ->
-                    downloader.download(stream.url, downloadHeadersFor(track, stream), out)
+                    downloader.download(
+                        stream.url,
+                        downloadHeadersFor(track, stream),
+                        stream.contentLength,
+                        out,
+                    )
                 }
                 if (!partFile.renameTo(targetFile)) {
                     partFile.copyTo(targetFile, overwrite = true)
@@ -585,7 +673,12 @@ class CloudExporter(
                 val out = ctx.contentResolver.openOutputStream(doc.uri)
                     ?: throw IOException("Could not open output stream for $fileName.")
                 out.use { streamOut ->
-                    downloader.download(stream.url, downloadHeadersFor(track, stream), streamOut)
+                    downloader.download(
+                        stream.url,
+                        downloadHeadersFor(track, stream),
+                        stream.contentLength,
+                        streamOut,
+                    )
                 }
                 doc.name ?: fileName
             } catch (t: Throwable) {

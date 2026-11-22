@@ -24,11 +24,18 @@ struct PlayerBar: View {
                             .font(.subheadline.weight(.medium))
                             .lineLimit(1)
                             .contentTransition(.opacity)
-                        Text(track.map { L10n.displayArtist($0.artist) } ?? L10n.tr("Pick a song from your library"))
-                            .font(.footnote)
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .contentTransition(.opacity)
+                        if player.isBuffering, let caption = bufferingCaption {
+                            Text(caption)
+                                .font(.footnote.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        } else {
+                            Text(track.map { L10n.displayArtist($0.artist) } ?? L10n.tr("Pick a song from your library"))
+                                .font(.footnote)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .contentTransition(.opacity)
+                        }
                     }
                     .animation(.easeInOut(duration: 0.2), value: track?.id)
                 }
@@ -99,6 +106,20 @@ struct PlayerBar: View {
                 .background(.bar)
                 .overlay(alignment: .top) { Divider() }
         }
+    }
+
+    private var bufferingCaption: String? {
+        guard let progress = player.bufferingProgress else { return nil }
+        var parts: [String] = []
+        if let fraction = progress.fractionCompleted {
+            parts.append(DownloadManager.formattedPercentage(fraction))
+        } else if progress.bytesDownloaded > 0 {
+            parts.append(DownloadManager.formattedBytes(progress.bytesDownloaded))
+        }
+        if progress.bytesPerSecond > 0 {
+            parts.append(DownloadManager.formattedSpeed(progress.bytesPerSecond))
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
     private var transport: some View {

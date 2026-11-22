@@ -596,12 +596,23 @@ enum L10n {
         "Stops in %@": "将在 %@ 后停止",
         "Stops at the end of this song": "将在当前歌曲结束后停止",
 
-        // CloudExporter Host Alerts
+        // CloudExporter Host Alerts & Downloads
         "Couldn’t Save Song": "无法保存歌曲",
         "Saving Song": "正在保存歌曲",
         "Saving “%@”…": "正在保存“%@”…",
         "Saved Song": "歌曲已保存",
         "Saved “%@” to “%@”.": "已将“%@”保存到“%@”。",
+        "Downloads": "下载",
+        "No Downloads": "暂无下载",
+        "Background cloud downloads and folder updates appear here.": "后台云端下载与文件夹更新将显示在这里。",
+        "Active": "进行中",
+        "Completed": "已完成",
+        "Clear Finished": "清除已完成",
+        "Dismiss": "关闭",
+        "Preparing…": "准备中…",
+        "Save Song": "保存歌曲",
+        "%@ Downloads Active": "%@ 个下载任务进行中",
+        "Run in Background": "后台运行",
 
         // Update Sheet & Service
         "Software Update": "软件更新",

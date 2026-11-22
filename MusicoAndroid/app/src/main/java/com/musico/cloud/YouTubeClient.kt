@@ -470,7 +470,7 @@ class YouTubeClient(
                 }.getOrDefault(-1)
 
                 if (probeCode == 200 || probeCode == 206) {
-                    if (candidate.contentLength > POST_1MB_PROBE_THRESHOLD_BYTES) {
+                    if ((candidate.contentLength ?: 0L) > POST_1MB_PROBE_THRESHOLD_BYTES) {
                         val post1MbHeaders = headers + ("Range" to "bytes=1048576-1049599")
                         val post1MbCode = runCatching {
                             httpClient.probeRange(candidate.url, post1MbHeaders)
@@ -486,6 +486,7 @@ class YouTubeClient(
                         headers = headers,
                         mimeType = candidate.mimeType,
                         expiresAtEpochMs = System.currentTimeMillis() + ttlMs,
+                        contentLength = candidate.contentLength,
                     )
                 }
             }
@@ -580,7 +581,7 @@ class YouTubeClient(
         val url: String,
         val mimeType: String?,
         val bitrate: Int,
-        val contentLength: Long = 0L,
+        val contentLength: Long? = null,
     )
 
     internal fun parseAudioCandidates(playerJson: JsonObject): List<AudioCandidate> {
@@ -595,9 +596,9 @@ class YouTubeClient(
                 val itag = obj.int("itag") ?: -1
                 val mimeType = obj.str("mimeType")?.takeIf { it.isNotBlank() }
                 val bitrate = obj.int("bitrate") ?: 0
-                val contentLength = obj.str("contentLength")?.toLongOrNull()
-                    ?: obj.long("contentLength")
-                    ?: 0L
+                val contentLength = (obj.str("contentLength")?.toLongOrNull()
+                    ?: obj.long("contentLength"))
+                    ?.takeIf { it > 0L }
                 val isAudio = mimeType?.startsWith("audio/", ignoreCase = true) == true || itag == 18
                 if (isAudio) {
                     raw.add(

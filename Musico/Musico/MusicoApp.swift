@@ -10,6 +10,7 @@ final class AppModel {
     let history: PlayHistoryStore
     let navigation = AppNavigation()
     let language = LanguageManager.shared
+    let downloadManager = DownloadManager()
     #if targetEnvironment(macCatalyst)
     let updateManager: UpdateManager
     #endif
@@ -56,6 +57,7 @@ struct MusicoApp: App {
                 .environment(model.history)
                 .environment(\.lyricsStore, model.lyrics)
                 .environment(\.appNavigation, model.navigation)
+                .environment(\.downloadManager, model.downloadManager)
                 .environment(\.languageManager, model.language)
                 .environment(\.locale, model.language.effectiveLocale)
                 #if targetEnvironment(macCatalyst)

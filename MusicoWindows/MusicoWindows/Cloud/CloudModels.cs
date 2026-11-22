@@ -34,7 +34,8 @@ public sealed record CloudPlaylistResult(
 public sealed record CloudAudioStream(
     string Url,
     string Extension,
-    IReadOnlyDictionary<string, string>? Headers = null);
+    IReadOnlyDictionary<string, string>? Headers = null,
+    long? ContentLength = null);
 
 public static class CloudUrlClassifier
 {

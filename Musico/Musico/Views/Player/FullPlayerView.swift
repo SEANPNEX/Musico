@@ -147,7 +147,7 @@ private struct PlayerPage: View {
     @State private var isCloseHovered = false
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             if showsClose {
                 closeButton
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -218,7 +218,7 @@ private struct PlayerPage: View {
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24)
         .padding(.top, showsClose ? 12 : 28)
-        .padding(.bottom, 16)
+        .padding(.bottom, 20)
     }
 
     private func performClose() {
@@ -240,15 +240,19 @@ private struct PlayerPage: View {
                 .contentShape(Capsule())
                 .background {
                     Color.clear
-                        .glassEffect(.regular.interactive(), in: Capsule())
+                        .glassEffect(.regular, in: Capsule())
                         .allowsHitTesting(false)
                 }
                 .overlay {
-                    if isCloseHovered {
+                    ZStack {
                         Capsule()
-                            .fill(Color.primary.opacity(0.08))
-                            .allowsHitTesting(false)
+                            .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                        if isCloseHovered {
+                            Capsule()
+                                .fill(Color.primary.opacity(0.08))
+                        }
                     }
+                    .allowsHitTesting(false)
                 }
                 .scaleEffect(isCloseHovered ? 1.05 : 1.0)
                 .onHover { isCloseHovered = $0 }
@@ -303,32 +307,16 @@ private struct PlayerPage: View {
         .tint(.primary)
     }
 
-    @ViewBuilder
     private var panelButtons: some View {
         let queueActive = activeSidePane == .queue || panel == .queue
         let lyricsActive = activeSidePane == .lyrics || panel == .lyrics
-        if #available(iOS 26.0, macCatalyst 26.0, *) {
-            GlassEffectContainer(spacing: 10) {
-                HStack(spacing: 8) {
-                    panelButton(L10n.tr("Queue"), "list.bullet", .queue, active: queueActive)
-                    panelButton(L10n.tr("Lyrics"), "quote.bubble", .lyrics, active: lyricsActive)
-                    panelButton(L10n.tr("Equalizer"), "slider.vertical.3", .equalizer, active: player.eq.enabled)
-                    panelButton(L10n.tr("Sleep Timer"), "moon.zzz", .sleep, active: player.sleepMode != .off)
-                }
-            }
-            .padding(.top, 4)
-        } else {
-            HStack {
-                panelButton(L10n.tr("Queue"), "list.bullet", .queue, active: queueActive)
-                Spacer()
-                panelButton(L10n.tr("Lyrics"), "quote.bubble", .lyrics, active: lyricsActive)
-                Spacer()
-                panelButton(L10n.tr("Equalizer"), "slider.vertical.3", .equalizer, active: player.eq.enabled)
-                Spacer()
-                panelButton(L10n.tr("Sleep Timer"), "moon.zzz", .sleep, active: player.sleepMode != .off)
-            }
-            .padding(.top, 4)
+        return HStack(spacing: 10) {
+            panelButton(L10n.tr("Queue"), "list.bullet", .queue, active: queueActive)
+            panelButton(L10n.tr("Lyrics"), "quote.bubble", .lyrics, active: lyricsActive)
+            panelButton(L10n.tr("Equalizer"), "slider.vertical.3", .equalizer, active: player.eq.enabled)
+            panelButton(L10n.tr("Sleep Timer"), "moon.zzz", .sleep, active: player.sleepMode != .off)
         }
+        .padding(.top, 4)
     }
 
     private func panelButton(_ title: String, _ icon: String, _ target: Panel, active: Bool) -> some View {
@@ -347,53 +335,45 @@ private struct PlayerPanelButton: View {
     @State private var isHovered = false
 
     var body: some View {
-        if #available(iOS 26.0, macCatalyst 26.0, *) {
-            Button(action: action) {
-                VStack(spacing: 4) {
-                    Image(systemName: icon).font(.title3).frame(height: 24)
-                    Text(title).font(.caption2).lineLimit(1).minimumScaleFactor(0.85)
-                }
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 6)
-                .contentShape(Capsule())
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.body.weight(.semibold))
+                    .frame(height: 22)
+                Text(title)
+                    .font(.caption.weight(.medium))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
-            .buttonStyle(.plain)
-            .foregroundStyle(active ? Color.accentColor : .primary)
-            .background {
-                Color.clear
-                    .glassEffect(.regular.interactive(), in: Capsule())
-                    .allowsHitTesting(false)
-            }
-            .overlay {
-                if active || isHovered {
-                    Capsule()
-                        .fill(active ? Color.accentColor.opacity(0.14) : Color.primary.opacity(0.06))
-                        .allowsHitTesting(false)
-                }
-            }
-            .onHover { isHovered = $0 }
-            .animation(.easeOut(duration: 0.14), value: isHovered)
-        } else {
-            Button(action: action) {
-                VStack(spacing: 4) {
-                    Image(systemName: icon).font(.title3).frame(height: 26)
-                    Text(title).font(.caption2)
-                }
-                .frame(minWidth: 64, minHeight: 44)
-                .background(
-                    active
-                        ? Color.accentColor.opacity(0.14)
-                        : (isHovered ? Color.primary.opacity(0.06) : .clear),
-                    in: RoundedRectangle(cornerRadius: 10, style: .continuous)
-                )
-                .contentShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-            }
-            .buttonStyle(.plain)
-            .foregroundStyle(active ? Color.accentColor : .primary)
-            .onHover { isHovered = $0 }
-            .animation(.easeOut(duration: 0.14), value: isHovered)
+            .frame(maxWidth: .infinity, minHeight: 50)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 7)
+            .contentShape(Capsule())
         }
+        .buttonStyle(.plain)
+        .foregroundStyle(active ? Color.accentColor : Color.primary)
+        .background {
+            ZStack {
+                Capsule().fill(.regularMaterial)
+                Capsule().fill(
+                    active
+                        ? Color.accentColor.opacity(0.15)
+                        : (isHovered ? Color.primary.opacity(0.09) : Color.primary.opacity(0.04))
+                )
+            }
+            .allowsHitTesting(false)
+        }
+        .overlay {
+            Capsule()
+                .strokeBorder(
+                    active ? Color.accentColor.opacity(0.38) : Color.primary.opacity(0.14),
+                    lineWidth: 0.75
+                )
+                .allowsHitTesting(false)
+        }
+        .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.14), value: isHovered)
     }
 }
 

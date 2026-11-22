@@ -17,6 +17,15 @@ struct CloudFolderManifest: Codable, Equatable, Sendable {
 
 /// Exports cached or fetched cloud tracks and playlists into user-selected local folders.
 enum CloudExporter {
+    struct ExportProgress: Sendable, Equatable {
+        var completedTracks: Int
+        var totalTracks: Int
+        var currentTrackTitle: String
+        var bytesDownloaded: Int64
+        var totalBytes: Int64?
+        var bytesPerSecond: Double
+    }
+
     struct ExportSummary: Sendable, Equatable {
         let savedCount: Int
         let failedCount: Int
@@ -102,6 +111,46 @@ enum CloudExporter {
         cache: CloudAudioCache = .shared,
         onProgress: (@MainActor @Sendable (Int, Int, String) -> Void)? = nil
     ) async throws -> ExportSummary {
+        try await performExportPlaylist(
+            root: root,
+            tracks: tracks,
+            toParentFolder: parentURL,
+            folderName: folderName,
+            cache: cache,
+            onDetailedProgress: onProgress.map { callback in
+                { @MainActor progress in
+                    callback(progress.completedTracks, progress.totalTracks, progress.currentTrackTitle)
+                }
+            }
+        )
+    }
+
+    static func exportPlaylist(
+        root: LibraryRoot,
+        tracks: [Track],
+        toParentFolder parentURL: URL,
+        folderName: String,
+        cache: CloudAudioCache = .shared,
+        onDetailedProgress: @escaping @MainActor @Sendable (ExportProgress) -> Void
+    ) async throws -> ExportSummary {
+        try await performExportPlaylist(
+            root: root,
+            tracks: tracks,
+            toParentFolder: parentURL,
+            folderName: folderName,
+            cache: cache,
+            onDetailedProgress: onDetailedProgress
+        )
+    }
+
+    private static func performExportPlaylist(
+        root: LibraryRoot,
+        tracks: [Track],
+        toParentFolder parentURL: URL,
+        folderName: String,
+        cache: CloudAudioCache,
+        onDetailedProgress: (@MainActor @Sendable (ExportProgress) -> Void)?
+    ) async throws -> ExportSummary {
         try Task.checkCancellation()
         let sanitizedFolder = sanitizeFileName(folderName, fallback: sanitizeFileName(root.name, fallback: "Cloud Playlist"))
         let destinationURL = parentURL.appendingPathComponent(sanitizedFolder, isDirectory: true)
@@ -117,9 +166,33 @@ enum CloudExporter {
 
         for (index, track) in cloudTracks.enumerated() {
             try Task.checkCancellation()
-            await onProgress?(index, total, track.title)
+            await onDetailedProgress?(ExportProgress(
+                completedTracks: index,
+                totalTracks: total,
+                currentTrackTitle: track.title,
+                bytesDownloaded: 0,
+                totalBytes: nil,
+                bytesPerSecond: 0
+            ))
             do {
-                let cachedURL = try await cache.resolveAndCache(track: track, root: root)
+                let cachedURL = try await cache.resolveAndCache(
+                    track: track,
+                    root: root,
+                    onProgress: onDetailedProgress.map { callback in
+                        { dlProgress in
+                            Task { @MainActor in
+                                callback(ExportProgress(
+                                    completedTracks: index,
+                                    totalTracks: total,
+                                    currentTrackTitle: track.title,
+                                    bytesDownloaded: dlProgress.bytesDownloaded,
+                                    totalBytes: dlProgress.totalBytes,
+                                    bytesPerSecond: dlProgress.bytesPerSecond
+                                ))
+                            }
+                        }
+                    }
+                )
                 try Task.checkCancellation()
                 let ext = cachedURL.pathExtension.isEmpty ? "m4a" : cachedURL.pathExtension
                 let targetURL = uniqueFileURL(in: destinationURL, baseName: track.title, fileExtension: ext)
@@ -136,7 +209,14 @@ enum CloudExporter {
                 errors.append("\(track.title): \(error.localizedDescription)")
             }
         }
-        await onProgress?(total, total, "")
+        await onDetailedProgress?(ExportProgress(
+            completedTracks: total,
+            totalTracks: total,
+            currentTrackTitle: "",
+            bytesDownloaded: 0,
+            totalBytes: nil,
+            bytesPerSecond: 0
+        ))
 
         if let sourceURL = root.sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines),
            !sourceURL.isEmpty,
@@ -185,6 +265,42 @@ enum CloudExporter {
         cache: CloudAudioCache = .shared,
         onProgress: (@MainActor @Sendable (Int, Int, String) -> Void)? = nil
     ) async throws -> CloudUpdateSummary {
+        try await performUpdateLocalFolder(
+            root: root,
+            folderURL: folderURL,
+            fetcher: fetcher,
+            cache: cache,
+            onDetailedProgress: onProgress.map { callback in
+                { @MainActor progress in
+                    callback(progress.completedTracks, progress.totalTracks, progress.currentTrackTitle)
+                }
+            }
+        )
+    }
+
+    static func updateLocalFolder(
+        root: LibraryRoot,
+        folderURL: URL,
+        fetcher: any CloudPlaylistFetching = LiveCloudService.shared,
+        cache: CloudAudioCache = .shared,
+        onDetailedProgress: @escaping @MainActor @Sendable (ExportProgress) -> Void
+    ) async throws -> CloudUpdateSummary {
+        try await performUpdateLocalFolder(
+            root: root,
+            folderURL: folderURL,
+            fetcher: fetcher,
+            cache: cache,
+            onDetailedProgress: onDetailedProgress
+        )
+    }
+
+    private static func performUpdateLocalFolder(
+        root: LibraryRoot,
+        folderURL: URL,
+        fetcher: any CloudPlaylistFetching,
+        cache: CloudAudioCache,
+        onDetailedProgress: (@MainActor @Sendable (ExportProgress) -> Void)?
+    ) async throws -> CloudUpdateSummary {
         try Task.checkCancellation()
         let existingManifest = loadManifest(in: folderURL)
         let rawSource = (existingManifest?.sourceURL ?? root.sourceURL ?? root.remoteID ?? "")
@@ -213,7 +329,14 @@ enum CloudExporter {
 
         for (index, item) in fetched.tracks.enumerated() {
             try Task.checkCancellation()
-            await onProgress?(index, total, item.title)
+            await onDetailedProgress?(ExportProgress(
+                completedTracks: index,
+                totalTracks: total,
+                currentTrackTitle: item.title,
+                bytesDownloaded: 0,
+                totalBytes: nil,
+                bytesPerSecond: 0
+            ))
 
             if let existingName = trackedMap[item.remoteTrackID],
                FileManager.default.fileExists(atPath: folderURL.appendingPathComponent(existingName).path) {
@@ -243,7 +366,24 @@ enum CloudExporter {
             )
 
             do {
-                let targetURL = try await exportTrack(tempTrack, root: cloudLookupRoot, toFolder: folderURL, cache: cache)
+                let targetURL = try await exportTrack(
+                    tempTrack,
+                    root: cloudLookupRoot,
+                    toFolder: folderURL,
+                    cache: cache,
+                    onProgress: onDetailedProgress.map { callback in
+                        { @MainActor dlProgress in
+                            callback(ExportProgress(
+                                completedTracks: index,
+                                totalTracks: total,
+                                currentTrackTitle: item.title,
+                                bytesDownloaded: dlProgress.bytesDownloaded,
+                                totalBytes: dlProgress.totalBytes,
+                                bytesPerSecond: dlProgress.bytesPerSecond
+                            ))
+                        }
+                    }
+                )
                 trackedMap[item.remoteTrackID] = targetURL.lastPathComponent
                 addedCount += 1
             } catch is CancellationError {
@@ -253,7 +393,14 @@ enum CloudExporter {
                 errors.append("\(item.title): \(error.localizedDescription)")
             }
         }
-        await onProgress?(total, total, "")
+        await onDetailedProgress?(ExportProgress(
+            completedTracks: total,
+            totalTracks: total,
+            currentTrackTitle: "",
+            bytesDownloaded: 0,
+            totalBytes: nil,
+            bytesPerSecond: 0
+        ))
 
         let updatedManifest = CloudFolderManifest(
             sourceURL: rawSource,
@@ -279,11 +426,22 @@ enum CloudExporter {
         _ track: Track,
         root: LibraryRoot?,
         toFolder folderURL: URL,
-        cache: CloudAudioCache = .shared
+        cache: CloudAudioCache = .shared,
+        onProgress: (@MainActor @Sendable (CloudDownloadProgress) -> Void)? = nil
     ) async throws -> URL {
         try Task.checkCancellation()
         try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
-        let cachedURL = try await cache.resolveAndCache(track: track, root: root)
+        let cachedURL = try await cache.resolveAndCache(
+            track: track,
+            root: root,
+            onProgress: onProgress.map { callback in
+                { progress in
+                    Task { @MainActor in
+                        callback(progress)
+                    }
+                }
+            }
+        )
         try Task.checkCancellation()
         let ext = cachedURL.pathExtension.isEmpty ? "m4a" : cachedURL.pathExtension
         let targetURL = uniqueFileURL(in: folderURL, baseName: track.title, fileExtension: ext)
@@ -304,14 +462,13 @@ final class CloudExportPrompt {
     var request: Request?
 }
 
-/// Hosts single-song cloud folder picker, progress, and completion alerts.
+/// Hosts single-song cloud folder picker, background download submission, and completion alerts.
 /// Kept free of store `@Environment` dependencies so evaluating it at a Mac sheet root is always safe.
 struct CloudExportHostModifier: ViewModifier {
+    @Environment(\.downloadManager) private var downloadManager
     @State private var prompt = CloudExportPrompt()
     @State private var showFolderPicker = false
     @State private var pendingRequest: CloudExportPrompt.Request?
-    @State private var exportingTitle: String?
-    @State private var exportTask: Task<Void, Never>?
     @State private var alertTitle = ""
     @State private var alertMessage: String?
 
@@ -336,17 +493,6 @@ struct CloudExportHostModifier: ViewModifier {
                 }
             }
             .alert(
-                L10n.tr("Saving Song"),
-                isPresented: Binding(
-                    get: { exportingTitle != nil },
-                    set: { if !$0 { exportTask?.cancel(); exportingTitle = nil } }
-                )
-            ) {
-                Button(L10n.tr("Cancel"), role: .cancel) { exportTask?.cancel() }
-            } message: {
-                Text(L10n.tr("Saving “%@”…", exportingTitle ?? ""))
-            }
-            .alert(
                 alertTitle,
                 isPresented: Binding(
                     get: { alertMessage != nil },
@@ -360,25 +506,25 @@ struct CloudExportHostModifier: ViewModifier {
     }
 
     private func startSingleExport(_ req: CloudExportPrompt.Request, to folderURL: URL) {
-        exportTask?.cancel()
-        exportingTitle = req.track.title
-        exportTask = Task { @MainActor in
-            let scoped = folderURL.startAccessingSecurityScopedResource()
-            defer {
-                if scoped { folderURL.stopAccessingSecurityScopedResource() }
+        let job = downloadManager.startSingleTrackExport(
+            track: req.track,
+            root: req.root,
+            folderURL: folderURL,
+            onSaved: req.onSaved
+        )
+        Task { @MainActor in
+            while job.state == .running {
+                try? await Task.sleep(for: .milliseconds(150))
             }
-            do {
-                let savedURL = try await CloudExporter.exportTrack(req.track, root: req.root, toFolder: folderURL)
-                await req.onSaved(savedURL)
-                exportingTitle = nil
+            switch job.state {
+            case .completed:
                 alertTitle = L10n.tr("Saved Song")
-                alertMessage = L10n.tr("Saved “%@” to “%@”.", savedURL.lastPathComponent, folderURL.lastPathComponent)
-            } catch is CancellationError {
-                exportingTitle = nil
-            } catch {
-                exportingTitle = nil
+                alertMessage = job.summaryMessage
+            case .failed(let message):
                 alertTitle = L10n.tr("Couldn’t Save Song")
-                alertMessage = error.localizedDescription
+                alertMessage = message
+            case .cancelled, .running:
+                break
             }
         }
     }

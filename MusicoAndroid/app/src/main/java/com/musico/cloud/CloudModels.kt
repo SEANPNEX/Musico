@@ -45,6 +45,7 @@ data class ResolvedStream(
     val headers: Map<String, String> = emptyMap(),
     val mimeType: String? = null,
     val expiresAtEpochMs: Long = 0L,
+    val contentLength: Long? = null,
 )
 
 data class CloudHttpResponse(

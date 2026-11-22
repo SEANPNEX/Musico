@@ -138,6 +138,7 @@ final class SheetEnvironmentTests: XCTestCase {
         try await present(AddCloudFolderSheet(), over: false, attachEmptyHostEnvironment: true)
         try await present(SaveCloudPlaylistSheet(root: cloudRoot), over: false, attachEmptyHostEnvironment: true)
         try await present(UpdateTrackedFolderSheet(root: cloudRoot), over: false, attachEmptyHostEnvironment: true)
+        try await present(DownloadsListView(), over: false, attachEmptyHostEnvironment: true)
     }
 
     func testPlayerBarAndMiniPlayerRenderAndControlPlayback() async throws {

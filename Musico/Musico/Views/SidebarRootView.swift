@@ -16,6 +16,7 @@ struct SidebarRootView: View {
     @Environment(CloudExportPrompt.self) private var cloudExport
     @Environment(SongInfoPrompt.self) private var songInfo
     @Environment(\.appNavigation) private var navigation
+    @Environment(\.downloadManager) private var downloadManager
     @Environment(\.languageManager) private var languageManager
     #if targetEnvironment(macCatalyst)
     @Environment(\.updateManager) private var updateManager
@@ -23,6 +24,7 @@ struct SidebarRootView: View {
     @State private var sidePanel: SidePanel?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var lastValidSelection: SidebarItem = .songs
+    @State private var showDownloadsSheet = false
 
     private var activeSelection: SidebarItem {
         navigation.sidebarSelection ?? lastValidSelection
@@ -127,6 +129,7 @@ struct SidebarRootView: View {
                 .environment(cloudExport)
                 .environment(songInfo)
                 .environment(\.appNavigation, navigation)
+                .environment(\.downloadManager, downloadManager)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
         }
@@ -184,6 +187,12 @@ struct SidebarRootView: View {
         .navigationTitle("Musico")
         .navigationSplitViewColumnWidth(min: 204, ideal: 232, max: 288)
         #if targetEnvironment(macCatalyst)
+        .sheet(isPresented: $showDownloadsSheet) {
+            DownloadsListView(downloadManager: downloadManager)
+                .environment(\.downloadManager, downloadManager)
+                .environment(\.languageManager, languageManager)
+                .environment(\.locale, languageManager.effectiveLocale)
+        }
         .sheet(isPresented: Binding(
             get: { updateManager.isSheetPresented },
             set: { updateManager.isSheetPresented = $0 }
@@ -199,6 +208,9 @@ struct SidebarRootView: View {
     #if targetEnvironment(macCatalyst)
     private var sidebarFooter: some View {
         VStack(spacing: 4) {
+            SidebarDownloadsWidget(downloadManager: downloadManager) {
+                showDownloadsSheet = true
+            }
             Button {
                 updateManager.presentManualCheck()
             } label: {

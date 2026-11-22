@@ -1,3 +1,4 @@
+import Network
 import XCTest
 @testable import Musico
 
@@ -111,5 +112,161 @@ final class AudioEngineTests: XCTestCase {
         XCTAssertTrue(engine.isEngineRunning)
         engine.unload()
         XCTAssertFalse(engine.isEngineRunning)
+    }
+
+    func testLoadStreamWithChunkedResourceLoaderReachesReadyToPlaySeekAndUnload() async throws {
+        let m4aURL = try fixture("art", "m4a")
+        let payload = try Data(contentsOf: m4aURL)
+
+        let server = try StreamFixtureHTTPServer(payload: payload, contentType: "audio/mp4")
+        let baseURL = try await server.start()
+        defer { server.stop() }
+
+        let engine = AudioEngine()
+        let readyExp = expectation(description: "stream readyToPlay")
+        var readyDuration: TimeInterval = 0
+        var failureMessage: String?
+
+        engine.onStreamReady = { dur in
+            readyDuration = dur
+            readyExp.fulfill()
+        }
+        engine.onStreamFailed = { msg in
+            failureMessage = msg
+            readyExp.fulfill()
+        }
+
+        engine.loadStream(
+            url: baseURL.appendingPathComponent("art.m4a"),
+            headers: ["Range": "bytes=0-"],
+            contentLength: Int64(payload.count),
+            fileExtension: "m4a",
+            estimatedDuration: 0
+        )
+
+        await fulfillment(of: [readyExp], timeout: 10)
+        XCTAssertNil(failureMessage)
+        XCTAssertGreaterThan(readyDuration, 0)
+        XCTAssertGreaterThan(engine.duration, 0)
+
+        engine.seek(to: min(1.0, engine.duration / 2))
+        engine.play()
+        XCTAssertTrue(engine.isPlaying)
+        engine.pause()
+        XCTAssertFalse(engine.isPlaying)
+
+        engine.unload()
+        XCTAssertEqual(engine.duration, 0)
+        XCTAssertEqual(engine.currentTime, 0)
+        XCTAssertFalse(engine.isPlaying)
+    }
+}
+
+private final class StreamFixtureHTTPServer: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "com.musico.audio-engine-stream-test")
+    private var listener: NWListener?
+    private let payload: Data
+    private let contentType: String
+
+    init(payload: Data, contentType: String) throws {
+        self.payload = payload
+        self.contentType = contentType
+        let params = NWParameters.tcp
+        params.allowLocalEndpointReuse = true
+        self.listener = try NWListener(using: params, on: .any)
+    }
+
+    func start() async throws -> URL {
+        guard let listener else { throw URLError(.cannotOpenFile) }
+        return try await withCheckedThrowingContinuation { continuation in
+            let lock = NSLock()
+            var didResume = false
+            listener.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    lock.lock()
+                    let shouldResume = !didResume
+                    didResume = true
+                    lock.unlock()
+                    if shouldResume {
+                        let port = listener.port?.rawValue ?? 0
+                        continuation.resume(returning: URL(string: "http://127.0.0.1:\(port)")!)
+                    }
+                case .failed(let error):
+                    lock.lock()
+                    let shouldResume = !didResume
+                    didResume = true
+                    lock.unlock()
+                    if shouldResume {
+                        continuation.resume(throwing: error)
+                    }
+                default:
+                    break
+                }
+            }
+            listener.newConnectionHandler = { [weak self] conn in
+                self?.serve(conn)
+            }
+            listener.start(queue: queue)
+        }
+    }
+
+    func stop() {
+        listener?.cancel()
+        listener = nil
+    }
+
+    private func serve(_ conn: NWConnection) {
+        conn.start(queue: queue)
+        readHeaders(conn: conn, buffer: Data())
+    }
+
+    private func readHeaders(conn: NWConnection, buffer: Data) {
+        conn.receive(minimumIncompleteLength: 1, maximumLength: 65536) { [weak self] data, _, isComplete, error in
+            guard let self else { return }
+            if error != nil { conn.cancel(); return }
+            var next = buffer
+            if let data { next.append(data) }
+            if let end = next.range(of: Data("\r\n\r\n".utf8)) {
+                let text = String(data: next[..<end.lowerBound], encoding: .utf8) ?? ""
+                self.writeResponse(for: text, on: conn)
+                return
+            }
+            if isComplete { conn.cancel(); return }
+            self.readHeaders(conn: conn, buffer: next)
+        }
+    }
+
+    private func writeResponse(for rawRequest: String, on conn: NWConnection) {
+        var rangeHeader: String?
+        for line in rawRequest.components(separatedBy: "\r\n").dropFirst() {
+            if let colon = line.firstIndex(of: ":") {
+                let key = line[..<colon].trimmingCharacters(in: .whitespaces).lowercased()
+                if key == "range" {
+                    rangeHeader = line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces)
+                }
+            }
+        }
+        if let rangeHeader, rangeHeader.hasPrefix("bytes=") {
+            let spec = String(rangeHeader.dropFirst(6))
+            if let dash = spec.firstIndex(of: "-") {
+                let start = Int(String(spec[..<dash])) ?? 0
+                let endPart = String(spec[spec.index(after: dash)...])
+                let requestedEnd = endPart.isEmpty ? (payload.count - 1) : (Int(endPart) ?? (payload.count - 1))
+                let end = min(requestedEnd, payload.count - 1)
+                if start <= end, start < payload.count {
+                    let slice = payload[start...end]
+                    let header = "HTTP/1.1 206 Partial Content\r\nContent-Type: \(contentType)\r\nContent-Range: bytes \(start)-\(end)/\(payload.count)\r\nContent-Length: \(slice.count)\r\nConnection: close\r\n\r\n"
+                    var out = Data(header.utf8)
+                    out.append(slice)
+                    conn.send(content: out, completion: .contentProcessed { _ in conn.cancel() })
+                    return
+                }
+            }
+        }
+        let header = "HTTP/1.1 200 OK\r\nContent-Type: \(contentType)\r\nContent-Length: \(payload.count)\r\nConnection: close\r\n\r\n"
+        var out = Data(header.utf8)
+        out.append(payload)
+        conn.send(content: out, completion: .contentProcessed { _ in conn.cancel() })
     }
 }

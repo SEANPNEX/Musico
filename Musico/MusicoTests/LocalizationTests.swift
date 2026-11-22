@@ -97,6 +97,9 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(L10n.tr("Rescan Library"), "重新扫描资料库")
         XCTAssertEqual(L10n.tr("View"), "视图")
         XCTAssertEqual(L10n.tr("Playback"), "播放")
+        XCTAssertEqual(L10n.tr("Downloads"), "下载")
+        XCTAssertEqual(L10n.tr("Run in Background"), "后台运行")
+        XCTAssertEqual(L10n.tr("Clear Finished"), "清除已完成")
 
         XCTAssertEqual(TrackSortOrder.custom.localizedTitle, "自定义顺序")
         XCTAssertEqual(SearchField.artist.localizedTitle, "艺术家")
