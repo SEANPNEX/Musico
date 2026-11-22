@@ -19,6 +19,7 @@ class MainActivity : ComponentActivity() {
 
     private var pendingFolderCallback: ((Uri) -> Unit)? = null
     private var pendingLyricsCallback: ((Uri) -> Unit)? = null
+    private var pendingImageCallback: ((Uri) -> Unit)? = null
 
     private val openDocumentTreeLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -53,6 +54,16 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private val pickImageLauncher = registerForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        val callback = pendingImageCallback
+        pendingImageCallback = null
+        if (uri != null) {
+            callback?.invoke(uri)
+        }
+    }
+
     private val requestNotificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { _ -> }
@@ -77,6 +88,10 @@ class MainActivity : ComponentActivity() {
                         openLyricsDocumentLauncher.launch(
                             arrayOf("*/*")
                         )
+                    },
+                    onPickImage = { onPicked ->
+                        pendingImageCallback = onPicked
+                        pickImageLauncher.launch("image/*")
                     }
                 )
             }

@@ -97,6 +97,7 @@ public partial class FullPlayerView : UserControl
         MetaText.Text = track != null ? $"{track.Artist} — {track.Album}" : "Pick a song from your library";
 
         bool hasTrack = track != null;
+        SongInfoButton.IsEnabled = hasTrack;
         FavouriteButton.IsEnabled = hasTrack;
         ShuffleButton.IsEnabled = hasTrack;
         PrevButton.IsEnabled = hasTrack;
@@ -145,6 +146,28 @@ public partial class FullPlayerView : UserControl
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
     private void Artwork_MouseLeftButtonUp(object sender, MouseButtonEventArgs e) => LyricsPivotTab.IsChecked = true;
+    private void SongInfo_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ctx?.Services.Player.CurrentTrack is { } track)
+            _ctx.OpenSongInfo?.Invoke(track);
+    }
+
+    private void TrackInfo_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_ctx?.Services.Player.CurrentTrack is not { } track) return;
+        var menu = TrackMenuHelper.BuildTrackMenu(
+            _ctx.Services,
+            [track.Id],
+            track.Id,
+            _ctx.OpenTextPrompt,
+            null,
+            _ctx.OpenSaveCloudTrack,
+            _ctx.OpenSongInfo);
+        menu.PlacementTarget = TrackInfoBar;
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
+
     private void Favourite_Click(object sender, RoutedEventArgs e)
     {
         if (_ctx?.Services.Player.CurrentTrack is { } track)

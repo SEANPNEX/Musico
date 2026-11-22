@@ -90,6 +90,25 @@
                     </StackPanel>
                 </Grid>
                 <WrapPanel x:Name="QueueCardsPanel" />
+                <Grid Margin="0,8,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0"
+                               Text="Sort:"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,0" />
+                    <ComboBox x:Name="SortCombo"
+                              Grid.Column="1"
+                              Style="{StaticResource Win10ComboBoxStyle}"
+                              Width="150"
+                              HorizontalAlignment="Left"
+                              SelectionChanged="SortCombo_SelectionChanged" />
+                </Grid>
             </StackPanel>
         </Border>
 

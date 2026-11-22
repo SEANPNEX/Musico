@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using MusicoWindows.Core;
 
 namespace MusicoWindows.Models;
 
@@ -23,6 +24,8 @@ public sealed class PlayQueue
     public bool Shuffle { get; private set; }
 
     public RepeatMode RepeatMode { get; set; } = RepeatMode.Off;
+
+    public TrackSortMode SortMode { get; set; } = TrackSortMode.Custom;
 
     [JsonInclude]
     public List<int> ShuffleOrder { get; private set; } = new();
@@ -76,6 +79,7 @@ public sealed class PlayQueue
         TrackIds = ids.ToList();
         CurrentIndex = TrackIds.Count == 0 ? null : Math.Clamp(startAt, 0, TrackIds.Count - 1);
         PositionSeconds = 0;
+        SortMode = TrackSortMode.Custom;
         Reshuffle(Random.Shared);
     }
 
@@ -239,6 +243,52 @@ public sealed class PlayQueue
         {
             ShuffleOrder[i] = newPosition[ShuffleOrder[i]];
         }
+        SortMode = TrackSortMode.Custom;
+    }
+
+    /// <summary>
+    /// Sorts the queue by <paramref name="mode"/> while keeping <see cref="CurrentIndex"/>
+    /// (and <see cref="ShuffleOrder"/>) pointing to the exact same playing track slot.
+    /// </summary>
+    public void Sort(TrackSortMode mode, Func<string, Track?> getTrack, Func<string, int> getPlayCount)
+    {
+        SortMode = mode;
+        if (mode == TrackSortMode.Custom || TrackIds.Count <= 1) return;
+
+        var items = new List<(int OldIndex, string Id, Track? Track)>(TrackIds.Count);
+        for (int i = 0; i < TrackIds.Count; i++)
+        {
+            string id = TrackIds[i];
+            items.Add((i, id, getTrack(id)));
+        }
+
+        items.Sort((a, b) =>
+        {
+            int cmp = TrackSorter.CompareNullableTracks(a.Track, a.Id, b.Track, b.Id, mode, getPlayCount);
+            return cmp != 0 ? cmp : a.OldIndex.CompareTo(b.OldIndex);
+        });
+
+        var newIds = new List<string>(items.Count);
+        var newPosition = new int[items.Count];
+        for (int newPos = 0; newPos < items.Count; newPos++)
+        {
+            newIds.Add(items[newPos].Id);
+            newPosition[items[newPos].OldIndex] = newPos;
+        }
+
+        TrackIds = newIds;
+        if (CurrentIndex is int ci && ci >= 0 && ci < newPosition.Length)
+        {
+            CurrentIndex = newPosition[ci];
+        }
+        for (int i = 0; i < ShuffleOrder.Count; i++)
+        {
+            int oldIdx = ShuffleOrder[i];
+            if (oldIdx >= 0 && oldIdx < newPosition.Length)
+            {
+                ShuffleOrder[i] = newPosition[oldIdx];
+            }
+        }
     }
 
     public void SetShuffle(bool on, Random? rng = null)
@@ -269,6 +319,7 @@ public sealed class PlayQueue
             PositionSeconds = PositionSeconds,
             Shuffle = Shuffle,
             RepeatMode = RepeatMode,
+            SortMode = SortMode,
             ShuffleOrder = new List<int>(ShuffleOrder)
         };
     }

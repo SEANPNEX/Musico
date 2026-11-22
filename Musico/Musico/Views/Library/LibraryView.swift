@@ -7,11 +7,12 @@ struct LibraryView: View {
         var id: String { rawValue }
     }
 
-    @AppStorage("librarySection") private var section: Section = .songs
+    @AppStorage("librarySection") private var storedSection: Section = .songs
+    @Environment(\.appNavigation) private var navigation
 
     var body: some View {
         Group {
-            switch section {
+            switch navigation.librarySection {
             case .songs: SongsView()
             case .albums: AlbumsView()
             case .artists: ArtistsView()
@@ -19,9 +20,20 @@ struct LibraryView: View {
             }
         }
         .navigationBarTitleDisplayMode(.inline)
+        .onAppear {
+            if !navigation.isSearchPresented {
+                navigation.librarySection = storedSection
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Picker("Show", selection: $section) {
+                Picker("Show", selection: Binding(
+                    get: { navigation.librarySection },
+                    set: {
+                        navigation.librarySection = $0
+                        storedSection = $0
+                    }
+                )) {
                     ForEach(Section.allCases) { Text($0.rawValue).tag($0) }
                 }
                 .pickerStyle(.segmented)

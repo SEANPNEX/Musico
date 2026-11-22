@@ -7,11 +7,20 @@ enum SongSort: String, CaseIterable, Identifiable {
 
 struct SongsView: View {
     @Environment(LibraryStore.self) private var library
+    @Environment(PlayerController.self) private var player
+    @Environment(\.appNavigation) private var navigation
     @AppStorage("songSort") private var sort: SongSort = .title
-    @State private var query = ""
+
+    private var trimmedQuery: String {
+        navigation.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private var isSearching: Bool { !trimmedQuery.isEmpty }
 
     private var songs: [Track] {
-        if !query.trimmingCharacters(in: .whitespaces).isEmpty { return library.search(query) }
+        if isSearching {
+            return library.search(trimmedQuery, field: navigation.searchField)
+        }
         func ascending(_ a: String, _ b: String) -> Bool { a.localizedStandardCompare(b) == .orderedAscending }
         switch sort {
         case .title: return library.tracks
@@ -22,21 +31,50 @@ struct SongsView: View {
     }
 
     var body: some View {
+        @Bindable var navigation = navigation
         let songs = self.songs
+        let searchTextBinding = Binding<String>(
+            get: { navigation.searchQuery },
+            set: { navigation.updateSearchQueryFromUser($0) }
+        )
         List {
+            if isSearching && navigation.searchField != .keyword {
+                HStack(spacing: 8) {
+                    Image(systemName: "line.3.horizontal.decrease.circle.fill")
+                        .foregroundStyle(Color.accentColor)
+                    Text("\(navigation.searchField.rawValue): \(trimmedQuery)")
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    Button("Clear Filter") {
+                        navigation.clearSearchFieldTag()
+                    }
+                    .font(.caption)
+                    .buttonStyle(.borderless)
+                }
+                .listRowSeparator(.hidden)
+            }
             if library.tracks.isEmpty {
                 ContentUnavailableView("No Songs Yet", systemImage: "music.note",
                                        description: Text("Add a folder in the Folders tab to build your library."))
             } else if songs.isEmpty {
-                ContentUnavailableView.search(text: query)
+                ContentUnavailableView.search(text: trimmedQuery)
             } else {
-                if query.isEmpty { PlayShuffleButtons(ids: songs.map(\.id)) }
-                TrackRows(tracks: songs) { sort == .album ? "\($0.artist) — \($0.album)" : $0.artist }
+                if !isSearching {
+                    PlayShuffleButtons(ids: songs.map(\.id))
+                }
+                TrackRows(
+                    tracks: songs,
+                    subtitle: { sort == .album || isSearching ? "\($0.artist) — \($0.album)" : $0.artist },
+                    onTap: isSearching ? { index, _ in
+                        let queueName = SearchField.queueName(field: navigation.searchField, query: trimmedQuery)
+                        player.playInNewQueue(songs.map(\.id), startAt: index, name: queueName)
+                    } : nil
+                )
             }
         }
         .listStyle(.plain)
         .navigationTitle("Songs")
-        .searchable(text: $query, prompt: "Songs, artists, albums")
+        .searchable(text: searchTextBinding, isPresented: $navigation.isSearchPresented, prompt: "Songs, artists, albums, genres")
         .refreshable { await library.rescan() }
         .toolbar {
             Menu("Sort", systemImage: "arrow.up.arrow.down") {

@@ -20,6 +20,7 @@ data class PlayQueue(
     val shuffle: Boolean = false,
     val repeatMode: RepeatMode = RepeatMode.OFF,
     val shuffleOrder: List<Int> = emptyList(),
+    val sortOrder: TrackSortOrder = TrackSortOrder.CUSTOM,
 ) {
     val currentTrackId: String?
         get() {
@@ -61,6 +62,7 @@ data class PlayQueue(
             trackIds = ids.toList(),
             currentIndex = nextIndex,
             positionSec = 0.0,
+            sortOrder = TrackSortOrder.CUSTOM,
         ).reshuffled(random)
     }
 
@@ -194,15 +196,24 @@ data class PlayQueue(
         val oldIndices = trackIds.indices.toMutableList()
         val movedOldIndex = oldIndices.removeAt(fromIndex)
         oldIndices.add(toIndex, movedOldIndex)
+        return reorder(oldIndices, TrackSortOrder.CUSTOM)
+    }
 
-        val nextTracks = oldIndices.map { trackIds[it] }
-        val newPosition = IntArray(oldIndices.size)
-        oldIndices.forEachIndexed { newPos, oldPos -> newPosition[oldPos] = newPos }
+    /**
+     * Reorders [trackIds] according to [newOrderIndices] (a permutation of `trackIds.indices`),
+     * updating [currentIndex] to follow the active playing song and remapping [shuffleOrder].
+     */
+    fun reorder(newOrderIndices: List<Int>, sortOrder: TrackSortOrder): PlayQueue {
+        if (newOrderIndices.size != trackIds.size) return this
+        val nextTracks = newOrderIndices.map { trackIds[it] }
+        val newPosition = IntArray(newOrderIndices.size)
+        newOrderIndices.forEachIndexed { newPos, oldPos -> newPosition[oldPos] = newPos }
 
         return copy(
             trackIds = nextTracks,
-            currentIndex = currentIndex?.let { newPosition[it] },
+            currentIndex = currentIndex?.let { if (it in newPosition.indices) newPosition[it] else null },
             shuffleOrder = if (shuffle) shuffleOrder.map { newPosition[it] } else emptyList(),
+            sortOrder = sortOrder,
         )
     }
 

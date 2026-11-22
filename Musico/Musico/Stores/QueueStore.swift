@@ -54,6 +54,34 @@ final class QueueStore {
         return queue.id
     }
 
+    /// Creates a queue with the exact given name, or replaces the existing same-name queue.
+    /// When `startAt` is nil and the replaced queue is active, playback of the current song is preserved if possible.
+    @discardableResult
+    func createOrReplaceQueue(named name: String, trackIDs: [String], startAt: Int? = nil) -> UUID {
+        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty else {
+            let id = addQueue(name: nil)
+            update(id) { $0.replace(with: trackIDs, startAt: startAt ?? 0) }
+            return id
+        }
+        if let index = queues.firstIndex(where: { $0.name == title }) {
+            if let startAt {
+                queues[index].replace(with: trackIDs, startAt: startAt)
+            } else if queues[index].id == activeID {
+                queues[index].replacePreservingPlayback(with: trackIDs)
+            } else {
+                queues[index].replace(with: trackIDs, startAt: 0)
+            }
+            save()
+            return queues[index].id
+        }
+        var queue = PlayQueue(name: title)
+        queue.replace(with: trackIDs, startAt: startAt ?? 0)
+        queues.append(queue)
+        save()
+        return queue.id
+    }
+
     func rename(_ id: UUID, to name: String) {
         let title = name.trimmingCharacters(in: .whitespaces)
         guard !title.isEmpty else { return }

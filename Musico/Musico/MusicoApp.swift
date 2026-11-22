@@ -8,6 +8,7 @@ final class AppModel {
     let player: PlayerController
     let lyrics: LyricsStore
     let history: PlayHistoryStore
+    let navigation = AppNavigation()
     #if targetEnvironment(macCatalyst)
     let updateManager: UpdateManager
     #endif
@@ -53,6 +54,7 @@ struct MusicoApp: App {
                 .environment(model.player)
                 .environment(model.history)
                 .environment(\.lyricsStore, model.lyrics)
+                .environment(\.appNavigation, model.navigation)
                 #if targetEnvironment(macCatalyst)
                 .environment(\.updateManager, model.updateManager)
                 .task {

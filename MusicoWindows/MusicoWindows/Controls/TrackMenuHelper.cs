@@ -23,7 +23,8 @@ public static class TrackMenuHelper
         string? favouriteTrackId,
         Action<string, string, string, string, Action<string>> openTextPrompt,
         Action<ContextMenu>? appendExtra = null,
-        Action<Track, string>? openSaveCloudTrack = null)
+        Action<Track, string>? openSaveCloudTrack = null,
+        Action<Track>? openSongInfo = null)
     {
         var menu = new ContextMenu();
         var ids = trackIds.ToList();
@@ -93,6 +94,26 @@ public static class TrackMenuHelper
                 isFav ? "\uEB52" : "\uEB51",
                 () => services.Library.ToggleFavourite(favouriteTrackId),
                 true));
+        }
+
+        if (ids.Count == 1 &&
+            !string.IsNullOrEmpty(favouriteTrackId) &&
+            services.Library.GetTrack(ids[0]) is { } singleTrack)
+        {
+            menu.Items.Add(CreateItem(
+                "Song Info",
+                "\uE946",
+                () =>
+                {
+                    if (openSongInfo is not null)
+                    {
+                        openSongInfo(singleTrack);
+                    }
+                    else if (Application.Current?.MainWindow is MainWindow mw)
+                    {
+                        mw.ShowSongInfo(singleTrack);
+                    }
+                }));
         }
 
         if (ids.Count == 1 && services.Library.GetTrack(ids[0]) is { IsCloud: true } cloudTrack)

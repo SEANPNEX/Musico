@@ -90,6 +90,8 @@ public sealed class PlayerController : ObservableStore, IDisposable
 
         _engine.TrackEnded += OnEngineTrackEnded;
         Library.OnTracksRemoved = OnLibraryTracksRemoved;
+        Library.OnFolderAdded = OnLibraryFolderAdded;
+        Library.TrackUpdated += OnLibraryTrackUpdated;
 
         if (_smtc is not null)
         {
@@ -468,12 +470,26 @@ public sealed class PlayerController : ObservableStore, IDisposable
         StartCurrent(autoplay: true);
     }
 
-    public void PlayInNewQueue(IReadOnlyList<string> ids)
+    public void PlayInNewQueue(IReadOnlyList<string> ids) =>
+        PlayInNewQueue(ids, queueName: null, startAt: 0);
+
+    public void PlayInNewQueue(IReadOnlyList<string> ids, string? queueName, int startAt = 0)
     {
         if (ids.Count == 0) return;
         PersistPosition();
-        Queues.SetActive(Queues.AddQueue());
-        Play(ids, startAt: 0);
+        Queues.SetActive(Queues.AddQueue(queueName));
+        Play(ids, startAt);
+    }
+
+    public void PlayInNamedQueue(string queueName, IReadOnlyList<string> ids, int startAt = 0, bool? shuffle = null)
+    {
+        if (ids.Count == 0) return;
+        CreateOrReplaceFolderQueue(queueName, ids, startPlayback: true, startAt: startAt, shuffle: shuffle);
+    }
+
+    public void SortQueue(TrackSortMode mode)
+    {
+        Queues.SortActive(mode, Library, History);
     }
 
     public void PlayNext(IReadOnlyList<string> ids)
@@ -693,6 +709,73 @@ public sealed class PlayerController : ObservableStore, IDisposable
         if (currentRemoved) StartCurrent(autoplay: wasPlaying);
     }
 
+    private void OnLibraryTrackUpdated(Track updated)
+    {
+        InvokeOnUiContext(() =>
+        {
+            if (_disposed) return;
+            if (CurrentTrack?.Id == updated.Id)
+            {
+                CurrentTrack = updated;
+                UpdateSmtc(trackChanged: true);
+            }
+        });
+    }
+
+    private void OnLibraryFolderAdded(string folderName, IReadOnlyList<string> trackIds)
+    {
+        InvokeOnUiContext(() =>
+        {
+            if (_disposed) return;
+            CreateOrReplaceFolderQueue(folderName, trackIds, startPlayback: false);
+        });
+    }
+
+    private void CreateOrReplaceFolderQueue(
+        string folderName,
+        IReadOnlyList<string> trackIds,
+        bool startPlayback,
+        int startAt = 0,
+        bool? shuffle = null)
+    {
+        if (startPlayback)
+        {
+            PersistPosition(flush: true);
+        }
+
+        var (_, wasActive) = Queues.CreateOrReplaceQueue(
+            folderName,
+            trackIds,
+            startAt: startAt,
+            activate: startPlayback,
+            shuffle: shuffle);
+
+        if (startPlayback)
+        {
+            ErrorMessage = null;
+            if (trackIds.Count == 0)
+            {
+                ClearPlayback();
+            }
+            else
+            {
+                StartCurrent(autoplay: true);
+            }
+        }
+        else if (wasActive)
+        {
+            if (trackIds.Count == 0)
+            {
+                ClearPlayback();
+            }
+            else if (IsPlaying || _isLoaded || CurrentTrack is not null)
+            {
+                bool wasPlaying = IsPlaying || (IsLoadingCloud && _targetAutoplay);
+                StartCurrent(autoplay: wasPlaying);
+            }
+        }
+    }
+
     // MARK: Persistence & Ticker
 
     public void Restore()
@@ -815,6 +898,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
         _sleepCts = null;
 
         _engine.TrackEnded -= OnEngineTrackEnded;
+        Library.TrackUpdated -= OnLibraryTrackUpdated;
         if (_smtc is not null)
         {
             _smtc.PlayRequested -= OnSmtcPlay;

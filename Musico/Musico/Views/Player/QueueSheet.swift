@@ -14,6 +14,7 @@ struct QueueSheet: View {
         }
         .modifier(NewPlaylistAlert())
         .modifier(CloudExportHostModifier())
+        .modifier(SongInfoHostModifier())
     }
 }
 
@@ -42,16 +43,28 @@ struct QueuesView: View {
                 }
                 // A song can be queued more than once, so rows are identified by position.
                 ForEach(Array(active.trackIDs.enumerated()), id: \.offset) { index, id in
-                    Button {
-                        player.jump(to: index)
-                    } label: {
+                    Group {
                         if let track = library.track(id) {
-                            TrackRow(track: track)
+                            ReorderableTrackRow(
+                                track: track,
+                                index: index,
+                                scopeID: "queue-\(active.id.uuidString)",
+                                isActive: index == active.currentIndex,
+                                onTap: { player.jump(to: index) },
+                                onMove: { from, to in
+                                    player.moveInQueue(from: IndexSet(integer: from), to: to)
+                                }
+                            )
                         } else {
-                            Text("Missing song").foregroundStyle(.secondary)
+                            Button {
+                                player.jump(to: index)
+                            } label: {
+                                Text("Missing song").foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .listRowBackground(index == active.currentIndex ? Color.accentColor.opacity(0.12) : nil)
                         }
                     }
-                    .buttonStyle(.plain)
                     .contextMenu {
                         TrackMenuItems(ids: [id], favouriteID: id)
                         Divider()
@@ -59,7 +72,6 @@ struct QueuesView: View {
                             player.removeFromQueue(at: index)
                         }
                     }
-                    .listRowBackground(index == active.currentIndex ? Color.accentColor.opacity(0.12) : nil)
                 }
                 .onDelete { offsets in
                     for index in offsets.sorted(by: >) { player.removeFromQueue(at: index) }
@@ -70,7 +82,11 @@ struct QueuesView: View {
         .navigationTitle("Queues")
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { EditButton() }
-            ToolbarItem(placement: .topBarTrailing) {
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                TrackSortMenu(selection: queues.active.sortOrder ?? .custom) { order in
+                    player.sortActiveQueue(by: order)
+                }
+                .disabled(queues.active.trackIDs.count < 2)
                 Button("Clear This Queue", systemImage: "trash") { confirmClear = true }
                     .disabled(queues.active.trackIDs.isEmpty)
             }

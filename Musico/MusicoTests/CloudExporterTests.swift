@@ -114,9 +114,19 @@ final class CloudExporterTests: XCTestCase {
         XCTAssertTrue(summary.errors.isEmpty)
         XCTAssertEqual(summary.destinationURL.lastPathComponent, "My- Cloud - Mix")
 
-        let files = try FileManager.default.contentsOfDirectory(atPath: summary.destinationURL.path).sorted()
+        let files = try FileManager.default.contentsOfDirectory(atPath: summary.destinationURL.path)
+            .filter { $0 != CloudFolderManifest.fileName }
+            .sorted()
         XCTAssertEqual(files, ["Track - A (2).m4a", "Track - A.m4a", "Track B.m4a"])
         XCTAssertEqual(try Data(contentsOf: summary.destinationURL.appendingPathComponent("Track - A.m4a")), Data("cached-v1".utf8))
+
+        let manifest = try XCTUnwrap(CloudExporter.loadManifest(in: summary.destinationURL))
+        XCTAssertEqual(manifest.sourceURL, root.sourceURL)
+        XCTAssertEqual(manifest.remoteID, root.remoteID)
+        XCTAssertEqual(manifest.cloudKind, .cloudYouTube)
+        XCTAssertEqual(manifest.tracks["v1"], "Track - A.m4a")
+        XCTAssertEqual(manifest.tracks["v2"], "Track - A (2).m4a")
+        XCTAssertEqual(manifest.tracks["v3"], "Track B.m4a")
 
         // Only v2 and v3 should have been downloaded; v1 came from cache.
         XCTAssertEqual(downloadCalls.value.sorted(), ["v2.m4a", "v3.m4a"])
@@ -165,7 +175,9 @@ final class CloudExporterTests: XCTestCase {
         XCTAssertEqual(summary.failedCount, 1)
         XCTAssertEqual(summary.errors.count, 1)
         XCTAssertTrue(summary.errors[0].contains("Broken Song"))
-        let files = try FileManager.default.contentsOfDirectory(atPath: summary.destinationURL.path).sorted()
+        let files = try FileManager.default.contentsOfDirectory(atPath: summary.destinationURL.path)
+            .filter { $0 != CloudFolderManifest.fileName }
+            .sorted()
         XCTAssertEqual(files, ["Good Song 1.m4a", "Good Song 2.m4a"])
     }
 
@@ -221,6 +233,94 @@ final class CloudExporterTests: XCTestCase {
         XCTAssertTrue(store.containsLocalURL(insideFolder.appendingPathComponent("song.m4a")))
         XCTAssertFalse(store.containsLocalURL(outside))
         XCTAssertFalse(store.containsLocalURL(outside.appendingPathComponent("song.m4a")))
+    }
+
+    @MainActor
+    func testUpdateLocalFolderDownloadsOnlyNewAndMissingAndLibraryStoreAutoTracksManifest() async throws {
+        let root = makeCloudRoot()
+        let t1 = makeCloudTrack(rootID: root.id, remoteID: "v1", title: "Song One")
+        let t2 = makeCloudTrack(rootID: root.id, remoteID: "v2", title: "Song Two")
+
+        let cacheDir = makeTempDir()
+        let downloads = LockBox<[String]>([])
+        let resolver = StubCloudStreamResolver { track, _, _ in
+            CloudStreamResult(
+                url: URL(string: "https://cdn.example/\(track.remoteTrackID ?? "x").m4a")!,
+                headers: [:],
+                fileExtension: "m4a",
+                expiresAt: Date().addingTimeInterval(600)
+            )
+        }
+        let cache = CloudAudioCache(
+            directory: cacheDir,
+            maxBytes: 50_000_000,
+            resolver: resolver,
+            downloader: { url, _ in
+                downloads.withLock { $0.append(url.lastPathComponent) }
+                let tmp = makeTempDir().appendingPathComponent("dl.m4a")
+                try Data("audio-\(url.lastPathComponent)".utf8).write(to: tmp)
+                return (tmp, 200, "audio/mp4")
+            }
+        )
+
+        let parentDir = makeTempDir()
+        let initial = try await CloudExporter.exportPlaylist(
+            root: root,
+            tracks: [t1, t2],
+            toParentFolder: parentDir,
+            folderName: "Tracked Mix",
+            cache: cache
+        )
+        let savedFolder = initial.destinationURL
+
+        // Delete Song Two on disk and wipe cache for v1+v2 to verify v1 is skipped while deleted v2 & new v3 are fetched.
+        try FileManager.default.removeItem(at: savedFolder.appendingPathComponent("Song Two.m4a"))
+        await cache.remove(trackID: t1.id)
+        await cache.remove(trackID: t2.id)
+        downloads.withLock { $0.removeAll() }
+
+        struct StubFetcher: CloudPlaylistFetching {
+            let result: CloudPlaylistResult
+            func fetchPlaylist(sourceURL: String, cookie: String?, kindHint: LibraryRoot.Kind?) async throws -> CloudPlaylistResult {
+                result
+            }
+        }
+        let fetcher = StubFetcher(result: CloudPlaylistResult(
+            kind: .cloudYouTube,
+            remoteID: "PLexport",
+            title: "Tracked Mix",
+            tracks: [
+                CloudTrackInfo(remoteTrackID: "v1", relativePath: "v1", title: "Song One", artist: "Artist", album: "Album", trackNumber: 1, duration: 100, artworkURL: nil),
+                CloudTrackInfo(remoteTrackID: "v2", relativePath: "v2", title: "Song Two", artist: "Artist", album: "Album", trackNumber: 2, duration: 100, artworkURL: nil),
+                CloudTrackInfo(remoteTrackID: "v3", relativePath: "v3", title: "Song Three", artist: "Artist", album: "Album", trackNumber: 3, duration: 100, artworkURL: nil),
+            ]
+        ))
+
+        let stateDir = makeTempDir()
+        let docsDir = makeTempDir()
+        let store = LibraryStore(
+            directory: stateDir,
+            documentsURL: docsDir,
+            reader: StubReader(),
+            artwork: ArtworkCache(directory: stateDir.appendingPathComponent("Artwork")),
+            cloudFetcher: fetcher
+        )
+        try await store.addRoot(url: savedFolder)
+        let pickedRoot = try XCTUnwrap(store.roots.first { $0.kind == .picked })
+        XCTAssertTrue(pickedRoot.isCloudTrackedLocal)
+        XCTAssertEqual(pickedRoot.linkedCloudKind, .cloudYouTube)
+        XCTAssertEqual(pickedRoot.sourceURL, root.sourceURL)
+
+        let update = try await store.updateTrackedLocalRoot(pickedRoot.id, cache: cache)
+        XCTAssertEqual(update.addedCount, 2)
+        XCTAssertEqual(update.skippedCount, 1)
+        XCTAssertEqual(update.failedCount, 0)
+        XCTAssertEqual(update.totalRemoteCount, 3)
+        XCTAssertEqual(downloads.value.sorted(), ["v2.m4a", "v3.m4a"])
+
+        let updatedManifest = try XCTUnwrap(CloudExporter.loadManifest(in: savedFolder))
+        XCTAssertEqual(Set(updatedManifest.tracks.keys), ["v1", "v2", "v3"])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: savedFolder.appendingPathComponent("Song Three.m4a").path))
     }
 }
 

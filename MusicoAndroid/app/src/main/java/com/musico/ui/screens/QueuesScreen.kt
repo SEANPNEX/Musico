@@ -18,6 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Add
@@ -53,28 +54,35 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.musico.audio.PlayerController
 import com.musico.audio.PlayerUiState
 import com.musico.model.PlayQueue
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
+import com.musico.store.PlayHistoryUiState
 import com.musico.store.QueueStore
 import com.musico.store.QueueUiState
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
+import com.musico.ui.components.SortOrderMenuButton
 import com.musico.ui.components.TextInputDialog
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
+import com.musico.ui.components.dragHandle
 import com.musico.ui.components.formatTime
+import com.musico.ui.components.rememberDragReorderState
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun QueuesScreen(
     libraryStore: LibraryStore,
     libraryState: LibraryUiState,
+    historyState: PlayHistoryUiState,
     queueStore: QueueStore,
     queueState: QueueUiState,
     playerController: PlayerController,
@@ -107,6 +115,7 @@ fun QueuesScreen(
         QueuesContent(
             libraryStore = libraryStore,
             libraryState = libraryState,
+            historyState = historyState,
             queueStore = queueStore,
             queueState = queueState,
             playerController = playerController,
@@ -135,6 +144,7 @@ fun QueuesScreen(
 fun QueueSheet(
     libraryStore: LibraryStore,
     libraryState: LibraryUiState,
+    historyState: PlayHistoryUiState,
     queueStore: QueueStore,
     queueState: QueueUiState,
     playerController: PlayerController,
@@ -184,6 +194,7 @@ fun QueueSheet(
             QueuesContent(
                 libraryStore = libraryStore,
                 libraryState = libraryState,
+                historyState = historyState,
                 queueStore = queueStore,
                 queueState = queueState,
                 playerController = playerController,
@@ -212,6 +223,7 @@ fun QueueSheet(
 fun QueuesContent(
     libraryStore: LibraryStore,
     libraryState: LibraryUiState,
+    historyState: PlayHistoryUiState,
     queueStore: QueueStore,
     queueState: QueueUiState,
     playerController: PlayerController,
@@ -299,6 +311,14 @@ fun QueuesContent(
                 )
             }
 
+            if (active.trackIds.isNotEmpty()) {
+                SortOrderMenuButton(
+                    current = active.sortOrder,
+                    onSelect = { order -> playerController.sortQueue(order) },
+                    contentDescription = "Sort queue",
+                )
+            }
+
             Box {
                 IconButton(onClick = { queueActionsExpanded = true }) {
                     Icon(Icons.Rounded.MoreVert, contentDescription = "Queue actions")
@@ -347,7 +367,19 @@ fun QueuesContent(
 
         HorizontalDivider()
 
+        val listState = rememberLazyListState()
+        val dragState = rememberDragReorderState(
+            items = active.trackIds,
+            listState = listState,
+            headerCount = 0,
+            keyOf = { it },
+            onCommit = { reordered ->
+                playerController.reorderQueue(reordered.map { it.originalIndex })
+            },
+        )
+
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 16.dp)
         ) {
@@ -361,16 +393,23 @@ fun QueuesContent(
                 }
             } else {
                 itemsIndexed(
-                    items = active.trackIds,
-                    key = { index, id -> "${index}_$id" }
-                ) { index, trackId ->
+                    items = dragState.items,
+                    key = { _, item -> item.uid }
+                ) { index, dragItem ->
+                    val trackId = dragItem.value
+                    val slotIndex = dragItem.originalIndex
                     val track = libraryStore.track(trackId)
-                    val isCurrentSlot = index == active.currentIndex
-                    val rowBg = if (isCurrentSlot) {
-                        MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
-                    } else {
-                        Color.Transparent
+                    val isCurrentSlot = slotIndex == active.currentIndex
+                    val isDragged = dragState.activeUid == dragItem.uid
+                    val rowBg = when {
+                        isDragged -> MaterialTheme.colorScheme.surfaceContainerHighest
+                        isCurrentSlot -> MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.35f)
+                        else -> Color.Transparent
                     }
+                    val rowModifier = Modifier
+                        .then(if (dragState.isDragging) Modifier else Modifier.animateItem())
+                        .zIndex(if (isDragged) 1f else 0f)
+                        .graphicsLayer { translationY = dragState.offsetFor(dragItem.uid) }
 
                     if (track != null) {
                         TrackRow(
@@ -380,8 +419,9 @@ fun QueuesContent(
                             isPlaying = isCurrentSlot && playerState.isPlaying,
                             isAvailable = libraryStore.isAvailable(track),
                             backgroundColor = rowBg,
-                            onClick = { playerController.jump(index) },
-                            modifier = Modifier.animateItem(),
+                            onClick = { playerController.jump(slotIndex) },
+                            modifier = rowModifier,
+                            dragHandleModifier = Modifier.dragHandle(dragState, dragItem.uid),
                             trailingActions = if (editing) {
                                 {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -440,7 +480,7 @@ fun QueuesContent(
                         )
                     } else {
                         ListItem(
-                            modifier = Modifier.animateItem(),
+                            modifier = rowModifier,
                             headlineContent = {
                                 Text(
                                     text = "Missing song",

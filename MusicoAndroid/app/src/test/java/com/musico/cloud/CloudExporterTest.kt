@@ -131,8 +131,16 @@ class CloudExporterTest {
         assertNotNull(targetDir)
         assertEquals("My_ Cloud _ Mix_", targetDir!!.name)
 
-        val savedFiles = targetDir.listFiles()!!.map { it.name }.sorted()
+        val savedFiles = targetDir.listFiles()!!
+            .map { it.name }
+            .filter { it != CloudExporter.MANIFEST_FILE_NAME }
+            .sorted()
         assertEquals(listOf("Song_ One (2).m4a", "Song_ One.m4a", "Track_Three.webm"), savedFiles)
+        val manifest = CloudExporter.loadManifest(targetDir)
+        assertNotNull(manifest)
+        assertEquals(root.sourceUrl, manifest!!.sourceURL)
+        assertEquals(RootKind.CLOUD_YOUTUBE.name, manifest.cloudKind)
+        assertEquals(3, manifest.tracks.size)
         assertEquals("audio:https://cdn.example.com/t1", File(targetDir, "Song_ One.m4a").readText())
         assertEquals("audio:https://cdn.example.com/t2", File(targetDir, "Song_ One (2).m4a").readText())
         assertEquals("audio:https://cdn.example.com/t3", File(targetDir, "Track_Three.webm").readText())
@@ -196,7 +204,10 @@ class CloudExporterTest {
         assertEquals(1, summary.failedCount)
         assertEquals(1, summary.errors.size)
         assertTrue(summary.errors[0].contains("Broken"))
-        val names = summary.targetDir!!.listFiles()!!.map { it.name }.sorted()
+        val names = summary.targetDir!!.listFiles()!!
+            .map { it.name }
+            .filter { it != CloudExporter.MANIFEST_FILE_NAME }
+            .sorted()
         assertEquals(listOf("First.m4a", "Third.m4a"), names)
 
         // Cancellation rethrows and leaves no partial files behind.
@@ -219,5 +230,78 @@ class CloudExporterTest {
         }
         assertTrue(cancelled)
         assertEquals(0, File(cancelDir, "Cancelled").listFiles()?.size ?: 0)
+    }
+
+    @Test
+    fun updateLocalFolderDownloadsOnlyNewAndMissingAndUpdatesManifest() = runBlocking {
+        val parent = tempFolder.newFolder("tracked_parent")
+        val root = cloudRoot()
+        val initialTracks = listOf(
+            cloudTrack("t1", "Song One", remoteId = "vid_1"),
+            cloudTrack("t2", "Song Two", remoteId = "vid_2"),
+        )
+        val resolvedIds = mutableListOf<String>()
+        val exporter = CloudExporter(
+            context = null,
+            cloudResolver = FakeCloudStreamResolver { track, _, _ ->
+                resolvedIds.add(track.remoteTrackId ?: track.id)
+                ResolvedStream(
+                    url = "https://cdn.example.com/${track.remoteTrackId}",
+                    mimeType = "audio/mp4",
+                )
+            },
+            downloader = CloudStreamDownloader { url, _, output ->
+                output.write("audio:$url".toByteArray(Charsets.UTF_8))
+            },
+        )
+        val exportSummary = exporter.exportPlaylist(initialTracks, root, parent, "Tracked Mix")
+        val targetDir = exportSummary.targetDir!!
+        assertEquals(2, exportSummary.savedCount)
+
+        // Delete Song Two on disk while leaving Song One intact; keep an unrelated file too.
+        File(targetDir, "Song Two.m4a").delete()
+        File(targetDir, "Custom Note.txt").writeText("keep")
+        resolvedIds.clear()
+
+        val trackedRoot = LibraryRoot(
+            id = "local_tracked",
+            name = "Tracked Mix",
+            kind = RootKind.PICKED,
+            treeUri = targetDir.toURI().toString(),
+            sourceUrl = root.sourceUrl,
+            remoteId = root.remoteId,
+            linkedCloudKind = RootKind.CLOUD_YOUTUBE,
+        )
+        val updateSummary = exporter.updateLocalFolder(
+            root = trackedRoot,
+            targetDir = targetDir,
+            fetchPlaylist = { _, _, _ ->
+                CloudPlaylistResult(
+                    source = CloudSource.YOUTUBE,
+                    remoteId = "PL123",
+                    title = "Tracked Mix",
+                    tracks = listOf(
+                        CloudTrackMetadata("vid_1", "Song One", "Artist", "Album", 180.0),
+                        CloudTrackMetadata("vid_2", "Song Two", "Artist", "Album", 200.0),
+                        CloudTrackMetadata("vid_3", "Song Three", "Artist", "Album", 210.0),
+                    ),
+                )
+            },
+        )
+
+        assertEquals(2, updateSummary.addedCount)
+        assertEquals(1, updateSummary.skippedCount)
+        assertEquals(0, updateSummary.failedCount)
+        assertEquals(3, updateSummary.totalRemoteCount)
+        assertEquals(listOf("vid_2", "vid_3"), resolvedIds)
+        assertTrue(File(targetDir, "Song One.m4a").exists())
+        assertTrue(File(targetDir, "Song Two.m4a").exists())
+        assertTrue(File(targetDir, "Song Three.m4a").exists())
+        assertTrue(File(targetDir, "Custom Note.txt").exists())
+
+        val updatedManifest = CloudExporter.loadManifest(targetDir)
+        assertNotNull(updatedManifest)
+        assertEquals(3, updatedManifest!!.tracks.size)
+        assertEquals("Song Three.m4a", updatedManifest.tracks["vid_3"])
     }
 }

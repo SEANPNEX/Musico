@@ -5,6 +5,7 @@ struct TrackMetadata: Sendable {
     var artist: String?
     var album: String?
     var albumArtist: String?
+    var genre: String?
     var trackNumber: Int?
     var discNumber: Int?
     var duration: TimeInterval
@@ -49,9 +50,16 @@ struct MetadataReader: MetadataReading {
                 if result.albumArtist == nil { result.albumArtist = Self.clean(try? await item.load(.stringValue)) }
             case (.id3MetadataUnsynchronizedLyric?, _), (.iTunesMetadataLyrics?, _), (_, "LYRICS"), (_, "UNSYNCEDLYRICS"):
                 if result.lyrics == nil { result.lyrics = Self.clean(try? await item.load(.stringValue)) }
+            case (.id3MetadataContentType?, _), (.iTunesMetadataUserGenre?, _), (.quickTimeMetadataGenre?, _), (_, "GENRE"), (_, "TCON"), (_, "©GEN"):
+                if result.genre == nil {
+                    result.genre = Self.cleanGenre(try? await item.load(.stringValue))
+                }
             default:
                 break
             }
+        }
+        if result.genre == nil {
+            result.genre = await commonString(.commonIdentifierType).flatMap { Self.cleanGenre($0) }
         }
         if result.lyrics == nil { result.lyrics = Self.clean(try? await asset.load(.lyrics)) }
         if url.pathExtension.lowercased() == "flac", let flac = FLACTags.read(url) {
@@ -64,12 +72,27 @@ struct MetadataReader: MetadataReading {
             result.artist = result.artist ?? text("ARTIST")
             result.album = result.album ?? text("ALBUM")
             result.albumArtist = result.albumArtist ?? text("ALBUMARTIST", "ALBUM ARTIST")
+            result.genre = result.genre ?? text("GENRE")
             result.trackNumber = result.trackNumber ?? number("TRACKNUMBER")
             result.discNumber = result.discNumber ?? number("DISCNUMBER")
             result.lyrics = result.lyrics ?? text("LYRICS", "UNSYNCEDLYRICS")
             result.artwork = result.artwork ?? flac.picture
         }
         return result
+    }
+
+    private static func cleanGenre(_ value: String??) -> String? {
+        guard var text = clean(value) else { return nil }
+        if text.hasPrefix("("), let close = text.firstIndex(of: ")") {
+            let inside = text[text.index(after: text.startIndex)..<close]
+            if !inside.isEmpty, inside.allSatisfy(\.isNumber) {
+                let after = String(text[text.index(after: close)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !after.isEmpty {
+                    text = after
+                }
+            }
+        }
+        return text
     }
 
     private static func clean(_ value: String??) -> String? {

@@ -8,6 +8,7 @@ struct FolderRef: Hashable {
 
 struct FoldersView: View {
     @Environment(LibraryStore.self) private var library
+    @Environment(PlayerController.self) private var player
     @State private var showImporter = false
     @State private var showCloudSheet = false
     /// When set, the next picked folder replaces this unavailable root instead of adding a new one.
@@ -17,6 +18,8 @@ struct FoldersView: View {
     @State private var removing: LibraryRoot?
     /// Cloud root queued for local export.
     @State private var exportingRoot: LibraryRoot?
+    /// Local folder linked to a cloud source queued for incremental sync.
+    @State private var updatingTrackedRoot: LibraryRoot?
 
     var body: some View {
         List {
@@ -88,6 +91,9 @@ struct FoldersView: View {
         .sheet(item: $exportingRoot) { root in
             SaveCloudPlaylistSheet(root: root)
         }
+        .sheet(item: $updatingTrackedRoot) { root in
+            UpdateTrackedFolderSheet(root: root)
+        }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
             guard case .success(let url) = result else { return }
             let target = relocating
@@ -149,11 +155,19 @@ struct FoldersView: View {
         }
     }
 
-    private static func sourceLabel(for kind: LibraryRoot.Kind) -> String? {
-        switch kind {
-        case .cloudYouTube: "YouTube"
-        case .cloudBilibili: "Bilibili"
-        case .picked, .appFolder: nil
+    private static func sourceLabel(for root: LibraryRoot) -> String? {
+        switch root.kind {
+        case .cloudYouTube:
+            return "YouTube"
+        case .cloudBilibili:
+            return "Bilibili"
+        case .picked, .appFolder:
+            guard root.isCloudTrackedLocal else { return nil }
+            switch root.linkedCloudKind {
+            case .cloudYouTube: return "YouTube · Local"
+            case .cloudBilibili: return "Bilibili · Local"
+            default: return "Cloud · Local"
+            }
         }
     }
 
@@ -172,7 +186,7 @@ struct FoldersView: View {
                     HStack(spacing: 6) {
                         Text(root.name)
                             .lineLimit(1)
-                        if let label = Self.sourceLabel(for: root.kind) {
+                        if let label = Self.sourceLabel(for: root) {
                             Text(label)
                                 .font(.caption2.weight(.semibold))
                                 .padding(.horizontal, 6)
@@ -209,9 +223,20 @@ struct FoldersView: View {
             }
         }
         .contextMenu {
+            let folderIDs = library.orderedTracks(under: root.id, path: "").map(\.id)
+            if !folderIDs.isEmpty {
+                Button("Play Folder", systemImage: "play.fill") {
+                    player.playInNamedQueue(folderIDs, name: root.name)
+                }
+            }
             if root.kind.isCloud {
                 Button("Save to Local Folder…", systemImage: "square.and.arrow.down") {
                     exportingRoot = root
+                }
+            }
+            if root.isCloudTrackedLocal {
+                Button("Update from Cloud", systemImage: "icloud.and.arrow.down") {
+                    updatingTrackedRoot = root
                 }
             }
             if root.kind == .picked {
@@ -314,19 +339,24 @@ private struct AddCloudFolderSheet: View {
 struct FolderDetailView: View {
     let ref: FolderRef
     @Environment(LibraryStore.self) private var library
+    @Environment(PlayerController.self) private var player
+    @Environment(PlayHistoryStore.self) private var history
     @Environment(\.dismiss) private var dismiss
     @State private var confirmRemove = false
     @State private var removingSubfolder: FolderRef?
     @State private var showExportSheet = false
+    @State private var showUpdateTrackedSheet = false
 
     var body: some View {
         let root = library.root(ref.root)
         let contents = library.folderContents(root: ref.root, path: ref.path)
-        let everything = library.tracks(under: ref.root, path: ref.path)
+        let directTracks = library.orderedFolderTracks(root: ref.root, path: ref.path, history: history)
+        let everything = library.orderedTracks(under: ref.root, path: ref.path, history: history)
         let isRemovableRoot = ref.path.isEmpty && (root.map { library.isRemovable($0) } ?? false)
         let canRemoveCurrentFolder = !ref.path.isEmpty || isRemovableRoot
         let excludedCount = ref.path.isEmpty ? (root?.normalizedExcludedPaths.count ?? 0) : 0
         let currentName = ref.path.isEmpty ? (root?.name ?? "Folder") : (ref.path as NSString).lastPathComponent
+        let currentSortOrder = library.folderSortOrder(root: ref.root, path: ref.path)
 
         List {
             if everything.isEmpty {
@@ -338,7 +368,7 @@ struct FolderDetailView: View {
                                       : "Songs you add to this folder appear after a rescan.")
                 )
             } else {
-                PlayShuffleButtons(ids: everything.map(\.id))
+                PlayShuffleButtons(ids: everything.map(\.id), queueName: currentName)
             }
             ForEach(contents.folders, id: \.self) { name in
                 let child = FolderRef(root: ref.root, path: ref.path.isEmpty ? name : ref.path + "/" + name)
@@ -362,13 +392,51 @@ struct FolderDetailView: View {
                     }
                 }
                 .contextMenu {
+                    let childIDs = library.orderedTracks(under: child.root, path: child.path, history: history).map(\.id)
+                    if !childIDs.isEmpty {
+                        Button("Play Folder", systemImage: "play.fill") {
+                            player.playInNamedQueue(childIDs, name: name)
+                        }
+                    }
                     Button("Remove Folder", systemImage: "trash", role: .destructive) {
                         removingSubfolder = child
                     }
-                    TrackMenuItems(ids: library.tracks(under: child.root, path: child.path).map(\.id))
+                    TrackMenuItems(ids: childIDs)
                 }
             }
-            TrackRows(tracks: contents.tracks) { $0.isCloud ? $0.artist : $0.fileName }
+            ForEach(Array(directTracks.enumerated()), id: \.element.id) { index, track in
+                ReorderableTrackRow(
+                    track: track,
+                    index: index,
+                    scopeID: "folder-\(LibraryStore.folderKey(rootID: ref.root, path: ref.path))",
+                    subtitle: track.isCloud ? track.artist : track.fileName,
+                    isAvailable: library.isAvailable(track),
+                    onTap: {
+                        let allIDs = everything.map(\.id)
+                        let startAt = allIDs.firstIndex(of: track.id) ?? index
+                        player.playInNamedQueue(allIDs, name: currentName, startAt: startAt)
+                    },
+                    onMove: { from, to in
+                        library.moveFolderTracks(
+                            root: ref.root,
+                            path: ref.path,
+                            currentTrackIDs: directTracks.map(\.id),
+                            from: IndexSet(integer: from),
+                            to: to
+                        )
+                    }
+                )
+                .contextMenu { TrackMenuItems(ids: [track.id], favouriteID: track.id) }
+            }
+            .onMove { source, destination in
+                library.moveFolderTracks(
+                    root: ref.root,
+                    path: ref.path,
+                    currentTrackIDs: directTracks.map(\.id),
+                    from: source,
+                    to: destination
+                )
+            }
         }
         .listStyle(.plain)
         .navigationTitle(currentName)
@@ -376,11 +444,22 @@ struct FolderDetailView: View {
         .refreshable { await library.rescan() }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
+                if !directTracks.isEmpty {
+                    TrackSortMenu(selection: currentSortOrder) { order in
+                        library.setFolderSortOrder(order, root: ref.root, path: ref.path)
+                    }
+                }
                 if ref.path.isEmpty, let root, root.kind.isCloud {
                     Button("Save to Local Folder…", systemImage: "square.and.arrow.down") {
                         showExportSheet = true
                     }
                     .help("Save to Local Folder…")
+                }
+                if ref.path.isEmpty, let root, root.isCloudTrackedLocal {
+                    Button("Update from Cloud", systemImage: "icloud.and.arrow.down") {
+                        showUpdateTrackedSheet = true
+                    }
+                    .help("Update from Cloud")
                 }
                 if excludedCount > 0 {
                     Button("Restore Removed Subfolders (\(excludedCount))", systemImage: "arrow.uturn.backward") {
@@ -399,6 +478,11 @@ struct FolderDetailView: View {
         .sheet(isPresented: $showExportSheet) {
             if let root {
                 SaveCloudPlaylistSheet(root: root)
+            }
+        }
+        .sheet(isPresented: $showUpdateTrackedSheet) {
+            if let root {
+                UpdateTrackedFolderSheet(root: root)
             }
         }
         .confirmationDialog("Remove “\(currentName)” from your library?",
@@ -595,17 +679,15 @@ private struct SaveCloudPlaylistSheet: View {
                 summary = result
                 isExporting = false
                 if addToLibrary, FileManager.default.fileExists(atPath: result.destinationURL.path) {
-                    if library.containsLocalURL(result.destinationURL) {
+                    do {
+                        try await library.addRoot(url: result.destinationURL)
+                    } catch LibraryError.duplicateRoot {
                         await library.rescan()
-                    } else {
-                        do {
-                            try await library.addRoot(url: result.destinationURL)
-                        } catch LibraryError.duplicateRoot {
-                            await library.rescan()
-                        } catch {
-                            errorMessage = "Saved songs, but couldn’t add folder to library: \(error.localizedDescription)"
-                        }
+                        library.notifyFolderQueueSync(folderURL: result.destinationURL)
+                    } catch {
+                        errorMessage = "Saved songs, but couldn’t add folder to library: \(error.localizedDescription)"
                     }
+                    library.attachCloudTracking(toFolderURL: result.destinationURL, from: root)
                 }
             } catch is CancellationError {
                 isExporting = false
@@ -615,5 +697,125 @@ private struct SaveCloudPlaylistSheet: View {
                 errorMessage = error.localizedDescription
             }
         }
+    }
+}
+
+private struct UpdateTrackedFolderSheet: View {
+    let root: LibraryRoot
+    @Environment(LibraryStore.self) private var library
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var isUpdating = true
+    @State private var progress: (done: Int, total: Int, title: String) = (0, 0, "")
+    @State private var summary: CloudExporter.CloudUpdateSummary?
+    @State private var errorMessage: String?
+    @State private var syncTask: Task<Void, Never>?
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let sourceURL = root.sourceURL, !sourceURL.isEmpty {
+                    Section("Cloud Source") {
+                        Text(sourceURL)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+                }
+
+                if isUpdating {
+                    Section("Syncing") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            if progress.total > 0 {
+                                let step = min(progress.done + (progress.done < progress.total ? 1 : 0), max(progress.total, 1))
+                                ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
+                                Text("Checking \(step) of \(progress.total) songs…")
+                                    .font(.subheadline)
+                            } else {
+                                ProgressView()
+                                Text("Fetching latest cloud playlist…")
+                                    .font(.subheadline)
+                            }
+                            if !progress.title.isEmpty {
+                                Text(progress.title)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                if let summary {
+                    Section("Result") {
+                        Label(
+                            summary.addedCount > 0
+                                ? "Added \(summary.addedCount) new \(summary.addedCount == 1 ? "song" : "songs") (\(summary.skippedCount) already saved)."
+                                : "Already up to date (\(summary.skippedCount) \(summary.skippedCount == 1 ? "song" : "songs")).",
+                            systemImage: summary.failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
+                        )
+                        .foregroundStyle(summary.failedCount == 0 ? Color.green : Color.orange)
+
+                        if summary.failedCount > 0 {
+                            Text("\(summary.failedCount) \(summary.failedCount == 1 ? "song" : "songs") failed.")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                            ForEach(Array(summary.errors.prefix(5).enumerated()), id: \.offset) { _, err in
+                                Text(err)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                if let errorMessage {
+                    Section {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle("Update “\(root.name)”")
+            .navigationBarTitleDisplayMode(.inline)
+            .interactiveDismissDisabled(isUpdating)
+            .onDisappear { syncTask?.cancel() }
+            .task {
+                await startUpdate()
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    if isUpdating {
+                        Button("Cancel", role: .cancel) {
+                            syncTask?.cancel()
+                        }
+                    } else {
+                        Button("Done") { dismiss() }
+                    }
+                }
+            }
+        }
+    }
+
+    private func startUpdate() async {
+        isUpdating = true
+        summary = nil
+        errorMessage = nil
+        let task = Task { @MainActor in
+            do {
+                let result = try await library.updateTrackedLocalRoot(root.id) { done, total, title in
+                    progress = (done, total, title)
+                }
+                summary = result
+            } catch is CancellationError {
+                errorMessage = "Update cancelled."
+            } catch {
+                errorMessage = error.localizedDescription
+            }
+            isUpdating = false
+        }
+        syncTask = task
+        await task.value
     }
 }

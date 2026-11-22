@@ -11,13 +11,15 @@ struct SidebarRootView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
     @Environment(QueueStore.self) private var queues
+    @Environment(PlayHistoryStore.self) private var history
     @Environment(NewPlaylistPrompt.self) private var newPlaylist
     @Environment(CloudExportPrompt.self) private var cloudExport
+    @Environment(SongInfoPrompt.self) private var songInfo
+    @Environment(\.appNavigation) private var navigation
     #if targetEnvironment(macCatalyst)
     @Environment(\.updateManager) private var updateManager
     @State private var showUpdateSheet = false
     #endif
-    @State private var selection: SidebarItem? = .songs
     @State private var sidePanel: SidePanel?
 
     var body: some View {
@@ -35,17 +37,20 @@ struct SidebarRootView: View {
             }
         }
         .onChange(of: library.playlists.map(\.id)) { _, ids in
-            if case .playlist(let id) = selection, !ids.contains(id) { selection = .playlists }
+            if case .playlist(let id) = navigation.sidebarSelection, !ids.contains(id) {
+                navigation.sidebarSelection = .playlists
+            }
         }
     }
 
     private var splitView: some View {
-        NavigationSplitView {
+        @Bindable var navigation = navigation
+        return NavigationSplitView {
             sidebar
         } detail: {
             // A fresh stack per item, so one section's pushed pages never show under another.
             NavigationStack { detail }
-                .id(selection)
+                .id(navigation.sidebarSelection)
         }
         .inspector(isPresented: Binding(get: { sidePanel != nil }, set: { if !$0 { sidePanel = nil } })) {
             panel
@@ -53,13 +58,17 @@ struct SidebarRootView: View {
                 .environment(library)
                 .environment(player)
                 .environment(queues)
+                .environment(history)
                 .environment(newPlaylist)
                 .environment(cloudExport)
+                .environment(songInfo)
+                .environment(\.appNavigation, navigation)
         }
     }
 
     private var sidebar: some View {
-        List(selection: $selection) {
+        @Bindable var navigation = navigation
+        return List(selection: $navigation.sidebarSelection) {
             link(.folders, "Folders", "folder")
             Section("Library") {
                 link(.songs, "Songs", "music.note")
@@ -149,7 +158,7 @@ struct SidebarRootView: View {
 
     @ViewBuilder
     private var detail: some View {
-        switch selection ?? .songs {
+        switch navigation.sidebarSelection ?? .songs {
         case .folders: FoldersView()
         case .songs: SongsView()
         case .albums: AlbumsView()

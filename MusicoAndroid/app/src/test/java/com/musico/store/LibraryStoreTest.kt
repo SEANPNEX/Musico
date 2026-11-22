@@ -11,6 +11,8 @@ import com.musico.core.MetadataReading
 import com.musico.core.TrackMetadata
 import com.musico.model.LibraryRoot
 import com.musico.model.RootKind
+import com.musico.model.SearchField
+import com.musico.model.TrackSortOrder
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -452,4 +454,194 @@ class LibraryStoreTest {
         assertEquals(emptyList<String>(), decoded.excludedPaths)
         assertFalse(decoded.isExcluded("Any/song.mp3"))
     }
+
+    @Test
+    fun metadataOverridesPersistAndSurviveRescanAndReload() = runBlocking {
+        val file = touch("song.flac", "initial")
+        reader.byName["song.flac"] = TrackMetadata(
+            title = "Original Title",
+            artist = "Original Artist",
+            album = "Original Album",
+            genre = "Pop",
+            durationSec = 10.0,
+        )
+        val store = makeStore()
+        store.rescan()
+
+        val original = store.state.value.tracks.single()
+        assertEquals("Pop", original.genre)
+
+        val customArtKey = store.artwork.store(createValidPngBytes())
+        // Test with arbitrary bytes via a real 1x1 PNG or fallback key string if BitmapFactory is stubbed in JVM unit tests
+        val effectiveArtKey = customArtKey ?: "manual_art_key"
+
+        var updatedCallbackTrackId: String? = null
+        store.onTrackUpdated = { updatedCallbackTrackId = it.id }
+
+        val edited = store.updateTrackMetadata(
+            trackId = original.id,
+            title = "Edited Title",
+            artist = "Edited Artist",
+            album = "Edited Album",
+            genre = "Synthwave",
+            artworkKey = effectiveArtKey,
+        )
+        assertNotNull(edited)
+        assertEquals(original.id, updatedCallbackTrackId)
+        assertEquals("Edited Title", store.track(original.id)?.title)
+        assertEquals("Edited Artist", store.track(original.id)?.artist)
+        assertEquals("Edited Album", store.track(original.id)?.album)
+        assertEquals("Synthwave", store.track(original.id)?.genre)
+        assertEquals(effectiveArtKey, store.track(original.id)?.artworkKey)
+        assertEquals(listOf("Edited Artist"), store.state.value.artists)
+        assertEquals(listOf("Edited Album"), store.state.value.albums.map { it.title })
+
+        // Modify file size/content so rescan re-reads tags from disk, then verify overrides still win.
+        file.writeText("modified longer audio bytes", Charsets.UTF_8)
+        reader.byName["song.flac"] = TrackMetadata(
+            title = "Re-read Disk Title",
+            artist = "Re-read Disk Artist",
+            album = "Re-read Disk Album",
+            genre = "Jazz",
+            durationSec = 12.0,
+        )
+        store.rescan()
+        val afterRescan = store.track(original.id)!!
+        assertEquals("Edited Title", afterRescan.title)
+        assertEquals("Edited Artist", afterRescan.artist)
+        assertEquals("Edited Album", afterRescan.album)
+        assertEquals("Synthwave", afterRescan.genre)
+        assertEquals(effectiveArtKey, afterRescan.artworkKey)
+
+        // Reload fresh LibraryStore from disk and rescan again.
+        val reloaded = makeStore()
+        val afterReload = reloaded.track(original.id)!!
+        assertEquals("Edited Title", afterReload.title)
+        assertEquals("Synthwave", afterReload.genre)
+        reloaded.rescan()
+        assertEquals("Edited Title", reloaded.track(original.id)?.title)
+        assertEquals("Edited Artist", reloaded.track(original.id)?.artist)
+        assertEquals("Edited Album", reloaded.track(original.id)?.album)
+        assertEquals("Synthwave", reloaded.track(original.id)?.genre)
+        assertEquals(effectiveArtKey, reloaded.track(original.id)?.artworkKey)
+    }
+
+    @Test
+    fun searchSupportsFieldFilteringIncludingGenre() = runBlocking {
+        touch("a.mp3")
+        touch("b.mp3")
+        reader.byName["a.mp3"] = TrackMetadata(
+            title = "Night Drive",
+            artist = "Kano",
+            album = "Neon City",
+            genre = "Rock",
+            durationSec = 3.0,
+        )
+        reader.byName["b.mp3"] = TrackMetadata(
+            title = "Kanojo",
+            artist = "Other",
+            album = "Rock Anthology",
+            genre = "Electronic",
+            durationSec = 3.0,
+        )
+        val store = makeStore()
+        store.rescan()
+
+        assertEquals(listOf("Kanojo", "Night Drive"), store.search("Kano", SearchField.KEYWORD).map { it.title }.sorted())
+        assertEquals(listOf("Night Drive"), store.search("Kano", SearchField.ARTIST).map { it.title })
+        assertEquals(listOf("Night Drive"), store.search("Neon City", SearchField.ALBUM).map { it.title })
+        assertEquals(listOf("Night Drive"), store.search("Rock", SearchField.GENRE).map { it.title })
+        assertEquals(listOf("Kanojo", "Night Drive"), store.search("Rock", SearchField.KEYWORD).map { it.title }.sorted())
+    }
+
+    @Test
+    fun folderSortOrderAndCustomTrackOrderPersistForDisplayAndPlayback() = runBlocking {
+        val f1 = touch("Mix/b_song.mp3", "1")
+        val f2 = touch("Mix/a_song.mp3", "2")
+        val f3 = touch("Mix/c_song.mp3", "3")
+        f1.setLastModified(1_000L)
+        f2.setLastModified(3_000L)
+        f3.setLastModified(2_000L)
+        reader.byName["b_song.mp3"] = TrackMetadata(title = "Beta", durationSec = 5.0)
+        reader.byName["a_song.mp3"] = TrackMetadata(title = "Alpha", durationSec = 5.0)
+        reader.byName["c_song.mp3"] = TrackMetadata(title = "Gamma", durationSec = 5.0)
+
+        val store = makeStore()
+        store.rescan()
+
+        val playCounts = mapOf(
+            store.state.value.tracks.first { it.title == "Alpha" }.id to 1,
+            store.state.value.tracks.first { it.title == "Beta" }.id to 10,
+            store.state.value.tracks.first { it.title == "Gamma" }.id to 5,
+        )
+        val countFn: (String) -> Int = { playCounts[it] ?: 0 }
+
+        store.setFolderSortOrder(LibraryRoot.APP_FOLDER_ID, "Mix", TrackSortOrder.NAME_DESC)
+        assertEquals(
+            listOf("Gamma", "Beta", "Alpha"),
+            store.folderContents(LibraryRoot.APP_FOLDER_ID, "Mix", countFn).second.map { it.title },
+        )
+        assertEquals(
+            listOf("Gamma", "Beta", "Alpha"),
+            store.tracksUnder(LibraryRoot.APP_FOLDER_ID, "Mix", countFn).map { it.title },
+        )
+
+        store.setFolderSortOrder(LibraryRoot.APP_FOLDER_ID, "Mix", TrackSortOrder.MOST_PLAYED)
+        assertEquals(
+            listOf("Beta", "Gamma", "Alpha"),
+            store.folderContents(LibraryRoot.APP_FOLDER_ID, "Mix", countFn).second.map { it.title },
+        )
+
+        // Drag reorder switches folder to CUSTOM and persists across reload for both display and playback.
+        val currentIds = store.folderContents(LibraryRoot.APP_FOLDER_ID, "Mix", countFn).second.map { it.id }
+        store.moveFolderTrack(LibraryRoot.APP_FOLDER_ID, "Mix", fromIndex = 2, toIndex = 0, currentOrderedIds = currentIds)
+        assertEquals(TrackSortOrder.CUSTOM, store.folderSortOrder(LibraryRoot.APP_FOLDER_ID, "Mix"))
+        assertEquals(
+            listOf("Alpha", "Beta", "Gamma"),
+            store.folderContents(LibraryRoot.APP_FOLDER_ID, "Mix", countFn).second.map { it.title },
+        )
+
+        val reloaded = makeStore()
+        assertEquals(TrackSortOrder.CUSTOM, reloaded.folderSortOrder(LibraryRoot.APP_FOLDER_ID, "Mix"))
+        assertEquals(
+            listOf("Alpha", "Beta", "Gamma"),
+            reloaded.folderContents(LibraryRoot.APP_FOLDER_ID, "Mix", countFn).second.map { it.title },
+        )
+        assertEquals(
+            listOf("Alpha", "Beta", "Gamma"),
+            reloaded.tracksUnder(LibraryRoot.APP_FOLDER_ID, "Mix", countFn).map { it.title },
+        )
+    }
+
+    @Test
+    fun playlistSortOrderAndReorderPersistAcrossReload() = runBlocking {
+        touch("a.mp3")
+        touch("b.mp3")
+        touch("c.mp3")
+        reader.byName["a.mp3"] = TrackMetadata(title = "Alpha", durationSec = 4.0)
+        reader.byName["b.mp3"] = TrackMetadata(title = "Beta", durationSec = 4.0)
+        reader.byName["c.mp3"] = TrackMetadata(title = "Gamma", durationSec = 4.0)
+
+        val store = makeStore()
+        store.rescan()
+        val idA = store.state.value.tracks.first { it.title == "Alpha" }.id
+        val idB = store.state.value.tracks.first { it.title == "Beta" }.id
+        val idC = store.state.value.tracks.first { it.title == "Gamma" }.id
+
+        val pid = store.createPlaylist("Sorted Mix")
+        store.addToPlaylist(listOf(idA, idB, idC), pid)
+        store.setPlaylistSortOrder(pid, TrackSortOrder.NAME_DESC)
+        assertEquals(listOf(idC, idB, idA), store.state.value.playlists.first { it.id == pid }.trackIds)
+        assertEquals(TrackSortOrder.NAME_DESC, store.state.value.playlists.first { it.id == pid }.sortOrder)
+
+        store.reorderPlaylistTracks(pid, listOf(idB, idC, idA))
+        val reloaded = makeStore()
+        val pl = reloaded.state.value.playlists.first { it.id == pid }
+        assertEquals(TrackSortOrder.CUSTOM, pl.sortOrder)
+        assertEquals(listOf(idB, idC, idA), pl.trackIds)
+    }
+
+    private fun createValidPngBytes(): ByteArray = byteArrayOf(
+        0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+    )
 }

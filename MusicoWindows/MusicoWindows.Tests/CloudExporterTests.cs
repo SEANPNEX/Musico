@@ -374,6 +374,156 @@ public sealed class CloudExporterTests
         Assert.True(store.IsFolderIndexed(outsideDir));
     }
 
+    [Fact]
+    public async Task ExportPlaylistWritesManifestWithoutCookieAndUpdateLocalFolderDownloadsOnlyNewAndMissing()
+    {
+        string cacheDir = TestHelpers.MakeTempDir();
+        string parentDir = TestHelpers.MakeTempDir();
+
+        var cloudId = Guid.NewGuid();
+        var cloudRoot = new LibraryRoot(
+            Id: cloudId,
+            Name: "Tracked Mix",
+            Kind: RootKind.CloudYouTube,
+            Path: "https://music.youtube.com/playlist?list=PLtrack",
+            SourceUrl: "https://music.youtube.com/playlist?list=PLtrack",
+            RemoteId: "PLtrack",
+            Cookie: "SECRET_COOKIE=should_not_persist");
+
+        var t1 = MakeCloudTrack(cloudId, "vid_1", "Song One", trackNumber: 1);
+        var t2 = MakeCloudTrack(cloudId, "vid_2", "Song Two", trackNumber: 2);
+        byte[] mp3Bytes = MakeMinimalMp3Bytes();
+
+        var requestedIds = new List<string>();
+        var handler = new StubHttpHandler(req =>
+        {
+            string uri = req.RequestUri!.AbsoluteUri;
+            if (uri.Contains("youtubei/v1/player", StringComparison.Ordinal))
+            {
+                string body = req.Content?.ReadAsStringAsync().GetAwaiter().GetResult() ?? string.Empty;
+                string vid = body.Contains("vid_1", StringComparison.Ordinal) ? "vid_1"
+                    : body.Contains("vid_2", StringComparison.Ordinal) ? "vid_2"
+                    : "vid_3";
+                requestedIds.Add(vid);
+                string playerJson = $$"""
+                {
+                  "streamingData": {
+                    "adaptiveFormats": [
+                      { "itag": 140, "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 128000, "url": "https://cdn.example/{{vid}}.m4a" }
+                    ]
+                  }
+                }
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(playerJson, Encoding.UTF8, "application/json")
+                };
+            }
+
+            if (uri.StartsWith("https://cdn.example/", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(mp3Bytes)
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var exporter = new CloudExporter(new CloudAudioCache(cacheDir, handler: handler), new YouTubeClient(handler), new BilibiliClient(handler));
+        var exportResult = await exporter.ExportPlaylistAsync(cloudRoot, [t1, t2], parentDir, "Tracked Mix");
+        Assert.Equal(2, exportResult.SavedCount);
+
+        string manifestPath = Path.Combine(exportResult.DestinationFolder, CloudExporter.ManifestFileName);
+        Assert.True(File.Exists(manifestPath));
+        string rawManifest = File.ReadAllText(manifestPath);
+        Assert.DoesNotContain("SECRET_COOKIE", rawManifest, StringComparison.Ordinal);
+
+        var loaded = CloudExporter.LoadManifest(exportResult.DestinationFolder);
+        Assert.NotNull(loaded);
+        Assert.Equal("https://music.youtube.com/playlist?list=PLtrack", loaded!.SourceUrl);
+        Assert.Equal(RootKind.CloudYouTube.ToString(), loaded.CloudKind);
+        Assert.Equal(2, loaded.Tracks.Count);
+
+        // Delete Song Two on disk, keep Song One, add an unrelated user file, and clear requestedIds.
+        File.Delete(Path.Combine(exportResult.DestinationFolder, "Song Two.m4a"));
+        string keepNotePath = Path.Combine(exportResult.DestinationFolder, "Custom Note.txt");
+        File.WriteAllText(keepNotePath, "keep me");
+        requestedIds.Clear();
+
+        var localTrackedRoot = new LibraryRoot(
+            Id: Guid.NewGuid(),
+            Name: "Tracked Mix",
+            Kind: RootKind.Picked,
+            Path: exportResult.DestinationFolder,
+            SourceUrl: cloudRoot.SourceUrl,
+            RemoteId: cloudRoot.RemoteId,
+            LinkedCloudKind: RootKind.CloudYouTube);
+
+        var updateResult = await exporter.UpdateLocalFolderAsync(
+            localTrackedRoot,
+            fetchPlaylist: (_, _, _, _, _) => Task.FromResult(new CloudPlaylistResult(
+                Kind: RootKind.CloudYouTube,
+                RemoteId: "PLtrack",
+                Title: "Tracked Mix",
+                SourceUrl: "https://music.youtube.com/playlist?list=PLtrack",
+                Items:
+                [
+                    new CloudPlaylistItem("vid_1", "Song One", "Artist", "Tracked Mix", 180, null, 1),
+                    new CloudPlaylistItem("vid_2", "Song Two", "Artist", "Tracked Mix", 190, null, 2),
+                    new CloudPlaylistItem("vid_3", "Song Three", "Artist", "Tracked Mix", 200, null, 3),
+                ])));
+
+        Assert.Equal(2, updateResult.AddedCount);
+        Assert.Equal(1, updateResult.SkippedCount);
+        Assert.Equal(0, updateResult.FailedCount);
+        Assert.Equal(3, updateResult.TotalRemoteCount);
+        Assert.Equal(["vid_2", "vid_3"], requestedIds);
+        Assert.True(File.Exists(Path.Combine(exportResult.DestinationFolder, "Song One.m4a")));
+        Assert.True(File.Exists(Path.Combine(exportResult.DestinationFolder, "Song Two.m4a")));
+        Assert.True(File.Exists(Path.Combine(exportResult.DestinationFolder, "Song Three.m4a")));
+        Assert.True(File.Exists(keepNotePath));
+
+        var updatedManifest = CloudExporter.LoadManifest(exportResult.DestinationFolder);
+        Assert.NotNull(updatedManifest);
+        Assert.Equal(3, updatedManifest!.Tracks.Count);
+        Assert.Equal("Song Three.m4a", updatedManifest.Tracks["vid_3"]);
+    }
+
+    [Fact]
+    public async Task LibraryStoreAddRootAutoDetectsCloudManifest()
+    {
+        string stateDir = TestHelpers.MakeTempDir();
+        string musicDir = TestHelpers.MakeTempDir();
+        string savedDir = TestHelpers.MakeTempDir();
+
+        CloudExporter.SaveManifest(
+            savedDir,
+            new CloudFolderManifest(
+                SourceUrl: "https://www.bilibili.com/video/BV1xx411c7mD",
+                RemoteId: "BV1xx411c7mD",
+                CloudKind: RootKind.CloudBilibili.ToString(),
+                LastSyncedUtc: DateTimeOffset.UtcNow,
+                Tracks: new Dictionary<string, string> { ["BV1xx411c7mD_1"] = "Track.m4a" }));
+
+        var store = new LibraryStore(
+            stateDir,
+            musicDir,
+            new StubMetadataReader(),
+            new ArtworkCache(Path.Combine(stateDir, "Artwork")));
+
+        await store.AddRootAsync(savedDir);
+
+        var added = Assert.Single(store.Roots, r => string.Equals(r.Path, Path.GetFullPath(savedDir), StringComparison.OrdinalIgnoreCase));
+        Assert.True(added.IsCloudTrackedLocal);
+        Assert.Equal(RootKind.Picked, added.Kind);
+        Assert.Equal(RootKind.CloudBilibili, added.LinkedCloudKind);
+        Assert.Equal("https://www.bilibili.com/video/BV1xx411c7mD", added.SourceUrl);
+        Assert.Equal("BV1xx411c7mD", added.RemoteId);
+        Assert.Null(added.Cookie);
+    }
+
     private sealed class SynchronousProgress<T> : IProgress<T>
     {
         private readonly Action<T> _handler;

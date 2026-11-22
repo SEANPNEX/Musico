@@ -85,17 +85,52 @@ class QueueStore(
 
     fun addQueue(name: String? = null): String {
         val current = _state.value
-        var title = name?.trim().orEmpty()
-        if (title.isEmpty()) {
-            val used = current.queues.map { it.name }.toSet()
-            title = generateSequence(1) { it + 1 }
-                .map { "Queue $it" }
-                .first { it !in used }
-        }
+        val title = resolveQueueTitle(name, current.queues)
         val queue = PlayQueue(name = title)
         _state.value = current.copy(queues = current.queues + queue)
         save()
         return queue.id
+    }
+
+    /**
+     * Creates a new queue named [name] containing [trackIds] starting at [startAt],
+     * replacing any existing queue with the exact same name.
+     * Returns `(queueId, wasActiveReplaced)`.
+     */
+    fun createOrReplaceQueue(
+        name: String,
+        trackIds: List<String> = emptyList(),
+        startAt: Int = 0,
+    ): Pair<String, Boolean> {
+        val current = _state.value
+        val title = resolveQueueTitle(name, current.queues)
+        val existingIndex = current.queues.indexOfFirst { it.name == title }
+        val created = PlayQueue(name = title).replace(trackIds, startAt = startAt)
+
+        return if (existingIndex >= 0) {
+            val existing = current.queues[existingIndex]
+            val wasActive = existing.id == current.activeId
+            val nextQueues = current.queues.toMutableList().apply {
+                this[existingIndex] = created
+            }
+            val nextActiveId = if (wasActive) created.id else current.activeId
+            _state.value = QueueUiState(queues = nextQueues, activeId = nextActiveId)
+            save()
+            created.id to wasActive
+        } else {
+            _state.value = current.copy(queues = current.queues + created)
+            save()
+            created.id to false
+        }
+    }
+
+    private fun resolveQueueTitle(name: String?, queues: List<PlayQueue>): String {
+        val trimmed = name?.trim().orEmpty()
+        if (trimmed.isNotEmpty()) return trimmed
+        val used = queues.map { it.name }.toSet()
+        return generateSequence(1) { it + 1 }
+            .map { "Queue $it" }
+            .first { it !in used }
     }
 
     fun rename(id: String, name: String) {

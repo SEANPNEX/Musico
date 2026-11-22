@@ -76,6 +76,85 @@ public sealed class QueueStore : ObservableStore
         Active.PositionSeconds = seconds;
     }
 
+    public static string FormatSearchQueueName(SearchField field, string query)
+    {
+        string trimmed = query.Trim();
+        string prefix = field switch
+        {
+            SearchField.Artist => "Artist",
+            SearchField.Album => "Album",
+            SearchField.Genre => "Genre",
+            _ => "Keyword"
+        };
+        return $"{prefix}: {trimmed}";
+    }
+
+    public (Guid QueueId, bool WasActive) CreateOrReplaceQueue(
+        string name,
+        IReadOnlyList<string> trackIds,
+        int startAt = 0,
+        bool activate = false,
+        bool? shuffle = null)
+    {
+        string title = name.Trim();
+        if (title.Length == 0)
+        {
+            title = "Queue";
+        }
+
+        var existing = _queues.FirstOrDefault(q => string.Equals(q.Name, title, StringComparison.Ordinal));
+        if (existing is not null)
+        {
+            bool wasActive = existing.Id == _activeId;
+            existing.Replace(trackIds, startAt);
+            if (shuffle is bool s)
+            {
+                existing.SetShuffle(s);
+            }
+
+            if (activate && _activeId != existing.Id)
+            {
+                _activeId = existing.Id;
+                OnPropertyChanged(nameof(ActiveId));
+            }
+
+            Save();
+            OnPropertyChanged(nameof(Queues));
+            if (_activeId == existing.Id)
+            {
+                OnPropertyChanged(nameof(Active));
+            }
+            return (existing.Id, wasActive);
+        }
+
+        var queue = new PlayQueue(title);
+        queue.Replace(trackIds, startAt);
+        if (shuffle is bool shuf)
+        {
+            queue.SetShuffle(shuf);
+        }
+        _queues = [.. _queues, queue];
+
+        if (activate)
+        {
+            _activeId = queue.Id;
+            OnPropertyChanged(nameof(ActiveId));
+            OnPropertyChanged(nameof(Active));
+        }
+
+        Save();
+        OnPropertyChanged(nameof(Queues));
+        return (queue.Id, false);
+    }
+
+    public void SortQueue(Guid id, TrackSortMode mode, LibraryStore library, PlayHistoryStore history)
+    {
+        Update(id, q => q.Sort(mode, library.GetTrack, history.GetCount));
+    }
+
+    public void SortActive(TrackSortMode mode, LibraryStore library, PlayHistoryStore history) =>
+        SortQueue(_activeId, mode, library, history);
+
     public Guid AddQueue(string? name = null)
     {
         string title = name?.Trim() ?? string.Empty;

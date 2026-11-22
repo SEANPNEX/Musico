@@ -42,6 +42,11 @@
                                Margin="0,3,0,0" />
                 </StackPanel>
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ComboBox x:Name="SortCombo"
+                              Style="{StaticResource Win10ComboBoxStyle}"
+                              Width="150"
+                              Margin="0,0,8,0"
+                              SelectionChanged="SortCombo_SelectionChanged" />
                     <Button x:Name="PlayAllButton"
                             Style="{StaticResource Win10PrimaryButtonStyle}"
                             Margin="0,0,8,0"

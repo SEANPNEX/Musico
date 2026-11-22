@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
@@ -45,20 +46,29 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import com.musico.audio.PlayerUiState
 import com.musico.model.PlayQueue
 import com.musico.model.Playlist
+import com.musico.model.TrackSortOrder
+import com.musico.model.sortTracks
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
+import com.musico.store.PlayHistoryUiState
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.PlayShuffleButtons
+import com.musico.ui.components.SortOrderMenuButton
 import com.musico.ui.components.TextInputDialog
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
+import com.musico.ui.components.dragHandle
+import com.musico.ui.components.rememberDragReorderState
 import kotlin.random.Random
 
 sealed interface PlaylistRef {
@@ -232,6 +242,7 @@ fun PlaylistDetailScreen(
     ref: PlaylistRef,
     libraryStore: LibraryStore,
     libraryState: LibraryUiState,
+    historyState: PlayHistoryUiState,
     playerState: PlayerUiState,
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
@@ -253,13 +264,38 @@ fun PlaylistDetailScreen(
         is PlaylistRef.User -> playlist?.name ?: "Playlist"
     }
 
-    val tracks = remember(libraryState.tracks, libraryState.favourites, playlist, ref) {
+    val sortOrder = when (ref) {
+        PlaylistRef.Favourites -> libraryState.favouritesSortOrder
+        is PlaylistRef.User -> playlist?.sortOrder ?: TrackSortOrder.CUSTOM
+    }
+
+    val tracks = remember(libraryState.tracks, libraryState.favourites, playlist, ref, sortOrder, historyState.entries) {
+        val playCounts: (String) -> Int = { id -> historyState.entries[id]?.count ?: 0 }
         when (ref) {
-            PlaylistRef.Favourites -> libraryState.tracks.filter { it.id in libraryState.favourites }
-            is PlaylistRef.User -> libraryStore.tracks(playlist?.trackIds.orEmpty())
+            PlaylistRef.Favourites -> {
+                val raw = libraryState.tracks.filter { it.id in libraryState.favourites }
+                sortTracks(raw, sortOrder, playCounts)
+            }
+            is PlaylistRef.User -> {
+                val raw = libraryStore.tracks(playlist?.trackIds.orEmpty())
+                sortTracks(raw, sortOrder, playCounts)
+            }
         }
     }
     val trackIds = remember(tracks) { tracks.map { it.id } }
+
+    val listState = rememberLazyListState()
+    val dragState = rememberDragReorderState(
+        items = tracks,
+        listState = listState,
+        headerCount = if (tracks.isEmpty()) 0 else 1,
+        keyOf = { it.id },
+        onCommit = { reordered ->
+            if (ref is PlaylistRef.User) {
+                libraryStore.reorderPlaylistTracks(ref.playlistId, reordered.map { it.value.id })
+            }
+        },
+    )
 
     Scaffold(
         modifier = modifier,
@@ -279,6 +315,24 @@ fun PlaylistDetailScreen(
                     )
                 },
                 actions = {
+                    if (tracks.isNotEmpty()) {
+                        SortOrderMenuButton(
+                            current = sortOrder,
+                            options = if (ref is PlaylistRef.User) {
+                                TrackSortOrder.entries
+                            } else {
+                                TrackSortOrder.entries.filter { it != TrackSortOrder.CUSTOM }
+                            },
+                            onSelect = { selected ->
+                                when (ref) {
+                                    PlaylistRef.Favourites -> libraryStore.setFavouritesSortOrder(selected)
+                                    is PlaylistRef.User -> libraryStore.setPlaylistSortOrder(ref.playlistId, selected) { id ->
+                                        historyState.entries[id]?.count ?: 0
+                                    }
+                                }
+                            },
+                        )
+                    }
                     if (ref is PlaylistRef.User && tracks.isNotEmpty()) {
                         TextButton(onClick = { editing = !editing }) {
                             Text(if (editing) "Done" else "Edit")
@@ -289,6 +343,7 @@ fun PlaylistDetailScreen(
         }
     ) { innerPadding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
@@ -321,22 +376,51 @@ fun PlaylistDetailScreen(
                 }
 
                 itemsIndexed(
-                    items = tracks,
-                    key = { index, track -> "${index}_${track.id}" }
-                ) { index, track ->
+                    items = dragState.items,
+                    key = { _, item -> item.uid }
+                ) { index, dragItem ->
+                    val track = dragItem.value
+                    val isDragged = dragState.activeUid == dragItem.uid
+                    val rowBg = if (isDragged) {
+                        MaterialTheme.colorScheme.surfaceContainerHighest
+                    } else {
+                        Color.Transparent
+                    }
+                    val rowModifier = Modifier
+                        .then(if (dragState.isDragging) Modifier else Modifier.animateItem())
+                        .zIndex(if (isDragged) 1f else 0f)
+                        .graphicsLayer { translationY = dragState.offsetFor(dragItem.uid) }
+
+                    val removeIndex = if (ref is PlaylistRef.User) {
+                        if (sortOrder == TrackSortOrder.CUSTOM) {
+                            dragItem.originalIndex
+                        } else {
+                            playlist?.trackIds?.indexOf(track.id)?.takeIf { it >= 0 } ?: index
+                        }
+                    } else {
+                        index
+                    }
+
                     TrackRow(
                         track = track,
                         artworkCache = libraryStore.artwork,
                         isCurrent = playerState.currentTrack?.id == track.id,
                         isPlaying = playerState.isPlaying,
                         isAvailable = libraryStore.isAvailable(track),
+                        backgroundColor = rowBg,
                         onClick = { trackActions.playerController.play(trackIds, startAt = index) },
-                        modifier = Modifier.animateItem(),
+                        modifier = rowModifier,
+                        dragHandleModifier = if (ref is PlaylistRef.User) {
+                            Modifier.dragHandle(dragState, dragItem.uid)
+                        } else null,
                         trailingActions = if (ref is PlaylistRef.User && editing) {
                             {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     IconButton(
                                         onClick = {
+                                            if (sortOrder != TrackSortOrder.CUSTOM) {
+                                                libraryStore.reorderPlaylistTracks(ref.playlistId, trackIds)
+                                            }
                                             libraryStore.movePlaylistTrack(ref.playlistId, index, index - 1)
                                         },
                                         enabled = index > 0
@@ -345,6 +429,9 @@ fun PlaylistDetailScreen(
                                     }
                                     IconButton(
                                         onClick = {
+                                            if (sortOrder != TrackSortOrder.CUSTOM) {
+                                                libraryStore.reorderPlaylistTracks(ref.playlistId, trackIds)
+                                            }
                                             libraryStore.movePlaylistTrack(ref.playlistId, index, index + 1)
                                         },
                                         enabled = index < tracks.lastIndex
@@ -353,7 +440,7 @@ fun PlaylistDetailScreen(
                                     }
                                     IconButton(
                                         onClick = {
-                                            libraryStore.removeFromPlaylist(ref.playlistId, index)
+                                            libraryStore.removeFromPlaylist(ref.playlistId, removeIndex)
                                         }
                                     ) {
                                         Icon(
@@ -389,7 +476,7 @@ fun PlaylistDetailScreen(
                                         },
                                         onClick = {
                                             onDismiss()
-                                            libraryStore.removeFromPlaylist(ref.playlistId, index)
+                                            libraryStore.removeFromPlaylist(ref.playlistId, removeIndex)
                                         }
                                     )
                                 }

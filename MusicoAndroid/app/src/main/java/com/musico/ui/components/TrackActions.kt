@@ -14,6 +14,7 @@ import androidx.compose.material.icons.rounded.AddToQueue
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Queue
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
@@ -37,8 +38,10 @@ import com.musico.audio.PlayerController
 import com.musico.cloud.CloudExporter
 import com.musico.model.PlayQueue
 import com.musico.model.Playlist
+import com.musico.model.SearchField
 import com.musico.model.Track
 import com.musico.store.LibraryStore
+import com.musico.store.PlayHistoryUiState
 import kotlinx.coroutines.CancellationException
 
 @Stable
@@ -47,11 +50,14 @@ class TrackActionState(
     val playerController: PlayerController,
     val cloudExporter: CloudExporter,
     val onPickFolder: ((Uri) -> Unit) -> Unit,
+    val onPickImage: ((Uri) -> Unit) -> Unit,
+    val onQuickSearch: (String, SearchField) -> Unit,
 ) {
     var queuePickerIds: List<String>? by mutableStateOf(null)
     var playlistPickerIds: List<String>? by mutableStateOf(null)
     var newPlaylistIds: List<String>? by mutableStateOf(null)
     var savingCloudTrack: Pair<Track, Uri>? by mutableStateOf(null)
+    var songInfoTrackId: String? by mutableStateOf(null)
 }
 
 @Composable
@@ -60,9 +66,11 @@ fun rememberTrackActionState(
     playerController: PlayerController,
     cloudExporter: CloudExporter,
     onPickFolder: ((Uri) -> Unit) -> Unit,
+    onPickImage: ((Uri) -> Unit) -> Unit,
+    onQuickSearch: (String, SearchField) -> Unit,
 ): TrackActionState {
-    return remember(libraryStore, playerController, cloudExporter, onPickFolder) {
-        TrackActionState(libraryStore, playerController, cloudExporter, onPickFolder)
+    return remember(libraryStore, playerController, cloudExporter, onPickFolder, onPickImage, onQuickSearch) {
+        TrackActionState(libraryStore, playerController, cloudExporter, onPickFolder, onPickImage, onQuickSearch)
     }
 }
 
@@ -74,8 +82,20 @@ fun TrackMenuItems(
     actionState: TrackActionState,
     onDismiss: () -> Unit,
     favouriteId: String? = null,
-    isFavourite: Boolean = false
+    isFavourite: Boolean = false,
+    namedQueueTitle: String? = null,
 ) {
+    if (ids.size == 1) {
+        DropdownMenuItem(
+            text = { Text("Song Info") },
+            leadingIcon = { Icon(Icons.Rounded.Info, contentDescription = null) },
+            onClick = {
+                actionState.songInfoTrackId = ids[0]
+                onDismiss()
+            }
+        )
+        HorizontalDivider()
+    }
     DropdownMenuItem(
         text = { Text("Play Next") },
         leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistPlay, contentDescription = null) },
@@ -110,7 +130,11 @@ fun TrackMenuItems(
         leadingIcon = { Icon(Icons.Rounded.Queue, contentDescription = null) },
         enabled = ids.isNotEmpty(),
         onClick = {
-            actionState.playerController.playInNewQueue(ids)
+            if (namedQueueTitle != null) {
+                actionState.playerController.playInNamedQueue(namedQueueTitle, ids, startAt = 0)
+            } else {
+                actionState.playerController.playInNewQueue(ids)
+            }
             onDismiss()
         }
     )
@@ -163,7 +187,8 @@ fun TrackActionDialogs(
     state: TrackActionState,
     queues: List<PlayQueue>,
     activeQueueId: String,
-    playlists: List<Playlist>
+    playlists: List<Playlist>,
+    historyState: PlayHistoryUiState,
 ) {
     val queueIds = state.queuePickerIds
     if (queueIds != null) {
@@ -229,6 +254,19 @@ fun TrackActionDialogs(
             libraryStore = state.libraryStore,
             cloudExporter = state.cloudExporter,
             onDismiss = { state.savingCloudTrack = null },
+        )
+    }
+
+    val infoTrackId = state.songInfoTrackId
+    val infoTrack = infoTrackId?.let { state.libraryStore.track(it) }
+    if (infoTrack != null) {
+        SongInfoSheet(
+            track = infoTrack,
+            libraryStore = state.libraryStore,
+            historyState = historyState,
+            onPickImage = state.onPickImage,
+            onQuickSearch = state.onQuickSearch,
+            onDismiss = { state.songInfoTrackId = null },
         )
     }
 }

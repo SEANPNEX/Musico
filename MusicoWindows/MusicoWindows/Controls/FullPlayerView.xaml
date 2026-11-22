@@ -72,10 +72,15 @@
                                        ToolTip="Show Lyrics"
                                        MouseLeftButtonUp="Artwork_MouseLeftButtonUp" />
 
-                <!-- Track Info + Favourite Heart -->
-                <Grid Grid.Row="1" Margin="0,0,0,16">
+                <!-- Track Info + Song Info + Favourite Heart -->
+                <Grid x:Name="TrackInfoBar"
+                      Grid.Row="1"
+                      Margin="0,0,0,16"
+                      Background="Transparent"
+                      MouseRightButtonUp="TrackInfo_MouseRightButtonUp">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
@@ -94,8 +99,18 @@
                                    TextTrimming="CharacterEllipsis"
                                    Margin="0,4,0,0" />
                     </StackPanel>
-                    <Button x:Name="FavouriteButton"
+                    <Button x:Name="SongInfoButton"
                             Grid.Column="1"
+                            Style="{StaticResource Win10IconButtonStyle}"
+                            Width="40"
+                            Height="40"
+                            FontSize="17"
+                            Content="&#xE946;"
+                            ToolTip="Song Info"
+                            Margin="4,0,2,0"
+                            Click="SongInfo_Click" />
+                    <Button x:Name="FavouriteButton"
+                            Grid.Column="2"
                             Style="{StaticResource Win10IconButtonStyle}"
                             Width="40"
                             Height="40"

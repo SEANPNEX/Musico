@@ -11,16 +11,21 @@ struct RootView: View {
     @Environment(PlayerController.self) private var player
     @Environment(LibraryStore.self) private var library
     @Environment(QueueStore.self) private var queues
+    @Environment(PlayHistoryStore.self) private var history
+    @Environment(\.appNavigation) private var navigation
     @Environment(\.horizontalSizeClass) private var sizeClass
-    @State private var showPlayer: Bool
+    @State private var localShowPlayer: Bool
+    @State private var didApplyInitialPlayerState = false
     @Namespace private var playerTransition
     private let fixedLayout: AppLayout?
+    private let initialShowPlayer: Bool
 
     /// - Parameters:
     ///   - showPlayer: open with the full player already showing (used by tests).
     ///   - layout: use this layout whatever the window size (used by tests).
     init(showPlayer: Bool = false, layout: AppLayout? = nil) {
-        _showPlayer = State(initialValue: showPlayer)
+        _localShowPlayer = State(initialValue: showPlayer)
+        initialShowPlayer = showPlayer
         fixedLayout = layout
     }
 
@@ -32,7 +37,10 @@ struct RootView: View {
             Group {
                 switch layout {
                 case .tabs: tabs
-                case .sidebar: SidebarRootView { showPlayer = true }
+                case .sidebar: SidebarRootView {
+                    localShowPlayer = true
+                    navigation.showPlayer = true
+                }
                 }
             }
             // The full player is a sheet over the tabs and fills the window over the sidebar layout.
@@ -46,8 +54,20 @@ struct RootView: View {
             }
             .fullScreenCover(isPresented: playerShown(when: layout == .sidebar)) { fullPlayer }
         }
+        .onAppear {
+            if !didApplyInitialPlayerState {
+                didApplyInitialPlayerState = true
+                if initialShowPlayer {
+                    navigation.showPlayer = true
+                }
+            }
+        }
+        .onChange(of: navigation.showPlayer) { _, newValue in
+            localShowPlayer = newValue
+        }
         .modifier(NewPlaylistAlert())
         .modifier(CloudExportHostModifier())
+        .modifier(SongInfoHostModifier())
         .alert("Playback Problem", isPresented: Binding(get: { player.errorMessage != nil }, set: { if !$0 { player.errorMessage = nil } })) {
             Button("OK", role: .cancel) {}
         } message: {
@@ -67,17 +87,18 @@ struct RootView: View {
     @available(iOS 26.0, macCatalyst 26.0, *)
     @ViewBuilder
     private var modernTabs: some View {
-        let baseTabs = TabView {
-            Tab("Folders", systemImage: "folder") {
+        @Bindable var navigation = navigation
+        let baseTabs = TabView(selection: $navigation.selectedTab) {
+            Tab("Folders", systemImage: "folder", value: AppTab.folders) {
                 NavigationStack { FoldersView() }
             }
-            Tab("Library", systemImage: "music.note.list") {
-                NavigationStack { LibraryView() }
+            Tab("Library", systemImage: "music.note.list", value: AppTab.library) {
+                NavigationStack(path: $navigation.libraryPath) { LibraryView() }
             }
-            Tab("Queues", systemImage: "list.bullet") {
+            Tab("Queues", systemImage: "list.bullet", value: AppTab.queues) {
                 NavigationStack { QueuesView() }
             }
-            Tab("Stats", systemImage: "chart.bar") {
+            Tab("Stats", systemImage: "chart.bar", value: AppTab.stats) {
                 NavigationStack { StatsView() }
             }
         }
@@ -97,16 +118,23 @@ struct RootView: View {
     }
 
     private var legacyTabs: some View {
-        TabView {
-            tab("Folders", "folder") { FoldersView() }
-            tab("Library", "music.note.list") { LibraryView() }
-            tab("Queues", "list.bullet") { QueuesView() }
-            tab("Stats", "chart.bar") { StatsView() }
+        @Bindable var navigation = navigation
+        return TabView(selection: $navigation.selectedTab) {
+            tab("Folders", "folder", tag: .folders) { FoldersView() }
+            tab("Library", "music.note.list", tag: .library, path: $navigation.libraryPath) { LibraryView() }
+            tab("Queues", "list.bullet", tag: .queues) { QueuesView() }
+            tab("Stats", "chart.bar", tag: .stats) { StatsView() }
         }
     }
 
     private func playerShown(when active: Bool) -> Binding<Bool> {
-        Binding(get: { showPlayer && active }, set: { showPlayer = $0 })
+        Binding(
+            get: { localShowPlayer && active },
+            set: { newValue in
+                localShowPlayer = newValue
+                navigation.showPlayer = newValue
+            }
+        )
     }
 
     // The stores are handed over explicitly: on the Mac the player is first evaluated before it
@@ -116,20 +144,32 @@ struct RootView: View {
             .environment(player)
             .environment(library)
             .environment(queues)
+            .environment(history)
+            .environment(\.appNavigation, navigation)
     }
 
     @ViewBuilder
     private func miniPlayer(isGlassAccessory: Bool) -> some View {
+        let open = {
+            localShowPlayer = true
+            navigation.showPlayer = true
+        }
         if #available(iOS 18.0, macCatalyst 18.0, *) {
-            MiniPlayerView(isGlassAccessory: isGlassAccessory) { showPlayer = true }
+            MiniPlayerView(isGlassAccessory: isGlassAccessory, onOpen: open)
                 .matchedTransitionSource(id: "nowPlaying", in: playerTransition)
         } else {
-            MiniPlayerView(isGlassAccessory: isGlassAccessory) { showPlayer = true }
+            MiniPlayerView(isGlassAccessory: isGlassAccessory, onOpen: open)
         }
     }
 
-    private func tab(_ title: String, _ icon: String, @ViewBuilder content: () -> some View) -> some View {
-        NavigationStack { content() }
+    private func tab(_ title: String, _ icon: String, tag: AppTab, path: Binding<NavigationPath>? = nil, @ViewBuilder content: () -> some View) -> some View {
+        Group {
+            if let path {
+                NavigationStack(path: path) { content() }
+            } else {
+                NavigationStack { content() }
+            }
+        }
             // The inset below does not reach lists inside the navigation stack, so their last
             // rows would stay hidden behind the mini player without this margin.
             .contentMargins(.bottom, player.currentTrack == nil ? 0 : MiniPlayerView.height, for: .scrollContent)
@@ -139,5 +179,6 @@ struct RootView: View {
                 }
             }
             .tabItem { Label(title, systemImage: icon) }
+            .tag(tag)
     }
 }

@@ -56,6 +56,9 @@ struct MiniPlayerView: View {
             }
             .contentShape(Rectangle())
             .onTapGesture(perform: onOpen)
+            .contextMenu {
+                TrackMenuItems(ids: [track.id], favouriteID: track.id)
+            }
             .accessibilityAddTraits(.isButton)
         }
     }

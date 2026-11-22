@@ -153,6 +153,116 @@ public partial class SaveCloudFolderDialog : UserControl
         }
     }
 
+    public async void ShowTrackedFolderUpdate(AppServices services, LibraryRoot root)
+    {
+        _services = services;
+        _root = root;
+        _tracks = Array.Empty<Track>();
+        _completedFolder = root.Path;
+        _completedFile = null;
+        ResetCts();
+
+        string sourceLabel = root.EffectiveCloudKind == RootKind.CloudBilibili ? "Bilibili" : "YouTube";
+        TitleText.Text = "Update from Cloud";
+        SourceSummaryText.Text = string.IsNullOrWhiteSpace(root.SourceUrl)
+            ? $"{root.Name} · {sourceLabel}"
+            : $"{root.Name} · {sourceLabel} · {root.SourceUrl}";
+
+        FormPanel.Visibility = Visibility.Collapsed;
+        SummaryPanel.Visibility = Visibility.Collapsed;
+        PartialErrorsBanner.Visibility = Visibility.Collapsed;
+        ErrorBanner.Visibility = Visibility.Collapsed;
+        ActiveActionsPanel.Visibility = Visibility.Visible;
+        DoneActionsPanel.Visibility = Visibility.Collapsed;
+        ResetFooterLayout();
+        SaveButton.Visibility = Visibility.Collapsed;
+        Grid.SetColumn(CancelButton, 0);
+        Grid.SetColumnSpan(CancelButton, 3);
+
+        ProgressPanel.Visibility = Visibility.Visible;
+        ProgressStatusText.Text = "Checking cloud playlist...";
+        ProgressCountText.Text = string.Empty;
+        ExportProgressBar.IsIndeterminate = true;
+        ExportProgressBar.Value = 0;
+
+        SetBusy(true);
+        Visibility = Visibility.Visible;
+        Win10Animations.AnimateModalOpen(BackdropGrid, DialogCard);
+
+        var cts = new CancellationTokenSource();
+        _cts = cts;
+
+        var progress = new Progress<CloudExportProgress>(p =>
+        {
+            ExportProgressBar.IsIndeterminate = false;
+            ExportProgressBar.Maximum = Math.Max(p.Total, 1);
+            ExportProgressBar.Value = p.Completed;
+            ProgressCountText.Text = $"{p.Completed} / {p.Total}";
+            ProgressStatusText.Text = string.IsNullOrWhiteSpace(p.CurrentTrackTitle)
+                ? "Finishing..."
+                : $"Syncing \"{p.CurrentTrackTitle}\"...";
+        });
+
+        try
+        {
+            CloudUpdateResult result = await services.CloudExporter.UpdateLocalFolderAsync(
+                root,
+                progress: progress,
+                ct: cts.Token);
+
+            services.Library.MarkRootCloudSynced(root.Id);
+            if (result.AddedCount > 0)
+            {
+                await services.Library.RescanAsync();
+            }
+
+            SetBusy(false);
+            ProgressPanel.Visibility = Visibility.Collapsed;
+            SummaryPanel.Visibility = Visibility.Visible;
+
+            if (result.AddedCount == 0 && result.FailedCount == 0)
+            {
+                SummaryHeadlineText.Text = $"Already up to date ({result.SkippedCount} {(result.SkippedCount == 1 ? "song" : "songs")})";
+            }
+            else if (result.FailedCount == 0)
+            {
+                SummaryHeadlineText.Text = $"Downloaded {result.AddedCount} new {(result.AddedCount == 1 ? "song" : "songs")}, skipped {result.SkippedCount} existing";
+            }
+            else
+            {
+                SummaryHeadlineText.Text = $"Downloaded {result.AddedCount}, skipped {result.SkippedCount}, failed {result.FailedCount}";
+            }
+
+            SummaryPathText.Text = root.Path ?? string.Empty;
+            LibraryStatusText.Text = "Library rescanned.";
+            LibraryStatusText.Visibility = result.AddedCount > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+            if (result.Errors.Count > 0)
+            {
+                PartialErrorsText.Text = string.Join(Environment.NewLine, result.Errors);
+                PartialErrorsBanner.Visibility = Visibility.Visible;
+            }
+
+            ActiveActionsPanel.Visibility = Visibility.Collapsed;
+            DoneActionsPanel.Visibility = Visibility.Visible;
+            OpenFolderButton.IsEnabled = !string.IsNullOrWhiteSpace(root.Path) && Directory.Exists(root.Path);
+        }
+        catch (OperationCanceledException)
+        {
+            SetBusy(false);
+            ProgressPanel.Visibility = Visibility.Collapsed;
+            ShowError("Update cancelled.");
+            ShowCloseOnlyFooter();
+        }
+        catch (Exception ex)
+        {
+            SetBusy(false);
+            ProgressPanel.Visibility = Visibility.Collapsed;
+            ShowError(ex.Message);
+            ShowCloseOnlyFooter();
+        }
+    }
+
     public void Close()
     {
         if (_isBusy) return;
@@ -292,12 +402,14 @@ public partial class SaveCloudFolderDialog : UserControl
                 {
                     if (_services.Library.IsFolderIndexed(result.DestinationFolder))
                     {
+                        _services.Library.AttachCloudTracking(result.DestinationFolder, _root);
                         await _services.Library.RescanAsync();
+                        _services.Library.NotifyFolderAddedByPath(result.DestinationFolder);
                         libraryNote = "Library rescanned.";
                     }
                     else
                     {
-                        await _services.Library.AddRootAsync(result.DestinationFolder);
+                        await _services.Library.AddRootAsync(result.DestinationFolder, _root);
                         libraryNote = "Added saved folder to Library.";
                     }
                 }
@@ -305,6 +417,20 @@ public partial class SaveCloudFolderDialog : UserControl
                 {
                     libraryNote = $"Saved, but could not update library: {libEx.Message}";
                 }
+            }
+            else if (_services.Library.IsFolderIndexed(result.DestinationFolder))
+            {
+                _services.Library.AttachCloudTracking(result.DestinationFolder, _root);
+                await _services.Library.RescanAsync();
+                _services.Library.NotifyFolderAddedByPath(result.DestinationFolder);
+            }
+            else if (result.SavedCount > 0)
+            {
+                var trackIds = _tracks
+                    .Where(t => _services.Library.GetTrack(t.Id) is not null)
+                    .Select(t => t.Id)
+                    .ToList();
+                _services.Library.NotifyFolderAddedByPath(result.DestinationFolder, trackIds);
             }
 
             SetBusy(false);

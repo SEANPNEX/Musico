@@ -26,6 +26,11 @@ struct PlayerBar: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Open Now Playing")
+            .contextMenu {
+                if let track {
+                    TrackMenuItems(ids: [track.id], favouriteID: track.id)
+                }
+            }
 
             VStack(spacing: 2) {
                 transport
@@ -35,6 +40,17 @@ struct PlayerBar: View {
             .disabled(track == nil)
 
             HStack(spacing: 4) {
+                if let track {
+                    Menu("More", systemImage: "ellipsis.circle") {
+                        TrackMenuItems(ids: [track.id], favouriteID: track.id)
+                    }
+                    .labelStyle(.iconOnly)
+                    .buttonStyle(.plain)
+                    .font(.body)
+                    .frame(width: 36, height: 32)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Song options")
+                }
                 panelToggle("Lyrics", "quote.bubble", .lyrics)
                 panelToggle("Queue", "list.bullet", .queue)
             }

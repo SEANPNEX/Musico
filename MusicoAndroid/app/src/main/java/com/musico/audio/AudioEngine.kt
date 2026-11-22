@@ -24,17 +24,39 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
+ * Playback engine abstraction for [PlayerController].
+ */
+interface AudioPlaybackEngine {
+    var onTrackEnded: (() -> Unit)?
+    var onPlaybackError: ((String) -> Unit)?
+    var onDurationChanged: ((Double) -> Unit)?
+    var onIsPlayingChanged: ((Boolean) -> Unit)?
+
+    val currentTimeSec: Double
+    val durationSec: Double
+
+    fun load(uri: Uri, metadata: MediaMetadata? = null)
+    fun loadFile(file: File, metadata: MediaMetadata? = null) = load(Uri.fromFile(file), metadata)
+    fun loadStream(url: String, headers: Map<String, String>, metadata: MediaMetadata? = null)
+    fun play()
+    fun pause()
+    fun seekTo(sec: Double)
+    fun unload()
+    fun applyEq(settings: EqSettings)
+}
+
+/**
  * ExoPlayer wrapper with a 10-band equalizer using [DynamicsProcessing] on API 28+
  * and [Equalizer] fallback on API 26–27.
  */
 class AudioEngine(
     private val context: Context,
-) {
-    var onTrackEnded: (() -> Unit)? = null
+) : AudioPlaybackEngine {
+    override var onTrackEnded: (() -> Unit)? = null
     var onAudioSessionIdChanged: ((Int) -> Unit)? = null
-    var onPlaybackError: ((String) -> Unit)? = null
-    var onDurationChanged: ((Double) -> Unit)? = null
-    var onIsPlayingChanged: ((Boolean) -> Unit)? = null
+    override var onPlaybackError: ((String) -> Unit)? = null
+    override var onDurationChanged: ((Double) -> Unit)? = null
+    override var onIsPlayingChanged: ((Boolean) -> Unit)? = null
 
     val player: ExoPlayer
 
@@ -89,13 +111,13 @@ class AudioEngine(
         setupEqualizerForSession(currentSessionId)
     }
 
-    val currentTimeSec: Double
+    override val currentTimeSec: Double
         get() {
             val posMs = player.currentPosition
             return if (posMs > 0L) posMs / 1000.0 else 0.0
         }
 
-    val durationSec: Double
+    override val durationSec: Double
         get() {
             val durMs = player.duration
             return if (durMs != C.TIME_UNSET && durMs > 0L) durMs / 1000.0 else 0.0
@@ -105,7 +127,7 @@ class AudioEngine(
         get() = player.isPlaying
 
     @Throws(IOException::class)
-    fun load(uri: Uri, metadata: MediaMetadata? = null) {
+    override fun load(uri: Uri, metadata: MediaMetadata?) {
         if (uri.scheme == "file") {
             val path = uri.path ?: throw IOException("Invalid file URI")
             val file = File(path)
@@ -125,10 +147,10 @@ class AudioEngine(
 
     @OptIn(UnstableApi::class)
     @Throws(IOException::class)
-    fun loadStream(
+    override fun loadStream(
         url: String,
         headers: Map<String, String>,
-        metadata: MediaMetadata? = null,
+        metadata: MediaMetadata?,
     ) {
         if (url.isBlank()) throw IOException("Empty stream URL")
         val dataSourceFactory = DefaultHttpDataSource.Factory()
@@ -147,7 +169,7 @@ class AudioEngine(
         player.prepare()
     }
 
-    fun play() {
+    override fun play() {
         if (player.playbackState == Player.STATE_ENDED) {
             player.seekTo(0L)
         }
@@ -155,23 +177,23 @@ class AudioEngine(
         player.play()
     }
 
-    fun pause() {
+    override fun pause() {
         player.playWhenReady = false
         player.pause()
     }
 
-    fun seekTo(sec: Double) {
+    override fun seekTo(sec: Double) {
         val safeSec = if (sec.isFinite() && sec >= 0.0) sec else 0.0
         player.seekTo((safeSec * 1000.0).toLong())
     }
 
-    fun unload() {
+    override fun unload() {
         player.playWhenReady = false
         player.stop()
         player.clearMediaItems()
     }
 
-    fun applyEq(settings: EqSettings) {
+    override fun applyEq(settings: EqSettings) {
         lastEqSettings = settings
         applyCurrentEq()
     }

@@ -3,9 +3,11 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
 using MusicoWindows.Converters;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
+using MusicoWindows.Views;
 
 namespace MusicoWindows.Controls;
 
@@ -18,6 +20,7 @@ public enum SidePanelKind
 public partial class PlayerBar : UserControl
 {
     private AppServices? _services;
+    private ViewContext? _ctx;
     private bool _isScrubbing;
     private bool _updatingVolume;
     private SidePanelKind? _activeSidePanel;
@@ -30,6 +33,12 @@ public partial class PlayerBar : UserControl
     public PlayerBar()
     {
         InitializeComponent();
+    }
+
+    public void Initialize(ViewContext ctx)
+    {
+        _ctx = ctx;
+        Initialize(ctx.Services);
     }
 
     public void Initialize(AppServices services)
@@ -144,6 +153,23 @@ public partial class PlayerBar : UserControl
     }
 
     private void NowPlaying_Click(object sender, RoutedEventArgs e) => OpenFullPlayerRequested?.Invoke();
+
+    private void NowPlaying_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_services?.Player.CurrentTrack is not { } track) return;
+
+        var menu = TrackMenuHelper.BuildTrackMenu(
+            _services,
+            [track.Id],
+            track.Id,
+            _ctx?.OpenTextPrompt ?? ((_, _, _, _, _) => { }),
+            null,
+            _ctx?.OpenSaveCloudTrack,
+            _ctx?.OpenSongInfo);
+        menu.PlacementTarget = NowPlayingButton;
+        menu.IsOpen = true;
+        e.Handled = true;
+    }
     private void Shuffle_Click(object sender, RoutedEventArgs e) => _services?.Player.ToggleShuffle();
     private void Prev_Click(object sender, RoutedEventArgs e) => _services?.Player.Previous();
     private void PlayPause_Click(object sender, RoutedEventArgs e) => _services?.Player.TogglePlayPause();

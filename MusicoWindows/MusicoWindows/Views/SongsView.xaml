@@ -30,6 +30,32 @@
 
                 <!-- Search & Sort Controls -->
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Border x:Name="SearchFieldChip"
+                            Background="{DynamicResource AccentSubtleBrush}"
+                            BorderBrush="{DynamicResource AccentBrush}"
+                            BorderThickness="1"
+                            Height="32"
+                            Padding="8,0,4,0"
+                            Margin="0,0,6,0"
+                            Visibility="Collapsed"
+                            VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock x:Name="SearchFieldLabel"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource AccentBrush}"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,4,0" />
+                            <Button Style="{StaticResource Win10IconButtonStyle}"
+                                    Width="20"
+                                    Height="20"
+                                    FontSize="9"
+                                    Content="&#xE711;"
+                                    ToolTip="Clear field filter"
+                                    Click="ClearSearchField_Click" />
+                        </StackPanel>
+                    </Border>
                     <Grid Width="240" Margin="0,0,10,0">
                         <TextBox x:Name="SearchBox"
                                  Style="{StaticResource Win10TextBoxStyle}"

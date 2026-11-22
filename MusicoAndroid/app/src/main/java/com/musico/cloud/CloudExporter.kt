@@ -4,12 +4,16 @@ import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import com.musico.model.LibraryRoot
+import com.musico.model.RootKind
 import com.musico.model.Track
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
@@ -17,11 +21,29 @@ import java.io.OutputStream
 import java.net.HttpURLConnection
 import java.net.URL
 
+@Serializable
+data class CloudFolderManifest(
+    val sourceURL: String,
+    val remoteID: String? = null,
+    val cloudKind: String,
+    val lastSyncedEpochMs: Long = 0L,
+    val tracks: Map<String, String> = emptyMap(),
+)
+
 data class CloudExportSummary(
     val savedCount: Int,
     val failedCount: Int,
     val targetTreeUri: Uri? = null,
     val targetDir: File? = null,
+    val savedFolderName: String? = null,
+    val errors: List<String> = emptyList(),
+)
+
+data class CloudUpdateSummary(
+    val addedCount: Int,
+    val skippedCount: Int,
+    val failedCount: Int,
+    val totalRemoteCount: Int,
     val errors: List<String> = emptyList(),
 )
 
@@ -136,6 +158,7 @@ class CloudExporter(
         }
 
         val existingNames = targetDir.list()?.toMutableSet() ?: mutableSetOf()
+        val trackedMap = (loadManifest(targetDir)?.tracks ?: emptyMap()).toMutableMap()
         val errors = mutableListOf<String>()
         var savedCount = 0
         var failedCount = 0
@@ -146,6 +169,10 @@ class CloudExporter(
             try {
                 val savedName = downloadToFileDir(track, root, targetDir, existingNames)
                 existingNames.add(savedName)
+                val trackKey = track.remoteTrackId ?: track.relativePath
+                if (trackKey.isNotEmpty()) {
+                    trackedMap[trackKey] = savedName
+                }
                 savedCount += 1
             } catch (cancel: CancellationException) {
                 throw cancel
@@ -157,11 +184,29 @@ class CloudExporter(
             }
         }
 
+        val sourceUrl = root?.sourceUrl?.trim()
+        val cloudKind = root?.effectiveCloudKind
+        if (!sourceUrl.isNullOrEmpty() && cloudKind != null) {
+            runCatching {
+                saveManifest(
+                    targetDir,
+                    CloudFolderManifest(
+                        sourceURL = sourceUrl,
+                        remoteID = root.remoteId,
+                        cloudKind = cloudKind.name,
+                        lastSyncedEpochMs = System.currentTimeMillis(),
+                        tracks = trackedMap,
+                    ),
+                )
+            }
+        }
+
         CloudExportSummary(
             savedCount = savedCount,
             failedCount = failedCount,
             targetTreeUri = null,
             targetDir = targetDir,
+            savedFolderName = targetDir.name,
             errors = errors,
         )
     }
@@ -200,6 +245,7 @@ class CloudExporter(
             }
 
             val existingNames = subDirDoc.listFiles().mapNotNullTo(mutableSetOf()) { it.name }
+            val trackedMap = (loadManifest(ctx, subDirDoc)?.tracks ?: emptyMap()).toMutableMap()
             val errors = mutableListOf<String>()
             var savedCount = 0
             var failedCount = 0
@@ -210,6 +256,10 @@ class CloudExporter(
                 try {
                     val savedName = downloadToDocumentDir(ctx, track, root, subDirDoc, existingNames)
                     existingNames.add(savedName)
+                    val trackKey = track.remoteTrackId ?: track.relativePath
+                    if (trackKey.isNotEmpty()) {
+                        trackedMap[trackKey] = savedName
+                    }
                     savedCount += 1
                 } catch (cancel: CancellationException) {
                     throw cancel
@@ -221,11 +271,233 @@ class CloudExporter(
                 }
             }
 
+            val sourceUrl = root?.sourceUrl?.trim()
+            val cloudKind = root?.effectiveCloudKind
+            if (!sourceUrl.isNullOrEmpty() && cloudKind != null) {
+                runCatching {
+                    saveManifest(
+                        ctx,
+                        subDirDoc,
+                        CloudFolderManifest(
+                            sourceURL = sourceUrl,
+                            remoteID = root.remoteId,
+                            cloudKind = cloudKind.name,
+                            lastSyncedEpochMs = System.currentTimeMillis(),
+                            tracks = trackedMap,
+                        ),
+                    )
+                }
+            }
+
             CloudExportSummary(
                 savedCount = savedCount,
                 failedCount = failedCount,
                 targetTreeUri = subDirDoc.uri,
                 targetDir = null,
+                savedFolderName = subDirDoc.name ?: safeFolder,
+                errors = errors,
+            )
+        }
+    }
+
+    suspend fun updateLocalFolder(
+        root: LibraryRoot,
+        targetDir: File,
+        fetchPlaylist: suspend (sourceUrl: String, cookie: String?, kindHint: RootKind?) -> CloudPlaylistResult,
+        onProgress: (done: Int, total: Int, title: String) -> Unit = { _, _, _ -> },
+    ): CloudUpdateSummary = withContext(Dispatchers.IO) {
+        val existingManifest = loadManifest(targetDir)
+        val rawSource = (existingManifest?.sourceURL ?: root.sourceUrl ?: root.remoteId ?: "").trim()
+        if (rawSource.isEmpty()) throw IOException("No cloud tracking source URL is associated with this folder.")
+        val kindHint = root.effectiveCloudKind
+            ?: existingManifest?.cloudKind?.let { raw -> runCatching { RootKind.valueOf(raw) }.getOrNull() }
+
+        val playlist = fetchPlaylist(rawSource, root.cookie, kindHint)
+        if (!targetDir.exists() && !targetDir.mkdirs()) {
+            throw IOException("Could not access target folder: ${targetDir.absolutePath}")
+        }
+
+        val cloudKind = if (playlist.source == CloudSource.YOUTUBE) RootKind.CLOUD_YOUTUBE else RootKind.CLOUD_BILIBILI
+        val lookupRoot = root.copy(kind = cloudKind, sourceUrl = rawSource, remoteId = playlist.remoteId)
+        val existingNames = targetDir.list()?.toMutableSet() ?: mutableSetOf()
+        val trackedMap = (existingManifest?.tracks ?: emptyMap()).toMutableMap()
+        val sourceSlug = cloudKind.name.lowercase()
+        val nowMs = System.currentTimeMillis()
+        val errors = mutableListOf<String>()
+        var addedCount = 0
+        var skippedCount = 0
+        var failedCount = 0
+
+        for ((index, meta) in playlist.tracks.withIndex()) {
+            currentCoroutineContext().ensureActive()
+            onProgress(index, playlist.tracks.size, meta.title)
+
+            val recordedName = trackedMap[meta.remoteTrackId]
+            if (recordedName != null && File(targetDir, recordedName).exists()) {
+                skippedCount += 1
+                onProgress(index + 1, playlist.tracks.size, meta.title)
+                continue
+            }
+
+            val relPath = "$sourceSlug/${meta.remoteTrackId}"
+            val tempTrack = Track(
+                id = Track.makeId(root.id, relPath),
+                rootId = root.id,
+                relativePath = relPath,
+                title = meta.title.ifBlank { meta.remoteTrackId },
+                artist = meta.artist.ifBlank { root.name },
+                album = meta.album.ifBlank { playlist.title.ifBlank { root.name } },
+                albumArtist = meta.artist.ifBlank { root.name },
+                trackNumber = meta.trackNumber ?: (index + 1),
+                durationSec = meta.durationSec,
+                fileSize = 0L,
+                modifiedEpochMs = 0L,
+                dateAddedEpochMs = nowMs,
+                cloudSource = playlist.source,
+                remoteTrackId = meta.remoteTrackId,
+                remoteArtworkUrl = meta.artworkUrl,
+            )
+
+            try {
+                val savedName = downloadToFileDir(tempTrack, lookupRoot, targetDir, existingNames)
+                existingNames.add(savedName)
+                trackedMap[meta.remoteTrackId] = savedName
+                addedCount += 1
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (err: Exception) {
+                failedCount += 1
+                errors.add("${meta.title}: ${err.message ?: err.javaClass.simpleName}")
+            } finally {
+                onProgress(index + 1, playlist.tracks.size, meta.title)
+            }
+        }
+
+        saveManifest(
+            targetDir,
+            CloudFolderManifest(
+                sourceURL = rawSource,
+                remoteID = playlist.remoteId,
+                cloudKind = cloudKind.name,
+                lastSyncedEpochMs = System.currentTimeMillis(),
+                tracks = trackedMap,
+            ),
+        )
+
+        CloudUpdateSummary(
+            addedCount = addedCount,
+            skippedCount = skippedCount,
+            failedCount = failedCount,
+            totalRemoteCount = playlist.tracks.size,
+            errors = errors,
+        )
+    }
+
+    suspend fun updateLocalFolder(
+        root: LibraryRoot,
+        treeUri: Uri,
+        fetchPlaylist: suspend (sourceUrl: String, cookie: String?, kindHint: RootKind?) -> CloudPlaylistResult,
+        onProgress: (done: Int, total: Int, title: String) -> Unit = { _, _, _ -> },
+    ): CloudUpdateSummary {
+        if (treeUri.scheme == "file") {
+            val path = treeUri.path ?: throw IOException("Invalid file URI: $treeUri")
+            val baseDir = File(path)
+            val targetDir = root.trackedSubfolderName?.takeIf { it.isNotBlank() }?.let { File(baseDir, it) } ?: baseDir
+            return updateLocalFolder(root, targetDir, fetchPlaylist, onProgress)
+        }
+        return withContext(Dispatchers.IO) {
+            val ctx = context ?: throw IOException("Android context unavailable for SAF export.")
+            val rootDoc = DocumentFile.fromTreeUri(ctx, treeUri)
+                ?: throw IOException("Could not open saved folder.")
+            val targetDoc = root.trackedSubfolderName?.takeIf { it.isNotBlank() }?.let { subName ->
+                rootDoc.findFile(subName)?.takeIf { it.isDirectory }
+                    ?: rootDoc.createDirectory(subName)
+                    ?: throw IOException("Could not open subfolder $subName.")
+            } ?: rootDoc
+            if (!targetDoc.exists() || !targetDoc.isDirectory || !targetDoc.canWrite()) {
+                throw IOException("Saved folder is not writable. Re-select it to grant write permission.")
+            }
+
+            val existingManifest = loadManifest(ctx, targetDoc)
+            val rawSource = (existingManifest?.sourceURL ?: root.sourceUrl ?: root.remoteId ?: "").trim()
+            if (rawSource.isEmpty()) throw IOException("No cloud tracking source URL is associated with this folder.")
+            val kindHint = root.effectiveCloudKind
+                ?: existingManifest?.cloudKind?.let { raw -> runCatching { RootKind.valueOf(raw) }.getOrNull() }
+
+            val playlist = fetchPlaylist(rawSource, root.cookie, kindHint)
+            val cloudKind = if (playlist.source == CloudSource.YOUTUBE) RootKind.CLOUD_YOUTUBE else RootKind.CLOUD_BILIBILI
+            val lookupRoot = root.copy(kind = cloudKind, sourceUrl = rawSource, remoteId = playlist.remoteId)
+            val existingNames = targetDoc.listFiles().mapNotNullTo(mutableSetOf()) { it.name }
+            val trackedMap = (existingManifest?.tracks ?: emptyMap()).toMutableMap()
+            val sourceSlug = cloudKind.name.lowercase()
+            val nowMs = System.currentTimeMillis()
+            val errors = mutableListOf<String>()
+            var addedCount = 0
+            var skippedCount = 0
+            var failedCount = 0
+
+            for ((index, meta) in playlist.tracks.withIndex()) {
+                currentCoroutineContext().ensureActive()
+                onProgress(index, playlist.tracks.size, meta.title)
+
+                val recordedName = trackedMap[meta.remoteTrackId]
+                if (recordedName != null && recordedName in existingNames) {
+                    skippedCount += 1
+                    onProgress(index + 1, playlist.tracks.size, meta.title)
+                    continue
+                }
+
+                val relPath = "$sourceSlug/${meta.remoteTrackId}"
+                val tempTrack = Track(
+                    id = Track.makeId(root.id, relPath),
+                    rootId = root.id,
+                    relativePath = relPath,
+                    title = meta.title.ifBlank { meta.remoteTrackId },
+                    artist = meta.artist.ifBlank { root.name },
+                    album = meta.album.ifBlank { playlist.title.ifBlank { root.name } },
+                    albumArtist = meta.artist.ifBlank { root.name },
+                    trackNumber = meta.trackNumber ?: (index + 1),
+                    durationSec = meta.durationSec,
+                    fileSize = 0L,
+                    modifiedEpochMs = 0L,
+                    dateAddedEpochMs = nowMs,
+                    cloudSource = playlist.source,
+                    remoteTrackId = meta.remoteTrackId,
+                    remoteArtworkUrl = meta.artworkUrl,
+                )
+
+                try {
+                    val savedName = downloadToDocumentDir(ctx, tempTrack, lookupRoot, targetDoc, existingNames)
+                    existingNames.add(savedName)
+                    trackedMap[meta.remoteTrackId] = savedName
+                    addedCount += 1
+                } catch (cancel: CancellationException) {
+                    throw cancel
+                } catch (err: Exception) {
+                    failedCount += 1
+                    errors.add("${meta.title}: ${err.message ?: err.javaClass.simpleName}")
+                } finally {
+                    onProgress(index + 1, playlist.tracks.size, meta.title)
+                }
+            }
+
+            saveManifest(
+                ctx,
+                targetDoc,
+                CloudFolderManifest(
+                    sourceURL = rawSource,
+                    remoteID = playlist.remoteId,
+                    cloudKind = cloudKind.name,
+                    lastSyncedEpochMs = System.currentTimeMillis(),
+                    tracks = trackedMap,
+                ),
+            )
+
+            CloudUpdateSummary(
+                addedCount = addedCount,
+                skippedCount = skippedCount,
+                failedCount = failedCount,
+                totalRemoteCount = playlist.tracks.size,
                 errors = errors,
             )
         }
@@ -341,9 +613,61 @@ class CloudExporter(
     }
 
     companion object {
+        const val MANIFEST_FILE_NAME = ".musico-cloud.json"
+        private const val SAF_MANIFEST_FILE_NAME = "musico-cloud.json"
+        private val manifestJson = Json {
+            ignoreUnknownKeys = true
+            prettyPrint = true
+        }
         private val INVALID_FILENAME_CHARS = Regex("[\\\\/:*?\"<>|\\u0000-\\u001F\\u007F]")
         private val MULTI_WHITESPACE = Regex("\\s+")
         private const val MAX_BASENAME_LENGTH = 120
+
+        fun loadManifest(dir: File): CloudFolderManifest? {
+            val file = listOf(MANIFEST_FILE_NAME, SAF_MANIFEST_FILE_NAME)
+                .map { File(dir, it) }
+                .firstOrNull { it.exists() && it.isFile } ?: return null
+            return runCatching {
+                manifestJson.decodeFromString<CloudFolderManifest>(file.readText(Charsets.UTF_8))
+            }.getOrNull()
+        }
+
+        fun saveManifest(dir: File, manifest: CloudFolderManifest) {
+            if (!dir.exists()) dir.mkdirs()
+            val file = File(dir, MANIFEST_FILE_NAME)
+            val tmp = File(dir, ".$MANIFEST_FILE_NAME.tmp")
+            tmp.writeText(manifestJson.encodeToString(manifest), Charsets.UTF_8)
+            if (!tmp.renameTo(file)) {
+                tmp.copyTo(file, overwrite = true)
+                tmp.delete()
+            }
+        }
+
+        fun loadManifest(context: Context, dirDoc: DocumentFile): CloudFolderManifest? {
+            val doc = dirDoc.listFiles().firstOrNull {
+                it.name == MANIFEST_FILE_NAME || it.name == SAF_MANIFEST_FILE_NAME
+            } ?: return null
+            return runCatching {
+                context.contentResolver.openInputStream(doc.uri)?.use { input ->
+                    val text = input.readBytes().toString(Charsets.UTF_8)
+                    manifestJson.decodeFromString<CloudFolderManifest>(text)
+                }
+            }.getOrNull()
+        }
+
+        fun saveManifest(context: Context, dirDoc: DocumentFile, manifest: CloudFolderManifest) {
+            val payload = manifestJson.encodeToString(manifest).toByteArray(Charsets.UTF_8)
+            dirDoc.listFiles()
+                .filter { it.name == MANIFEST_FILE_NAME || it.name == SAF_MANIFEST_FILE_NAME }
+                .forEach { runCatching { it.delete() } }
+            val created = dirDoc.createFile("application/octet-stream", MANIFEST_FILE_NAME)
+                ?: dirDoc.createFile("application/octet-stream", SAF_MANIFEST_FILE_NAME)
+                ?: throw IOException("Could not create cloud manifest file.")
+            context.contentResolver.openOutputStream(created.uri)?.use { out ->
+                out.write(payload)
+                out.flush()
+            } ?: throw IOException("Could not write cloud manifest file.")
+        }
 
         fun sanitizeFileName(raw: String, fallback: String = "track"): String {
             val safeFallback = cleanSegment(fallback).ifBlank { "track" }

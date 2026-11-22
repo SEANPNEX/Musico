@@ -34,6 +34,7 @@ import androidx.compose.material.icons.rounded.Bedtime
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.MusicNote
@@ -74,6 +75,7 @@ import com.musico.model.RepeatMode
 import com.musico.model.SleepMode
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
+import com.musico.store.PlayHistoryUiState
 import com.musico.store.QueueStore
 import com.musico.store.QueueUiState
 import com.musico.ui.components.ArtworkImage
@@ -99,6 +101,7 @@ enum class PlayerSidePane(val label: String) {
 fun FullPlayerScreen(
     libraryStore: LibraryStore,
     libraryState: LibraryUiState,
+    historyState: PlayHistoryUiState,
     queueStore: QueueStore,
     queueState: QueueUiState,
     lyricsStore: LyricsStore,
@@ -139,6 +142,7 @@ fun FullPlayerScreen(
                                 else -> activeSheet = target
                             }
                         },
+                        onOpenSongInfo = { trackId -> trackActions.songInfoTrackId = trackId },
                         onClose = onClose,
                         modifier = Modifier
                             .weight(1f)
@@ -192,6 +196,7 @@ fun FullPlayerScreen(
                                 PlayerSidePane.QUEUE -> QueuesContent(
                                     libraryStore = libraryStore,
                                     libraryState = libraryState,
+                                    historyState = historyState,
                                     queueStore = queueStore,
                                     queueState = queueState,
                                     playerController = playerController,
@@ -212,6 +217,7 @@ fun FullPlayerScreen(
                     playerController = playerController,
                     playerState = playerState,
                     onOpenSheet = { activeSheet = it },
+                    onOpenSongInfo = { trackId -> trackActions.songInfoTrackId = trackId },
                     onClose = onClose,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -223,6 +229,7 @@ fun FullPlayerScreen(
         PlayerModalSheet.QUEUE -> QueueSheet(
             libraryStore = libraryStore,
             libraryState = libraryState,
+            historyState = historyState,
             queueStore = queueStore,
             queueState = queueState,
             playerController = playerController,
@@ -260,6 +267,7 @@ private fun PlayerControlsPane(
     playerController: PlayerController,
     playerState: PlayerUiState,
     onOpenSheet: (PlayerModalSheet) -> Unit,
+    onOpenSongInfo: (String) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -275,7 +283,8 @@ private fun PlayerControlsPane(
     ) {
         Row(
             modifier = Modifier.fillMaxWidth(),
-            verticalAlignment = Alignment.CenterVertically
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween
         ) {
             IconButton(onClick = onClose) {
                 Icon(
@@ -283,6 +292,14 @@ private fun PlayerControlsPane(
                     contentDescription = "Close player",
                     modifier = Modifier.size(30.dp)
                 )
+            }
+            if (track != null) {
+                IconButton(onClick = { onOpenSongInfo(track.id) }) {
+                    Icon(
+                        imageVector = Icons.Rounded.Info,
+                        contentDescription = "Song Info"
+                    )
+                }
             }
         }
 

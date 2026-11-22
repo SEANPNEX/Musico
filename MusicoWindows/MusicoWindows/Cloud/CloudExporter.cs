@@ -3,12 +3,27 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MusicoWindows.Core;
 using MusicoWindows.Models;
 
 namespace MusicoWindows.Cloud;
+
+public sealed record CloudFolderManifest(
+    string SourceUrl,
+    string? RemoteId,
+    string CloudKind,
+    DateTimeOffset LastSyncedUtc,
+    Dictionary<string, string> Tracks);
+
+public sealed record CloudUpdateResult(
+    int AddedCount,
+    int SkippedCount,
+    int FailedCount,
+    int TotalRemoteCount,
+    IReadOnlyList<string> Errors);
 
 public sealed record CloudExportProgress(
     int Completed,
@@ -29,6 +44,13 @@ public sealed record CloudExportResult(
 public sealed class CloudExporter
 {
     public const int MaxFileNameLength = 120;
+    public const string ManifestFileName = ".musico-cloud.json";
+
+    private static readonly JsonSerializerOptions ManifestJsonOptions = new()
+    {
+        WriteIndented = true,
+        PropertyNameCaseInsensitive = true
+    };
 
     private static readonly HashSet<string> ReservedDeviceNames = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -153,6 +175,11 @@ public sealed class CloudExporter
         string destinationFolder = Path.Combine(parentDirectory, safeFolderName);
         Directory.CreateDirectory(destinationFolder);
 
+        var existingManifest = LoadManifest(destinationFolder);
+        var trackedMap = existingManifest?.Tracks is not null
+            ? new Dictionary<string, string>(existingManifest.Tracks, StringComparer.Ordinal)
+            : new Dictionary<string, string>(StringComparer.Ordinal);
+
         var cloudTracks = tracks.Where(t => t.IsCloud).ToList();
         int savedCount = 0;
         int failedCount = 0;
@@ -166,7 +193,14 @@ public sealed class CloudExporter
 
             try
             {
-                await ExportTrackAsync(track, root, destinationFolder, ct).ConfigureAwait(false);
+                string destPath = await ExportTrackAsync(track, root, destinationFolder, ct).ConfigureAwait(false);
+                string trackKey = !string.IsNullOrWhiteSpace(track.RemoteTrackId)
+                    ? track.RemoteTrackId!
+                    : track.RelativePath;
+                if (!string.IsNullOrWhiteSpace(trackKey))
+                {
+                    trackedMap[trackKey] = Path.GetFileName(destPath);
+                }
                 savedCount++;
             }
             catch (OperationCanceledException)
@@ -180,8 +214,197 @@ public sealed class CloudExporter
             }
         }
 
+        string? sourceUrl = string.IsNullOrWhiteSpace(root.SourceUrl) ? null : root.SourceUrl.Trim();
+        RootKind? cloudKind = root.EffectiveCloudKind;
+        if (sourceUrl is not null && cloudKind is { } kind)
+        {
+            try
+            {
+                SaveManifest(
+                    destinationFolder,
+                    new CloudFolderManifest(
+                        SourceUrl: sourceUrl,
+                        RemoteId: root.RemoteId,
+                        CloudKind: kind.ToString(),
+                        LastSyncedUtc: DateTimeOffset.UtcNow,
+                        Tracks: trackedMap));
+            }
+            catch
+            {
+                // Best effort; exported audio files remain valid even if manifest write fails.
+            }
+        }
+
         progress?.Report(new CloudExportProgress(cloudTracks.Count, cloudTracks.Count, string.Empty, failedCount));
         return new CloudExportResult(savedCount, failedCount, destinationFolder, errors);
+    }
+
+    public async Task<CloudUpdateResult> UpdateLocalFolderAsync(
+        LibraryRoot root,
+        Func<string, string?, string?, RootKind?, CancellationToken, Task<CloudPlaylistResult>>? fetchPlaylist = null,
+        IProgress<CloudExportProgress>? progress = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        if (string.IsNullOrWhiteSpace(root.Path))
+        {
+            throw new DirectoryNotFoundException("Saved folder location is unavailable.");
+        }
+
+        string folderPath = root.Path;
+        Directory.CreateDirectory(folderPath);
+
+        CloudFolderManifest? existingManifest = LoadManifest(folderPath);
+        string rawSource = (existingManifest?.SourceUrl ?? root.SourceUrl ?? root.RemoteId ?? string.Empty).Trim();
+        if (rawSource.Length == 0)
+        {
+            throw new InvalidOperationException("No cloud tracking source URL is associated with this folder.");
+        }
+
+        RootKind? kindHint = root.EffectiveCloudKind;
+        if (kindHint is null &&
+            existingManifest is not null &&
+            Enum.TryParse<RootKind>(existingManifest.CloudKind, ignoreCase: true, out var parsedKind) &&
+            parsedKind.IsCloud())
+        {
+            kindHint = parsedKind;
+        }
+
+        CloudPlaylistResult playlist;
+        if (fetchPlaylist is not null)
+        {
+            playlist = await fetchPlaylist(rawSource, root.Cookie, root.ProxyUrl, kindHint, ct).ConfigureAwait(false);
+        }
+        else
+        {
+            RootKind resolvedKind = kindHint ?? CloudUrlClassifier.Classify(rawSource);
+            playlist = resolvedKind == RootKind.CloudBilibili
+                ? await _bilibili.FetchPlaylistAsync(rawSource, root.Cookie, root.ProxyUrl, ct).ConfigureAwait(false)
+                : await _youtube.FetchPlaylistAsync(rawSource, root.Cookie, root.ProxyUrl, ct).ConfigureAwait(false);
+        }
+
+        var trackedMap = existingManifest?.Tracks is not null
+            ? new Dictionary<string, string>(existingManifest.Tracks, StringComparer.Ordinal)
+            : new Dictionary<string, string>(StringComparer.Ordinal);
+
+        string cloudSource = playlist.Kind == RootKind.CloudBilibili ? CloudSources.Bilibili : CloudSources.YouTube;
+        string albumArtist = playlist.Kind == RootKind.CloudBilibili ? "Bilibili" : "YouTube";
+        var lookupRoot = root with
+        {
+            Kind = playlist.Kind,
+            SourceUrl = string.IsNullOrWhiteSpace(playlist.SourceUrl) ? rawSource : playlist.SourceUrl,
+            RemoteId = playlist.RemoteId
+        };
+
+        int addedCount = 0;
+        int skippedCount = 0;
+        int failedCount = 0;
+        var errors = new List<string>();
+        var now = DateTimeOffset.UtcNow;
+
+        for (int i = 0; i < playlist.Items.Count; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var item = playlist.Items[i];
+            progress?.Report(new CloudExportProgress(i, playlist.Items.Count, item.Title, failedCount));
+
+            if (trackedMap.TryGetValue(item.RemoteTrackId, out string? recordedFile) &&
+                !string.IsNullOrWhiteSpace(recordedFile) &&
+                File.Exists(Path.Combine(folderPath, recordedFile)))
+            {
+                skippedCount++;
+                continue;
+            }
+
+            string relPath = $"cloud/{item.RemoteTrackId}";
+            var tempTrack = new Track(
+                Id: Track.MakeId(root.Id, relPath),
+                RootId: root.Id,
+                RelativePath: relPath,
+                Title: string.IsNullOrWhiteSpace(item.Title) ? item.RemoteTrackId : item.Title,
+                Artist: string.IsNullOrWhiteSpace(item.Artist) ? root.Name : item.Artist,
+                Album: string.IsNullOrWhiteSpace(item.Album) ? (string.IsNullOrWhiteSpace(playlist.Title) ? root.Name : playlist.Title) : item.Album,
+                AlbumArtist: albumArtist,
+                TrackNumber: item.TrackNumber > 0 ? item.TrackNumber : i + 1,
+                DiscNumber: 1,
+                DurationSeconds: item.DurationSeconds,
+                FileSize: 0,
+                ModifiedUtc: now,
+                HasEmbeddedLyrics: false,
+                DateAddedUtc: now,
+                ArtworkKey: null,
+                CloudSource: cloudSource,
+                RemoteTrackId: item.RemoteTrackId,
+                RemoteArtworkUrl: item.ArtworkUrl);
+
+            try
+            {
+                string destPath = await ExportTrackAsync(tempTrack, lookupRoot, folderPath, ct).ConfigureAwait(false);
+                trackedMap[item.RemoteTrackId] = Path.GetFileName(destPath);
+                addedCount++;
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                failedCount++;
+                errors.Add($"{item.Title}: {ex.Message}");
+            }
+        }
+
+        SaveManifest(
+            folderPath,
+            new CloudFolderManifest(
+                SourceUrl: string.IsNullOrWhiteSpace(playlist.SourceUrl) ? rawSource : playlist.SourceUrl,
+                RemoteId: playlist.RemoteId,
+                CloudKind: playlist.Kind.ToString(),
+                LastSyncedUtc: DateTimeOffset.UtcNow,
+                Tracks: trackedMap));
+
+        progress?.Report(new CloudExportProgress(playlist.Items.Count, playlist.Items.Count, string.Empty, failedCount));
+        return new CloudUpdateResult(addedCount, skippedCount, failedCount, playlist.Items.Count, errors);
+    }
+
+    public static CloudFolderManifest? LoadManifest(string folderPath)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath)) return null;
+        string path = Path.Combine(folderPath, ManifestFileName);
+        if (!File.Exists(path)) return null;
+        try
+        {
+            string json = File.ReadAllText(path, Encoding.UTF8);
+            var manifest = JsonSerializer.Deserialize<CloudFolderManifest>(json, ManifestJsonOptions);
+            if (manifest is null || string.IsNullOrWhiteSpace(manifest.SourceUrl))
+            {
+                return null;
+            }
+            return manifest;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public static void SaveManifest(string folderPath, CloudFolderManifest manifest)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        Directory.CreateDirectory(folderPath);
+        string path = Path.Combine(folderPath, ManifestFileName);
+        string tempPath = $"{path}.{Guid.NewGuid():N}.tmp";
+        string json = JsonSerializer.Serialize(manifest, ManifestJsonOptions);
+        try
+        {
+            File.WriteAllText(tempPath, json, Encoding.UTF8);
+            File.Move(tempPath, path, overwrite: true);
+        }
+        catch
+        {
+            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* ignore */ }
+            throw;
+        }
     }
 
     public async Task<string> ExportTrackAsync(

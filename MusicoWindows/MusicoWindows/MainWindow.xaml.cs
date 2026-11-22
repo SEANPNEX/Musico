@@ -42,10 +42,13 @@ public partial class MainWindow : Window
             OpenPlaylist = ShowPlaylistDetail,
             OpenAddCloudFolder = () => CloudDialog.Show(_services),
             OpenSaveCloudPlaylist = (root, tracks) => SaveCloudDialog.Show(_services, root, tracks),
-            OpenSaveCloudTrack = StartSingleTrackExport
+            OpenSaveCloudTrack = StartSingleTrackExport,
+            OpenUpdateTrackedFolder = root => SaveCloudDialog.ShowTrackedFolderUpdate(_services, root),
+            OpenSongInfo = ShowSongInfo,
+            OpenSearch = OpenSearchWithField
         };
 
-        BottomPlayerBar.Initialize(_services);
+        BottomPlayerBar.Initialize(_ctx);
         BottomPlayerBar.OpenFullPlayerRequested += () => FullPlayer.Show();
         BottomPlayerBar.OpenEqualizerRequested += () => EqDialog.Show(_services);
         BottomPlayerBar.OpenSleepTimerRequested += () => SleepDialog.Show(_services);
@@ -359,6 +362,25 @@ public partial class MainWindow : Window
         SaveCloudDialog.ShowSingleTrackExport(_services, track, destinationDirectory);
     }
 
+    internal void ShowSongInfo(MusicoWindows.Models.Track track)
+    {
+        SongInfoDialog.Show(_ctx, track);
+    }
+
+    private void OpenSearchWithField(string query, SearchField field)
+    {
+        if (FullPlayer.IsOpen) FullPlayer.Close();
+        NavSongs.IsChecked = true;
+        if (ContentHost.Content is not SongsView)
+        {
+            NavigateTo("songs");
+        }
+        if (ContentHost.Content is SongsView sv)
+        {
+            sv.ApplySearch(query, field);
+        }
+    }
+
     private void ShowTextPrompt(string title, string message, string initialText, string confirmLabel, Action<string> onConfirm)
     {
         PromptDialog.Show(title, message, initialText, confirmLabel, onConfirm);
@@ -470,6 +492,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.Escape)
         {
             if (ConfirmOverlay.IsOpen) { ConfirmOverlay.Close(); e.Handled = true; return; }
+            if (SongInfoDialog.IsOpen) { SongInfoDialog.Close(); e.Handled = true; return; }
             if (UpdateDialog.IsOpen) { UpdateDialog.Close(); e.Handled = true; return; }
             if (SaveCloudDialog.IsOpen) { SaveCloudDialog.Close(); e.Handled = true; return; }
             if (CloudDialog.IsOpen) { CloudDialog.Close(); e.Handled = true; return; }
@@ -510,7 +533,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
         {
             if (Keyboard.FocusedElement is TextBoxBase) return;
-            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || SaveCloudDialog.IsOpen || UpdateDialog.IsOpen) return;
+            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || SaveCloudDialog.IsOpen || UpdateDialog.IsOpen || SongInfoDialog.IsOpen) return;
             _services.Player.TogglePlayPause();
             e.Handled = true;
         }

@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
@@ -46,6 +47,7 @@ fun TrackRow(
     modifier: Modifier = Modifier,
     subtitle: String = track.artist,
     backgroundColor: Color = Color.Transparent,
+    dragHandleModifier: Modifier? = null,
     trailingActions: (@Composable () -> Unit)? = null,
     menuContent: (@Composable ColumnScope.(onDismiss: () -> Unit) -> Unit)? = null
 ) {
@@ -103,6 +105,14 @@ fun TrackRow(
         if (trailingActions != null) {
             trailingActions()
         }
+        if (dragHandleModifier != null) {
+            Icon(
+                imageVector = Icons.Rounded.DragHandle,
+                contentDescription = "Reorder",
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = dragHandleModifier.padding(horizontal = 8.dp, vertical = 10.dp)
+            )
+        }
         if (menuContent != null) {
             Box {
                 IconButton(onClick = { menuExpanded = true }) {
@@ -119,7 +129,7 @@ fun TrackRow(
                     menuContent { menuExpanded = false }
                 }
             }
-        } else if (trailingActions == null) {
+        } else if (trailingActions == null && dragHandleModifier == null) {
             Spacer(Modifier.width(12.dp))
         }
     }

@@ -13,6 +13,8 @@ import com.musico.model.EqSettings
 import com.musico.model.RepeatMode
 import com.musico.model.SleepMode
 import com.musico.model.Track
+import com.musico.model.TrackSortOrder
+import com.musico.model.compareTracks
 import com.musico.store.LibraryStore
 import com.musico.store.PlayHistoryStore
 import com.musico.store.QueueStore
@@ -51,7 +53,7 @@ class PlayerController(
     private val library: LibraryStore,
     private val queues: QueueStore,
     private val history: PlayHistoryStore,
-    private val engine: AudioEngine,
+    private val engine: AudioPlaybackEngine,
     private val settingsFile: File,
     private val cloudResolver: CloudStreamResolver = CloudStreamResolver(),
 ) {
@@ -117,6 +119,8 @@ class PlayerController(
             }
         }
         library.onTracksRemoved = { ids -> tracksRemoved(ids) }
+        library.onFolderAdded = { name, trackIds -> onFolderAdded(name, trackIds) }
+        library.onTrackUpdated = { track -> onTrackUpdated(track) }
     }
 
     fun shutdown() {
@@ -189,9 +193,15 @@ class PlayerController(
             currentTimeSec = 0.0,
         )
 
-        val uri = library.uriFor(track) ?: return false
+        val uri = library.uriFor(track)
+        val localFile = if (uri == null) library.localFileFor(track) else null
+        if (uri == null && localFile == null) return false
         try {
-            engine.load(uri, buildMediaMetadata(track))
+            if (uri != null) {
+                engine.load(uri, buildMediaMetadata(track))
+            } else {
+                engine.loadFile(localFile!!, buildMediaMetadata(track))
+            }
         } catch (_: Exception) {
             return false
         }
@@ -416,12 +426,54 @@ class PlayerController(
         startCurrent(autoplay = true)
     }
 
-    fun playInNewQueue(ids: List<String>) {
+    fun playInNewQueue(ids: List<String>, startAt: Int = 0, name: String? = null) {
         if (ids.isEmpty()) return
         persistPosition()
-        val newId = queues.addQueue(name = null)
+        val newId = queues.addQueue(name = name)
         queues.setActive(newId)
-        play(ids, startAt = 0)
+        play(ids, startAt = startAt)
+    }
+
+    fun playInNamedQueue(
+        name: String,
+        ids: List<String>,
+        startAt: Int = 0,
+        shuffle: Boolean = false,
+    ) {
+        if (ids.isEmpty()) return
+        persistPosition()
+        val (newId, _) = queues.createOrReplaceQueue(
+            name = name,
+            trackIds = ids,
+            startAt = startAt,
+        )
+        queues.setActive(newId)
+        if (shuffle) {
+            queues.update(newId) { it.withShuffle(true) }
+        }
+        _state.value = _state.value.copy(errorMessage = null)
+        startCurrent(autoplay = true)
+    }
+
+    fun onFolderAdded(folderName: String, trackIds: List<String>) {
+        val (_, wasActive) = queues.createOrReplaceQueue(
+            name = folderName,
+            trackIds = trackIds,
+            startAt = 0,
+        )
+        if (wasActive) {
+            if (trackIds.isEmpty()) {
+                clearPlayback()
+            } else {
+                startCurrent(autoplay = isActiveOrLoadingToPlay)
+            }
+        }
+    }
+
+    private fun onTrackUpdated(updatedTrack: Track) {
+        if (_state.value.currentTrack?.id == updatedTrack.id) {
+            _state.value = _state.value.copy(currentTrack = updatedTrack)
+        }
     }
 
     fun playNext(ids: List<String>) {
@@ -612,6 +664,32 @@ class PlayerController(
 
     fun moveInQueue(fromIndex: Int, toIndex: Int) {
         queues.updateActive { it.move(fromIndex, toIndex) }
+    }
+
+    fun reorderQueue(newOrderIndices: List<Int>) {
+        queues.updateActive { it.reorder(newOrderIndices, TrackSortOrder.CUSTOM) }
+    }
+
+    fun sortQueue(sortOrder: TrackSortOrder, queueId: String? = null) {
+        val targetId = queueId ?: queues.state.value.activeId
+        if (sortOrder == TrackSortOrder.CUSTOM) {
+            queues.update(targetId) { it.copy(sortOrder = TrackSortOrder.CUSTOM) }
+            return
+        }
+        val playCounts: (String) -> Int = { history.count(it) }
+        queues.update(targetId) { queue ->
+            val sortedIndices = queue.trackIds.indices.sortedWith { idxA, idxB ->
+                val trackA = library.track(queue.trackIds[idxA])
+                val trackB = library.track(queue.trackIds[idxB])
+                when {
+                    trackA == null && trackB == null -> 0
+                    trackA == null -> 1
+                    trackB == null -> -1
+                    else -> compareTracks(trackA, trackB, sortOrder, playCounts)
+                }
+            }
+            queue.reorder(sortedIndices, sortOrder)
+        }
     }
 
     fun clearQueue() {

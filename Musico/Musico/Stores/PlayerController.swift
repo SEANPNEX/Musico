@@ -67,6 +67,8 @@ final class PlayerController {
         engine.apply(eq)
         engine.onTrackEnded = { [weak self] in self?.trackDidEnd() }
         library.onTracksRemoved = { [weak self] ids in self?.tracksRemoved(ids) }
+        library.onTrackUpdated = { [weak self] track in self?.trackUpdated(track) }
+        library.onFolderAdded = { [weak self] name, trackIDs in self?.syncFolderQueue(name: name, trackIDs: trackIDs) }
         configureAudioSession { try $0.setCategory(.playback, mode: .default) }
         observeSystem()
         registerRemoteCommands()
@@ -285,11 +287,24 @@ final class PlayerController {
         startCurrent(autoplay: true)
     }
 
-    func playInNewQueue(_ ids: [String]) {
+    func playInNewQueue(_ ids: [String], startAt: Int = 0, name: String? = nil) {
         guard !ids.isEmpty else { return }
         persistPosition()
-        queues.setActive(queues.addQueue(name: nil))
-        play(ids, startAt: 0)
+        queues.setActive(queues.addQueue(name: name))
+        play(ids, startAt: startAt)
+    }
+
+    func playInNamedQueue(_ ids: [String], name: String, startAt: Int = 0, shuffle: Bool? = nil) {
+        guard !ids.isEmpty else { return }
+        persistPosition()
+        let queueID = queues.createOrReplaceQueue(named: name, trackIDs: ids, startAt: startAt)
+        queues.setActive(queueID)
+        if let shuffle {
+            var rng = SystemRandomNumberGenerator()
+            queues.updateActive { $0.setShuffle(shuffle, using: &rng) }
+        }
+        errorMessage = nil
+        startCurrent(autoplay: true)
     }
 
     func playNext(_ ids: [String]) {
@@ -457,9 +472,37 @@ final class PlayerController {
         queues.updateActive { $0.move(from: source, to: destination) }
     }
 
+    func sortActiveQueue(by order: TrackSortOrder) {
+        let map = Dictionary(library.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let history = self.history
+        queues.updateActive {
+            $0.sort(
+                by: order,
+                tracksByID: map,
+                playCount: { history.count(for: $0) },
+                lastPlayed: { history.lastPlayed(for: $0) }
+            )
+        }
+    }
+
     func clearQueue() {
         queues.updateActive { $0.replace(with: [], startAt: 0) }
         clearPlayback()
+    }
+
+    private func trackUpdated(_ track: Track) {
+        guard currentTrack?.id == track.id else { return }
+        currentTrack = track
+        updateNowPlaying()
+    }
+
+    private func syncFolderQueue(name: String, trackIDs: [String]) {
+        let previousCurrentID = queues.active.currentTrackID
+        let wasPlaying = isPlaying || isBuffering
+        let queueID = queues.createOrReplaceQueue(named: name, trackIDs: trackIDs, startAt: nil)
+        if queueID == queues.activeID, queues.active.currentTrackID != previousCurrentID {
+            startCurrent(autoplay: wasPlaying)
+        }
     }
 
     private func tracksRemoved(_ ids: Set<String>) {

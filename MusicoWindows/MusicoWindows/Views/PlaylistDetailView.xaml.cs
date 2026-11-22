@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using MusicoWindows.Controls;
+using MusicoWindows.Core;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -15,12 +16,18 @@ public partial class PlaylistDetailView : UserControl
     private ViewContext? _ctx;
     private PlaylistRef _ref = PlaylistRef.Favourites;
     private IReadOnlyList<Track> _tracks = Array.Empty<Track>();
+    private bool _suppressSortSelection;
 
     public event Action? BackRequested;
 
     public PlaylistDetailView()
     {
         InitializeComponent();
+        foreach (var mode in TrackSorter.AllModes)
+        {
+            SortCombo.Items.Add(TrackSorter.Label(mode));
+        }
+        SortCombo.SelectedIndex = 0;
         Unloaded += OnUnloaded;
     }
 
@@ -56,18 +63,36 @@ public partial class PlaylistDetailView : UserControl
     {
         if (_ctx is null) return;
         var lib = _ctx.Services.Library;
+        var history = _ctx.Services.History;
+        TrackSortMode sortMode = TrackSortMode.Custom;
 
         if (_ref.Kind == PlaylistKind.Favourites)
         {
             TitleText.Text = "Favourites";
-            _tracks = lib.Tracks.Where(t => lib.IsFavourite(t.Id)).ToList();
+            _tracks = lib.GetFavouriteTracks(history);
+            sortMode = lib.GetFavouritesSortMode();
         }
         else if (_ref.Id is Guid pid)
         {
             var pl = lib.Playlists.FirstOrDefault(p => p.Id == pid);
             TitleText.Text = pl?.Name ?? "Playlist";
-            _tracks = pl is null ? Array.Empty<Track>() : lib.GetTracks(pl.TrackIds);
+            _tracks = pl is null ? Array.Empty<Track>() : lib.GetPlaylistTracks(pid, history);
+            sortMode = pl?.SortMode ?? TrackSortMode.Custom;
         }
+
+        int modeIndex = 0;
+        for (int i = 0; i < TrackSorter.AllModes.Count; i++)
+        {
+            if (TrackSorter.AllModes[i] == sortMode)
+            {
+                modeIndex = i;
+                break;
+            }
+        }
+        _suppressSortSelection = true;
+        SortCombo.SelectedIndex = modeIndex;
+        _suppressSortSelection = false;
+        SortCombo.IsEnabled = _tracks.Count > 1;
 
         CountText.Text = $"{_tracks.Count} {(_tracks.Count == 1 ? "song" : "songs")}";
         PlayAllButton.IsEnabled = _tracks.Count > 0;
@@ -109,18 +134,45 @@ public partial class PlaylistDetailView : UserControl
                 {
                     menu.Items.Add(new Separator());
                     menu.Items.Add(TrackMenuHelper.CreateItem("Remove from Playlist", "\uE74D",
-                        () => lib.RemoveFromPlaylist(userPlaylistId, idx)));
+                        () => lib.RemoveFromPlaylist(userPlaylistId, idx, history)));
                 } : null,
-                _ctx.OpenSaveCloudTrack);
+                _ctx.OpenSaveCloudTrack,
+                _ctx.OpenSongInfo);
 
             if (isUser)
             {
-                row.AddRowActionButton("\uE74A", "Move Up", () => lib.MovePlaylistTrack(userPlaylistId, idx, idx - 1), idx > 0);
-                row.AddRowActionButton("\uE74B", "Move Down", () => lib.MovePlaylistTrack(userPlaylistId, idx, idx + 1), idx < _tracks.Count - 1);
-                row.AddRowActionButton("\uE711", "Remove from Playlist", () => lib.RemoveFromPlaylist(userPlaylistId, idx));
+                row.EnableDragReorder($"playlist:{userPlaylistId:D}", idx, _tracks.Count,
+                    (from, to) => lib.MovePlaylistTrack(userPlaylistId, from, to, history));
+                row.AddRowActionButton("\uE74A", "Move Up", () => lib.MovePlaylistTrack(userPlaylistId, idx, idx - 1, history), idx > 0);
+                row.AddRowActionButton("\uE74B", "Move Down", () => lib.MovePlaylistTrack(userPlaylistId, idx, idx + 1, history), idx < _tracks.Count - 1);
+                row.AddRowActionButton("\uE711", "Remove from Playlist", () => lib.RemoveFromPlaylist(userPlaylistId, idx, history));
+            }
+            else
+            {
+                row.EnableDragReorder("playlist:favourites", idx, _tracks.Count,
+                    (from, to) => lib.MoveFavouriteTrack(from, to, history));
             }
 
             TracksStack.Children.Add(row);
+        }
+    }
+
+    private void SortCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressSortSelection || _ctx is null) return;
+        int idx = SortCombo.SelectedIndex;
+        if (idx < 0 || idx >= TrackSorter.AllModes.Count) return;
+
+        var mode = TrackSorter.AllModes[idx];
+        var lib = _ctx.Services.Library;
+        var history = _ctx.Services.History;
+        if (_ref.Kind == PlaylistKind.Favourites)
+        {
+            lib.SetFavouritesSortMode(mode, history);
+        }
+        else if (_ref.Id is Guid pid)
+        {
+            lib.SetPlaylistSortMode(pid, mode, history);
         }
     }
 

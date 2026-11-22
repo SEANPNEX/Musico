@@ -11,9 +11,19 @@ namespace MusicoWindows.Controls;
 
 public partial class TrackRowControl : UserControl
 {
+    private const string DragDataFormat = "MusicoWindows.TrackReorderPayload";
+
+    private sealed record DragPayload(string ScopeKey, int SourceIndex);
+
     private Action? _onClick;
     private bool _isAvailable = true;
     private bool _isCurrent;
+    private string? _dragScopeKey;
+    private int _dragIndex = -1;
+    private int _dragItemCount;
+    private Action<int, int>? _onDropReorder;
+    private Point _dragStartPoint;
+    private bool _dragArmed;
 
     public TrackRowControl()
     {
@@ -30,7 +40,8 @@ public partial class TrackRowControl : UserControl
         Action onClick,
         Action<string, string, string, string, Action<string>> openTextPrompt,
         Action<ContextMenu>? extraMenuItems = null,
-        Action<Track, string>? openSaveCloudTrack = null)
+        Action<Track, string>? openSaveCloudTrack = null,
+        Action<Track>? openSongInfo = null)
     {
         _onClick = onClick;
         _isAvailable = isAvailable;
@@ -65,7 +76,18 @@ public partial class TrackRowControl : UserControl
             track.Id,
             openTextPrompt,
             extraMenuItems,
-            openSaveCloudTrack);
+            openSaveCloudTrack,
+            openSongInfo);
+    }
+
+    public void EnableDragReorder(string scopeKey, int index, int itemCount, Action<int, int> onDropReorder)
+    {
+        _dragScopeKey = scopeKey;
+        _dragIndex = index;
+        _dragItemCount = itemCount;
+        _onDropReorder = onDropReorder;
+        DragHandle.Visibility = Visibility.Visible;
+        RowBorder.AllowDrop = true;
     }
 
     public void AddRowActionButton(string mdl2Glyph, string tooltip, Action onClick, bool isEnabled = true)
@@ -90,6 +112,101 @@ public partial class TrackRowControl : UserControl
         ActionHost.Children.Add(btn);
     }
 
+    private void DragHandle_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_onDropReorder is null || _dragIndex < 0) return;
+        _dragStartPoint = e.GetPosition(null);
+        _dragArmed = true;
+        e.Handled = true;
+    }
+
+    private void DragHandle_PreviewMouseMove(object sender, MouseEventArgs e)
+    {
+        if (!_dragArmed || e.LeftButton != MouseButtonState.Pressed || _onDropReorder is null || string.IsNullOrEmpty(_dragScopeKey))
+        {
+            if (e.LeftButton != MouseButtonState.Pressed) _dragArmed = false;
+            return;
+        }
+
+        Point pos = e.GetPosition(null);
+        if (Math.Abs(pos.X - _dragStartPoint.X) < SystemParameters.MinimumHorizontalDragDistance &&
+            Math.Abs(pos.Y - _dragStartPoint.Y) < SystemParameters.MinimumVerticalDragDistance)
+        {
+            return;
+        }
+
+        _dragArmed = false;
+        var data = new DataObject(DragDataFormat, new DragPayload(_dragScopeKey, _dragIndex));
+        DragDrop.DoDragDrop(this, data, DragDropEffects.Move);
+    }
+
+    private void Row_DragOver(object sender, DragEventArgs e)
+    {
+        if (!TryGetMatchingPayload(e, out _))
+        {
+            e.Effects = DragDropEffects.None;
+            HideDropIndicators();
+            return;
+        }
+
+        e.Effects = DragDropEffects.Move;
+        e.Handled = true;
+
+        bool insertBefore = e.GetPosition(RowBorder).Y < RowBorder.ActualHeight / 2.0;
+        DropTopIndicator.Visibility = insertBefore ? Visibility.Visible : Visibility.Collapsed;
+        DropBottomIndicator.Visibility = insertBefore ? Visibility.Collapsed : Visibility.Visible;
+    }
+
+    private void Row_DragLeave(object sender, DragEventArgs e)
+    {
+        HideDropIndicators();
+    }
+
+    private void Row_Drop(object sender, DragEventArgs e)
+    {
+        HideDropIndicators();
+        if (!TryGetMatchingPayload(e, out var payload) || _onDropReorder is null) return;
+
+        bool insertBefore = e.GetPosition(RowBorder).Y < RowBorder.ActualHeight / 2.0;
+        int fromIndex = payload.SourceIndex;
+        int targetIndex = insertBefore
+            ? (fromIndex < _dragIndex ? _dragIndex - 1 : _dragIndex)
+            : (fromIndex < _dragIndex ? _dragIndex : _dragIndex + 1);
+
+        if (_dragItemCount > 0)
+        {
+            targetIndex = Math.Clamp(targetIndex, 0, _dragItemCount - 1);
+        }
+
+        e.Handled = true;
+        if (fromIndex != targetIndex && targetIndex >= 0)
+        {
+            _onDropReorder(fromIndex, targetIndex);
+        }
+    }
+
+    private bool TryGetMatchingPayload(DragEventArgs e, out DragPayload payload)
+    {
+        if (_onDropReorder is not null &&
+            !string.IsNullOrEmpty(_dragScopeKey) &&
+            e.Data.GetDataPresent(DragDataFormat) &&
+            e.Data.GetData(DragDataFormat) is DragPayload p &&
+            string.Equals(p.ScopeKey, _dragScopeKey, StringComparison.Ordinal))
+        {
+            payload = p;
+            return true;
+        }
+
+        payload = null!;
+        return false;
+    }
+
+    private void HideDropIndicators()
+    {
+        DropTopIndicator.Visibility = Visibility.Collapsed;
+        DropBottomIndicator.Visibility = Visibility.Collapsed;
+    }
+
     private void Row_MouseEnter(object sender, MouseEventArgs e)
     {
         if (!_isCurrent)
@@ -107,6 +224,7 @@ public partial class TrackRowControl : UserControl
 
     private void Row_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
+        _dragArmed = false;
         if (!_isAvailable) return;
         _onClick?.Invoke();
     }

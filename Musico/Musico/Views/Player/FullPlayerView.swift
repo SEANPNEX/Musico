@@ -40,6 +40,7 @@ struct FullPlayerView: View {
         .presentationDragIndicator(.visible)
         .modifier(NewPlaylistAlert())
         .modifier(CloudExportHostModifier())
+        .modifier(SongInfoHostModifier())
         .sheet(item: $panel) { panel in
             switch panel {
             case .queue: QueueSheet()
@@ -127,6 +128,14 @@ private struct PlayerPage: View {
                     .foregroundStyle(isFavourite ? Color.red : Color.secondary)
                     .contentTransition(.symbolEffect(.replace))
                     .symbolEffect(.bounce, value: isFavourite)
+
+                    Menu("More", systemImage: "ellipsis.circle") {
+                        TrackMenuItems(ids: [track.id], favouriteID: track.id)
+                    }
+                    .font(.title2)
+                    .labelStyle(.iconOnly)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Song options")
                 }
 
                 PlaybackScrubber()

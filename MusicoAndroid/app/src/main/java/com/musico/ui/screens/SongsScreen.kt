@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -24,12 +25,14 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextField
 import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -42,6 +45,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.musico.audio.PlayerUiState
 import com.musico.model.PlayQueue
+import com.musico.model.SearchField
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
 import com.musico.ui.components.EmptyState
@@ -51,6 +55,12 @@ import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
 import kotlinx.coroutines.launch
 import kotlin.random.Random
+
+data class SearchRequest(
+    val query: String,
+    val field: SearchField,
+    val token: Long,
+)
 
 enum class SongSort(val label: String) {
     TITLE("Title"),
@@ -68,16 +78,27 @@ fun SongsScreen(
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
+    pendingSearchRequest: SearchRequest? = null,
+    onConsumeSearchRequest: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val scope = rememberCoroutineScope()
     var query by rememberSaveable { mutableStateOf("") }
+    var searchField by rememberSaveable { mutableStateOf(SearchField.KEYWORD) }
     var sort by rememberSaveable { mutableStateOf(SongSort.TITLE) }
     var sortMenuExpanded by remember { mutableStateOf(false) }
 
-    val songs = remember(libraryState.tracks, query, sort) {
+    LaunchedEffect(pendingSearchRequest?.token) {
+        if (pendingSearchRequest != null) {
+            query = pendingSearchRequest.query
+            searchField = pendingSearchRequest.field
+            onConsumeSearchRequest()
+        }
+    }
+
+    val songs = remember(libraryState.tracks, query, searchField, sort) {
         if (query.isNotBlank()) {
-            libraryStore.search(query)
+            libraryStore.search(query, searchField)
         } else {
             when (sort) {
                 SongSort.TITLE -> libraryState.tracks
@@ -104,12 +125,18 @@ fun SongsScreen(
         ) {
             TextField(
                 value = query,
-                onValueChange = { query = it },
-                placeholder = { Text("Songs, artists, albums") },
+                onValueChange = {
+                    query = it
+                    searchField = SearchField.KEYWORD
+                },
+                placeholder = { Text("Songs, artists, albums, genres") },
                 leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                 trailingIcon = {
                     if (query.isNotEmpty()) {
-                        IconButton(onClick = { query = "" }) {
+                        IconButton(onClick = {
+                            query = ""
+                            searchField = SearchField.KEYWORD
+                        }) {
                             Icon(Icons.Rounded.Close, contentDescription = "Clear search")
                         }
                     }
@@ -148,6 +175,28 @@ fun SongsScreen(
                         )
                     }
                 }
+            }
+        }
+
+        if (query.isNotBlank() && searchField != SearchField.KEYWORD) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                InputChip(
+                    selected = true,
+                    onClick = { searchField = SearchField.KEYWORD },
+                    label = { Text("${searchField.label}: ${query.trim()}") },
+                    trailingIcon = {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Reset field filter",
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                )
             }
         }
 
@@ -205,7 +254,17 @@ fun SongsScreen(
                             isPlaying = playerState.isPlaying,
                             isAvailable = libraryStore.isAvailable(track),
                             subtitle = if (sort == SongSort.ALBUM) "${track.artist} — ${track.album}" else track.artist,
-                            onClick = { trackActions.playerController.play(songIds, startAt = index) },
+                            onClick = {
+                                if (query.isNotBlank()) {
+                                    trackActions.playerController.playInNewQueue(
+                                        ids = songIds,
+                                        startAt = index,
+                                        name = "${searchField.label}: ${query.trim()}",
+                                    )
+                                } else {
+                                    trackActions.playerController.play(songIds, startAt = index)
+                                }
+                            },
                             modifier = Modifier.animateItem(),
                             menuContent = { onDismiss ->
                                 TrackMenuItems(

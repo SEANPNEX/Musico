@@ -102,6 +102,11 @@
                            Grid.Column="0"
                            VerticalAlignment="Center" />
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <ComboBox x:Name="SortCombo"
+                              Style="{StaticResource Win10ComboBoxStyle}"
+                              Width="148"
+                              Margin="0,0,8,0"
+                              SelectionChanged="SortCombo_SelectionChanged" />
                     <Button x:Name="PlayFolderButton"
                             Style="{StaticResource Win10PrimaryButtonStyle}"
                             Margin="0,0,8,0"
@@ -119,6 +124,16 @@
                             <TextBlock Text="Shuffle" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
+                    <Button x:Name="NewFolderButton"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            Margin="8,0,0,0"
+                            Visibility="Collapsed"
+                            Click="NewFolder_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE8F4;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
+                            <TextBlock Text="New Folder" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                     <Button x:Name="SaveCloudFolderButton"
                             Style="{StaticResource Win10ButtonStyle}"
                             Margin="8,0,0,0"
@@ -127,6 +142,16 @@
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE896;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
                             <TextBlock Text="Save to Local Folder..." VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="UpdateTrackedFolderButton"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            Margin="8,0,0,0"
+                            Visibility="Collapsed"
+                            Click="UpdateTrackedFolder_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE896;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
+                            <TextBlock Text="Update from Cloud" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button x:Name="RemoveRootButton"

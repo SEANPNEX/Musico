@@ -31,7 +31,8 @@ public sealed record LibraryRoot(
     string? Cookie = null,
     string? ProxyUrl = null,
     DateTimeOffset? LastSyncedUtc = null,
-    IReadOnlyList<string>? ExcludedPaths = null)
+    IReadOnlyList<string>? ExcludedPaths = null,
+    RootKind? LinkedCloudKind = null)
 {
     public static readonly Guid AppFolderId = Guid.Parse("00000000-0000-0000-0000-00000000A990");
 
@@ -40,6 +41,12 @@ public sealed record LibraryRoot(
 
     [JsonIgnore]
     public bool IsLocal => Kind.IsLocal();
+
+    [JsonIgnore]
+    public bool IsCloudTrackedLocal => IsLocal && LinkedCloudKind is not null && !string.IsNullOrWhiteSpace(SourceUrl);
+
+    [JsonIgnore]
+    public RootKind? EffectiveCloudKind => IsCloud ? Kind : LinkedCloudKind;
 
     public static string NormalizeFolderPath(string path) =>
         path.Replace('\\', '/')
@@ -92,7 +99,8 @@ public sealed record Track(
     string? ArtworkKey = null,
     string? CloudSource = null,
     string? RemoteTrackId = null,
-    string? RemoteArtworkUrl = null)
+    string? RemoteArtworkUrl = null,
+    string? Genre = null)
 {
     [JsonIgnore]
     public bool IsCloud => CloudSource is not null;
@@ -131,10 +139,42 @@ public sealed record AlbumInfo(
     IReadOnlyList<string> TrackIds,
     string? ArtworkKey = null);
 
+public enum TrackSortMode
+{
+    Custom,
+    NameAscending,
+    NameDescending,
+    DateModified,
+    MostPlayed,
+    LeastPlayed
+}
+
+public enum SearchField
+{
+    Keyword,
+    Artist,
+    Album,
+    Genre
+}
+
+public sealed record TrackMetadataOverride(
+    string? Title = null,
+    string? Artist = null,
+    string? Album = null,
+    string? Genre = null,
+    bool HasGenreOverride = false,
+    string? ArtworkKey = null,
+    DateTimeOffset? EditedUtc = null);
+
+public sealed record FolderViewPrefs(
+    TrackSortMode SortMode = TrackSortMode.NameAscending,
+    List<string>? CustomTrackOrder = null);
+
 public sealed record Playlist(
     Guid Id,
     string Name,
-    List<string> TrackIds);
+    List<string> TrackIds,
+    TrackSortMode SortMode = TrackSortMode.Custom);
 
 public enum RepeatMode
 {

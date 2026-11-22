@@ -28,7 +28,14 @@ data class LibraryRoot(
     val proxyUrl: String? = null,
     val lastSyncedEpochMs: Long? = null,
     val excludedPaths: List<String> = emptyList(),
+    val linkedCloudKind: RootKind? = null,
+    val trackedSubfolderName: String? = null,
 ) {
+    val isCloudTrackedLocal: Boolean
+        get() = !kind.isCloud && !sourceUrl.isNullOrBlank()
+
+    val effectiveCloudKind: RootKind?
+        get() = if (kind.isCloud) kind else linkedCloudKind
     fun isExcluded(relativePath: String): Boolean {
         if (excludedPaths.isEmpty()) return false
         val normRel = normalizeFolderPath(relativePath)
@@ -55,6 +62,32 @@ data class LibraryRoot(
 }
 
 @Serializable
+enum class TrackSortOrder(val label: String) {
+    CUSTOM("Custom"),
+    NAME_ASC("Name (A–Z)"),
+    NAME_DESC("Name (Z–A)"),
+    DATE_MODIFIED("Date Modified"),
+    MOST_PLAYED("Most Played"),
+    LEAST_PLAYED("Least Played"),
+}
+
+enum class SearchField(val label: String) {
+    KEYWORD("Keyword"),
+    ARTIST("Artist"),
+    ALBUM("Album"),
+    GENRE("Genre"),
+}
+
+@Serializable
+data class TrackMetadataOverride(
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    val genre: String? = null,
+    val artworkKey: String? = null,
+)
+
+@Serializable
 data class Track(
     val id: String,
     val rootId: String,
@@ -63,6 +96,7 @@ data class Track(
     val artist: String,
     val album: String,
     val albumArtist: String,
+    val genre: String = "",
     val trackNumber: Int? = null,
     val discNumber: Int? = null,
     val durationSec: Double,
@@ -113,7 +147,48 @@ data class Playlist(
     val id: String,
     val name: String,
     val trackIds: List<String> = emptyList(),
+    val sortOrder: TrackSortOrder = TrackSortOrder.CUSTOM,
 )
+
+fun compareTracks(
+    a: Track,
+    b: Track,
+    sortOrder: TrackSortOrder,
+    playCounts: (String) -> Int = { 0 },
+): Int {
+    return when (sortOrder) {
+        TrackSortOrder.CUSTOM -> 0
+        TrackSortOrder.NAME_ASC -> {
+            val byTitle = String.CASE_INSENSITIVE_ORDER.compare(a.title, b.title)
+            if (byTitle != 0) byTitle else String.CASE_INSENSITIVE_ORDER.compare(a.fileName, b.fileName)
+        }
+        TrackSortOrder.NAME_DESC -> {
+            val byTitle = String.CASE_INSENSITIVE_ORDER.compare(b.title, a.title)
+            if (byTitle != 0) byTitle else String.CASE_INSENSITIVE_ORDER.compare(b.fileName, a.fileName)
+        }
+        TrackSortOrder.DATE_MODIFIED -> {
+            val byMod = b.modifiedEpochMs.compareTo(a.modifiedEpochMs)
+            if (byMod != 0) byMod else String.CASE_INSENSITIVE_ORDER.compare(a.title, b.title)
+        }
+        TrackSortOrder.MOST_PLAYED -> {
+            val byPlays = playCounts(b.id).compareTo(playCounts(a.id))
+            if (byPlays != 0) byPlays else String.CASE_INSENSITIVE_ORDER.compare(a.title, b.title)
+        }
+        TrackSortOrder.LEAST_PLAYED -> {
+            val byPlays = playCounts(a.id).compareTo(playCounts(b.id))
+            if (byPlays != 0) byPlays else String.CASE_INSENSITIVE_ORDER.compare(a.title, b.title)
+        }
+    }
+}
+
+fun sortTracks(
+    tracks: List<Track>,
+    sortOrder: TrackSortOrder,
+    playCounts: (String) -> Int = { 0 },
+): List<Track> {
+    if (sortOrder == TrackSortOrder.CUSTOM) return tracks
+    return tracks.sortedWith { a, b -> compareTracks(a, b, sortOrder, playCounts) }
+}
 
 @Serializable
 enum class RepeatMode {

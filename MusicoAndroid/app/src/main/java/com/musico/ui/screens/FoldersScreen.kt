@@ -21,11 +21,13 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.CloudQueue
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.Delete
@@ -78,14 +80,18 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.zIndex
 import androidx.documentfile.provider.DocumentFile
 import com.musico.audio.PlayerUiState
 import com.musico.cloud.CloudExportSummary
 import com.musico.cloud.CloudExporter
+import com.musico.cloud.CloudUpdateSummary
 import com.musico.model.LibraryRoot
 import com.musico.model.PlayQueue
 import com.musico.model.RootKind
@@ -93,13 +99,17 @@ import com.musico.model.Track
 import com.musico.store.LibraryException
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
+import com.musico.store.PlayHistoryUiState
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.PlayShuffleButtons
+import com.musico.ui.components.SortOrderMenuButton
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
 import com.musico.ui.components.UpdateDialog
+import com.musico.ui.components.dragHandle
+import com.musico.ui.components.rememberDragReorderState
 import com.musico.ui.theme.MusicoMotion
 import com.musico.update.UpdateManager
 import com.musico.update.UpdateUiState
@@ -127,6 +137,7 @@ private fun folderDepth(ref: FolderRef?): Int {
 fun FoldersScreen(
     libraryStore: LibraryStore,
     libraryState: LibraryUiState,
+    historyState: PlayHistoryUiState,
     playerState: PlayerUiState,
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
@@ -143,6 +154,7 @@ fun FoldersScreen(
     var removingRoot by remember { mutableStateOf<LibraryRoot?>(null) }
     var removingSubfolder by remember { mutableStateOf<FolderRef?>(null) }
     var savingCloudTarget by remember { mutableStateOf<Pair<LibraryRoot, List<Track>>?>(null) }
+    var updatingTrackedRoot by remember { mutableStateOf<LibraryRoot?>(null) }
     var showAddCloudDialog by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
     var detailMenuExpanded by remember { mutableStateOf(false) }
@@ -235,7 +247,8 @@ fun FoldersScreen(
                 val hasExcluded = activeRef.path.isEmpty() &&
                     (currentRoot?.excludedPaths?.isNotEmpty() == true)
                 val isCloudRootDetail = currentRoot?.kind?.isCloud == true
-                val showDetailMenu = activeRef.path.isNotEmpty() || isRemovableRootDetail || hasExcluded || isCloudRootDetail
+                val isTrackedLocalDetail = activeRef.path.isEmpty() && currentRoot?.isCloudTrackedLocal == true
+                val showDetailMenu = activeRef.path.isNotEmpty() || isRemovableRootDetail || hasExcluded || isCloudRootDetail || isTrackedLocalDetail
 
                 TopAppBar(
                     navigationIcon = {
@@ -262,6 +275,16 @@ fun FoldersScreen(
                         )
                     },
                     actions = {
+                        val activeFolderKey = libraryStore.folderKey(activeRef.rootId, activeRef.path)
+                        val folderSort = libraryState.folderSortOrders[activeFolderKey]
+                            ?: libraryStore.folderSortOrder(activeRef.rootId, activeRef.path)
+                        SortOrderMenuButton(
+                            current = folderSort,
+                            onSelect = { selected ->
+                                libraryStore.setFolderSortOrder(activeRef.rootId, activeRef.path, selected)
+                            },
+                            contentDescription = "Sort folder",
+                        )
                         IconButton(
                             onClick = { scope.launch { libraryStore.rescan() } },
                             enabled = !libraryState.isScanning
@@ -289,6 +312,18 @@ fun FoldersScreen(
                                                 savingCloudTarget = rootForMenu to cloudTracks
                                             }
                                         )
+                                    }
+                                    if (isTrackedLocalDetail) {
+                                        currentRoot?.let { trackedRoot ->
+                                            DropdownMenuItem(
+                                                text = { Text("Update from Cloud") },
+                                                leadingIcon = { Icon(Icons.Rounded.CloudDownload, contentDescription = null) },
+                                                onClick = {
+                                                    detailMenuExpanded = false
+                                                    updatingTrackedRoot = trackedRoot
+                                                }
+                                            )
+                                        }
                                     }
                                     if (activeRef.path.isNotEmpty()) {
                                         DropdownMenuItem(
@@ -380,6 +415,7 @@ fun FoldersScreen(
                     FolderRootList(
                         libraryStore = libraryStore,
                         libraryState = libraryState,
+                        historyState = historyState,
                         queues = queues,
                         activeQueue = activeQueue,
                         trackActions = trackActions,
@@ -387,9 +423,12 @@ fun FoldersScreen(
                         onRelocateRoot = ::launchRelocateFolder,
                         onRequestRemove = { removingRoot = it },
                         onSaveCloudRoot = { root ->
-                            val tracks = libraryStore.tracksUnder(root.id, "")
+                            val tracks = libraryStore.tracksUnder(root.id, "") { id ->
+                                historyState.entries[id]?.count ?: 0
+                            }
                             savingCloudTarget = root to tracks
                         },
+                        onUpdateTrackedRoot = { root -> updatingTrackedRoot = root },
                         onRestoreExcluded = { rootId -> scope.launch { libraryStore.restoreExcludedFolders(rootId) } },
                         onAddFolder = ::launchAddFolder,
                         onAddCloudFolder = { showAddCloudDialog = true }
@@ -401,6 +440,7 @@ fun FoldersScreen(
                         rootName = rootForRef?.name ?: "Folder",
                         libraryStore = libraryStore,
                         libraryState = libraryState,
+                        historyState = historyState,
                         playerState = playerState,
                         queues = queues,
                         activeQueue = activeQueue,
@@ -437,7 +477,20 @@ fun FoldersScreen(
             libraryStore = libraryStore,
             cloudExporter = cloudExporter,
             onPickFolder = onPickFolder,
+            onFolderSavedWithoutLibrary = { folderName ->
+                trackActions.playerController.onFolderAdded(folderName, emptyList())
+            },
             onDismiss = { savingCloudTarget = null },
+        )
+    }
+
+    val pendingUpdateTracked = updatingTrackedRoot
+    if (pendingUpdateTracked != null) {
+        UpdateTrackedFolderDialog(
+            root = pendingUpdateTracked,
+            libraryStore = libraryStore,
+            cloudExporter = cloudExporter,
+            onDismiss = { updatingTrackedRoot = null },
         )
     }
 
@@ -598,6 +651,7 @@ private fun SaveCloudPlaylistDialog(
     libraryStore: LibraryStore,
     cloudExporter: CloudExporter,
     onPickFolder: ((Uri) -> Unit) -> Unit,
+    onFolderSavedWithoutLibrary: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -819,25 +873,28 @@ private fun SaveCloudPlaylistDialog(
                                     },
                                 )
                                 if (addToLibrary && res.savedCount > 0) {
-                                    val savedUri = if (parentUri.scheme == "file" && res.targetDir != null) {
-                                        Uri.fromFile(res.targetDir)
+                                    val isDirectFileDir = parentUri.scheme == "file" && res.targetDir != null
+                                    val savedUri = if (isDirectFileDir) {
+                                        Uri.fromFile(res.targetDir!!)
                                     } else {
                                         parentUri
                                     }
-                                    if (libraryStore.isUriInsideIndexedRoot(savedUri)) {
-                                        libraryStore.rescan()
-                                        libraryStatusText = "Library updated."
+                                    val trackedSub = if (isDirectFileDir) null else res.savedFolderName
+                                    val addResult = libraryStore.addPickedRoot(
+                                        treeUri = savedUri,
+                                        cloudSourceRoot = root,
+                                        trackedSubfolderName = trackedSub,
+                                    )
+                                    if (addResult.isSuccess) {
+                                        libraryStatusText = "Added saved folder to Library with cloud tracking."
                                     } else {
-                                        val addResult = libraryStore.addPickedRoot(savedUri)
-                                        if (addResult.isSuccess) {
-                                            libraryStatusText = "Added saved folder to Library."
-                                        } else if (addResult.exceptionOrNull() is LibraryException.DuplicateRoot) {
-                                            libraryStore.rescan()
-                                            libraryStatusText = "Library updated."
-                                        } else {
-                                            libraryStatusText = addResult.exceptionOrNull()?.message
-                                                ?: "Could not add folder to Library."
-                                        }
+                                        libraryStatusText = addResult.exceptionOrNull()?.message
+                                            ?: "Could not add folder to Library."
+                                    }
+                                } else if (!addToLibrary && res.savedCount > 0) {
+                                    val savedName = res.savedFolderName?.trim()?.takeIf { it.isNotEmpty() }
+                                    if (savedName != null) {
+                                        onFolderSavedWithoutLibrary(savedName)
                                     }
                                 }
                                 summary = res
@@ -875,11 +932,182 @@ private fun SaveCloudPlaylistDialog(
     )
 }
 
+@Composable
+private fun UpdateTrackedFolderDialog(
+    root: LibraryRoot,
+    libraryStore: LibraryStore,
+    cloudExporter: CloudExporter,
+    onDismiss: () -> Unit,
+) {
+    val scope = rememberCoroutineScope()
+    var isUpdating by remember { mutableStateOf(true) }
+    var progressDone by remember { mutableIntStateOf(0) }
+    var progressTotal by remember { mutableIntStateOf(0) }
+    var progressTitle by remember { mutableStateOf("") }
+    var summary by remember { mutableStateOf<CloudUpdateSummary?>(null) }
+    var errorText by remember { mutableStateOf<String?>(null) }
+    var syncJob by remember { mutableStateOf<Job?>(null) }
+
+    androidx.compose.runtime.LaunchedEffect(root.id) {
+        val treeUri = root.treeUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        if (treeUri == null) {
+            errorText = "Saved folder location is unavailable."
+            isUpdating = false
+            return@LaunchedEffect
+        }
+        syncJob = scope.launch {
+            try {
+                val res = cloudExporter.updateLocalFolder(
+                    root = root,
+                    treeUri = treeUri,
+                    fetchPlaylist = { url, cookie, kindHint ->
+                        libraryStore.fetchCloudPlaylist(url, cookie, kindHint)
+                    },
+                    onProgress = { done, total, title ->
+                        progressDone = done
+                        progressTotal = total
+                        progressTitle = title
+                    },
+                )
+                libraryStore.markRootCloudSynced(root.id)
+                if (res.addedCount > 0) {
+                    libraryStore.rescan()
+                }
+                summary = res
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (err: Exception) {
+                errorText = err.message ?: "Could not update from cloud."
+            } finally {
+                isUpdating = false
+                syncJob = null
+            }
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!isUpdating) onDismiss() },
+        icon = { Icon(Icons.Rounded.CloudDownload, contentDescription = null) },
+        title = {
+            Text(
+                when {
+                    isUpdating -> "Updating “${root.name}”"
+                    summary != null -> "Update Complete"
+                    else -> "Update from Cloud"
+                }
+            )
+        },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                root.sourceUrl?.let { url ->
+                    Text(
+                        text = url,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+
+                if (isUpdating) {
+                    if (progressTotal > 0) {
+                        val fraction = (progressDone.toFloat() / progressTotal.toFloat()).coerceIn(0f, 1f)
+                        LinearProgressIndicator(
+                            progress = { fraction },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Text(
+                            text = if (progressTitle.isNotBlank()) {
+                                "Checking $progressDone of $progressTotal: $progressTitle"
+                            } else {
+                                "Checking $progressDone of $progressTotal…"
+                            },
+                            style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        Text(
+                            text = "Fetching latest cloud playlist…",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+
+                val result = summary
+                if (result != null) {
+                    val summaryLine = if (result.addedCount > 0) {
+                        "Added ${result.addedCount} new ${if (result.addedCount == 1) "song" else "songs"} (${result.skippedCount} already saved)."
+                    } else {
+                        "Already up to date (${result.skippedCount} ${if (result.skippedCount == 1) "song" else "songs"})."
+                    }
+                    Text(summaryLine, style = MaterialTheme.typography.bodyMedium)
+                    if (result.failedCount > 0) {
+                        Text(
+                            text = "${result.failedCount} failed.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.error,
+                        )
+                        result.errors.take(5).forEach { msg ->
+                            Text(
+                                text = "• $msg",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.error,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                    }
+                }
+
+                val err = errorText
+                if (err != null) {
+                    Text(
+                        text = err,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (!isUpdating) {
+                Button(onClick = onDismiss) {
+                    Text("Done")
+                }
+            }
+        },
+        dismissButton = {
+            if (isUpdating) {
+                TextButton(
+                    onClick = {
+                        syncJob?.cancel()
+                        syncJob = null
+                        isUpdating = false
+                        onDismiss()
+                    },
+                ) {
+                    Text("Cancel")
+                }
+            }
+        },
+    )
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FolderRootList(
     libraryStore: LibraryStore,
     libraryState: LibraryUiState,
+    historyState: PlayHistoryUiState,
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
@@ -887,6 +1115,7 @@ private fun FolderRootList(
     onRelocateRoot: (String) -> Unit,
     onRequestRemove: (LibraryRoot) -> Unit,
     onSaveCloudRoot: (LibraryRoot) -> Unit,
+    onUpdateTrackedRoot: (LibraryRoot) -> Unit,
     onRestoreExcluded: (String) -> Unit,
     onAddFolder: () -> Unit,
     onAddCloudFolder: () -> Unit
@@ -936,8 +1165,16 @@ private fun FolderRootList(
             val count = remember(libraryState.tracks, root.id) {
                 libraryState.tracks.count { it.rootId == root.id }
             }
-            val rootTrackIds = remember(libraryState.tracks, root.id) {
-                libraryStore.tracksUnder(root.id, "").map { it.id }
+            val rootTrackIds = remember(
+                libraryState.tracks,
+                libraryState.folderSortOrders,
+                libraryState.folderTrackOrders,
+                historyState.entries,
+                root.id,
+            ) {
+                libraryStore.tracksUnder(root.id, "") { id ->
+                    historyState.entries[id]?.count ?: 0
+                }.map { it.id }
             }
             val isRemovable = root.kind != RootKind.APP_FOLDER
 
@@ -980,6 +1217,7 @@ private fun FolderRootList(
                             onOpen = { onOpenRoot(root.id) },
                             onRelocate = { onRelocateRoot(root.id) },
                             onSaveCloudRoot = { onSaveCloudRoot(root) },
+                            onUpdateTrackedRoot = { onUpdateTrackedRoot(root) },
                             onRestoreExcluded = { onRestoreExcluded(root.id) },
                             onRemove = { onRequestRemove(root) }
                         )
@@ -996,6 +1234,7 @@ private fun FolderRootList(
                         onOpen = { onOpenRoot(root.id) },
                         onRelocate = {},
                         onSaveCloudRoot = {},
+                        onUpdateTrackedRoot = { onUpdateTrackedRoot(root) },
                         onRestoreExcluded = { onRestoreExcluded(root.id) },
                         onRemove = {}
                     )
@@ -1059,6 +1298,7 @@ private fun RootItemRow(
     onOpen: () -> Unit,
     onRelocate: () -> Unit,
     onSaveCloudRoot: () -> Unit,
+    onUpdateTrackedRoot: () -> Unit,
     onRestoreExcluded: () -> Unit,
     onRemove: () -> Unit
 ) {
@@ -1096,14 +1336,23 @@ private fun RootItemRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
-                    if (root.kind.isCloud) {
-                        val chipLabel = if (root.kind == RootKind.CLOUD_YOUTUBE) "YouTube" else "Bilibili"
+                    val badgeLabel = when {
+                        root.kind == RootKind.CLOUD_YOUTUBE -> "YouTube"
+                        root.kind == RootKind.CLOUD_BILIBILI -> "Bilibili"
+                        root.isCloudTrackedLocal -> when (root.linkedCloudKind) {
+                            RootKind.CLOUD_YOUTUBE -> "YouTube · Local"
+                            RootKind.CLOUD_BILIBILI -> "Bilibili · Local"
+                            else -> "Cloud · Local"
+                        }
+                        else -> null
+                    }
+                    if (badgeLabel != null) {
                         Surface(
                             color = MaterialTheme.colorScheme.secondaryContainer,
                             shape = MaterialTheme.shapes.extraSmall
                         ) {
                             Text(
-                                text = chipLabel,
+                                text = badgeLabel,
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSecondaryContainer,
                                 modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
@@ -1135,6 +1384,16 @@ private fun RootItemRow(
                                 onClick = {
                                     menuExpanded = false
                                     onSaveCloudRoot()
+                                }
+                            )
+                        }
+                        if (root.isCloudTrackedLocal) {
+                            DropdownMenuItem(
+                                text = { Text("Update from Cloud") },
+                                leadingIcon = { Icon(Icons.Rounded.CloudDownload, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onUpdateTrackedRoot()
                                 }
                             )
                         }
@@ -1183,7 +1442,8 @@ private fun RootItemRow(
                                 queues = queues,
                                 activeQueueId = activeQueue.id,
                                 actionState = trackActions,
-                                onDismiss = { menuExpanded = false }
+                                onDismiss = { menuExpanded = false },
+                                namedQueueTitle = root.name,
                             )
                         }
                     }
@@ -1235,6 +1495,7 @@ private fun FolderDetailContent(
     rootName: String,
     libraryStore: LibraryStore,
     libraryState: LibraryUiState,
+    historyState: PlayHistoryUiState,
     playerState: PlayerUiState,
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
@@ -1242,16 +1503,50 @@ private fun FolderDetailContent(
     onNavigate: (FolderRef) -> Unit,
     onRequestRemoveSubfolder: (FolderRef) -> Unit
 ) {
-    val (subfolders, directTracks) = remember(libraryState.tracks, ref) {
-        libraryStore.folderContents(ref.rootId, ref.path)
+    val playCounts: (String) -> Int = { id -> historyState.entries[id]?.count ?: 0 }
+    val (subfolders, directTracks) = remember(
+        libraryState.tracks,
+        libraryState.folderSortOrders,
+        libraryState.folderTrackOrders,
+        historyState.entries,
+        ref,
+    ) {
+        libraryStore.folderContents(ref.rootId, ref.path, playCounts)
     }
-    val allTracks = remember(libraryState.tracks, ref) {
-        libraryStore.tracksUnder(ref.rootId, ref.path)
+    val allTracks = remember(
+        libraryState.tracks,
+        libraryState.folderSortOrders,
+        libraryState.folderTrackOrders,
+        historyState.entries,
+        ref,
+    ) {
+        libraryStore.tracksUnder(ref.rootId, ref.path, playCounts)
     }
     val allIds = remember(allTracks) { allTracks.map { it.id } }
     val directIds = remember(directTracks) { directTracks.map { it.id } }
+    val exactFolderName = remember(ref, rootName) {
+        val norm = LibraryRoot.normalizeFolderPath(ref.path)
+        if (norm.isEmpty()) rootName else norm.substringAfterLast('/')
+    }
+
+    val listState = rememberLazyListState()
+    val headerCount = 1 + 1 + subfolders.size
+    val dragState = rememberDragReorderState(
+        items = directTracks,
+        listState = listState,
+        headerCount = headerCount,
+        keyOf = { it.id },
+        onCommit = { reordered ->
+            libraryStore.setFolderTrackOrder(
+                rootId = ref.rootId,
+                path = ref.path,
+                orderedTrackIds = reordered.map { it.value.id },
+            )
+        },
+    )
 
     LazyColumn(
+        state = listState,
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 16.dp)
     ) {
@@ -1276,14 +1571,19 @@ private fun FolderDetailContent(
                 PlayShuffleButtons(
                     enabled = allIds.isNotEmpty(),
                     onPlay = {
-                        if (activeQueue.shuffle) trackActions.playerController.toggleShuffle()
-                        trackActions.playerController.play(allIds, startAt = 0)
+                        trackActions.playerController.playInNamedQueue(
+                            name = exactFolderName,
+                            ids = allIds,
+                            startAt = 0,
+                            shuffle = false,
+                        )
                     },
                     onShuffle = {
-                        if (!activeQueue.shuffle) trackActions.playerController.toggleShuffle()
-                        trackActions.playerController.play(
-                            allIds,
-                            startAt = Random.nextInt(allIds.size.coerceAtLeast(1))
+                        trackActions.playerController.playInNamedQueue(
+                            name = exactFolderName,
+                            ids = allIds,
+                            startAt = Random.nextInt(allIds.size.coerceAtLeast(1)),
+                            shuffle = true,
                         )
                     }
                 )
@@ -1293,8 +1593,15 @@ private fun FolderDetailContent(
         items(subfolders, key = { "dir:$it" }) { folderName ->
             val childPath = if (ref.path.isEmpty()) folderName else "${ref.path}/$folderName"
             val childRef = FolderRef(ref.rootId, childPath)
-            val childIds = remember(libraryState.tracks, ref.rootId, childPath) {
-                libraryStore.tracksUnder(ref.rootId, childPath).map { it.id }
+            val childIds = remember(
+                libraryState.tracks,
+                libraryState.folderSortOrders,
+                libraryState.folderTrackOrders,
+                historyState.entries,
+                ref.rootId,
+                childPath,
+            ) {
+                libraryStore.tracksUnder(ref.rootId, childPath, playCounts).map { it.id }
             }
             var menuExpanded by remember { mutableStateOf(false) }
             val dismissState = rememberSwipeToDismissBoxState(
@@ -1366,7 +1673,8 @@ private fun FolderDetailContent(
                                             queues = queues,
                                             activeQueueId = activeQueue.id,
                                             actionState = trackActions,
-                                            onDismiss = { menuExpanded = false }
+                                            onDismiss = { menuExpanded = false },
+                                            namedQueueTitle = folderName,
                                         )
                                     }
                                 }
@@ -1377,7 +1685,19 @@ private fun FolderDetailContent(
             }
         }
 
-        itemsIndexed(directTracks, key = { _, t -> t.id }) { index, track ->
+        itemsIndexed(dragState.items, key = { _, item -> item.uid }) { index, dragItem ->
+            val track = dragItem.value
+            val isDragged = dragState.activeUid == dragItem.uid
+            val rowBg = if (isDragged) {
+                MaterialTheme.colorScheme.surfaceContainerHighest
+            } else {
+                Color.Transparent
+            }
+            val rowModifier = Modifier
+                .then(if (dragState.isDragging) Modifier else Modifier.animateItem())
+                .zIndex(if (isDragged) 1f else 0f)
+                .graphicsLayer { translationY = dragState.offsetFor(dragItem.uid) }
+
             TrackRow(
                 track = track,
                 artworkCache = libraryStore.artwork,
@@ -1385,8 +1705,17 @@ private fun FolderDetailContent(
                 isPlaying = playerState.isPlaying,
                 isAvailable = libraryStore.isAvailable(track),
                 subtitle = if (track.isCloud) track.artist else track.fileName,
-                onClick = { trackActions.playerController.play(directIds, startAt = index) },
-                modifier = Modifier.animateItem(),
+                backgroundColor = rowBg,
+                onClick = {
+                    trackActions.playerController.playInNamedQueue(
+                        name = exactFolderName,
+                        ids = directIds,
+                        startAt = index,
+                        shuffle = false,
+                    )
+                },
+                modifier = rowModifier,
+                dragHandleModifier = Modifier.dragHandle(dragState, dragItem.uid),
                 menuContent = { onDismiss ->
                     TrackMenuItems(
                         ids = listOf(track.id),

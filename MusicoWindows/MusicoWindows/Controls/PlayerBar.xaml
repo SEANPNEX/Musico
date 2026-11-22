@@ -20,8 +20,9 @@
                     Style="{StaticResource Win10FlatButtonStyle}"
                     Padding="4"
                     HorizontalContentAlignment="Left"
-                    ToolTip="Open Now Playing"
-                    Click="NowPlaying_Click">
+                    ToolTip="Open Now Playing (Right-click for Song Info &amp; options)"
+                    Click="NowPlaying_Click"
+                    MouseRightButtonUp="NowPlaying_MouseRightButtonUp">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="52" />

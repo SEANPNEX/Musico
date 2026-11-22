@@ -6,6 +6,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using MusicoWindows.Controls;
 using MusicoWindows.Converters;
+using MusicoWindows.Core;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -15,10 +16,16 @@ public partial class QueuesView : UserControl
 {
     private ViewContext? _ctx;
     private bool _compact;
+    private bool _suppressSortSelection;
 
     public QueuesView()
     {
         InitializeComponent();
+        foreach (var mode in TrackSorter.AllModes)
+        {
+            SortCombo.Items.Add(TrackSorter.Label(mode));
+        }
+        SortCombo.SelectedIndex = 0;
         Unloaded += OnUnloaded;
     }
 
@@ -75,6 +82,20 @@ public partial class QueuesView : UserControl
         SubtitleText.Text = $"{active.Name} · {active.TrackIds.Count} {(active.TrackIds.Count == 1 ? "song" : "songs")}";
         ClearButton.IsEnabled = active.TrackIds.Count > 0;
         DeleteButton.IsEnabled = services.Queues.Queues.Count > 1;
+        SortCombo.IsEnabled = active.TrackIds.Count > 1;
+
+        int modeIndex = 0;
+        for (int i = 0; i < TrackSorter.AllModes.Count; i++)
+        {
+            if (TrackSorter.AllModes[i] == active.SortMode)
+            {
+                modeIndex = i;
+                break;
+            }
+        }
+        _suppressSortSelection = true;
+        SortCombo.SelectedIndex = modeIndex;
+        _suppressSortSelection = false;
 
         BuildQueueChips(services);
         BuildQueueTracks(services, active);
@@ -222,14 +243,25 @@ public partial class QueuesView : UserControl
                     menu.Items.Add(TrackMenuHelper.CreateItem("Remove from Queue", "\uE74D",
                         () => services.Player.RemoveFromQueue(index)));
                 },
-                _ctx.OpenSaveCloudTrack);
+                _ctx.OpenSaveCloudTrack,
+                _ctx.OpenSongInfo);
 
+            row.EnableDragReorder($"queue:{active.Id:D}", index, active.TrackIds.Count,
+                (from, to) => services.Player.MoveInQueue(from, to));
             row.AddRowActionButton("\uE74A", "Move Up", () => services.Player.MoveInQueue(index, index - 1), index > 0);
             row.AddRowActionButton("\uE74B", "Move Down", () => services.Player.MoveInQueue(index, index + 1), index < active.TrackIds.Count - 1);
             row.AddRowActionButton("\uE711", "Remove from Queue", () => services.Player.RemoveFromQueue(index));
 
             TracksStack.Children.Add(row);
         }
+    }
+
+    private void SortCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressSortSelection || _ctx is null) return;
+        int idx = SortCombo.SelectedIndex;
+        if (idx < 0 || idx >= TrackSorter.AllModes.Count) return;
+        _ctx.Services.Player.SortQueue(TrackSorter.AllModes[idx]);
     }
 
     private void NewQueue_Click(object sender, RoutedEventArgs e)

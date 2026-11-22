@@ -28,6 +28,15 @@ struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
     var proxyURL: String? = nil
     var lastSynced: Date? = nil
     var excludedPaths: [String]? = nil
+    var linkedCloudKind: Kind? = nil
+
+    var isCloudTrackedLocal: Bool {
+        kind.isLocal && !(sourceURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    var effectiveCloudKind: Kind? {
+        kind.isCloud ? kind : linkedCloudKind
+    }
 
     var normalizedExcludedPaths: [String] { excludedPaths ?? [] }
 
@@ -74,11 +83,16 @@ struct Track: Codable, Hashable, Identifiable, Sendable {
     var dateAdded: Date
     /// Key into `ArtworkCache` (hash of the embedded image), shared by songs with the same cover.
     var artworkKey: String? = nil
+    var genre: String? = nil
     var cloudSource: String? = nil
     var remoteTrackID: String? = nil
     var remoteArtworkURL: String? = nil
 
     var isCloud: Bool { cloudSource != nil }
+
+    var displayGenre: String {
+        (genre ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     static func makeID(rootID: UUID, relativePath: String) -> String {
         let digest = SHA256.hash(data: Data("\(rootID.uuidString)/\(relativePath)".utf8))
@@ -101,6 +115,117 @@ struct Playlist: Codable, Hashable, Identifiable, Sendable {
     var id: UUID
     var name: String
     var trackIDs: [String]
+    var sortOrder: TrackSortOrder? = nil
+}
+
+struct TrackMetadataOverride: Codable, Hashable, Sendable {
+    var title: String?
+    var artist: String?
+    var album: String?
+    var genre: String?
+    var artworkKey: String?
+}
+
+enum SearchField: String, Codable, Hashable, Sendable {
+    case keyword = "Keyword"
+    case artist = "Artist"
+    case album = "Album"
+    case genre = "Genre"
+
+    static func queueName(field: SearchField, query: String) -> String {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return "\(field.rawValue): \(trimmed)"
+    }
+}
+
+enum TrackSortOrder: String, Codable, CaseIterable, Identifiable, Sendable {
+    case custom = "Custom Order"
+    case nameAscending = "Name (A–Z)"
+    case nameDescending = "Name (Z–A)"
+    case dateModified = "Date Modified"
+    case mostPlayed = "Most Played"
+    case leastPlayed = "Least Played"
+
+    var id: String { rawValue }
+}
+
+struct FolderOrderState: Codable, Hashable, Sendable {
+    var sortOrder: TrackSortOrder = .custom
+    var customTrackIDs: [String] = []
+}
+
+enum TrackSorter {
+    static func sort(
+        _ tracks: [Track],
+        by order: TrackSortOrder,
+        playCount: (String) -> Int,
+        lastPlayed: ((String) -> Date?)? = nil
+    ) -> [Track] {
+        guard order != .custom else { return tracks }
+        let orderIndices = sortedIndexOrder(
+            for: tracks.map(\.id),
+            tracksByID: Dictionary(tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }),
+            by: order,
+            playCount: playCount,
+            lastPlayed: lastPlayed
+        )
+        return orderIndices.map { tracks[$0] }
+    }
+
+    static func sortedIndexOrder(
+        for trackIDs: [String],
+        tracksByID: [String: Track],
+        by order: TrackSortOrder,
+        playCount: (String) -> Int,
+        lastPlayed: ((String) -> Date?)? = nil
+    ) -> [Int] {
+        let indices = Array(trackIDs.indices)
+        guard order != .custom else { return indices }
+        return indices.sorted { lhsIdx, rhsIdx in
+            let lhsID = trackIDs[lhsIdx]
+            let rhsID = trackIDs[rhsIdx]
+            guard let lhs = tracksByID[lhsID], let rhs = tracksByID[rhsID] else {
+                if tracksByID[lhsID] != nil { return true }
+                if tracksByID[rhsID] != nil { return false }
+                return lhsIdx < rhsIdx
+            }
+            switch order {
+            case .custom:
+                return lhsIdx < rhsIdx
+            case .nameAscending:
+                let cmp = lhs.title.localizedStandardCompare(rhs.title)
+                if cmp != .orderedSame { return cmp == .orderedAscending }
+                let pathCmp = lhs.relativePath.localizedStandardCompare(rhs.relativePath)
+                return pathCmp == .orderedSame ? lhsIdx < rhsIdx : pathCmp == .orderedAscending
+            case .nameDescending:
+                let cmp = lhs.title.localizedStandardCompare(rhs.title)
+                if cmp != .orderedSame { return cmp == .orderedDescending }
+                let pathCmp = lhs.relativePath.localizedStandardCompare(rhs.relativePath)
+                return pathCmp == .orderedSame ? lhsIdx < rhsIdx : pathCmp == .orderedAscending
+            case .dateModified:
+                if lhs.modified != rhs.modified { return lhs.modified > rhs.modified }
+                let cmp = lhs.title.localizedStandardCompare(rhs.title)
+                return cmp == .orderedSame ? lhsIdx < rhsIdx : cmp == .orderedAscending
+            case .mostPlayed:
+                let c0 = playCount(lhs.id)
+                let c1 = playCount(rhs.id)
+                if c0 != c1 { return c0 > c1 }
+                if let lp0 = lastPlayed?(lhs.id), let lp1 = lastPlayed?(rhs.id), lp0 != lp1 {
+                    return lp0 > lp1
+                } else if (lastPlayed?(lhs.id) != nil) != (lastPlayed?(rhs.id) != nil) {
+                    return lastPlayed?(lhs.id) != nil
+                }
+                let cmp = lhs.title.localizedStandardCompare(rhs.title)
+                return cmp == .orderedSame ? lhsIdx < rhsIdx : cmp == .orderedAscending
+            case .leastPlayed:
+                let c0 = playCount(lhs.id)
+                let c1 = playCount(rhs.id)
+                if c0 != c1 { return c0 < c1 }
+                let cmp = lhs.title.localizedStandardCompare(rhs.title)
+                return cmp == .orderedSame ? lhsIdx < rhsIdx : cmp == .orderedAscending
+            }
+        }
+    }
 }
 
 enum RepeatMode: String, Codable, Sendable { case off, all, one }

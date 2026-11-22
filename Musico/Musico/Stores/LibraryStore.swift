@@ -25,11 +25,24 @@ final class LibraryStore {
         var artworkKey: String?
     }
 
-    private struct LibraryFile: Codable { var roots: [LibraryRoot]; var tracks: [Track]; var readerVersion: Int?; var appFolderRemoved: Bool? }
+    private struct LibraryFile: Codable {
+        var roots: [LibraryRoot]
+        var tracks: [Track]
+        var readerVersion: Int?
+        var appFolderRemoved: Bool?
+        var metadataOverrides: [String: TrackMetadataOverride]?
+        var folderSortOrders: [String: FolderOrderState]?
+        var knownAppFolders: [String]?
+    }
     /// Raised when tag reading improves, so songs indexed by an older build are read again.
-    private static let readerVersion = 2
+    private static let readerVersion = 3
     @ObservationIgnored private var rereadAll = false
-    private struct PlaylistFile: Codable { var playlists: [Playlist]; var favourites: Set<String> }
+    private struct PlaylistFile: Codable {
+        var playlists: [Playlist]
+        var favourites: Set<String>
+        var favouritesSortOrder: TrackSortOrder?
+        var favouritesOrder: [String]?
+    }
 
     private(set) var roots: [LibraryRoot] = []
     private(set) var tracks: [Track] = [] { didSet { rebuildIndex() } }
@@ -37,6 +50,11 @@ final class LibraryStore {
     private(set) var artists: [String] = []
     private(set) var playlists: [Playlist] = []
     private(set) var favourites: Set<String> = []
+    private(set) var favouritesSortOrder: TrackSortOrder = .custom
+    private(set) var favouritesOrder: [String] = []
+    private(set) var metadataOverrides: [String: TrackMetadataOverride] = [:]
+    private(set) var folderOrders: [String: FolderOrderState] = [:]
+    @ObservationIgnored private var knownAppFolders: Set<String> = []
     private(set) var isScanning = false
     private(set) var scanProgress: (done: Int, total: Int) = (0, 0)
     private(set) var cloudSyncErrors: [UUID: String] = [:]
@@ -47,6 +65,8 @@ final class LibraryStore {
     @ObservationIgnored let appFolderRemovable: Bool
 
     @ObservationIgnored var onTracksRemoved: ((Set<String>) -> Void)?
+    @ObservationIgnored var onTrackUpdated: ((Track) -> Void)?
+    @ObservationIgnored var onFolderAdded: ((_ name: String, _ trackIDs: [String]) -> Void)?
     @ObservationIgnored private var byID: [String: Track] = [:]
     @ObservationIgnored private let directory: URL
     @ObservationIgnored private let documentsURL: URL
@@ -109,20 +129,55 @@ final class LibraryStore {
         Self.makeAppFolderVisible(documentsURL)
         #endif
         for index in roots.indices where roots[index].kind == .picked { resolve(rootAt: index) }
-        tracks = file?.tracks ?? []
+        metadataOverrides = file?.metadataOverrides ?? [:]
+        folderOrders = file?.folderSortOrders ?? [:]
+        let loadedTracks = file?.tracks ?? []
+        if let savedKnown = file?.knownAppFolders {
+            knownAppFolders = Set(savedKnown)
+        } else if file != nil {
+            knownAppFolders = Set(loadedTracks.filter { $0.rootID == LibraryRoot.appFolderID }.compactMap { Self.topFolderName($0.relativePath) })
+        } else {
+            knownAppFolders = Self.existingSubfolderNames(in: documentsURL)
+        }
+        tracks = loadedTracks.map { applyOverride(to: $0) }
         rebuildIndex()
 
         let lists = Persistence.load(PlaylistFile.self, from: playlistsURL)
         playlists = lists?.playlists ?? []
         favourites = lists?.favourites ?? []
+        favouritesSortOrder = lists?.favouritesSortOrder ?? .custom
+        favouritesOrder = lists?.favouritesOrder ?? []
     }
 
     private var libraryURL: URL { directory.appendingPathComponent("library.json") }
     private var playlistsURL: URL { directory.appendingPathComponent("playlists.json") }
 
-    private func saveLibrary() { try? Persistence.save(LibraryFile(roots: roots, tracks: tracks, readerVersion: rereadAll ? nil : Self.readerVersion,
-                                                                       appFolderRemoved: appFolderRemoved ? true : nil), to: libraryURL) }
-    private func savePlaylists() { try? Persistence.save(PlaylistFile(playlists: playlists, favourites: favourites), to: playlistsURL) }
+    private func saveLibrary() {
+        try? Persistence.save(
+            LibraryFile(
+                roots: roots,
+                tracks: tracks,
+                readerVersion: rereadAll ? nil : Self.readerVersion,
+                appFolderRemoved: appFolderRemoved ? true : nil,
+                metadataOverrides: metadataOverrides.isEmpty ? nil : metadataOverrides,
+                folderSortOrders: folderOrders.isEmpty ? nil : folderOrders,
+                knownAppFolders: Array(knownAppFolders).sorted()
+            ),
+            to: libraryURL
+        )
+    }
+
+    private func savePlaylists() {
+        try? Persistence.save(
+            PlaylistFile(
+                playlists: playlists,
+                favourites: favourites,
+                favouritesSortOrder: favouritesSortOrder == .custom ? nil : favouritesSortOrder,
+                favouritesOrder: favouritesOrder.isEmpty ? nil : favouritesOrder
+            ),
+            to: playlistsURL
+        )
+    }
 
     // MARK: Roots
 
@@ -135,7 +190,7 @@ final class LibraryStore {
     /// as a security-scoped one; iOS bookmarks of picked folders carry that implicitly.
     private static func makeBookmark(_ url: URL) -> Data? {
         #if targetEnvironment(macCatalyst)
-        if let scoped = try? url.bookmarkData(options: [.withSecurityScope, .securityScopeAllowOnlyReadAccess]) {
+        if let scoped = try? url.bookmarkData(options: [.withSecurityScope]) {
             return scoped
         }
         return try? url.bookmarkData()
@@ -197,11 +252,79 @@ final class LibraryStore {
         guard Self.isDirectory(url) else { throw fail(.notAFolder) }
         guard !rootURLs.values.contains(where: { sameLocation($0, url) }) else { throw fail(.duplicateRoot) }
         guard let bookmark = Self.makeBookmark(url) else { throw fail(.notAFolder) }
-        let root = LibraryRoot(id: UUID(), name: url.lastPathComponent, kind: .picked, bookmark: bookmark)
+        let manifest = CloudExporter.loadManifest(in: url)
+        let root = LibraryRoot(
+            id: UUID(),
+            name: url.lastPathComponent,
+            kind: .picked,
+            bookmark: bookmark,
+            sourceURL: manifest?.sourceURL,
+            remoteID: manifest?.remoteID,
+            lastSynced: manifest.map { Date(timeIntervalSince1970: Double($0.lastSyncedEpochMs) / 1000.0) },
+            linkedCloudKind: manifest?.cloudKind
+        )
         roots.append(root)
         rootURLs[root.id] = url
         saveLibrary()
+        onFolderAdded?(root.name, [])
         await rescan()
+        onFolderAdded?(root.name, tracks(under: root.id, path: "").map(\.id))
+    }
+
+    func notifyFolderQueueSync(folderURL: URL) {
+        let name = folderURL.lastPathComponent
+        guard !name.isEmpty else { return }
+        if let matchingRoot = roots.first(where: { root in
+            guard let u = rootURLs[root.id] else { return false }
+            return sameLocation(u, folderURL)
+        }) {
+            onFolderAdded?(matchingRoot.name, tracks(under: matchingRoot.id, path: "").map(\.id))
+        } else {
+            onFolderAdded?(name, [])
+        }
+    }
+
+    func attachCloudTracking(toFolderURL folderURL: URL, from cloudRoot: LibraryRoot) {
+        guard let index = roots.firstIndex(where: { root in
+            guard let url = rootURLs[root.id] else { return false }
+            return sameLocation(url, folderURL)
+        }) else { return }
+        roots[index].sourceURL = cloudRoot.sourceURL
+        roots[index].remoteID = cloudRoot.remoteID
+        roots[index].linkedCloudKind = cloudRoot.effectiveCloudKind
+        roots[index].cookie = cloudRoot.cookie
+        roots[index].lastSynced = Date()
+        saveLibrary()
+    }
+
+    func updateTrackedLocalRoot(
+        _ rootID: UUID,
+        cache: CloudAudioCache = .shared,
+        onProgress: (@MainActor @Sendable (Int, Int, String) -> Void)? = nil
+    ) async throws -> CloudExporter.CloudUpdateSummary {
+        guard let index = roots.firstIndex(where: { $0.id == rootID }),
+              let folderURL = rootURLs[rootID] else {
+            throw LibraryError.notAFolder
+        }
+        let targetRoot = roots[index]
+        guard targetRoot.isCloudTrackedLocal else {
+            throw LibraryError.invalidCloudURL
+        }
+        let summary = try await CloudExporter.updateLocalFolder(
+            root: targetRoot,
+            folderURL: folderURL,
+            fetcher: cloudFetcher,
+            cache: cache,
+            onProgress: onProgress
+        )
+        if let updatedIdx = roots.firstIndex(where: { $0.id == rootID }) {
+            roots[updatedIdx].lastSynced = Date()
+            saveLibrary()
+        }
+        if summary.addedCount > 0 {
+            await rescan()
+        }
+        return summary
     }
 
     /// Points an existing (usually unavailable) root at a newly picked folder, keeping its tracks' identities.
@@ -247,6 +370,7 @@ final class LibraryStore {
         roots.append(root)
         cloudSyncErrors[root.id] = nil
         publish(tracks + newTracks)
+        onFolderAdded?(root.name, tracks(under: root.id, path: "").map(\.id))
         await populateMissingCloudArtwork(forRoot: root.id)
     }
 
@@ -312,7 +436,9 @@ final class LibraryStore {
         roots.insert(Self.appFolderRoot, at: 0)
         rootURLs[LibraryRoot.appFolderID] = documentsURL
         saveLibrary()
+        onFolderAdded?(Self.appFolderName, [])
         await rescan()
+        onFolderAdded?(Self.appFolderName, tracks(under: LibraryRoot.appFolderID, path: "").map(\.id))
     }
 
     // MARK: Scanning
@@ -454,23 +580,76 @@ final class LibraryStore {
             saveLibrary()
         }
 
+        if let appRoot = rootsByID[LibraryRoot.appFolderID], rootURLs[LibraryRoot.appFolderID] != nil {
+            let onDiskFolders = Self.existingSubfolderNames(in: documentsURL)
+            let newlyDiscovered = onDiskFolders.subtracting(knownAppFolders)
+                .filter { !appRoot.isExcluded($0) }
+                .sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            if !newlyDiscovered.isEmpty {
+                knownAppFolders.formUnion(newlyDiscovered)
+                saveLibrary()
+                for folderName in newlyDiscovered {
+                    let ids = tracks(under: LibraryRoot.appFolderID, path: folderName).map(\.id)
+                    onFolderAdded?(folderName, ids)
+                }
+            }
+        }
+
         await populateMissingCloudArtwork(forRoot: nil)
     }
 
     private func publish(_ list: [Track]) {
         let rootsByID = Dictionary(uniqueKeysWithValues: roots.map { ($0.id, $0) })
-        tracks = sortedByTitle(list.filter { track in
+        let filtered = list.filter { track in
             guard let activeRoot = rootsByID[track.rootID] else { return false }
             return !activeRoot.isExcluded(track.relativePath)
-        })
+        }.map { applyOverride(to: $0) }
+        tracks = sortedByTitle(filtered)
         saveLibrary()
+    }
+
+    private func applyOverride(to track: Track) -> Track {
+        guard let ov = metadataOverrides[track.id] else { return track }
+        var updated = track
+        if let title = ov.title { updated.title = title }
+        if let artist = ov.artist {
+            if updated.albumArtist == updated.artist {
+                updated.albumArtist = artist
+            }
+            updated.artist = artist
+        }
+        if let album = ov.album { updated.album = album }
+        if let genre = ov.genre { updated.genre = genre }
+        if let artworkKey = ov.artworkKey { updated.artworkKey = artworkKey }
+        return updated
+    }
+
+    private static func topFolderName(_ relativePath: String) -> String? {
+        let norm = LibraryRoot.normalizeFolderPath(relativePath)
+        guard let slash = norm.firstIndex(of: "/") else { return nil }
+        return String(norm[..<slash])
+    }
+
+    private static func existingSubfolderNames(in rootURL: URL) -> Set<String> {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: rootURL,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+        var names = Set<String>()
+        for url in urls {
+            if (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
+                names.insert(url.lastPathComponent)
+            }
+        }
+        return names
     }
 
     private func makeTrack(root: LibraryRoot, file: ScannedFile, metadata: TrackMetadata, artworkKey: String?, dateAdded: Date) -> Track {
         let name = (file.relativePath as NSString).lastPathComponent
         let folder = ((file.relativePath as NSString).deletingLastPathComponent as NSString).lastPathComponent
         let artist = metadata.artist ?? "Unknown Artist"
-        return Track(
+        let base = Track(
             id: Track.makeID(rootID: root.id, relativePath: file.relativePath),
             rootID: root.id,
             relativePath: file.relativePath,
@@ -485,7 +664,9 @@ final class LibraryStore {
             modified: file.modified,
             hasEmbeddedLyrics: metadata.lyrics != nil,
             dateAdded: dateAdded,
-            artworkKey: artworkKey)
+            artworkKey: artworkKey,
+            genre: metadata.genre)
+        return applyOverride(to: base)
     }
 
     private static func mergeCloudTracks(
@@ -621,6 +802,11 @@ final class LibraryStore {
         guard !ids.isEmpty else { return }
         for index in playlists.indices { playlists[index].trackIDs.removeAll { ids.contains($0) } }
         favourites.subtract(ids)
+        favouritesOrder.removeAll { ids.contains($0) }
+        for id in ids { metadataOverrides.removeValue(forKey: id) }
+        for key in folderOrders.keys {
+            folderOrders[key]?.customTrackIDs.removeAll { ids.contains($0) }
+        }
         savePlaylists()
         onTracksRemoved?(ids)
     }
@@ -665,6 +851,83 @@ final class LibraryStore {
 
     func tracks(byArtist artist: String) -> [Track] { tracks.filter { $0.artist == artist } }
 
+    // MARK: Metadata editing & search
+
+    @discardableResult
+    func updateTrackMetadata(
+        id: String,
+        title: String,
+        artist: String,
+        album: String,
+        genre: String,
+        artworkData: Data? = nil
+    ) -> Track? {
+        guard let index = tracks.firstIndex(where: { $0.id == id }) else { return nil }
+        let existing = tracks[index]
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanArtist = artist.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanAlbum = album.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanGenre = genre.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let finalTitle = cleanTitle.isEmpty ? existing.title : cleanTitle
+        let finalArtist = cleanArtist.isEmpty ? "Unknown Artist" : cleanArtist
+        let finalAlbum = cleanAlbum.isEmpty ? "Unknown Album" : cleanAlbum
+        let newArtworkKey = artworkData.flatMap { artwork.store($0) } ?? metadataOverrides[id]?.artworkKey
+
+        let override = TrackMetadataOverride(
+            title: finalTitle,
+            artist: finalArtist,
+            album: finalAlbum,
+            genre: cleanGenre,
+            artworkKey: newArtworkKey
+        )
+        metadataOverrides[id] = override
+
+        var updated = existing
+        updated.title = finalTitle
+        if updated.albumArtist == updated.artist {
+            updated.albumArtist = finalArtist
+        }
+        updated.artist = finalArtist
+        updated.album = finalAlbum
+        updated.genre = cleanGenre
+        if let newArtworkKey {
+            updated.artworkKey = newArtworkKey
+        }
+        tracks[index] = updated
+        saveLibrary()
+        onTrackUpdated?(updated)
+
+        if !updated.isCloud, let fileURL = url(for: updated) {
+            let payload = AudioTagWriter.Payload(
+                title: finalTitle,
+                artist: finalArtist,
+                album: finalAlbum,
+                genre: cleanGenre,
+                artworkData: artworkData
+            )
+            Task.detached(priority: .utility) { [weak self] in
+                let wrote = await AudioTagWriter.write(payload, to: fileURL)
+                if wrote,
+                   let attrs = try? FileManager.default.attributesOfItem(atPath: fileURL.path),
+                   let mtime = attrs[.modificationDate] as? Date,
+                   let size = (attrs[.size] as? NSNumber)?.int64Value {
+                    await MainActor.run {
+                        self?.syncFileStatsAfterTagWrite(id: id, fileSize: size, modified: mtime)
+                    }
+                }
+            }
+        }
+        return updated
+    }
+
+    private func syncFileStatsAfterTagWrite(id: String, fileSize: Int64, modified: Date) {
+        guard let index = tracks.firstIndex(where: { $0.id == id }) else { return }
+        tracks[index].fileSize = fileSize
+        tracks[index].modified = modified
+        saveLibrary()
+    }
+
     /// Direct children of a folder: subfolder names, then the songs in it.
     func folderContents(root: UUID, path: String) -> (folders: [String], tracks: [Track]) {
         let prefix = path.isEmpty ? "" : path + "/"
@@ -689,12 +952,95 @@ final class LibraryStore {
             .sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
     }
 
-    func search(_ query: String) -> [Track] {
-        let needle = query.trimmingCharacters(in: .whitespaces)
+    // MARK: Folder sorting & custom reordering
+
+    static func folderKey(rootID: UUID, path: String) -> String {
+        "\(rootID.uuidString)::\(LibraryRoot.normalizeFolderPath(path))"
+    }
+
+    func folderSortOrder(root: UUID, path: String) -> TrackSortOrder {
+        folderOrders[Self.folderKey(rootID: root, path: path)]?.sortOrder ?? .custom
+    }
+
+    func setFolderSortOrder(_ order: TrackSortOrder, root: UUID, path: String) {
+        let key = Self.folderKey(rootID: root, path: path)
+        var state = folderOrders[key] ?? FolderOrderState()
+        state.sortOrder = order
+        folderOrders[key] = state
+        saveLibrary()
+    }
+
+    func orderedFolderTracks(root: UUID, path: String, history: PlayHistoryStore? = nil) -> [Track] {
+        let direct = folderContents(root: root, path: path).tracks
+        let key = Self.folderKey(rootID: root, path: path)
+        let state = folderOrders[key] ?? FolderOrderState()
+        switch state.sortOrder {
+        case .custom:
+            guard !state.customTrackIDs.isEmpty else { return direct }
+            let byTrackID = Dictionary(direct.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            var ordered: [Track] = []
+            var seen = Set<String>()
+            for id in state.customTrackIDs {
+                if let track = byTrackID[id], seen.insert(id).inserted {
+                    ordered.append(track)
+                }
+            }
+            for track in direct where !seen.contains(track.id) {
+                ordered.append(track)
+            }
+            return ordered
+        default:
+            return TrackSorter.sort(
+                direct,
+                by: state.sortOrder,
+                playCount: { history?.count(for: $0) ?? 0 },
+                lastPlayed: { history?.lastPlayed(for: $0) }
+            )
+        }
+    }
+
+    func orderedTracks(under root: UUID, path: String, history: PlayHistoryStore? = nil) -> [Track] {
+        let direct = orderedFolderTracks(root: root, path: path, history: history)
+        let subfolders = folderContents(root: root, path: path).folders
+        var result = direct
+        for child in subfolders {
+            let childPath = path.isEmpty ? child : "\(path)/\(child)"
+            result.append(contentsOf: orderedTracks(under: root, path: childPath, history: history))
+        }
+        return result
+    }
+
+    func moveFolderTracks(root: UUID, path: String, currentTrackIDs: [String], from source: IndexSet, to destination: Int) {
+        var reordered = currentTrackIDs
+        reordered.move(fromOffsets: source, toOffset: destination)
+        let key = Self.folderKey(rootID: root, path: path)
+        folderOrders[key] = FolderOrderState(sortOrder: .custom, customTrackIDs: reordered)
+        saveLibrary()
+    }
+
+    func search(_ query: String, field: SearchField = .keyword) -> [Track] {
+        let needle = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !needle.isEmpty else { return [] }
-        return tracks.filter {
-            $0.title.localizedStandardContains(needle) || $0.artist.localizedStandardContains(needle)
-                || $0.album.localizedStandardContains(needle)
+        switch field {
+        case .keyword:
+            return tracks.filter {
+                $0.title.localizedStandardContains(needle)
+                    || $0.artist.localizedStandardContains(needle)
+                    || $0.album.localizedStandardContains(needle)
+                    || $0.displayGenre.localizedStandardContains(needle)
+            }
+        case .artist:
+            return tracks.filter {
+                $0.artist.compare(needle, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }
+        case .album:
+            return tracks.filter {
+                $0.album.compare(needle, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }
+        case .genre:
+            return tracks.filter {
+                $0.displayGenre.compare(needle, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+            }
         }
     }
 
@@ -703,7 +1049,62 @@ final class LibraryStore {
     func isFavourite(_ id: String) -> Bool { favourites.contains(id) }
 
     func toggleFavourite(_ id: String) {
-        if favourites.contains(id) { favourites.remove(id) } else { favourites.insert(id) }
+        if favourites.contains(id) {
+            favourites.remove(id)
+            favouritesOrder.removeAll { $0 == id }
+        } else {
+            favourites.insert(id)
+            if !favouritesOrder.contains(id) {
+                favouritesOrder.append(id)
+            }
+        }
+        savePlaylists()
+    }
+
+    func orderedFavourites(history: PlayHistoryStore? = nil) -> [Track] {
+        let favTracks = tracks.filter { favourites.contains($0.id) }
+        switch favouritesSortOrder {
+        case .custom:
+            guard !favouritesOrder.isEmpty else { return favTracks }
+            let map = Dictionary(favTracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+            var ordered: [Track] = []
+            var seen = Set<String>()
+            for id in favouritesOrder {
+                if let t = map[id], seen.insert(id).inserted { ordered.append(t) }
+            }
+            for t in favTracks where !seen.contains(t.id) { ordered.append(t) }
+            return ordered
+        default:
+            return TrackSorter.sort(
+                favTracks,
+                by: favouritesSortOrder,
+                playCount: { history?.count(for: $0) ?? 0 },
+                lastPlayed: { history?.lastPlayed(for: $0) }
+            )
+        }
+    }
+
+    func sortFavourites(by order: TrackSortOrder, history: PlayHistoryStore? = nil) {
+        if order != .custom {
+            favouritesOrder = orderedFavourites(history: nil).map(\.id)
+        }
+        favouritesSortOrder = order
+        if order != .custom {
+            favouritesOrder = TrackSorter.sort(
+                tracks.filter { favourites.contains($0.id) },
+                by: order,
+                playCount: { history?.count(for: $0) ?? 0 },
+                lastPlayed: { history?.lastPlayed(for: $0) }
+            ).map(\.id)
+        }
+        savePlaylists()
+    }
+
+    func moveFavourites(currentTrackIDs: [String], from source: IndexSet, to destination: Int) {
+        var reordered = currentTrackIDs
+        reordered.move(fromOffsets: source, toOffset: destination)
+        favouritesOrder = reordered
+        favouritesSortOrder = .custom
         savePlaylists()
     }
 
@@ -736,6 +1137,22 @@ final class LibraryStore {
         }
     }
 
+    func sortPlaylist(_ id: UUID, by order: TrackSortOrder, history: PlayHistoryStore? = nil) {
+        updatePlaylist(id) { playlist in
+            if order != .custom {
+                let orderIndices = TrackSorter.sortedIndexOrder(
+                    for: playlist.trackIDs,
+                    tracksByID: byID,
+                    by: order,
+                    playCount: { history?.count(for: $0) ?? 0 },
+                    lastPlayed: { history?.lastPlayed(for: $0) }
+                )
+                playlist.trackIDs = orderIndices.map { playlist.trackIDs[$0] }
+            }
+            playlist.sortOrder = order
+        }
+    }
+
     func movePlaylistTracks(_ id: UUID, from source: IndexSet, to destination: Int) {
         updatePlaylist(id) { playlist in
             let moved = source.filter { playlist.trackIDs.indices.contains($0) }.map { playlist.trackIDs[$0] }
@@ -743,6 +1160,7 @@ final class LibraryStore {
             let insertAt = destination - source.filter { $0 < destination }.count
             remaining.insert(contentsOf: moved, at: min(max(insertAt, 0), remaining.count))
             playlist.trackIDs = remaining
+            playlist.sortOrder = .custom
         }
     }
 }

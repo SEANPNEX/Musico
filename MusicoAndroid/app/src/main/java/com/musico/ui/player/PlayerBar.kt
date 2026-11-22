@@ -12,6 +12,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Lyrics
 import androidx.compose.material.icons.rounded.Pause
 import androidx.compose.material.icons.rounded.PlayArrow
@@ -53,6 +54,7 @@ fun PlayerBar(
     artworkCache: ArtworkCache,
     sidePanel: SidePanel?,
     onToggleSidePanel: (SidePanel) -> Unit,
+    onOpenSongInfo: (String) -> Unit,
     onOpenFullPlayer: () -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -181,6 +183,11 @@ fun PlayerBar(
                     horizontalArrangement = Arrangement.End,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
+                    if (track != null) {
+                        IconButton(onClick = { onOpenSongInfo(track.id) }) {
+                            Icon(Icons.Rounded.Info, contentDescription = "Song Info")
+                        }
+                    }
                     IconToggleButton(
                         checked = sidePanel == SidePanel.LYRICS,
                         onCheckedChange = { onToggleSidePanel(SidePanel.LYRICS) }

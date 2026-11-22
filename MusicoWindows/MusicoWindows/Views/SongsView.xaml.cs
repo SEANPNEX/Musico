@@ -45,6 +45,8 @@ public partial class SongsView : UserControl
 
     private ViewContext? _ctx;
     private SongSort _sort = SongSort.Title;
+    private SearchField _searchField = SearchField.Keyword;
+    private bool _isProgrammaticSearch;
     private List<Track> _displayedTracks = new();
 
     public SongsView()
@@ -71,6 +73,22 @@ public partial class SongsView : UserControl
     {
         SearchBox.Focus();
         SearchBox.SelectAll();
+    }
+
+    public void ApplySearch(string query, SearchField field)
+    {
+        _isProgrammaticSearch = true;
+        try
+        {
+            _searchField = field;
+            SearchBox.Text = query;
+            SearchBox.CaretIndex = SearchBox.Text.Length;
+        }
+        finally
+        {
+            _isProgrammaticSearch = false;
+        }
+        Refresh();
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e) => Detach();
@@ -103,10 +121,17 @@ public partial class SongsView : UserControl
         SearchPlaceholder.Visibility = string.IsNullOrEmpty(SearchBox.Text) ? Visibility.Visible : Visibility.Collapsed;
         ClearSearchButton.Visibility = string.IsNullOrEmpty(SearchBox.Text) ? Visibility.Collapsed : Visibility.Visible;
 
+        bool showFieldChip = _searchField != SearchField.Keyword && !string.IsNullOrEmpty(query);
+        SearchFieldChip.Visibility = showFieldChip ? Visibility.Visible : Visibility.Collapsed;
+        if (showFieldChip)
+        {
+            SearchFieldLabel.Text = _searchField.ToString();
+        }
+
         IReadOnlyList<Track> list;
         if (!string.IsNullOrEmpty(query))
         {
-            list = lib.Search(query);
+            list = lib.Search(query, _searchField);
         }
         else
         {
@@ -176,10 +201,24 @@ public partial class SongsView : UserControl
         SongsList.ItemsSource = items;
     }
 
-    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e) => Refresh();
+    private void SearchBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (!_isProgrammaticSearch)
+        {
+            _searchField = SearchField.Keyword;
+        }
+        Refresh();
+    }
+
+    private void ClearSearchField_Click(object sender, RoutedEventArgs e)
+    {
+        _searchField = SearchField.Keyword;
+        Refresh();
+    }
 
     private void ClearSearch_Click(object sender, RoutedEventArgs e)
     {
+        _searchField = SearchField.Keyword;
         SearchBox.Text = string.Empty;
         SearchBox.Focus();
     }
@@ -243,7 +282,16 @@ public partial class SongsView : UserControl
             return;
 
         var ids = _displayedTracks.Select(t => t.Id).ToList();
-        _ctx.Services.Player.Play(ids, item.Index);
+        string query = SearchBox.Text.Trim();
+        if (!string.IsNullOrEmpty(query))
+        {
+            string queueName = QueueStore.FormatSearchQueueName(_searchField, query);
+            _ctx.Services.Player.PlayInNewQueue(ids, queueName, item.Index);
+        }
+        else
+        {
+            _ctx.Services.Player.Play(ids, item.Index);
+        }
     }
 
     private void SongRow_MouseRightButtonUp(object sender, MouseButtonEventArgs e)
@@ -257,7 +305,8 @@ public partial class SongsView : UserControl
             item.Track.Id,
             _ctx.OpenTextPrompt,
             null,
-            _ctx.OpenSaveCloudTrack);
+            _ctx.OpenSaveCloudTrack,
+            _ctx.OpenSongInfo);
         menu.PlacementTarget = border;
         menu.IsOpen = true;
         e.Handled = true;

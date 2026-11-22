@@ -8,6 +8,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using Microsoft.Win32;
 using MusicoWindows.Controls;
+using MusicoWindows.Core;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 using MusicoWindows.Theme;
@@ -19,10 +20,16 @@ public partial class FoldersView : UserControl
     private ViewContext? _ctx;
     private Guid? _currentRootId;
     private string _currentPath = string.Empty;
+    private bool _suppressSortSelection;
 
     public FoldersView()
     {
         InitializeComponent();
+        foreach (var mode in TrackSorter.AllModes)
+        {
+            SortCombo.Items.Add(TrackSorter.Label(mode));
+        }
+        SortCombo.SelectedIndex = 1;
         Unloaded += OnUnloaded;
     }
 
@@ -184,7 +191,7 @@ public partial class FoldersView : UserControl
             nameTb.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
             titleRow.Children.Add(nameTb);
 
-            if (root.IsCloud)
+            if (root.IsCloud || root.IsCloudTrackedLocal)
             {
                 var badge = new Border
                 {
@@ -197,9 +204,10 @@ public partial class FoldersView : UserControl
                 badge.SetResourceReference(Border.BackgroundProperty, "AccentSubtleBrush");
                 badge.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
 
+                string cloudName = root.EffectiveCloudKind == RootKind.CloudBilibili ? "Bilibili" : "YouTube";
                 var badgeText = new TextBlock
                 {
-                    Text = root.Kind == RootKind.CloudBilibili ? "Bilibili" : "YouTube",
+                    Text = root.IsCloud ? cloudName : $"{cloudName} · Local",
                     FontFamily = (FontFamily)FindResource("Win10Font"),
                     FontSize = 10,
                     FontWeight = FontWeights.SemiBold
@@ -209,7 +217,11 @@ public partial class FoldersView : UserControl
                 titleRow.Children.Add(badge);
             }
 
-            string locationDisplay = root.IsCloud ? (root.SourceUrl ?? root.Path ?? string.Empty) : (root.Path ?? string.Empty);
+            string locationDisplay = root.IsCloud
+                ? (root.SourceUrl ?? root.Path ?? string.Empty)
+                : root.IsCloudTrackedLocal && !string.IsNullOrWhiteSpace(root.SourceUrl)
+                    ? $"{root.Path ?? string.Empty} · {root.SourceUrl}"
+                    : (root.Path ?? string.Empty);
             var detailTb = new TextBlock
             {
                 Text = available
@@ -276,6 +288,37 @@ public partial class FoldersView : UserControl
                 actions.Children.Add(saveBtn);
             }
 
+            if (root.IsCloudTrackedLocal && available)
+            {
+                var updateBtn = new Button
+                {
+                    Style = (Style)FindResource("Win10ButtonStyle"),
+                    ToolTip = "Update from Cloud",
+                    Margin = new Thickness(0, 0, 8, 0)
+                };
+                var updateContent = new StackPanel { Orientation = Orientation.Horizontal };
+                updateContent.Children.Add(new TextBlock
+                {
+                    Text = "\uE896",
+                    FontFamily = (FontFamily)FindResource("Win10GlyphFont"),
+                    FontSize = 12,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(0, 0, 6, 0)
+                });
+                updateContent.Children.Add(new TextBlock
+                {
+                    Text = "Update from Cloud",
+                    VerticalAlignment = VerticalAlignment.Center
+                });
+                updateBtn.Content = updateContent;
+                updateBtn.Click += (_, e) =>
+                {
+                    e.Handled = true;
+                    _ctx.OpenUpdateTrackedFolder?.Invoke(root);
+                };
+                actions.Children.Add(updateBtn);
+            }
+
             var removeBtn = new Button
             {
                 Style = (Style)FindResource("Win10ButtonStyle"),
@@ -327,7 +370,7 @@ public partial class FoldersView : UserControl
                 Win10Animations.AnimateSlideX(ContentStack, 24);
             };
 
-            var rootTracks = lib.GetTracksUnder(rootId, string.Empty);
+            var rootTracks = lib.GetTracksUnder(rootId, string.Empty, _ctx.Services.History);
             var rootTrackIds = rootTracks.Select(t => t.Id).ToList();
             card.ContextMenu = TrackMenuHelper.BuildTrackMenu(
                 _ctx.Services,
@@ -336,6 +379,14 @@ public partial class FoldersView : UserControl
                 _ctx.OpenTextPrompt,
                 menu =>
                 {
+                    if (rootTrackIds.Count > 0)
+                    {
+                        menu.Items.Insert(0, TrackMenuHelper.CreateItem(
+                            "Play",
+                            "\uE768",
+                            () => _ctx.Services.Player.PlayInNamedQueue(root.Name, rootTrackIds)));
+                        menu.Items.Insert(1, new Separator());
+                    }
                     menu.Items.Add(new Separator());
                     if (root.IsCloud)
                     {
@@ -344,6 +395,14 @@ public partial class FoldersView : UserControl
                             "\uE896",
                             () => _ctx.OpenSaveCloudPlaylist?.Invoke(root, rootTracks),
                             rootTracks.Count > 0));
+                    }
+                    if (root.IsCloudTrackedLocal)
+                    {
+                        menu.Items.Add(TrackMenuHelper.CreateItem(
+                            "Update from Cloud",
+                            "\uE896",
+                            () => _ctx.OpenUpdateTrackedFolder?.Invoke(root),
+                            available));
                     }
                     if (root.Kind == RootKind.Picked)
                     {
@@ -398,16 +457,40 @@ public partial class FoldersView : UserControl
             ? root.Name
             : _currentPath.Split('/').Last();
         TitleText.Text = leafName;
-        SubtitleText.Text = root.IsCloud ? (root.SourceUrl ?? root.Path ?? string.Empty) : (root.Path ?? string.Empty);
+        SubtitleText.Text = root.IsCloud
+            ? (root.SourceUrl ?? root.Path ?? string.Empty)
+            : root.IsCloudTrackedLocal && !string.IsNullOrWhiteSpace(root.SourceUrl)
+                ? $"{root.Path ?? string.Empty} · {root.SourceUrl}"
+                : (root.Path ?? string.Empty);
         DrillBar.Visibility = Visibility.Visible;
+        NewFolderButton.Visibility = root.IsLocal && lib.IsAvailable(root) ? Visibility.Visible : Visibility.Collapsed;
         SaveCloudFolderButton.Visibility = root.IsCloud ? Visibility.Visible : Visibility.Collapsed;
+        UpdateTrackedFolderButton.Visibility = root.IsCloudTrackedLocal && string.IsNullOrEmpty(_currentPath)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
         RemoveRootButton.Visibility = Visibility.Visible;
 
         BuildBreadcrumbs(root);
 
-        var (subfolders, directTracks) = lib.GetFolderContents(rootId, _currentPath);
-        var allTracksUnder = lib.GetTracksUnder(rootId, _currentPath);
+        var history = _ctx.Services.History;
+        TrackSortMode sortMode = lib.GetFolderSortMode(rootId, _currentPath);
+        int modeIndex = 0;
+        for (int i = 0; i < TrackSorter.AllModes.Count; i++)
+        {
+            if (TrackSorter.AllModes[i] == sortMode)
+            {
+                modeIndex = i;
+                break;
+            }
+        }
+        _suppressSortSelection = true;
+        SortCombo.SelectedIndex = modeIndex;
+        _suppressSortSelection = false;
 
+        var (subfolders, directTracks) = lib.GetFolderContents(rootId, _currentPath, history);
+        var allTracksUnder = lib.GetTracksUnder(rootId, _currentPath, history);
+
+        SortCombo.IsEnabled = directTracks.Count > 1;
         PlayFolderButton.IsEnabled = allTracksUnder.Count > 0;
         ShuffleFolderButton.IsEnabled = allTracksUnder.Count > 0;
         SaveCloudFolderButton.IsEnabled = root.IsCloud && allTracksUnder.Count > 0;
@@ -453,7 +536,8 @@ public partial class FoldersView : UserControl
         foreach (string folderName in subfolders)
         {
             string childPath = string.IsNullOrEmpty(_currentPath) ? folderName : $"{_currentPath}/{folderName}";
-            var folderTracks = lib.GetTracksUnder(rootId, childPath);
+            string capturedFolderName = folderName;
+            var folderTracks = lib.GetTracksUnder(rootId, childPath, history);
 
             var row = new Border
             {
@@ -553,13 +637,22 @@ public partial class FoldersView : UserControl
                 Win10Animations.AnimateSlideX(ContentStack, 24);
             };
 
+            var folderTrackIds = folderTracks.Select(t => t.Id).ToList();
             row.ContextMenu = TrackMenuHelper.BuildTrackMenu(
                 _ctx.Services,
-                folderTracks.Select(t => t.Id).ToList(),
+                folderTrackIds,
                 null,
                 _ctx.OpenTextPrompt,
                 menu =>
                 {
+                    if (folderTrackIds.Count > 0)
+                    {
+                        menu.Items.Insert(0, TrackMenuHelper.CreateItem(
+                            "Play",
+                            "\uE768",
+                            () => _ctx.Services.Player.PlayInNamedQueue(capturedFolderName, folderTrackIds)));
+                        menu.Items.Insert(1, new Separator());
+                    }
                     menu.Items.Add(new Separator());
                     menu.Items.Add(TrackMenuHelper.CreateItem(
                         "Remove Folder",
@@ -588,10 +681,14 @@ public partial class FoldersView : UserControl
                 isCurrent,
                 isPlaying,
                 isAvail,
-                () => _ctx.Services.Player.Play(directIds, idx),
+                () => _ctx.Services.Player.PlayInNamedQueue(leafName, directIds, idx),
                 _ctx.OpenTextPrompt,
                 null,
-                _ctx.OpenSaveCloudTrack);
+                _ctx.OpenSaveCloudTrack,
+                _ctx.OpenSongInfo);
+
+            row.EnableDragReorder($"folder:{rootId:D}:{_currentPath}", idx, directTracks.Count,
+                (from, to) => lib.MoveFolderTrack(rootId, _currentPath, from, to, history));
             ContentStack.Children.Add(row);
         }
     }
@@ -744,6 +841,14 @@ public partial class FoldersView : UserControl
         _ctx.OpenSaveCloudPlaylist?.Invoke(root, tracks);
     }
 
+    private void UpdateTrackedFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ctx is null || _currentRootId is not Guid rid) return;
+        var root = _ctx.Services.Library.GetRoot(rid);
+        if (root is null || !root.IsCloudTrackedLocal) return;
+        _ctx.OpenUpdateTrackedFolder?.Invoke(root);
+    }
+
     private void RemoveRoot_Click(object sender, RoutedEventArgs e)
     {
         if (_ctx is null || _currentRootId is not Guid rid) return;
@@ -765,21 +870,54 @@ public partial class FoldersView : UserControl
         await _ctx.Services.Library.RescanAsync();
     }
 
+    private void SortCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressSortSelection || _ctx is null || _currentRootId is not Guid rid) return;
+        int idx = SortCombo.SelectedIndex;
+        if (idx < 0 || idx >= TrackSorter.AllModes.Count) return;
+        _ctx.Services.Library.SetFolderSortMode(rid, _currentPath, TrackSorter.AllModes[idx]);
+    }
+
+    private void NewFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ctx is null || _currentRootId is not Guid rid) return;
+        _ctx.OpenTextPrompt(
+            "New Folder",
+            "Enter a name for the new folder.",
+            string.Empty,
+            "Create",
+            async name =>
+            {
+                try
+                {
+                    await _ctx.Services.Library.CreateSubfolderAsync(rid, _currentPath, name);
+                }
+                catch (Exception ex)
+                {
+                    _ctx.OpenConfirm("Couldn't Create Folder", ex.Message, "OK", null, false);
+                }
+            });
+    }
+
     private void PlayFolder_Click(object sender, RoutedEventArgs e)
     {
         if (_ctx is null || _currentRootId is not Guid rid) return;
-        var ids = _ctx.Services.Library.GetTracksUnder(rid, _currentPath).Select(t => t.Id).ToList();
+        var root = _ctx.Services.Library.GetRoot(rid);
+        if (root is null) return;
+        string leafName = string.IsNullOrEmpty(_currentPath) ? root.Name : _currentPath.Split('/').Last();
+        var ids = _ctx.Services.Library.GetTracksUnder(rid, _currentPath, _ctx.Services.History).Select(t => t.Id).ToList();
         if (ids.Count == 0) return;
-        if (_ctx.Services.Queues.Active.Shuffle) _ctx.Services.Player.ToggleShuffle();
-        _ctx.Services.Player.Play(ids, 0);
+        _ctx.Services.Player.PlayInNamedQueue(leafName, ids, startAt: 0, shuffle: false);
     }
 
     private void ShuffleFolder_Click(object sender, RoutedEventArgs e)
     {
         if (_ctx is null || _currentRootId is not Guid rid) return;
-        var ids = _ctx.Services.Library.GetTracksUnder(rid, _currentPath).Select(t => t.Id).ToList();
+        var root = _ctx.Services.Library.GetRoot(rid);
+        if (root is null) return;
+        string leafName = string.IsNullOrEmpty(_currentPath) ? root.Name : _currentPath.Split('/').Last();
+        var ids = _ctx.Services.Library.GetTracksUnder(rid, _currentPath, _ctx.Services.History).Select(t => t.Id).ToList();
         if (ids.Count == 0) return;
-        if (!_ctx.Services.Queues.Active.Shuffle) _ctx.Services.Player.ToggleShuffle();
-        _ctx.Services.Player.Play(ids, Random.Shared.Next(ids.Count));
+        _ctx.Services.Player.PlayInNamedQueue(leafName, ids, startAt: Random.Shared.Next(ids.Count), shuffle: true);
     }
 }

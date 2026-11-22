@@ -15,6 +15,7 @@ import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -29,6 +30,7 @@ import com.musico.model.Album
 import com.musico.model.PlayQueue
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
+import com.musico.store.PlayHistoryUiState
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.theme.MusicoMotion
 
@@ -50,14 +52,24 @@ sealed interface LibraryDetail {
 fun LibraryScreen(
     libraryStore: LibraryStore,
     libraryState: LibraryUiState,
+    historyState: PlayHistoryUiState,
     playerState: PlayerUiState,
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
+    pendingSearchRequest: SearchRequest? = null,
+    onConsumeSearchRequest: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var section by rememberSaveable { mutableStateOf(LibrarySection.SONGS) }
     val detailStack = remember { mutableStateListOf<LibraryDetail>() }
+
+    LaunchedEffect(pendingSearchRequest?.token) {
+        if (pendingSearchRequest != null) {
+            detailStack.clear()
+            section = LibrarySection.SONGS
+        }
+    }
 
     BackHandler(enabled = detailStack.isNotEmpty()) {
         detailStack.removeAt(detailStack.lastIndex)
@@ -110,6 +122,7 @@ fun LibraryScreen(
                         ref = topDetail.ref,
                         libraryStore = libraryStore,
                         libraryState = libraryState,
+                        historyState = historyState,
                         playerState = playerState,
                         queues = queues,
                         activeQueue = activeQueue,
@@ -176,6 +189,8 @@ fun LibraryScreen(
                                 queues = queues,
                                 activeQueue = activeQueue,
                                 trackActions = trackActions,
+                                pendingSearchRequest = pendingSearchRequest,
+                                onConsumeSearchRequest = onConsumeSearchRequest,
                                 modifier = Modifier.fillMaxSize()
                             )
                             LibrarySection.ALBUMS -> AlbumsScreen(

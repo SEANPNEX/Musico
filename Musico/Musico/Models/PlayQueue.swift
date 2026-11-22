@@ -11,6 +11,7 @@ struct PlayQueue: Codable, Identifiable, Hashable, Sendable {
     private(set) var shuffle = false
     var repeatMode: RepeatMode = .off
     private(set) var shuffleOrder: [Int] = []
+    var sortOrder: TrackSortOrder? = nil
 
     init(name: String) { self.name = name }
 
@@ -36,6 +37,20 @@ struct PlayQueue: Codable, Identifiable, Hashable, Sendable {
         trackIDs = ids
         currentIndex = ids.isEmpty ? nil : min(max(index, 0), ids.count - 1)
         position = 0
+        sortOrder = nil
+        var rng = SystemRandomNumberGenerator()
+        reshuffle(using: &rng)
+    }
+
+    /// Replaces the track list while keeping the currently playing track active if it remains in `ids`.
+    mutating func replacePreservingPlayback(with ids: [String]) {
+        guard let currentID = currentTrackID, let preservedIndex = ids.firstIndex(of: currentID) else {
+            replace(with: ids, startAt: 0)
+            return
+        }
+        trackIDs = ids
+        currentIndex = preservedIndex
+        sortOrder = nil
         var rng = SystemRandomNumberGenerator()
         reshuffle(using: &rng)
     }
@@ -124,11 +139,37 @@ struct PlayQueue: Codable, Identifiable, Hashable, Sendable {
     mutating func move(from source: IndexSet, to destination: Int) {
         var oldIndices = Array(trackIDs.indices)
         oldIndices.move(fromOffsets: source, toOffset: destination)
-        trackIDs.move(fromOffsets: source, toOffset: destination)
+        applyOrder(oldIndices, sortOrder: .custom)
+    }
+
+    mutating func applyOrder(_ oldIndices: [Int], sortOrder: TrackSortOrder) {
+        guard oldIndices.count == trackIDs.count else { return }
+        trackIDs = oldIndices.map { trackIDs[$0] }
         var newPosition = Array(repeating: 0, count: oldIndices.count)
         for (new, old) in oldIndices.enumerated() { newPosition[old] = new }
         currentIndex = currentIndex.map { newPosition[$0] }
         shuffleOrder = shuffleOrder.map { newPosition[$0] }
+        self.sortOrder = sortOrder
+    }
+
+    mutating func sort(
+        by order: TrackSortOrder,
+        tracksByID: [String: Track],
+        playCount: (String) -> Int,
+        lastPlayed: ((String) -> Date?)? = nil
+    ) {
+        if order == .custom {
+            sortOrder = .custom
+            return
+        }
+        let oldIndices = TrackSorter.sortedIndexOrder(
+            for: trackIDs,
+            tracksByID: tracksByID,
+            by: order,
+            playCount: playCount,
+            lastPlayed: lastPlayed
+        )
+        applyOrder(oldIndices, sortOrder: order)
     }
 
     mutating func setShuffle(_ on: Bool, using rng: inout some RandomNumberGenerator) {

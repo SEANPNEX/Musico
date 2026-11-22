@@ -74,6 +74,7 @@ struct PlaylistDetailView: View {
     let ref: PlaylistRef
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
+    @Environment(PlayHistoryStore.self) private var history
 
     private var title: String {
         switch ref {
@@ -84,8 +85,15 @@ struct PlaylistDetailView: View {
 
     private var tracks: [Track] {
         switch ref {
-        case .favourites: library.tracks.filter { library.favourites.contains($0.id) }
+        case .favourites: library.orderedFavourites(history: history)
         case .user(let id): library.tracks(library.playlists.first { $0.id == id }?.trackIDs ?? [])
+        }
+    }
+
+    private var currentSortOrder: TrackSortOrder {
+        switch ref {
+        case .favourites: library.favouritesSortOrder
+        case .user(let id): library.playlists.first { $0.id == id }?.sortOrder ?? .custom
         }
     }
 
@@ -101,26 +109,56 @@ struct PlaylistDetailView: View {
             if case .user(let id) = ref {
                 // The same song may be in a playlist twice, so rows are identified by position.
                 ForEach(Array(tracks.enumerated()), id: \.offset) { index, track in
-                    Button {
-                        player.play(tracks.map(\.id), startAt: index)
-                    } label: {
-                        TrackRow(track: track)
-                    }
-                    .buttonStyle(.plain)
-                    .disabled(!library.isAvailable(track))
+                    ReorderableTrackRow(
+                        track: track,
+                        index: index,
+                        scopeID: "playlist-\(id.uuidString)",
+                        isAvailable: library.isAvailable(track),
+                        onTap: { player.play(tracks.map(\.id), startAt: index) },
+                        onMove: { from, to in
+                            library.movePlaylistTracks(id, from: IndexSet(integer: from), to: to)
+                        }
+                    )
                     .contextMenu { TrackMenuItems(ids: [track.id], favouriteID: track.id) }
                 }
                 .onDelete { library.removeFromPlaylist(id, at: $0) }
                 .onMove { library.movePlaylistTracks(id, from: $0, to: $1) }
             } else {
-                TrackRows(tracks: tracks)
+                ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+                    ReorderableTrackRow(
+                        track: track,
+                        index: index,
+                        scopeID: "favourites",
+                        isAvailable: library.isAvailable(track),
+                        onTap: { player.play(tracks.map(\.id), startAt: index) },
+                        onMove: { from, to in
+                            library.moveFavourites(currentTrackIDs: tracks.map(\.id), from: IndexSet(integer: from), to: to)
+                        }
+                    )
+                    .contextMenu { TrackMenuItems(ids: [track.id], favouriteID: track.id) }
+                }
+                .onMove { source, destination in
+                    library.moveFavourites(currentTrackIDs: tracks.map(\.id), from: source, to: destination)
+                }
             }
         }
         .listStyle(.plain)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            if case .user = ref, !tracks.isEmpty { EditButton() }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if !tracks.isEmpty {
+                    TrackSortMenu(selection: currentSortOrder) { order in
+                        switch ref {
+                        case .favourites:
+                            library.sortFavourites(by: order, history: history)
+                        case .user(let id):
+                            library.sortPlaylist(id, by: order, history: history)
+                        }
+                    }
+                }
+                if case .user = ref, !tracks.isEmpty { EditButton() }
+            }
         }
     }
 }

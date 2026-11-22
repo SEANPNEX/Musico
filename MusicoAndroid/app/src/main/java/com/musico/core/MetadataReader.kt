@@ -16,6 +16,7 @@ data class TrackMetadata(
     val artist: String? = null,
     val album: String? = null,
     val albumArtist: String? = null,
+    val genre: String? = null,
     val trackNumber: Int? = null,
     val discNumber: Int? = null,
     val durationSec: Double = 0.0,
@@ -29,6 +30,7 @@ data class TrackMetadata(
             artist == other.artist &&
             album == other.album &&
             albumArtist == other.albumArtist &&
+            genre == other.genre &&
             trackNumber == other.trackNumber &&
             discNumber == other.discNumber &&
             durationSec == other.durationSec &&
@@ -41,6 +43,7 @@ data class TrackMetadata(
         result = 31 * result + (artist?.hashCode() ?: 0)
         result = 31 * result + (album?.hashCode() ?: 0)
         result = 31 * result + (albumArtist?.hashCode() ?: 0)
+        result = 31 * result + (genre?.hashCode() ?: 0)
         result = 31 * result + (trackNumber ?: 0)
         result = 31 * result + (discNumber ?: 0)
         result = 31 * result + durationSec.hashCode()
@@ -70,6 +73,7 @@ class AndroidMetadataReader(
         var artist: String? = null
         var album: String? = null
         var albumArtist: String? = null
+        var genre: String? = null
         var trackNumber: Int? = null
         var discNumber: Int? = null
         var durationSec = 0.0
@@ -87,6 +91,7 @@ class AndroidMetadataReader(
             artist = clean(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST))
             album = clean(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM))
             albumArtist = clean(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST))
+            genre = clean(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE))
             trackNumber = parseLeadingInt(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER))
             discNumber = parseLeadingInt(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DISC_NUMBER))
             mimeType = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_MIMETYPE)
@@ -115,6 +120,7 @@ class AndroidMetadataReader(
                 artist = artist ?: comment("ARTIST")
                 album = album ?: comment("ALBUM")
                 albumArtist = albumArtist ?: comment("ALBUMARTIST", "ALBUM ARTIST")
+                genre = genre ?: comment("GENRE")
                 trackNumber = trackNumber ?: parseLeadingInt(flac.comments["TRACKNUMBER"])
                 discNumber = discNumber ?: parseLeadingInt(flac.comments["DISCNUMBER"])
                 lyrics = lyrics ?: comment("LYRICS", "UNSYNCEDLYRICS")
@@ -131,6 +137,7 @@ class AndroidMetadataReader(
             artist = artist,
             album = album,
             albumArtist = albumArtist,
+            genre = genre,
             trackNumber = trackNumber,
             discNumber = discNumber,
             durationSec = durationSec,

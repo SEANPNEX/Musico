@@ -52,6 +52,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.musico.model.SearchField
 import com.musico.store.AppContainer
 import com.musico.ui.components.TrackActionDialogs
 import com.musico.ui.components.rememberTrackActionState
@@ -64,6 +65,7 @@ import com.musico.ui.screens.FoldersScreen
 import com.musico.ui.screens.LibraryScreen
 import com.musico.ui.screens.QueuesContent
 import com.musico.ui.screens.QueuesScreen
+import com.musico.ui.screens.SearchRequest
 import com.musico.ui.screens.StatsScreen
 import com.musico.ui.theme.MusicoMotion
 
@@ -81,7 +83,8 @@ enum class TopDestination(
 fun MusicoApp(
     appContainer: AppContainer,
     onPickFolder: ((Uri) -> Unit) -> Unit,
-    onPickLyricsFile: ((Uri) -> Unit) -> Unit
+    onPickLyricsFile: ((Uri) -> Unit) -> Unit,
+    onPickImage: ((Uri) -> Unit) -> Unit,
 ) {
     val libraryStore = appContainer.libraryStore
     val queueStore = appContainer.queueStore
@@ -100,11 +103,23 @@ fun MusicoApp(
     val historyState by historyStore.state.collectAsStateWithLifecycle()
     val playerState by playerController.state.collectAsStateWithLifecycle()
 
-    val trackActions = rememberTrackActionState(libraryStore, playerController, cloudExporter, onPickFolder)
-
     var selectedDestination by rememberSaveable { mutableStateOf(TopDestination.LIBRARY) }
     var showFullPlayer by rememberSaveable { mutableStateOf(false) }
     var sidePanel by rememberSaveable { mutableStateOf<SidePanel?>(null) }
+    var pendingSearchRequest by remember { mutableStateOf<SearchRequest?>(null) }
+
+    val trackActions = rememberTrackActionState(
+        libraryStore = libraryStore,
+        playerController = playerController,
+        cloudExporter = cloudExporter,
+        onPickFolder = onPickFolder,
+        onPickImage = onPickImage,
+        onQuickSearch = { query, field ->
+            showFullPlayer = false
+            selectedDestination = TopDestination.LIBRARY
+            pendingSearchRequest = SearchRequest(query = query, field = field, token = System.nanoTime())
+        },
+    )
     var lastTrack by remember { mutableStateOf(playerState.currentTrack) }
     if (playerState.currentTrack != null) {
         lastTrack = playerState.currentTrack
@@ -167,6 +182,8 @@ fun MusicoApp(
                     historyState = historyState,
                     playerState = playerState,
                     trackActions = trackActions,
+                    pendingSearchRequest = pendingSearchRequest,
+                    onConsumeSearchRequest = { pendingSearchRequest = null },
                     onPickFolder = onPickFolder,
                     modifier = Modifier
                         .fillMaxSize()
@@ -211,6 +228,8 @@ fun MusicoApp(
                         historyState = historyState,
                         playerState = playerState,
                         trackActions = trackActions,
+                        pendingSearchRequest = pendingSearchRequest,
+                        onConsumeSearchRequest = { pendingSearchRequest = null },
                         onPickFolder = onPickFolder,
                         modifier = Modifier
                             .weight(1f)
@@ -266,6 +285,7 @@ fun MusicoApp(
                                             SidePanel.QUEUE -> QueuesContent(
                                                 libraryStore = libraryStore,
                                                 libraryState = libraryState,
+                                                historyState = historyState,
                                                 queueStore = queueStore,
                                                 queueState = queueState,
                                                 playerController = playerController,
@@ -292,6 +312,7 @@ fun MusicoApp(
                         onToggleSidePanel = { target ->
                             sidePanel = if (sidePanel == target) null else target
                         },
+                        onOpenSongInfo = { trackId -> trackActions.songInfoTrackId = trackId },
                         onOpenFullPlayer = { showFullPlayer = true }
                     )
                 } else {
@@ -321,6 +342,7 @@ fun MusicoApp(
             FullPlayerScreen(
                 libraryStore = libraryStore,
                 libraryState = libraryState,
+                historyState = historyState,
                 queueStore = queueStore,
                 queueState = queueState,
                 lyricsStore = lyricsStore,
@@ -337,7 +359,8 @@ fun MusicoApp(
         state = trackActions,
         queues = queueState.queues,
         activeQueueId = queueState.activeId,
-        playlists = libraryState.playlists
+        playlists = libraryState.playlists,
+        historyState = historyState,
     )
 
     val errorMsg = playerState.errorMessage
@@ -364,6 +387,8 @@ private fun DestinationContent(
     historyState: com.musico.store.PlayHistoryUiState,
     playerState: com.musico.audio.PlayerUiState,
     trackActions: com.musico.ui.components.TrackActionState,
+    pendingSearchRequest: SearchRequest?,
+    onConsumeSearchRequest: () -> Unit,
     onPickFolder: ((Uri) -> Unit) -> Unit,
     modifier: Modifier = Modifier
 ) {
@@ -377,6 +402,7 @@ private fun DestinationContent(
                 TopDestination.FOLDERS -> FoldersScreen(
                     libraryStore = appContainer.libraryStore,
                     libraryState = libraryState,
+                    historyState = historyState,
                     playerState = playerState,
                     queues = queueState.queues,
                     activeQueue = queueState.active,
@@ -389,15 +415,19 @@ private fun DestinationContent(
                 TopDestination.LIBRARY -> LibraryScreen(
                     libraryStore = appContainer.libraryStore,
                     libraryState = libraryState,
+                    historyState = historyState,
                     playerState = playerState,
                     queues = queueState.queues,
                     activeQueue = queueState.active,
                     trackActions = trackActions,
+                    pendingSearchRequest = pendingSearchRequest,
+                    onConsumeSearchRequest = onConsumeSearchRequest,
                     modifier = Modifier.fillMaxSize()
                 )
                 TopDestination.QUEUES -> QueuesScreen(
                     libraryStore = appContainer.libraryStore,
                     libraryState = libraryState,
+                    historyState = historyState,
                     queueStore = appContainer.queueStore,
                     queueState = queueState,
                     playerController = appContainer.playerController,

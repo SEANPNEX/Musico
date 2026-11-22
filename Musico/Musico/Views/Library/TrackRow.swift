@@ -71,6 +71,7 @@ struct TrackRows: View {
     /// The list to play when `tracks` is only the start of a longer one.
     var queue: [Track]?
     var subtitle: ((Track) -> String)?
+    var onTap: ((Int, Track) -> Void)?
 
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
@@ -78,13 +79,98 @@ struct TrackRows: View {
     var body: some View {
         ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
             Button {
-                player.play((queue ?? tracks).map(\.id), startAt: index)
+                if let onTap {
+                    onTap(index, track)
+                } else {
+                    player.play((queue ?? tracks).map(\.id), startAt: index)
+                }
             } label: {
                 TrackRow(track: track, subtitle: subtitle?(track))
             }
             .buttonStyle(.plain)
             .disabled(!library.isAvailable(track))
             .contextMenu { TrackMenuItems(ids: [track.id], favouriteID: track.id) }
+        }
+    }
+}
+
+struct ReorderableTrackRow: View {
+    let track: Track
+    let index: Int
+    let scopeID: String
+    var subtitle: String? = nil
+    var isActive: Bool = false
+    var isAvailable: Bool = true
+    let onTap: () -> Void
+    let onMove: (Int, Int) -> Void
+
+    @State private var isDropTargeted = false
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Button(action: onTap) {
+                TrackRow(track: track, subtitle: subtitle)
+            }
+            .buttonStyle(.plain)
+            .disabled(!isAvailable)
+
+            Image(systemName: "line.3.horizontal")
+                .font(.body)
+                .foregroundStyle(.tertiary)
+                .frame(width: 28, height: 36)
+                .contentShape(Rectangle())
+                .accessibilityLabel("Reorder \(track.title)")
+                .draggable("\(scopeID):\(index)") {
+                    Text(track.title)
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                }
+        }
+        .listRowBackground(
+            isDropTargeted
+                ? Color.accentColor.opacity(0.20)
+                : (isActive ? Color.accentColor.opacity(0.12) : nil)
+        )
+        .dropDestination(for: String.self) { items, _ in
+            guard let payload = items.first,
+                  let sourceIndex = Self.parseSourceIndex(payload, scopeID: scopeID),
+                  sourceIndex != index else {
+                return false
+            }
+            let destination = sourceIndex < index ? index + 1 : index
+            onMove(sourceIndex, destination)
+            return true
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
+    }
+
+    static func parseSourceIndex(_ payload: String, scopeID: String) -> Int? {
+        let prefix = "\(scopeID):"
+        guard payload.hasPrefix(prefix) else { return nil }
+        return Int(payload.dropFirst(prefix.count))
+    }
+}
+
+struct TrackSortMenu: View {
+    let selection: TrackSortOrder
+    let onSelect: (TrackSortOrder) -> Void
+
+    var body: some View {
+        Menu("Sort", systemImage: "arrow.up.arrow.down") {
+            ForEach(TrackSortOrder.allCases) { order in
+                Button {
+                    onSelect(order)
+                } label: {
+                    if selection == order {
+                        Label(order.rawValue, systemImage: "checkmark")
+                    } else {
+                        Text(order.rawValue)
+                    }
+                }
+            }
         }
     }
 }
@@ -135,6 +221,7 @@ struct TrackMenuItems: View {
     @Environment(PlayerController.self) private var player
     @Environment(NewPlaylistPrompt.self) private var newPlaylist
     @Environment(CloudExportPrompt.self) private var cloudExport
+    @Environment(SongInfoPrompt.self) private var songInfo
 
     var body: some View {
         Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") { player.playNext(ids) }
@@ -147,6 +234,11 @@ struct TrackMenuItems: View {
             }
         }
         Button("Play in New Queue", systemImage: "plus.rectangle.on.rectangle") { player.playInNewQueue(ids) }
+        if ids.count == 1, let trackID = ids.first, library.track(trackID) != nil {
+            Button("Song Info", systemImage: "info.circle") {
+                songInfo.show(trackID)
+            }
+        }
         Divider()
         Menu("Add to Playlist", systemImage: "music.note.list") {
             ForEach(library.playlists) { playlist in
@@ -181,6 +273,7 @@ struct TrackMenuItems: View {
 /// "Play" and "Shuffle" buttons shown at the top of a collection.
 struct PlayShuffleButtons: View {
     let ids: [String]
+    var queueName: String? = nil
     @Environment(PlayerController.self) private var player
     @Environment(QueueStore.self) private var queues
 
@@ -207,8 +300,12 @@ struct PlayShuffleButtons: View {
 
     private var playButton: some View {
         Button {
-            if queues.active.shuffle { player.toggleShuffle() }
-            player.play(ids, startAt: 0)
+            if let queueName {
+                player.playInNamedQueue(ids, name: queueName, startAt: 0, shuffle: false)
+            } else {
+                if queues.active.shuffle { player.toggleShuffle() }
+                player.play(ids, startAt: 0)
+            }
         } label: {
             Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity)
         }
@@ -216,8 +313,13 @@ struct PlayShuffleButtons: View {
 
     private var shuffleButton: some View {
         Button {
-            if !queues.active.shuffle { player.toggleShuffle() }
-            player.play(ids, startAt: Int.random(in: 0..<max(ids.count, 1)))
+            let startIndex = Int.random(in: 0..<max(ids.count, 1))
+            if let queueName {
+                player.playInNamedQueue(ids, name: queueName, startAt: startIndex, shuffle: true)
+            } else {
+                if !queues.active.shuffle { player.toggleShuffle() }
+                player.play(ids, startAt: startIndex)
+            }
         } label: {
             Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity)
         }

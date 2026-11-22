@@ -17,15 +17,19 @@ public sealed class LibraryStore : ObservableStore
         public List<Track> Tracks { get; set; } = new();
         public int? ReaderVersion { get; set; }
         public bool? AppFolderRemoved { get; set; }
+        public Dictionary<string, TrackMetadataOverride> MetadataOverrides { get; set; } = new();
+        public Dictionary<string, FolderViewPrefs> FolderPrefs { get; set; } = new();
     }
 
     private sealed class PlaylistFile
     {
         public List<Playlist> Playlists { get; set; } = new();
         public HashSet<string> Favourites { get; set; } = new();
+        public List<string>? FavouritesOrder { get; set; }
+        public TrackSortMode? FavouritesSortMode { get; set; }
     }
 
-    private const int CurrentReaderVersion = 2;
+    private const int CurrentReaderVersion = 3;
     public const string AppFolderName = "Music Folder";
 
     private readonly string _stateDirectory;
@@ -47,6 +51,10 @@ public sealed class LibraryStore : ObservableStore
     private List<string> _artists = new();
     private List<Playlist> _playlists = new();
     private HashSet<string> _favourites = new();
+    private List<string> _favouritesOrder = new();
+    private TrackSortMode _favouritesSortMode = TrackSortMode.Custom;
+    private Dictionary<string, TrackMetadataOverride> _metadataOverrides = new(StringComparer.Ordinal);
+    private Dictionary<string, FolderViewPrefs> _folderPrefs = new(StringComparer.Ordinal);
     private bool _isScanning;
     private int _scanDone;
     private int _scanTotal;
@@ -101,11 +109,23 @@ public sealed class LibraryStore : ObservableStore
 
         _roots = loadedRoots;
         _tracks = file?.Tracks ?? new List<Track>();
+        _metadataOverrides = file?.MetadataOverrides is not null
+            ? new Dictionary<string, TrackMetadataOverride>(file.MetadataOverrides, StringComparer.Ordinal)
+            : new Dictionary<string, TrackMetadataOverride>(StringComparer.Ordinal);
+        _folderPrefs = file?.FolderPrefs is not null
+            ? new Dictionary<string, FolderViewPrefs>(file.FolderPrefs, StringComparer.Ordinal)
+            : new Dictionary<string, FolderViewPrefs>(StringComparer.Ordinal);
+        if (_metadataOverrides.Count > 0 && _tracks.Count > 0)
+        {
+            _tracks = _tracks.Select(ApplyMetadataOverride).ToList();
+        }
         RebuildIndex();
 
         var lists = Persistence.Load<PlaylistFile>(PlaylistsPath);
         _playlists = lists?.Playlists ?? new List<Playlist>();
         _favourites = lists?.Favourites ?? new HashSet<string>();
+        _favouritesOrder = lists?.FavouritesOrder ?? new List<string>();
+        _favouritesSortMode = lists?.FavouritesSortMode ?? TrackSortMode.Custom;
     }
 
     public IReadOnlyList<LibraryRoot> Roots => _roots;
@@ -120,6 +140,8 @@ public sealed class LibraryStore : ObservableStore
     public bool AppFolderRemoved { get => _appFolderRemoved; private set => SetProperty(ref _appFolderRemoved, value); }
     public ArtworkCache Artwork { get; }
     public Action<ISet<string>>? OnTracksRemoved { get; set; }
+    public Action<string, IReadOnlyList<string>>? OnFolderAdded { get; set; }
+    public event Action<Track>? TrackUpdated;
 
     private string LibraryPath => Path.Combine(_stateDirectory, "library.json");
     private string PlaylistsPath => Path.Combine(_stateDirectory, "playlists.json");
@@ -136,7 +158,9 @@ public sealed class LibraryStore : ObservableStore
                 Roots = _roots,
                 Tracks = _tracks,
                 ReaderVersion = _rereadAll ? null : CurrentReaderVersion,
-                AppFolderRemoved = _appFolderRemoved ? true : null
+                AppFolderRemoved = _appFolderRemoved ? true : null,
+                MetadataOverrides = _metadataOverrides,
+                FolderPrefs = _folderPrefs
             }, LibraryPath);
         }
         catch
@@ -152,7 +176,9 @@ public sealed class LibraryStore : ObservableStore
             Persistence.Save(new PlaylistFile
             {
                 Playlists = _playlists,
-                Favourites = _favourites
+                Favourites = _favourites,
+                FavouritesOrder = _favouritesOrder,
+                FavouritesSortMode = _favouritesSortMode
             }, PlaylistsPath);
         }
         catch
@@ -207,7 +233,7 @@ public sealed class LibraryStore : ObservableStore
         return false;
     }
 
-    public async Task AddRootAsync(string path)
+    public async Task AddRootAsync(string path, LibraryRoot? cloudSourceRoot = null)
     {
         if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
         {
@@ -221,12 +247,96 @@ public sealed class LibraryStore : ObservableStore
         }
 
         string name = new DirectoryInfo(normalized).Name;
-        var root = new LibraryRoot(Guid.NewGuid(), name, RootKind.Picked, normalized);
+        string? sourceUrl = null;
+        string? remoteId = null;
+        string? cookie = null;
+        string? proxyUrl = null;
+        DateTimeOffset? lastSyncedUtc = null;
+        RootKind? linkedCloudKind = null;
+
+        if (cloudSourceRoot is not null &&
+            cloudSourceRoot.EffectiveCloudKind is { } cloudKind &&
+            !string.IsNullOrWhiteSpace(cloudSourceRoot.SourceUrl))
+        {
+            sourceUrl = cloudSourceRoot.SourceUrl.Trim();
+            remoteId = cloudSourceRoot.RemoteId;
+            cookie = cloudSourceRoot.Cookie;
+            proxyUrl = cloudSourceRoot.ProxyUrl;
+            lastSyncedUtc = DateTimeOffset.UtcNow;
+            linkedCloudKind = cloudKind;
+        }
+        else if (CloudExporter.LoadManifest(normalized) is { } manifest)
+        {
+            sourceUrl = manifest.SourceUrl.Trim();
+            remoteId = manifest.RemoteId;
+            lastSyncedUtc = manifest.LastSyncedUtc;
+            if (Enum.TryParse<RootKind>(manifest.CloudKind, ignoreCase: true, out var parsedKind) && parsedKind.IsCloud())
+            {
+                linkedCloudKind = parsedKind;
+            }
+            else
+            {
+                try { linkedCloudKind = CloudUrlClassifier.Classify(sourceUrl); } catch { /* ignore */ }
+            }
+        }
+
+        var root = new LibraryRoot(
+            Id: Guid.NewGuid(),
+            Name: name,
+            Kind: RootKind.Picked,
+            Path: normalized,
+            SourceUrl: sourceUrl,
+            RemoteId: remoteId,
+            Cookie: cookie,
+            ProxyUrl: proxyUrl,
+            LastSyncedUtc: lastSyncedUtc,
+            LinkedCloudKind: linkedCloudKind);
         _roots = [.. _roots, root];
         _rootPaths[root.Id] = normalized;
         OnPropertyChanged(nameof(Roots));
         SaveLibrary();
         await RescanAsync();
+        var addedIds = GetTracksUnder(root.Id, string.Empty).Select(t => t.Id).ToList();
+        OnFolderAdded?.Invoke(root.Name, addedIds);
+    }
+
+    public void AttachCloudTracking(string folderPath, LibraryRoot cloudSourceRoot)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath)) return;
+        if (cloudSourceRoot.EffectiveCloudKind is not { } cloudKind || string.IsNullOrWhiteSpace(cloudSourceRoot.SourceUrl)) return;
+
+        string normalized = NormalizeDirPath(folderPath);
+        int idx = _roots.FindIndex(r =>
+            r.IsLocal &&
+            _rootPaths.TryGetValue(r.Id, out string? existingPath) &&
+            string.Equals(NormalizeDirPath(existingPath), normalized, StringComparison.OrdinalIgnoreCase));
+        if (idx < 0) return;
+
+        var updated = new List<LibraryRoot>(_roots);
+        updated[idx] = updated[idx] with
+        {
+            SourceUrl = cloudSourceRoot.SourceUrl.Trim(),
+            RemoteId = cloudSourceRoot.RemoteId ?? updated[idx].RemoteId,
+            Cookie = cloudSourceRoot.Cookie ?? updated[idx].Cookie,
+            ProxyUrl = cloudSourceRoot.ProxyUrl ?? updated[idx].ProxyUrl,
+            LastSyncedUtc = DateTimeOffset.UtcNow,
+            LinkedCloudKind = cloudKind
+        };
+        _roots = updated;
+        OnPropertyChanged(nameof(Roots));
+        SaveLibrary();
+    }
+
+    public void MarkRootCloudSynced(Guid rootId)
+    {
+        int idx = _roots.FindIndex(r => r.Id == rootId);
+        if (idx < 0) return;
+
+        var updated = new List<LibraryRoot>(_roots);
+        updated[idx] = updated[idx] with { LastSyncedUtc = DateTimeOffset.UtcNow };
+        _roots = updated;
+        OnPropertyChanged(nameof(Roots));
+        SaveLibrary();
     }
 
     public async Task<LibraryRoot> AddCloudRootAsync(
@@ -265,7 +375,64 @@ public sealed class LibraryStore : ObservableStore
         _roots = [.. _roots, root];
         OnPropertyChanged(nameof(Roots));
         Publish([.. _tracks, .. newTracks]);
+        OnFolderAdded?.Invoke(root.Name, newTracks.Select(t => t.Id).ToList());
         return root;
+    }
+
+    public async Task<string> CreateSubfolderAsync(Guid rootId, string parentPath, string folderName)
+    {
+        var root = GetRoot(rootId);
+        if (root is null || !root.IsLocal || !_rootPaths.TryGetValue(rootId, out string? rootPath))
+        {
+            throw new InvalidOperationException("Cannot create a subfolder here.");
+        }
+
+        string trimmed = folderName.Trim();
+        if (trimmed.Length == 0 ||
+            trimmed is "." or ".." ||
+            trimmed.IndexOfAny(['/', '\\', ':', '*', '?', '"', '<', '>', '|']) >= 0)
+        {
+            throw new ArgumentException("Enter a valid folder name.", nameof(folderName));
+        }
+
+        string normParent = LibraryRoot.NormalizeFolderPath(parentPath);
+        string relPath = string.IsNullOrEmpty(normParent) ? trimmed : $"{normParent}/{trimmed}";
+        string fullPath = FolderScanner.CombinePath(rootPath, relPath);
+        Directory.CreateDirectory(fullPath);
+
+        await RescanAsync();
+        OnFolderAdded?.Invoke(trimmed, Array.Empty<string>());
+        return relPath;
+    }
+
+    public void NotifyFolderAddedByPath(string folderPath, IReadOnlyList<string>? fallbackTrackIds = null)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath)) return;
+        string target = NormalizeDirPath(folderPath);
+        string exactName = new DirectoryInfo(target).Name;
+
+        foreach (var root in _roots)
+        {
+            if (!root.IsLocal || !_rootPaths.TryGetValue(root.Id, out string? rootPath)) continue;
+            string normRoot = NormalizeDirPath(rootPath);
+            if (string.Equals(target, normRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                OnFolderAdded?.Invoke(exactName, GetTracksUnder(root.Id, string.Empty).Select(t => t.Id).ToList());
+                return;
+            }
+
+            string prefix = Path.EndsInDirectorySeparator(normRoot)
+                ? normRoot
+                : normRoot + Path.DirectorySeparatorChar;
+            if (target.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                string rel = LibraryRoot.NormalizeFolderPath(Path.GetRelativePath(normRoot, target));
+                OnFolderAdded?.Invoke(exactName, GetTracksUnder(root.Id, rel).Select(t => t.Id).ToList());
+                return;
+            }
+        }
+
+        OnFolderAdded?.Invoke(exactName, fallbackTrackIds ?? Array.Empty<string>());
     }
 
     public async Task RelocateRootAsync(Guid id, string path)
@@ -307,6 +474,7 @@ public sealed class LibraryStore : ObservableStore
         OnPropertyChanged(nameof(Roots));
 
         var removedIds = new HashSet<string>(_tracks.Where(t => t.RootId == id).Select(t => t.Id));
+        RemoveFolderPrefsForRoot(id);
         if (removedIds.Count > 0)
         {
             _tracks = _tracks.Where(t => t.RootId != id).ToList();
@@ -493,9 +661,12 @@ public sealed class LibraryStore : ObservableStore
                 if (!reread
                     && existingByRel.TryGetValue(file.RelativePath, out var old)
                     && old.FileSize == file.FileSize
-                    && Math.Abs((old.ModifiedUtc - file.ModifiedUtc).TotalSeconds) < 0.001)
+                    && (Math.Abs((old.ModifiedUtc - file.ModifiedUtc).TotalSeconds) < 0.001 ||
+                        (_metadataOverrides.TryGetValue(old.Id, out var ov) &&
+                         ov.EditedUtc is DateTimeOffset edited &&
+                         file.ModifiedUtc <= edited)))
                 {
-                    kept.Add(old);
+                    kept.Add(ApplyMetadataOverride(old));
                 }
                 else
                 {
@@ -590,7 +761,10 @@ public sealed class LibraryStore : ObservableStore
         Forget(removed);
         _cloudCache?.RemoveForTracks(removed);
 
-        var keepKeys = new HashSet<string>(_tracks.Select(t => t.ArtworkKey).Where(k => k is not null)!);
+        var keepKeys = new HashSet<string>(
+            _tracks.Select(t => t.ArtworkKey)
+                .Concat(_metadataOverrides.Values.Select(o => o.ArtworkKey))
+                .Where(k => k is not null)!);
         await Task.Run(() => Artwork.Prune(keepKeys));
     }
 
@@ -661,7 +835,7 @@ public sealed class LibraryStore : ObservableStore
                 }
             }
 
-            built.Add(new Track(
+            built.Add(ApplyMetadataOverride(new Track(
                 Id: trackId,
                 RootId: root.Id,
                 RelativePath: relPath,
@@ -679,7 +853,7 @@ public sealed class LibraryStore : ObservableStore
                 ArtworkKey: artKey,
                 CloudSource: cloudSource,
                 RemoteTrackId: item.RemoteTrackId,
-                RemoteArtworkUrl: item.ArtworkUrl));
+                RemoteArtworkUrl: item.ArtworkUrl)));
         }
 
         return built;
@@ -730,7 +904,7 @@ public sealed class LibraryStore : ObservableStore
         SaveLibrary();
     }
 
-    private static Track MakeTrack(LibraryRoot root, ScannedFile file, TrackMetadata metadata, string? artworkKey, DateTimeOffset dateAdded)
+    private Track MakeTrack(LibraryRoot root, ScannedFile file, TrackMetadata metadata, string? artworkKey, DateTimeOffset dateAdded)
     {
         string fileName = Path.GetFileName(file.RelativePath);
         string titleFallback = Path.GetFileNameWithoutExtension(fileName);
@@ -740,7 +914,7 @@ public sealed class LibraryStore : ObservableStore
             : string.Empty;
 
         string artist = metadata.Artist ?? "Unknown Artist";
-        return new Track(
+        var track = new Track(
             Id: Track.MakeId(root.Id, file.RelativePath),
             RootId: root.Id,
             RelativePath: file.RelativePath,
@@ -755,7 +929,128 @@ public sealed class LibraryStore : ObservableStore
             ModifiedUtc: file.ModifiedUtc,
             HasEmbeddedLyrics: metadata.Lyrics is not null,
             DateAddedUtc: dateAdded,
-            ArtworkKey: artworkKey);
+            ArtworkKey: artworkKey,
+            Genre: metadata.Genre);
+        return ApplyMetadataOverride(track);
+    }
+
+    private Track ApplyMetadataOverride(Track track)
+    {
+        if (!_metadataOverrides.TryGetValue(track.Id, out var ov)) return track;
+
+        string title = !string.IsNullOrWhiteSpace(ov.Title) ? ov.Title! : track.Title;
+        string artist = !string.IsNullOrWhiteSpace(ov.Artist) ? ov.Artist! : track.Artist;
+        string album = !string.IsNullOrWhiteSpace(ov.Album) ? ov.Album! : track.Album;
+        string albumArtist = string.Equals(track.AlbumArtist, track.Artist, StringComparison.Ordinal) ||
+                             string.IsNullOrWhiteSpace(track.AlbumArtist)
+            ? artist
+            : track.AlbumArtist;
+        string? genre = ov.HasGenreOverride ? ov.Genre : track.Genre;
+        string? artKey = !string.IsNullOrWhiteSpace(ov.ArtworkKey) ? ov.ArtworkKey : track.ArtworkKey;
+        var modifiedUtc = ov.EditedUtc is DateTimeOffset edited && edited > track.ModifiedUtc
+            ? edited
+            : track.ModifiedUtc;
+
+        return track with
+        {
+            Title = title,
+            Artist = artist,
+            Album = album,
+            AlbumArtist = albumArtist,
+            Genre = genre,
+            ArtworkKey = artKey,
+            ModifiedUtc = modifiedUtc
+        };
+    }
+
+    public async Task<Track?> UpdateTrackMetadataAsync(
+        string trackId,
+        string title,
+        string artist,
+        string album,
+        string? genre,
+        byte[]? newArtworkBytes = null,
+        CancellationToken ct = default)
+    {
+        var track = GetTrack(trackId);
+        if (track is null) return null;
+
+        string finalTitle = string.IsNullOrWhiteSpace(title) ? track.Title : title.Trim();
+        string finalArtist = string.IsNullOrWhiteSpace(artist) ? "Unknown Artist" : artist.Trim();
+        string finalAlbum = string.IsNullOrWhiteSpace(album) ? "Unknown Album" : album.Trim();
+        string? finalGenre = string.IsNullOrWhiteSpace(genre) ? null : genre.Trim();
+
+        string? finalArtKey = track.ArtworkKey;
+        byte[]? artBytesForFile = null;
+        if (newArtworkBytes is { Length: > 0 })
+        {
+            string? storedKey = Artwork.Store(newArtworkBytes);
+            if (!string.IsNullOrEmpty(storedKey))
+            {
+                finalArtKey = storedKey;
+                string? artPath = Artwork.GetImagePath(storedKey);
+                if (!string.IsNullOrEmpty(artPath) && File.Exists(artPath))
+                {
+                    try { artBytesForFile = File.ReadAllBytes(artPath); } catch { /* ignore */ }
+                }
+                artBytesForFile ??= newArtworkBytes;
+            }
+        }
+
+        long fileSize = track.FileSize;
+        var modifiedUtc = DateTimeOffset.UtcNow;
+        string? filePath = !track.IsCloud ? GetFilePath(track) : null;
+
+        if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath))
+        {
+            await Task.Run(() =>
+            {
+                if (TagLibMetadataReader.TryWriteTags(filePath, finalTitle, finalArtist, finalAlbum, finalGenre, artBytesForFile))
+                {
+                    try
+                    {
+                        var fi = new FileInfo(filePath);
+                        fileSize = fi.Length;
+                        modifiedUtc = new DateTimeOffset(DateTime.SpecifyKind(fi.LastWriteTimeUtc, DateTimeKind.Utc));
+                    }
+                    catch
+                    {
+                        // Keep fallback timestamp/size if FileInfo fails.
+                    }
+                }
+            }, ct).ConfigureAwait(false);
+        }
+
+        _metadataOverrides[trackId] = new TrackMetadataOverride(
+            Title: finalTitle,
+            Artist: finalArtist,
+            Album: finalAlbum,
+            Genre: finalGenre,
+            HasGenreOverride: true,
+            ArtworkKey: finalArtKey,
+            EditedUtc: modifiedUtc);
+
+        string albumArtist = string.Equals(track.AlbumArtist, track.Artist, StringComparison.Ordinal) ||
+                             string.IsNullOrWhiteSpace(track.AlbumArtist)
+            ? finalArtist
+            : track.AlbumArtist;
+
+        var updated = track with
+        {
+            Title = finalTitle,
+            Artist = finalArtist,
+            Album = finalAlbum,
+            AlbumArtist = albumArtist,
+            Genre = finalGenre,
+            ArtworkKey = finalArtKey,
+            FileSize = fileSize,
+            ModifiedUtc = modifiedUtc
+        };
+
+        var nextTracks = _tracks.Select(t => t.Id == trackId ? updated : t).ToList();
+        Publish(nextTracks);
+        TrackUpdated?.Invoke(updated);
+        return updated;
     }
 
     private void Forget(ISet<string> ids)
@@ -770,10 +1065,37 @@ public sealed class LibraryStore : ObservableStore
         }
         _playlists = updatedPlaylists;
         _favourites.ExceptWith(ids);
+        _favouritesOrder = _favouritesOrder.Where(id => !ids.Contains(id)).ToList();
+
+        bool folderPrefsChanged = false;
+        foreach (var key in _folderPrefs.Keys.ToList())
+        {
+            var prefs = _folderPrefs[key];
+            if (prefs.CustomTrackOrder is { Count: > 0 } order && order.Any(ids.Contains))
+            {
+                _folderPrefs[key] = prefs with { CustomTrackOrder = order.Where(id => !ids.Contains(id)).ToList() };
+                folderPrefsChanged = true;
+            }
+        }
+        foreach (string id in ids)
+        {
+            _metadataOverrides.Remove(id);
+        }
+
         OnPropertyChanged(nameof(Playlists));
         OnPropertyChanged(nameof(Favourites));
         SavePlaylists();
+        if (folderPrefsChanged) SaveLibrary();
         OnTracksRemoved?.Invoke(ids);
+    }
+
+    private void RemoveFolderPrefsForRoot(Guid rootId)
+    {
+        string prefix = $"{rootId:D}:";
+        foreach (string key in _folderPrefs.Keys.Where(k => k.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)).ToList())
+        {
+            _folderPrefs.Remove(key);
+        }
     }
 
     // MARK: Index & Lookup
@@ -864,10 +1186,54 @@ public sealed class LibraryStore : ObservableStore
     public IReadOnlyList<Track> GetTracksByArtist(string artist) =>
         _tracks.Where(t => t.Artist == artist).ToList();
 
-    /// <summary>Direct children of a folder: sorted subfolder names, then direct tracks sorted by file name.</summary>
-    public (IReadOnlyList<string> Folders, IReadOnlyList<Track> Tracks) GetFolderContents(Guid rootId, string path)
+    public static string MakeFolderOrderKey(Guid rootId, string path) =>
+        $"{rootId:D}:{LibraryRoot.NormalizeFolderPath(path)}";
+
+    public TrackSortMode GetFolderSortMode(Guid rootId, string path) =>
+        _folderPrefs.TryGetValue(MakeFolderOrderKey(rootId, path), out var prefs)
+            ? prefs.SortMode
+            : TrackSortMode.NameAscending;
+
+    public void SetFolderSortMode(Guid rootId, string path, TrackSortMode mode)
     {
-        string prefix = string.IsNullOrEmpty(path) ? string.Empty : path + "/";
+        string key = MakeFolderOrderKey(rootId, path);
+        _folderPrefs.TryGetValue(key, out var existing);
+        _folderPrefs[key] = existing is not null
+            ? existing with { SortMode = mode }
+            : new FolderViewPrefs(SortMode: mode);
+        SaveLibrary();
+        OnPropertyChanged(nameof(Tracks));
+    }
+
+    public void MoveFolderTrack(Guid rootId, string path, int from, int to, PlayHistoryStore? history = null)
+    {
+        var current = GetFolderContents(rootId, path, history).Tracks.Select(t => t.Id).ToList();
+        if (from < 0 || from >= current.Count || to < 0 || to >= current.Count || from == to)
+        {
+            return;
+        }
+
+        string moved = current[from];
+        current.RemoveAt(from);
+        current.Insert(to, moved);
+
+        string key = MakeFolderOrderKey(rootId, path);
+        _folderPrefs[key] = new FolderViewPrefs(TrackSortMode.Custom, current);
+        SaveLibrary();
+        OnPropertyChanged(nameof(Tracks));
+    }
+
+    /// <summary>Direct children of a folder: sorted subfolder names, then direct tracks ordered by folder prefs.</summary>
+    public (IReadOnlyList<string> Folders, IReadOnlyList<Track> Tracks) GetFolderContents(Guid rootId, string path) =>
+        GetFolderContents(rootId, path, null);
+
+    public (IReadOnlyList<string> Folders, IReadOnlyList<Track> Tracks) GetFolderContents(
+        Guid rootId,
+        string path,
+        PlayHistoryStore? history)
+    {
+        string normPath = LibraryRoot.NormalizeFolderPath(path);
+        string prefix = string.IsNullOrEmpty(normPath) ? string.Empty : normPath + "/";
         var folders = new HashSet<string>(StringComparer.Ordinal);
         var direct = new List<Track>();
 
@@ -886,23 +1252,68 @@ public sealed class LibraryStore : ObservableStore
             }
         }
 
+        IReadOnlyList<Track> orderedDirect;
+        if (_folderPrefs.TryGetValue(MakeFolderOrderKey(rootId, normPath), out var prefs))
+        {
+            orderedDirect = prefs.SortMode == TrackSortMode.Custom
+                ? TrackSorter.ApplyCustomOrder(direct, prefs.CustomTrackOrder)
+                : TrackSorter.Sort(direct, prefs.SortMode, history);
+        }
+        else
+        {
+            orderedDirect = direct.OrderBy(t => t.FileName, StringComparer.CurrentCultureIgnoreCase).ToList();
+        }
+
         return (
             folders.OrderBy(f => f, StringComparer.CurrentCultureIgnoreCase).ToList(),
-            direct.OrderBy(t => t.FileName, StringComparer.CurrentCultureIgnoreCase).ToList()
+            orderedDirect
         );
     }
 
-    /// <summary>Every song in a folder and its subfolders, in path order.</summary>
-    public IReadOnlyList<Track> GetTracksUnder(Guid rootId, string path)
+    /// <summary>Every song in a folder and its subfolders, respecting persisted folder sort/custom order when present.</summary>
+    public IReadOnlyList<Track> GetTracksUnder(Guid rootId, string path) =>
+        GetTracksUnder(rootId, path, null);
+
+    public IReadOnlyList<Track> GetTracksUnder(Guid rootId, string path, PlayHistoryStore? history)
     {
-        string prefix = string.IsNullOrEmpty(path) ? string.Empty : path + "/";
-        return _tracks
-            .Where(t => t.RootId == rootId && t.RelativePath.StartsWith(prefix, StringComparison.Ordinal))
-            .OrderBy(t => t.RelativePath, StringComparer.CurrentCultureIgnoreCase)
-            .ToList();
+        string normPath = LibraryRoot.NormalizeFolderPath(path);
+        string prefix = string.IsNullOrEmpty(normPath) ? string.Empty : normPath + "/";
+        string rootPrefix = $"{rootId:D}:";
+        string selfKey = MakeFolderOrderKey(rootId, normPath);
+        string subKeyPrefix = string.IsNullOrEmpty(normPath)
+            ? rootPrefix
+            : $"{selfKey}/";
+
+        bool hasPrefsInTree = _folderPrefs.ContainsKey(selfKey) ||
+            _folderPrefs.Keys.Any(k => k.StartsWith(subKeyPrefix, StringComparison.Ordinal));
+
+        if (!hasPrefsInTree)
+        {
+            return _tracks
+                .Where(t => t.RootId == rootId && t.RelativePath.StartsWith(prefix, StringComparison.Ordinal))
+                .OrderBy(t => t.RelativePath, StringComparer.CurrentCultureIgnoreCase)
+                .ToList();
+        }
+
+        var result = new List<Track>();
+        CollectFolderTracksOrdered(rootId, normPath, history, result);
+        return result;
     }
 
-    public IReadOnlyList<Track> Search(string query)
+    private void CollectFolderTracksOrdered(Guid rootId, string normPath, PlayHistoryStore? history, List<Track> output)
+    {
+        var (subfolders, directTracks) = GetFolderContents(rootId, normPath, history);
+        output.AddRange(directTracks);
+        foreach (string sub in subfolders)
+        {
+            string childPath = string.IsNullOrEmpty(normPath) ? sub : $"{normPath}/{sub}";
+            CollectFolderTracksOrdered(rootId, childPath, history, output);
+        }
+    }
+
+    public IReadOnlyList<Track> Search(string query) => Search(query, SearchField.Keyword);
+
+    public IReadOnlyList<Track> Search(string query, SearchField field)
     {
         string needle = query.Trim();
         if (needle.Length == 0) return Array.Empty<Track>();
@@ -910,24 +1321,109 @@ public sealed class LibraryStore : ObservableStore
         var compare = CultureInfo.CurrentCulture.CompareInfo;
         const CompareOptions options = CompareOptions.IgnoreCase | CompareOptions.IgnoreNonSpace;
 
-        return _tracks.Where(t =>
-            compare.IndexOf(t.Title, needle, options) >= 0 ||
-            compare.IndexOf(t.Artist, needle, options) >= 0 ||
-            compare.IndexOf(t.Album, needle, options) >= 0).ToList();
+        return field switch
+        {
+            SearchField.Artist => _tracks.Where(t => compare.IndexOf(t.Artist, needle, options) >= 0).ToList(),
+            SearchField.Album => _tracks.Where(t => compare.IndexOf(t.Album, needle, options) >= 0).ToList(),
+            SearchField.Genre => _tracks.Where(t => t.Genre is not null && compare.IndexOf(t.Genre, needle, options) >= 0).ToList(),
+            _ => _tracks.Where(t =>
+                compare.IndexOf(t.Title, needle, options) >= 0 ||
+                compare.IndexOf(t.Artist, needle, options) >= 0 ||
+                compare.IndexOf(t.Album, needle, options) >= 0 ||
+                (t.Genre is not null && compare.IndexOf(t.Genre, needle, options) >= 0)).ToList()
+        };
     }
 
     // MARK: Favourites and Playlists
 
     public bool IsFavourite(string id) => _favourites.Contains(id);
 
+    public TrackSortMode GetFavouritesSortMode() => _favouritesSortMode;
+
+    public IReadOnlyList<Track> GetFavouriteTracks(PlayHistoryStore? history = null)
+    {
+        var favTracks = _tracks.Where(t => _favourites.Contains(t.Id)).ToList();
+        if (_favouritesSortMode == TrackSortMode.Custom)
+        {
+            return _favouritesOrder.Count > 0
+                ? TrackSorter.ApplyCustomOrder(favTracks, _favouritesOrder)
+                : favTracks;
+        }
+        return TrackSorter.Sort(favTracks, _favouritesSortMode, history);
+    }
+
+    public void SetFavouritesSortMode(TrackSortMode mode, PlayHistoryStore? history = null)
+    {
+        _favouritesSortMode = mode;
+        if (mode != TrackSortMode.Custom)
+        {
+            _favouritesOrder = TrackSorter.Sort(_tracks.Where(t => _favourites.Contains(t.Id)), mode, history)
+                .Select(t => t.Id)
+                .ToList();
+        }
+        OnPropertyChanged(nameof(Favourites));
+        SavePlaylists();
+    }
+
+    public void MoveFavouriteTrack(int from, int to, PlayHistoryStore? history = null)
+    {
+        var current = GetFavouriteTracks(history).Select(t => t.Id).ToList();
+        if (from < 0 || from >= current.Count || to < 0 || to >= current.Count || from == to)
+        {
+            return;
+        }
+        string moved = current[from];
+        current.RemoveAt(from);
+        current.Insert(to, moved);
+
+        _favouritesOrder = current;
+        _favouritesSortMode = TrackSortMode.Custom;
+        OnPropertyChanged(nameof(Favourites));
+        SavePlaylists();
+    }
+
     public void ToggleFavourite(string id)
     {
         if (!_favourites.Remove(id))
         {
             _favourites.Add(id);
+            if (!_favouritesOrder.Contains(id, StringComparer.Ordinal))
+            {
+                _favouritesOrder.Add(id);
+            }
+        }
+        else
+        {
+            _favouritesOrder.RemoveAll(x => x == id);
         }
         OnPropertyChanged(nameof(Favourites));
         SavePlaylists();
+    }
+
+    public IReadOnlyList<Track> GetPlaylistTracks(Guid playlistId, PlayHistoryStore? history = null)
+    {
+        var pl = _playlists.FirstOrDefault(p => p.Id == playlistId);
+        if (pl is null) return Array.Empty<Track>();
+        var tracks = GetTracks(pl.TrackIds);
+        return pl.SortMode == TrackSortMode.Custom
+            ? tracks
+            : TrackSorter.Sort(tracks, pl.SortMode, history);
+    }
+
+    public void SetPlaylistSortMode(Guid playlistId, TrackSortMode mode, PlayHistoryStore? history = null)
+    {
+        UpdatePlaylist(playlistId, pl =>
+        {
+            if (mode == TrackSortMode.Custom)
+            {
+                return pl with { SortMode = TrackSortMode.Custom };
+            }
+
+            var resolved = TrackSorter.Sort(GetTracks(pl.TrackIds), mode, history).Select(t => t.Id).ToList();
+            var unresolved = pl.TrackIds.Where(id => !_byId.ContainsKey(id));
+            resolved.AddRange(unresolved);
+            return pl with { TrackIds = resolved, SortMode = mode };
+        });
     }
 
     public Guid CreatePlaylist(string name)
@@ -965,28 +1461,43 @@ public sealed class LibraryStore : ObservableStore
         });
     }
 
-    public void RemoveFromPlaylist(Guid playlistId, int index)
+    public void RemoveFromPlaylist(Guid playlistId, int index) =>
+        RemoveFromPlaylist(playlistId, index, null);
+
+    public void RemoveFromPlaylist(Guid playlistId, int index, PlayHistoryStore? history)
     {
         UpdatePlaylist(playlistId, pl =>
         {
-            if (index < 0 || index >= pl.TrackIds.Count) return pl;
-            var next = new List<string>(pl.TrackIds);
+            List<string> next = pl.SortMode == TrackSortMode.Custom
+                ? new List<string>(pl.TrackIds)
+                : TrackSorter.Sort(GetTracks(pl.TrackIds), pl.SortMode, history)
+                    .Select(t => t.Id)
+                    .Concat(pl.TrackIds.Where(id => !_byId.ContainsKey(id)))
+                    .ToList();
+            if (index < 0 || index >= next.Count) return pl;
             next.RemoveAt(index);
             return pl with { TrackIds = next };
         });
     }
 
-    public void MovePlaylistTrack(Guid playlistId, int from, int to)
+    public void MovePlaylistTrack(Guid playlistId, int from, int to) =>
+        MovePlaylistTrack(playlistId, from, to, null);
+
+    public void MovePlaylistTrack(Guid playlistId, int from, int to, PlayHistoryStore? history)
     {
         UpdatePlaylist(playlistId, pl =>
         {
-            if (from < 0 || from >= pl.TrackIds.Count || to < 0 || to >= pl.TrackIds.Count || from == to)
+            List<string> next = pl.SortMode == TrackSortMode.Custom
+                ? new List<string>(pl.TrackIds)
+                : TrackSorter.Sort(GetTracks(pl.TrackIds), pl.SortMode, history).Select(t => t.Id).ToList();
+
+            if (from < 0 || from >= next.Count || to < 0 || to >= next.Count || from == to)
                 return pl;
-            var next = new List<string>(pl.TrackIds);
+
             string item = next[from];
             next.RemoveAt(from);
             next.Insert(to, item);
-            return pl with { TrackIds = next };
+            return pl with { TrackIds = next, SortMode = TrackSortMode.Custom };
         });
     }
 

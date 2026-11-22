@@ -6,7 +6,9 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import com.musico.cloud.BilibiliClient
+import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudHttpClient
+import com.musico.cloud.CloudPlaylistResult
 import com.musico.cloud.CloudSource
 import com.musico.cloud.CloudTrackMetadata
 import com.musico.cloud.UrlConnectionCloudHttpClient
@@ -21,7 +23,11 @@ import com.musico.model.Album
 import com.musico.model.LibraryRoot
 import com.musico.model.Playlist
 import com.musico.model.RootKind
+import com.musico.model.SearchField
 import com.musico.model.Track
+import com.musico.model.TrackMetadataOverride
+import com.musico.model.TrackSortOrder
+import com.musico.model.sortTracks
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
@@ -51,6 +57,9 @@ data class LibraryUiState(
     val artists: List<String> = emptyList(),
     val playlists: List<Playlist> = emptyList(),
     val favourites: Set<String> = emptySet(),
+    val favouritesSortOrder: TrackSortOrder = TrackSortOrder.NAME_ASC,
+    val folderSortOrders: Map<String, TrackSortOrder> = emptyMap(),
+    val folderTrackOrders: Map<String, List<String>> = emptyMap(),
     val isScanning: Boolean = false,
     val scanDone: Int = 0,
     val scanTotal: Int = 0,
@@ -73,15 +82,21 @@ class LibraryStore(
         val tracks: List<Track> = emptyList(),
         val readerVersion: Int? = null,
         val trackUris: Map<String, String> = emptyMap(),
+        val metadataOverrides: Map<String, TrackMetadataOverride> = emptyMap(),
+        val folderSortOrders: Map<String, TrackSortOrder> = emptyMap(),
+        val folderTrackOrders: Map<String, List<String>> = emptyMap(),
     )
 
     @Serializable
     private data class PlaylistFile(
         val playlists: List<Playlist> = emptyList(),
         val favourites: Set<String> = emptySet(),
+        val favouritesSortOrder: TrackSortOrder = TrackSortOrder.NAME_ASC,
     )
 
     var onTracksRemoved: ((Set<String>) -> Unit)? = null
+    var onFolderAdded: ((folderName: String, trackIds: List<String>) -> Unit)? = null
+    var onTrackUpdated: ((Track) -> Unit)? = null
 
     private val libraryFile = File(directory, "library.json")
     private val playlistsFile = File(directory, "playlists.json")
@@ -90,6 +105,9 @@ class LibraryStore(
     private var rereadAll = false
     private var byId: Map<String, Track> = emptyMap()
     private val trackUris = mutableMapOf<String, String>()
+    private val metadataOverrides = mutableMapOf<String, TrackMetadataOverride>()
+    private val folderSortOrders = mutableMapOf<String, TrackSortOrder>()
+    private val folderTrackOrders = mutableMapOf<String, List<String>>()
 
     private var rescanRequested = false
     private var scanningJob: Job? = null
@@ -115,10 +133,13 @@ class LibraryStore(
 
         if (loadedLib != null) {
             trackUris.putAll(loadedLib.trackUris)
+            metadataOverrides.putAll(loadedLib.metadataOverrides)
+            folderSortOrders.putAll(loadedLib.folderSortOrders)
+            folderTrackOrders.putAll(loadedLib.folderTrackOrders)
         }
 
         val initialAvailable = computeAvailableRootIds(initialRoots)
-        val initialTracks = loadedLib?.tracks.orEmpty()
+        val initialTracks = loadedLib?.tracks.orEmpty().map { applyMetadataOverride(it) }
         val loadedPlaylists = Persistence.load<PlaylistFile>(playlistsFile)
 
         val (albums, artists, idMap) = buildIndices(initialTracks)
@@ -132,6 +153,9 @@ class LibraryStore(
             artists = artists,
             playlists = loadedPlaylists?.playlists.orEmpty(),
             favourites = loadedPlaylists?.favourites.orEmpty(),
+            favouritesSortOrder = loadedPlaylists?.favouritesSortOrder ?: TrackSortOrder.NAME_ASC,
+            folderSortOrders = folderSortOrders.toMap(),
+            folderTrackOrders = folderTrackOrders.toMap(),
         )
     }
 
@@ -153,11 +177,10 @@ class LibraryStore(
             return appFolderDir.exists() && appFolderDir.isDirectory && appFolderDir.canRead()
         }
         val uriStr = root.treeUri ?: return false
-        val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return false
-        if (uri.scheme == "file") {
-            val file = uri.path?.let { File(it) } ?: return false
+        fileFromUriString(uriStr)?.let { file ->
             return file.exists() && file.isDirectory && file.canRead()
         }
+        val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return false
         val ctx = context ?: return false
         val doc = runCatching { DocumentFile.fromTreeUri(ctx, uri) }.getOrNull() ?: return false
         return doc.exists() && doc.isDirectory && doc.canRead()
@@ -172,6 +195,9 @@ class LibraryStore(
                     tracks = current.tracks,
                     readerVersion = if (rereadAll) null else READER_VERSION,
                     trackUris = trackUris.toMap(),
+                    metadataOverrides = metadataOverrides.toMap(),
+                    folderSortOrders = folderSortOrders.toMap(),
+                    folderTrackOrders = folderTrackOrders.toMap(),
                 ),
                 libraryFile,
             )
@@ -185,10 +211,23 @@ class LibraryStore(
                 PlaylistFile(
                     playlists = current.playlists,
                     favourites = current.favourites,
+                    favouritesSortOrder = current.favouritesSortOrder,
                 ),
                 playlistsFile,
             )
         }
+    }
+
+    private fun fileFromUriString(uriStr: String?): File? {
+        if (uriStr.isNullOrBlank()) return null
+        if (uriStr.startsWith("file:")) {
+            return runCatching { File(java.net.URI(uriStr)) }.getOrNull()
+        }
+        val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return null
+        if (uri.scheme == "file" && uri.path != null) {
+            return File(uri.path!!)
+        }
+        return null
     }
 
     private fun canonicalUriKey(uri: Uri): String {
@@ -196,6 +235,13 @@ class LibraryStore(
             return runCatching { File(uri.path!!).canonicalPath }.getOrElse { uri.toString() }
         }
         return uri.toString()
+    }
+
+    private fun canonicalUriKey(uriStr: String): String {
+        fileFromUriString(uriStr)?.let { file ->
+            return runCatching { file.canonicalPath }.getOrElse { uriStr }
+        }
+        return uriStr
     }
 
     private fun resolvePickedRootName(uri: Uri): String? {
@@ -216,8 +262,15 @@ class LibraryStore(
         runCatching {
             ctx.contentResolver.takePersistableUriPermission(
                 uri,
-                Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION,
             )
+        }.onFailure {
+            runCatching {
+                ctx.contentResolver.takePersistableUriPermission(
+                    uri,
+                    Intent.FLAG_GRANT_READ_URI_PERMISSION,
+                )
+            }
         }
     }
 
@@ -234,30 +287,107 @@ class LibraryStore(
         }
     }
 
-    suspend fun addPickedRoot(treeUri: Uri): Result<Unit> {
+    suspend fun addLocalFolder(
+        dir: File,
+        cloudSourceRoot: LibraryRoot? = null,
+        trackedSubfolderName: String? = null,
+    ): Result<Unit> {
+        if (!dir.exists() || !dir.isDirectory || !dir.canRead()) {
+            return Result.failure(LibraryException.NotAFolder)
+        }
+        val uriString = dir.toURI().toString()
+        val candidateKey = runCatching { dir.canonicalPath }.getOrElse { dir.absolutePath }
+        return addPickedRootInternal(
+            name = dir.name,
+            treeUriString = uriString,
+            candidateKey = candidateKey,
+            treeUri = runCatching { Uri.fromFile(dir) }.getOrNull(),
+            cloudSourceRoot = cloudSourceRoot,
+            trackedSubfolderName = trackedSubfolderName,
+        )
+    }
+
+    suspend fun addPickedRoot(
+        treeUri: Uri,
+        cloudSourceRoot: LibraryRoot? = null,
+        trackedSubfolderName: String? = null,
+    ): Result<Unit> {
         val name = resolvePickedRootName(treeUri)
             ?: return Result.failure(LibraryException.NotAFolder)
+        return addPickedRootInternal(
+            name = name,
+            treeUriString = treeUri.toString(),
+            candidateKey = canonicalUriKey(treeUri),
+            treeUri = treeUri,
+            cloudSourceRoot = cloudSourceRoot,
+            trackedSubfolderName = trackedSubfolderName,
+        )
+    }
 
-        val candidateKey = canonicalUriKey(treeUri)
-        val duplicate = _state.value.roots.any { root ->
+    private suspend fun addPickedRootInternal(
+        name: String,
+        treeUriString: String,
+        candidateKey: String,
+        treeUri: Uri?,
+        cloudSourceRoot: LibraryRoot? = null,
+        trackedSubfolderName: String? = null,
+    ): Result<Unit> {
+        val appCanonical = runCatching { appFolderDir.canonicalPath }.getOrElse { appFolderDir.absolutePath }
+        val duplicateIndex = _state.value.roots.indexOfFirst { root ->
             when (root.kind) {
-                RootKind.APP_FOLDER -> canonicalUriKey(Uri.fromFile(appFolderDir)) == candidateKey
-                RootKind.PICKED -> root.treeUri?.let {
-                    runCatching { canonicalUriKey(Uri.parse(it)) }.getOrNull() == candidateKey
-                } == true
+                RootKind.APP_FOLDER -> appCanonical == candidateKey
+                RootKind.PICKED -> root.treeUri?.let { canonicalUriKey(it) == candidateKey } == true
                 RootKind.CLOUD_YOUTUBE, RootKind.CLOUD_BILIBILI -> false
             }
         }
-        if (duplicate) {
+        if (duplicateIndex >= 0) {
+            if (cloudSourceRoot != null) {
+                val updatedRoots = _state.value.roots.toMutableList()
+                val existing = updatedRoots[duplicateIndex]
+                val updatedRoot = existing.copy(
+                    sourceUrl = cloudSourceRoot.sourceUrl ?: existing.sourceUrl,
+                    remoteId = cloudSourceRoot.remoteId ?: existing.remoteId,
+                    linkedCloudKind = cloudSourceRoot.effectiveCloudKind ?: existing.linkedCloudKind,
+                    cookie = cloudSourceRoot.cookie ?: existing.cookie,
+                    lastSyncedEpochMs = System.currentTimeMillis(),
+                    trackedSubfolderName = trackedSubfolderName ?: existing.trackedSubfolderName,
+                )
+                updatedRoots[duplicateIndex] = updatedRoot
+                _state.value = _state.value.copy(roots = updatedRoots)
+                saveLibrary()
+                rescan()
+                notifyFolderAdded(updatedRoot, trackedSubfolderName)
+                return Result.success(Unit)
+            }
             return Result.failure(LibraryException.DuplicateRoot)
         }
 
-        takePersistableReadPermission(treeUri)
+        if (treeUri != null) {
+            takePersistableReadPermission(treeUri)
+        }
+        val manifest = if (cloudSourceRoot == null && treeUri != null) {
+            resolveManifestForPickedUri(treeUri, trackedSubfolderName)
+        } else {
+            null
+        }
+        val manifestKind = manifest?.cloudKind?.let { raw ->
+            runCatching { RootKind.valueOf(raw) }.getOrNull()
+        }
         val root = LibraryRoot(
             id = UUID.randomUUID().toString(),
             name = name,
             kind = RootKind.PICKED,
-            treeUri = treeUri.toString(),
+            treeUri = treeUriString,
+            sourceUrl = cloudSourceRoot?.sourceUrl ?: manifest?.sourceURL,
+            remoteId = cloudSourceRoot?.remoteId ?: manifest?.remoteID,
+            cookie = cloudSourceRoot?.cookie,
+            lastSyncedEpochMs = if (cloudSourceRoot != null) {
+                System.currentTimeMillis()
+            } else {
+                manifest?.lastSyncedEpochMs?.takeIf { it > 0L }
+            },
+            linkedCloudKind = cloudSourceRoot?.effectiveCloudKind ?: manifestKind,
+            trackedSubfolderName = trackedSubfolderName,
         )
         val current = _state.value
         _state.value = current.copy(
@@ -266,7 +396,56 @@ class LibraryStore(
         )
         saveLibrary()
         rescan()
+        notifyFolderAdded(root, trackedSubfolderName)
         return Result.success(Unit)
+    }
+
+    private fun notifyFolderAdded(root: LibraryRoot, trackedSubfolderName: String?) {
+        val sub = trackedSubfolderName?.trim()?.takeIf { it.isNotEmpty() }
+        val folderName = sub ?: root.name
+        val subPath = sub?.let { LibraryRoot.normalizeFolderPath(it) }.orEmpty()
+        val trackIds = tracksUnder(root.id, subPath).map { it.id }
+        onFolderAdded?.invoke(folderName, trackIds)
+    }
+
+    private fun resolveManifestForPickedUri(treeUri: Uri, subfolderName: String?): com.musico.cloud.CloudFolderManifest? {
+        if (treeUri.scheme == "file" && treeUri.path != null) {
+            val base = File(treeUri.path!!)
+            val target = subfolderName?.takeIf { it.isNotBlank() }?.let { File(base, it) } ?: base
+            return CloudExporter.loadManifest(target)
+        }
+        val ctx = context ?: return null
+        val rootDoc = runCatching { DocumentFile.fromTreeUri(ctx, treeUri) }.getOrNull() ?: return null
+        val targetDoc = subfolderName?.takeIf { it.isNotBlank() }?.let { rootDoc.findFile(it) } ?: rootDoc
+        return CloudExporter.loadManifest(ctx, targetDoc)
+    }
+
+    suspend fun fetchCloudPlaylist(
+        sourceUrl: String,
+        cookie: String? = null,
+        kindHint: RootKind? = null,
+    ): CloudPlaylistResult = withContext(Dispatchers.IO) {
+        when (kindHint) {
+            RootKind.CLOUD_BILIBILI -> bilibiliClient.fetchPlaylist(sourceUrl, cookie)
+            RootKind.CLOUD_YOUTUBE -> youTubeClient.fetchPlaylist(sourceUrl, cookie)
+            else -> {
+                if (sourceUrl.contains("bilibili", ignoreCase = true) || sourceUrl.contains("b23.tv", ignoreCase = true)) {
+                    bilibiliClient.fetchPlaylist(sourceUrl, cookie)
+                } else {
+                    youTubeClient.fetchPlaylist(sourceUrl, cookie)
+                }
+            }
+        }
+    }
+
+    fun markRootCloudSynced(rootId: String, syncedEpochMs: Long = System.currentTimeMillis()) {
+        val current = _state.value
+        val index = current.roots.indexOfFirst { it.id == rootId }
+        if (index < 0) return
+        val updated = current.roots.toMutableList()
+        updated[index] = updated[index].copy(lastSyncedEpochMs = syncedEpochMs)
+        _state.value = current.copy(roots = updated)
+        saveLibrary()
     }
 
     suspend fun relocateRoot(rootId: String, treeUri: Uri): Result<Unit> {
@@ -367,6 +546,7 @@ class LibraryStore(
             availableRootIds = current.availableRootIds + root.id,
         )
         publish(current.tracks + newTracks)
+        onFolderAdded?.invoke(root.name, newTracks.map { it.id })
         return Result.success(Unit)
     }
 
@@ -386,6 +566,7 @@ class LibraryStore(
         val keptTracks = current.tracks.filter { it.rootId != rootId }
         for (id in removedIds) {
             trackUris.remove(id)
+            metadataOverrides.remove(id)
         }
 
         val (albums, artists, idMap) = buildIndices(keptTracks)
@@ -437,6 +618,7 @@ class LibraryStore(
         val keptTracks = current.tracks.filter { it.id !in removedIds }
         for (id in removedIds) {
             trackUris.remove(id)
+            metadataOverrides.remove(id)
         }
         val (albums, artists, idMap) = buildIndices(keptTracks)
         byId = idMap
@@ -449,7 +631,8 @@ class LibraryStore(
         )
         forget(removedIds)
         saveLibrary()
-        val keysToKeep = keptTracks.mapNotNull { it.artworkKey }.toSet()
+        val keysToKeep = keptTracks.mapNotNull { it.artworkKey }.toSet() +
+            metadataOverrides.values.mapNotNull { it.artworkKey }
         artwork.prune(keysToKeep)
     }
 
@@ -592,7 +775,7 @@ class LibraryStore(
                     old.fileSize == file.fileSize &&
                     abs(old.modifiedEpochMs - file.modifiedEpochMs) < 1L
                 ) {
-                    kept.add(old)
+                    kept.add(applyMetadataOverride(old))
                 } else {
                     pending.add(PendingScan(root = root, file = file, old = old))
                 }
@@ -623,12 +806,14 @@ class LibraryStore(
                 meta to artKey
             }
 
-            val track = makeTrack(
-                root = item.root,
-                file = item.file,
-                metadata = metadata,
-                artworkKey = artworkKey,
-                dateAddedEpochMs = item.old?.dateAddedEpochMs ?: nowMs,
+            val track = applyMetadataOverride(
+                makeTrack(
+                    root = item.root,
+                    file = item.file,
+                    metadata = metadata,
+                    artworkKey = artworkKey,
+                    dateAddedEpochMs = item.old?.dateAddedEpochMs ?: nowMs,
+                )
             )
             if (item.file.uriString != null) {
                 trackUris[track.id] = item.file.uriString
@@ -663,10 +848,12 @@ class LibraryStore(
         publish(finalTracks)
         for (id in finalRemoved) {
             trackUris.remove(id)
+            metadataOverrides.remove(id)
         }
         forget(finalRemoved)
 
-        val keysToKeep = _state.value.tracks.mapNotNull { it.artworkKey }.toSet()
+        val keysToKeep = _state.value.tracks.mapNotNull { it.artworkKey }.toSet() +
+            metadataOverrides.values.mapNotNull { it.artworkKey }
         withContext(Dispatchers.IO) {
             artwork.prune(keysToKeep)
         }
@@ -721,25 +908,27 @@ class LibraryStore(
             }
 
             result.add(
-                Track(
-                    id = Track.makeId(root.id, relPath),
-                    rootId = root.id,
-                    relativePath = relPath,
-                    title = meta.title.ifBlank { meta.remoteTrackId },
-                    artist = meta.artist.ifBlank { root.name },
-                    album = meta.album.ifBlank { root.name },
-                    albumArtist = meta.artist.ifBlank { root.name },
-                    trackNumber = meta.trackNumber ?: (index + 1),
-                    discNumber = null,
-                    durationSec = meta.durationSec,
-                    fileSize = 0L,
-                    modifiedEpochMs = 0L,
-                    hasEmbeddedLyrics = false,
-                    dateAddedEpochMs = old?.dateAddedEpochMs ?: nowMs,
-                    artworkKey = artworkKey,
-                    cloudSource = cloudSource,
-                    remoteTrackId = meta.remoteTrackId,
-                    remoteArtworkUrl = artUrl,
+                applyMetadataOverride(
+                    Track(
+                        id = Track.makeId(root.id, relPath),
+                        rootId = root.id,
+                        relativePath = relPath,
+                        title = meta.title.ifBlank { meta.remoteTrackId },
+                        artist = meta.artist.ifBlank { root.name },
+                        album = meta.album.ifBlank { root.name },
+                        albumArtist = meta.artist.ifBlank { root.name },
+                        trackNumber = meta.trackNumber ?: (index + 1),
+                        discNumber = null,
+                        durationSec = meta.durationSec,
+                        fileSize = 0L,
+                        modifiedEpochMs = 0L,
+                        hasEmbeddedLyrics = false,
+                        dateAddedEpochMs = old?.dateAddedEpochMs ?: nowMs,
+                        artworkKey = artworkKey,
+                        cloudSource = cloudSource,
+                        remoteTrackId = meta.remoteTrackId,
+                        remoteArtworkUrl = artUrl,
+                    )
                 )
             )
         }
@@ -751,11 +940,10 @@ class LibraryStore(
             return FolderScanner.scan(appFolderDir)
         }
         val uriStr = root.treeUri ?: return null
-        val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return null
-        if (uri.scheme == "file") {
-            val dir = uri.path?.let { File(it) } ?: return null
+        fileFromUriString(uriStr)?.let { dir ->
             return FolderScanner.scan(dir)
         }
+        val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return null
         val ctx = context ?: return null
         return FolderScanner.scanTree(ctx, uri)
     }
@@ -769,12 +957,17 @@ class LibraryStore(
         if (root.kind == RootKind.APP_FOLDER) {
             return FolderScanner.fileFor(appFolderDir, relativePath)
         }
-        val uriStr = root.treeUri ?: return null
-        val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return null
-        if (uri.scheme == "file" && uri.path != null) {
-            return FolderScanner.fileFor(File(uri.path!!), relativePath)
-        }
-        return null
+        val baseDir = fileFromUriString(root.treeUri) ?: return null
+        return FolderScanner.fileFor(baseDir, relativePath)
+    }
+
+    fun localFileFor(track: Track): File? {
+        if (track.isCloud) return null
+        val current = _state.value
+        if (track.rootId !in current.availableRootIds) return null
+        val root = current.roots.firstOrNull { it.id == track.rootId } ?: return null
+        if (root.kind.isCloud) return null
+        return resolveLocalFile(root, track.relativePath)
     }
 
     private fun publish(list: List<Track>) {
@@ -816,6 +1009,7 @@ class LibraryStore(
             artist = artist,
             album = album,
             albumArtist = metadata.albumArtist ?: artist,
+            genre = metadata.genre.orEmpty(),
             trackNumber = metadata.trackNumber,
             discNumber = metadata.discNumber,
             durationSec = metadata.durationSec,
@@ -825,6 +1019,57 @@ class LibraryStore(
             dateAddedEpochMs = dateAddedEpochMs,
             artworkKey = artworkKey,
         )
+    }
+
+    private fun applyMetadataOverride(track: Track): Track {
+        val ov = metadataOverrides[track.id] ?: return track
+        val nextArtist = ov.artist ?: track.artist
+        val nextAlbumArtist = if (ov.artist != null && track.albumArtist == track.artist) {
+            ov.artist
+        } else {
+            track.albumArtist
+        }
+        return track.copy(
+            title = ov.title ?: track.title,
+            artist = nextArtist,
+            album = ov.album ?: track.album,
+            albumArtist = nextAlbumArtist,
+            genre = ov.genre ?: track.genre,
+            artworkKey = ov.artworkKey ?: track.artworkKey,
+        )
+    }
+
+    fun updateTrackMetadata(
+        trackId: String,
+        title: String? = null,
+        artist: String? = null,
+        album: String? = null,
+        genre: String? = null,
+        artworkKey: String? = null,
+    ): Track? {
+        val current = _state.value
+        val existing = current.tracks.firstOrNull { it.id == trackId } ?: return null
+        val prevOverride = metadataOverrides[trackId]
+        val nextOverride = TrackMetadataOverride(
+            title = title?.trim()?.takeIf { it.isNotEmpty() } ?: prevOverride?.title,
+            artist = artist?.trim()?.takeIf { it.isNotEmpty() } ?: prevOverride?.artist,
+            album = album?.trim()?.takeIf { it.isNotEmpty() } ?: prevOverride?.album,
+            genre = genre?.trim() ?: prevOverride?.genre,
+            artworkKey = artworkKey ?: prevOverride?.artworkKey,
+        )
+        metadataOverrides[trackId] = nextOverride
+        val updatedTrack = applyMetadataOverride(existing)
+        val nextTracks = current.tracks.map { if (it.id == trackId) updatedTrack else it }
+        val (albums, artists, idMap) = buildIndices(nextTracks)
+        byId = idMap
+        _state.value = current.copy(
+            tracks = nextTracks,
+            albums = albums,
+            artists = artists,
+        )
+        saveLibrary()
+        onTrackUpdated?.invoke(updatedTrack)
+        return updatedTrack
     }
 
     private fun forget(ids: Set<String>) {
@@ -1055,11 +1300,85 @@ class LibraryStore(
     fun tracksByArtist(artist: String): List<Track> =
         _state.value.tracks.filter { it.artist == artist }
 
+    fun folderKey(rootId: String, path: String): String =
+        "$rootId\u001F${LibraryRoot.normalizeFolderPath(path)}"
+
+    fun folderSortOrder(rootId: String, path: String): TrackSortOrder {
+        val key = folderKey(rootId, path)
+        return folderSortOrders[key]
+            ?: if (folderTrackOrders.containsKey(key)) TrackSortOrder.CUSTOM else TrackSortOrder.NAME_ASC
+    }
+
+    fun setFolderSortOrder(rootId: String, path: String, sortOrder: TrackSortOrder) {
+        val key = folderKey(rootId, path)
+        folderSortOrders[key] = sortOrder
+        _state.value = _state.value.copy(folderSortOrders = folderSortOrders.toMap())
+        saveLibrary()
+    }
+
+    fun setFolderTrackOrder(rootId: String, path: String, orderedTrackIds: List<String>) {
+        val key = folderKey(rootId, path)
+        folderTrackOrders[key] = orderedTrackIds
+        folderSortOrders[key] = TrackSortOrder.CUSTOM
+        _state.value = _state.value.copy(
+            folderSortOrders = folderSortOrders.toMap(),
+            folderTrackOrders = folderTrackOrders.toMap(),
+        )
+        saveLibrary()
+    }
+
+    fun moveFolderTrack(
+        rootId: String,
+        path: String,
+        fromIndex: Int,
+        toIndex: Int,
+        currentOrderedIds: List<String>? = null,
+    ) {
+        val baseIds = currentOrderedIds ?: folderContents(rootId, path).second.map { it.id }
+        if (fromIndex !in baseIds.indices || toIndex !in baseIds.indices || fromIndex == toIndex) return
+        val updated = baseIds.toMutableList()
+        val item = updated.removeAt(fromIndex)
+        updated.add(toIndex, item)
+        setFolderTrackOrder(rootId, path, updated)
+    }
+
+    private fun orderDirectTracks(
+        rootId: String,
+        path: String,
+        direct: List<Track>,
+        playCounts: (String) -> Int,
+    ): List<Track> {
+        val key = folderKey(rootId, path)
+        val explicitSort = folderSortOrders[key]
+        val customIds = folderTrackOrders[key]
+        return when {
+            explicitSort == TrackSortOrder.CUSTOM || (explicitSort == null && customIds != null) -> {
+                if (customIds.isNullOrEmpty()) {
+                    direct.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.fileName })
+                } else {
+                    val rank = HashMap<String, Int>(customIds.size)
+                    customIds.forEachIndexed { idx, id -> rank.putIfAbsent(id, idx) }
+                    val inCustom = direct.filter { it.id in rank }.sortedBy { rank[it.id] }
+                    val remaining = direct.filter { it.id !in rank }
+                        .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.fileName })
+                    inCustom + remaining
+                }
+            }
+            explicitSort != null -> sortTracks(direct, explicitSort, playCounts)
+            else -> direct.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.fileName })
+        }
+    }
+
     /**
-     * Direct children of a folder: sorted subfolder names, then sorted direct tracks.
+     * Direct children of a folder: sorted subfolder names, then ordered direct tracks.
      */
-    fun folderContents(rootId: String, path: String): Pair<List<String>, List<Track>> {
-        val prefix = if (path.isEmpty()) "" else "$path/"
+    fun folderContents(
+        rootId: String,
+        path: String,
+        playCounts: (String) -> Int = { 0 },
+    ): Pair<List<String>, List<Track>> {
+        val normPath = LibraryRoot.normalizeFolderPath(path)
+        val prefix = if (normPath.isEmpty()) "" else "$normPath/"
         val folders = linkedSetOf<String>()
         val direct = mutableListOf<Track>()
         for (track in _state.value.tracks) {
@@ -1073,24 +1392,53 @@ class LibraryStore(
             }
         }
         return folders.sortedWith(String.CASE_INSENSITIVE_ORDER) to
-            direct.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.fileName })
+            orderDirectTracks(rootId, normPath, direct, playCounts)
     }
 
-    /** Every song in a folder and its subfolders, in path order. */
-    fun tracksUnder(rootId: String, path: String): List<Track> {
-        val prefix = if (path.isEmpty()) "" else "$path/"
-        return _state.value.tracks
-            .filter { it.rootId == rootId && it.relativePath.startsWith(prefix) }
-            .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.relativePath })
+    /** Every song in a folder and its subfolders, respecting persisted sort/custom order when set. */
+    fun tracksUnder(
+        rootId: String,
+        path: String,
+        playCounts: (String) -> Int = { 0 },
+    ): List<Track> {
+        val normPath = LibraryRoot.normalizeFolderPath(path)
+        val prefix = if (normPath.isEmpty()) "" else "$normPath/"
+        val matching = _state.value.tracks.filter {
+            it.rootId == rootId && it.relativePath.startsWith(prefix)
+        }
+        val key = folderKey(rootId, normPath)
+        val explicitSort = folderSortOrders[key]
+        val hasCustom = explicitSort == TrackSortOrder.CUSTOM ||
+            (explicitSort == null && folderTrackOrders.containsKey(key))
+
+        if (hasCustom) {
+            val (subfolders, direct) = folderContents(rootId, normPath, playCounts)
+            val subTracks = subfolders.flatMap { sub ->
+                val subPath = if (normPath.isEmpty()) sub else "$normPath/$sub"
+                tracksUnder(rootId, subPath, playCounts)
+            }
+            return direct + subTracks
+        }
+        if (explicitSort != null) {
+            return sortTracks(matching, explicitSort, playCounts)
+        }
+        return matching.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.relativePath })
     }
 
-    fun search(query: String): List<Track> {
+    fun search(query: String, field: SearchField = SearchField.KEYWORD): List<Track> {
         val needle = foldForSearch(query.trim())
         if (needle.isEmpty()) return emptyList()
         return _state.value.tracks.filter { track ->
-            foldForSearch(track.title).contains(needle) ||
-                foldForSearch(track.artist).contains(needle) ||
-                foldForSearch(track.album).contains(needle)
+            when (field) {
+                SearchField.KEYWORD ->
+                    foldForSearch(track.title).contains(needle) ||
+                        foldForSearch(track.artist).contains(needle) ||
+                        foldForSearch(track.album).contains(needle) ||
+                        foldForSearch(track.genre).contains(needle)
+                SearchField.ARTIST -> foldForSearch(track.artist).contains(needle)
+                SearchField.ALBUM -> foldForSearch(track.album).contains(needle)
+                SearchField.GENRE -> foldForSearch(track.genre).contains(needle)
+            }
         }
     }
 
@@ -1147,6 +1495,32 @@ class LibraryStore(
         }
     }
 
+    fun setFavouritesSortOrder(sortOrder: TrackSortOrder) {
+        _state.value = _state.value.copy(favouritesSortOrder = sortOrder)
+        savePlaylists()
+    }
+
+    fun setPlaylistSortOrder(
+        playlistId: String,
+        sortOrder: TrackSortOrder,
+        playCounts: (String) -> Int = { 0 },
+    ) {
+        updatePlaylist(playlistId) { pl ->
+            if (sortOrder == TrackSortOrder.CUSTOM) {
+                pl.copy(sortOrder = TrackSortOrder.CUSTOM)
+            } else {
+                val sortedIds = sortTracks(tracks(pl.trackIds), sortOrder, playCounts).map { it.id }
+                pl.copy(trackIds = sortedIds, sortOrder = sortOrder)
+            }
+        }
+    }
+
+    fun reorderPlaylistTracks(playlistId: String, orderedTrackIds: List<String>) {
+        updatePlaylist(playlistId) { pl ->
+            pl.copy(trackIds = orderedTrackIds, sortOrder = TrackSortOrder.CUSTOM)
+        }
+    }
+
     fun movePlaylistTrack(playlistId: String, fromIndex: Int, toIndex: Int) {
         updatePlaylist(playlistId) { pl ->
             if (fromIndex !in pl.trackIds.indices || toIndex !in pl.trackIds.indices || fromIndex == toIndex) {
@@ -1155,7 +1529,7 @@ class LibraryStore(
                 val updated = pl.trackIds.toMutableList()
                 val item = updated.removeAt(fromIndex)
                 updated.add(toIndex, item)
-                pl.copy(trackIds = updated)
+                pl.copy(trackIds = updated, sortOrder = TrackSortOrder.CUSTOM)
             }
         }
     }
@@ -1167,7 +1541,7 @@ class LibraryStore(
     )
 
     companion object {
-        private const val READER_VERSION = 2
+        private const val READER_VERSION = 3
         const val APP_FOLDER_NAME = "Musico Folder"
         private val combiningMarks = "\\p{InCombiningDiacriticalMarks}+".toRegex()
 

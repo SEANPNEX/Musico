@@ -364,6 +364,7 @@
             <controls:AddCloudFolderDialog x:Name="CloudDialog" />
             <controls:SaveCloudFolderDialog x:Name="SaveCloudDialog" />
             <controls:UpdateDialog x:Name="UpdateDialog" />
+            <controls:SongInfoDialog x:Name="SongInfoDialog" />
         </Grid>
     </Grid>
 </Window>

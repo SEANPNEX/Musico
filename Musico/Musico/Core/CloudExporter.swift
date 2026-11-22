@@ -3,12 +3,32 @@ import Observation
 import SwiftUI
 import UniformTypeIdentifiers
 
+/// Per-folder manifest stored as `.musico-cloud.json` so saved local folders remember their
+/// originating cloud playlist and can pull newly added songs incrementally.
+struct CloudFolderManifest: Codable, Equatable, Sendable {
+    static let fileName = ".musico-cloud.json"
+
+    var sourceURL: String
+    var remoteID: String?
+    var cloudKind: LibraryRoot.Kind
+    var lastSyncedEpochMs: Int64
+    var tracks: [String: String]
+}
+
 /// Exports cached or fetched cloud tracks and playlists into user-selected local folders.
 enum CloudExporter {
     struct ExportSummary: Sendable, Equatable {
         let savedCount: Int
         let failedCount: Int
         let destinationURL: URL
+        let errors: [String]
+    }
+
+    struct CloudUpdateSummary: Sendable, Equatable {
+        let addedCount: Int
+        let skippedCount: Int
+        let failedCount: Int
+        let totalRemoteCount: Int
         let errors: [String]
     }
 
@@ -93,6 +113,8 @@ enum CloudExporter {
         var failedCount = 0
         var errors: [String] = []
 
+        var trackedMap = loadManifest(in: destinationURL)?.tracks ?? [:]
+
         for (index, track) in cloudTracks.enumerated() {
             try Task.checkCancellation()
             await onProgress?(index, total, track.title)
@@ -102,6 +124,10 @@ enum CloudExporter {
                 let ext = cachedURL.pathExtension.isEmpty ? "m4a" : cachedURL.pathExtension
                 let targetURL = uniqueFileURL(in: destinationURL, baseName: track.title, fileExtension: ext)
                 try FileManager.default.copyItem(at: cachedURL, to: targetURL)
+                let trackKey = track.remoteTrackID ?? track.relativePath
+                if !trackKey.isEmpty {
+                    trackedMap[trackKey] = targetURL.lastPathComponent
+                }
                 savedCount += 1
             } catch is CancellationError {
                 throw CancellationError()
@@ -112,10 +138,137 @@ enum CloudExporter {
         }
         await onProgress?(total, total, "")
 
+        if let sourceURL = root.sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !sourceURL.isEmpty,
+           let cloudKind = root.effectiveCloudKind {
+            let manifest = CloudFolderManifest(
+                sourceURL: sourceURL,
+                remoteID: root.remoteID,
+                cloudKind: cloudKind,
+                lastSyncedEpochMs: Int64(Date().timeIntervalSince1970 * 1000),
+                tracks: trackedMap
+            )
+            try? saveManifest(manifest, in: destinationURL)
+        }
+
         return ExportSummary(
             savedCount: savedCount,
             failedCount: failedCount,
             destinationURL: destinationURL,
+            errors: errors
+        )
+    }
+
+    static func manifestURL(in directory: URL) -> URL {
+        directory.appendingPathComponent(CloudFolderManifest.fileName)
+    }
+
+    static func loadManifest(in directory: URL) -> CloudFolderManifest? {
+        let url = manifestURL(in: directory)
+        guard let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(CloudFolderManifest.self, from: data)
+    }
+
+    static func saveManifest(_ manifest: CloudFolderManifest, in directory: URL) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        let data = try encoder.encode(manifest)
+        let url = manifestURL(in: directory)
+        try data.write(to: url, options: .atomic)
+    }
+
+    /// Fetches the latest remote playlist for a tracked local folder and downloads only missing/new tracks.
+    static func updateLocalFolder(
+        root: LibraryRoot,
+        folderURL: URL,
+        fetcher: any CloudPlaylistFetching = LiveCloudService.shared,
+        cache: CloudAudioCache = .shared,
+        onProgress: (@MainActor @Sendable (Int, Int, String) -> Void)? = nil
+    ) async throws -> CloudUpdateSummary {
+        try Task.checkCancellation()
+        let existingManifest = loadManifest(in: folderURL)
+        let rawSource = (existingManifest?.sourceURL ?? root.sourceURL ?? root.remoteID ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawSource.isEmpty else {
+            throw CloudSourceError.invalidURL
+        }
+        let kindHint = root.effectiveCloudKind ?? existingManifest?.cloudKind
+        let fetched = try await fetcher.fetchPlaylist(sourceURL: rawSource, cookie: root.cookie, kindHint: kindHint)
+        try Task.checkCancellation()
+
+        try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
+        var trackedMap = existingManifest?.tracks ?? [:]
+        var cloudLookupRoot = root
+        cloudLookupRoot.kind = fetched.kind
+        cloudLookupRoot.sourceURL = rawSource
+        cloudLookupRoot.remoteID = fetched.remoteID
+
+        let now = Date()
+        let sourceSlug = fetched.kind == .cloudYouTube ? "youtube" : "bilibili"
+        let total = fetched.tracks.count
+        var addedCount = 0
+        var skippedCount = 0
+        var failedCount = 0
+        var errors: [String] = []
+
+        for (index, item) in fetched.tracks.enumerated() {
+            try Task.checkCancellation()
+            await onProgress?(index, total, item.title)
+
+            if let existingName = trackedMap[item.remoteTrackID],
+               FileManager.default.fileExists(atPath: folderURL.appendingPathComponent(existingName).path) {
+                skippedCount += 1
+                continue
+            }
+
+            let tempTrack = Track(
+                id: Track.makeID(rootID: root.id, relativePath: item.relativePath),
+                rootID: root.id,
+                relativePath: item.relativePath,
+                title: item.title,
+                artist: item.artist,
+                album: item.album,
+                albumArtist: item.artist,
+                trackNumber: item.trackNumber,
+                discNumber: nil,
+                duration: item.duration,
+                fileSize: 0,
+                modified: now,
+                hasEmbeddedLyrics: false,
+                dateAdded: now,
+                artworkKey: nil,
+                cloudSource: sourceSlug,
+                remoteTrackID: item.remoteTrackID,
+                remoteArtworkURL: item.artworkURL
+            )
+
+            do {
+                let targetURL = try await exportTrack(tempTrack, root: cloudLookupRoot, toFolder: folderURL, cache: cache)
+                trackedMap[item.remoteTrackID] = targetURL.lastPathComponent
+                addedCount += 1
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                failedCount += 1
+                errors.append("\(item.title): \(error.localizedDescription)")
+            }
+        }
+        await onProgress?(total, total, "")
+
+        let updatedManifest = CloudFolderManifest(
+            sourceURL: rawSource,
+            remoteID: fetched.remoteID,
+            cloudKind: fetched.kind,
+            lastSyncedEpochMs: Int64(Date().timeIntervalSince1970 * 1000),
+            tracks: trackedMap
+        )
+        try saveManifest(updatedManifest, in: folderURL)
+
+        return CloudUpdateSummary(
+            addedCount: addedCount,
+            skippedCount: skippedCount,
+            failedCount: failedCount,
+            totalRemoteCount: total,
             errors: errors
         )
     }

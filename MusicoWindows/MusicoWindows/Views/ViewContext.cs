@@ -28,4 +28,7 @@ public sealed class ViewContext
     public Action? OpenAddCloudFolder { get; init; }
     public Action<LibraryRoot, IReadOnlyList<Track>>? OpenSaveCloudPlaylist { get; init; }
     public Action<Track, string>? OpenSaveCloudTrack { get; init; }
+    public Action<LibraryRoot>? OpenUpdateTrackedFolder { get; init; }
+    public Action<Track>? OpenSongInfo { get; init; }
+    public Action<string, SearchField>? OpenSearch { get; init; }
 }
