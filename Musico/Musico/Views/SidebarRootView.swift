@@ -18,7 +18,6 @@ struct SidebarRootView: View {
     @Environment(\.appNavigation) private var navigation
     #if targetEnvironment(macCatalyst)
     @Environment(\.updateManager) private var updateManager
-    @State private var showUpdateSheet = false
     #endif
     @State private var sidePanel: SidePanel?
 
@@ -95,62 +94,39 @@ struct SidebarRootView: View {
                 link(.queues, "Queues", "list.bullet")
                 link(.stats, "Stats", "chart.bar")
             }
+            #if targetEnvironment(macCatalyst)
+            Section {
+                Button {
+                    updateManager.presentManualCheck()
+                } label: {
+                    HStack(spacing: 8) {
+                        Label("Check for Updates", systemImage: "arrow.down.circle")
+                        Spacer()
+                        if updateManager.hasAvailableUpdate {
+                            Circle()
+                                .fill(Color.accentColor)
+                                .frame(width: 8, height: 8)
+                                .accessibilityLabel("Update available")
+                        }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+            }
+            #endif
         }
         .listStyle(.sidebar)
         .navigationTitle("Musico")
         #if targetEnvironment(macCatalyst)
-        .safeAreaInset(edge: .bottom) {
-            updateFooter
-        }
-        .sheet(isPresented: $showUpdateSheet) {
+        .sheet(isPresented: Binding(
+            get: { updateManager.isSheetPresented },
+            set: { updateManager.isSheetPresented = $0 }
+        )) {
             UpdateSheet()
                 .environment(\.updateManager, updateManager)
         }
         #endif
     }
-
-    #if targetEnvironment(macCatalyst)
-    @ViewBuilder
-    private var updateFooter: some View {
-        let button = Button {
-            showUpdateSheet = true
-            switch updateManager.state {
-            case .available, .downloading, .readyToInstall, .installing:
-                break
-            default:
-                Task { await updateManager.checkForUpdates(manual: true) }
-            }
-        } label: {
-            HStack(spacing: 8) {
-                Image(systemName: "arrow.down.circle")
-                Text("Check for Updates")
-                Spacer()
-                if updateManager.hasAvailableUpdate {
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: 8, height: 8)
-                        .accessibilityLabel("Update available")
-                }
-            }
-            .font(.subheadline)
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(.secondary)
-
-        if #available(iOS 26.0, macCatalyst 26.0, *) {
-            button
-                .glassEffect(.regular.interactive(), in: Capsule())
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
-        } else {
-            button
-                .background(.bar)
-        }
-    }
-    #endif
 
     private func link(_ item: SidebarItem, _ title: String, _ icon: String) -> some View {
         NavigationLink(value: item) { Label(title, systemImage: icon) }

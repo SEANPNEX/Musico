@@ -421,6 +421,7 @@ final class UpdateManager {
 
     private(set) var state: State = .idle
     private(set) var lastCheckedRelease: ReleaseInfo?
+    var isSheetPresented = false
 
     let currentVersion: AppVersion
     private let checker: UpdateChecker
@@ -487,6 +488,16 @@ final class UpdateManager {
             return info
         case .idle, .checking, .upToDate, .error:
             return lastCheckedRelease
+        }
+    }
+
+    func presentManualCheck() {
+        isSheetPresented = true
+        switch state {
+        case .available, .downloading, .readyToInstall, .installing:
+            break
+        default:
+            Task { await checkForUpdates(manual: true) }
         }
     }
 

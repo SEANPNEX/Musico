@@ -71,5 +71,14 @@ struct MusicoApp: App {
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { model.player.persistPosition() }
         }
+        #if targetEnvironment(macCatalyst)
+        .commands {
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    model.updateManager.presentManualCheck()
+                }
+            }
+        }
+        #endif
     }
 }
