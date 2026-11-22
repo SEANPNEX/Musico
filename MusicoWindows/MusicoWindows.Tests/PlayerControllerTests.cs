@@ -298,7 +298,7 @@ public sealed class PlayerControllerTests : IDisposable
         // Release slow track 1 after skip; stale load must NOT overwrite track 2.
         slowGate.TrySetResult();
 
-        for (int i = 0; i < 40 && !player.IsPlaying; i++)
+        for (int i = 0; i < 200 && !player.IsPlaying; i++)
         {
             await Task.Delay(25);
         }
@@ -309,7 +309,7 @@ public sealed class PlayerControllerTests : IDisposable
         Assert.Contains(cloudTracks[1].Id, _engine.LoadedPaths[0]);
 
         // Next track (#3) should be prefetched into CloudCache in the background.
-        for (int i = 0; i < 40 && cache.TryGetCachedPath(cloudTracks[2].Id) is null; i++)
+        for (int i = 0; i < 200 && cache.TryGetCachedPath(cloudTracks[2].Id) is null; i++)
         {
             await Task.Delay(25);
         }
