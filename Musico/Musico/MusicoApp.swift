@@ -1,4 +1,7 @@
 import SwiftUI
+#if targetEnvironment(macCatalyst)
+import UIKit
+#endif
 
 /// Owns the long-lived stores for the running app.
 @MainActor
@@ -35,6 +38,7 @@ final class AppModel {
         lyrics = LyricsStore(directory: support.appendingPathComponent("Lyrics"))
         #if targetEnvironment(macCatalyst)
         updateManager = UpdateManager()
+        UIScrollView.appearance().delaysContentTouches = false
         #endif
     }
 }

@@ -26,17 +26,219 @@ struct QueuesView: View {
     @Environment(PlayerController.self) private var player
     @Environment(LibraryStore.self) private var library
     @Environment(QueueStore.self) private var queues
+    @Environment(\.languageManager) private var languageManager
     @State private var renaming: PlayQueue?
-    @State private var name = ""
-    @State private var confirmClear = false
+    @State private var clearingQueue: PlayQueue?
 
     var body: some View {
+        let canDeleteQueues = queues.queues.count > 1
+        queueContent(canDeleteQueues: canDeleteQueues)
+            .navigationTitle(L10n.tr("Queues"))
+            #if targetEnvironment(macCatalyst)
+            .navigationBarTitleDisplayMode(.inline)
+            #else
+            .navigationBarTitleDisplayMode(embeddedInInspector ? .inline : .automatic)
+            #endif
+            .toolbar {
+                #if !targetEnvironment(macCatalyst)
+                ToolbarItem(placement: .topBarLeading) { EditButton() }
+                #endif
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    TrackSortMenu(selection: queues.active.sortOrder ?? .custom) { order in
+                        player.sortActiveQueue(by: order)
+                    }
+                    .disabled(queues.active.trackIDs.count < 2)
+
+                    Button(L10n.tr("Clear This Queue"), systemImage: "eraser") { clearingQueue = queues.active }
+                        .disabled(queues.active.trackIDs.isEmpty)
+                        .help(L10n.tr("Clear This Queue"))
+
+                    #if targetEnvironment(macCatalyst)
+                    Button(L10n.tr("Delete Queue"), systemImage: "trash", role: .destructive) {
+                        player.deleteQueue(queues.activeID)
+                    }
+                    .disabled(!canDeleteQueues)
+                    .help(canDeleteQueues ? L10n.tr("Delete Queue") : L10n.tr("At least one queue is required"))
+                    #endif
+
+                    if let onDone {
+                        Button(L10n.tr("Done")) { onDone() }
+                    }
+                }
+            }
+            .confirmationDialog(
+                L10n.tr("Remove every song from “%@”?", clearingQueue.map { L10n.displayQueueName($0.name) } ?? ""),
+                isPresented: Binding(get: { clearingQueue != nil }, set: { if !$0 { clearingQueue = nil } }),
+                titleVisibility: .visible,
+                presenting: clearingQueue
+            ) { target in
+                Button(L10n.tr("Clear Queue"), role: .destructive) { player.clearQueue(target.id) }
+                Button(L10n.tr("Cancel"), role: .cancel) {}
+            }
+            .sheet(item: $renaming) { queue in
+                NamePromptSheet(
+                    title: L10n.tr("Rename Queue"),
+                    subtitle: L10n.tr("Choose a new name for this queue."),
+                    placeholder: L10n.tr("Queue name"),
+                    confirmLabel: L10n.tr("Rename"),
+                    systemImage: "list.bullet",
+                    initialName: queue.name
+                ) { trimmed in
+                    queues.rename(queue.id, to: trimmed)
+                }
+                .environment(\.languageManager, languageManager)
+                .environment(\.locale, languageManager.effectiveLocale)
+            }
+    }
+
+    @ViewBuilder
+    private func queueContent(canDeleteQueues: Bool) -> some View {
+        #if targetEnvironment(macCatalyst)
+        macQueuesBody(canDeleteQueues: canDeleteQueues)
+        #else
+        iosQueuesList(canDeleteQueues: canDeleteQueues)
+        #endif
+    }
+
+    #if targetEnvironment(macCatalyst)
+    private func macQueuesBody(canDeleteQueues: Bool) -> some View {
+        let active = queues.active
+        let scopeID = "queue-\(active.id.uuidString)"
+        return ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(L10n.tr("Queues"))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                        Spacer()
+                        Button {
+                            queues.addQueue(name: nil)
+                        } label: {
+                            Label(L10n.tr("New Queue"), systemImage: "plus")
+                                .font(.caption.weight(.medium))
+                        }
+                        .buttonStyle(.borderless)
+                    }
+                    .padding(.horizontal, 4)
+
+                    VStack(spacing: 0) {
+                        ForEach(Array(queues.queues.enumerated()), id: \.element.id) { idx, queue in
+                            let isActive = queue.id == queues.activeID
+                            MacQueueRow(
+                                queue: queue,
+                                isActive: isActive,
+                                canDelete: canDeleteQueues,
+                                onSelect: { player.switchQueue(to: queue.id) },
+                                onRename: { renaming = queue },
+                                onClear: { clearingQueue = queue },
+                                onDelete: { player.deleteQueue(queue.id) }
+                            )
+                            if idx < queues.queues.count - 1 {
+                                Divider().padding(.leading, 12)
+                            }
+                        }
+                    }
+                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                            .allowsHitTesting(false)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text(L10n.displayQueueName(active.name))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                            .textCase(.uppercase)
+                            .lineLimit(1)
+                        Spacer()
+                        if !active.trackIDs.isEmpty {
+                            Text(L10n.songCount(active.trackIDs.count))
+                                .font(.caption.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .padding(.horizontal, 4)
+
+                    Group {
+                        if active.trackIDs.isEmpty {
+                            Text(L10n.tr("This queue is empty. Tap a song in your library to fill it."))
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .padding(14)
+                        } else {
+                            LazyVStack(spacing: 0) {
+                                ForEach(Array(active.trackIDs.enumerated()), id: \.offset) { index, id in
+                                    MacQueueTrackRow(
+                                        track: library.track(id),
+                                        trackID: id,
+                                        index: index,
+                                        scopeID: scopeID,
+                                        isActive: index == active.currentIndex,
+                                        onSelect: { player.jump(to: index) },
+                                        onMove: { from, to in
+                                            player.moveInQueue(from: IndexSet(integer: from), to: to)
+                                        },
+                                        onRemove: { player.removeFromQueue(at: index) }
+                                    )
+                                    if index < active.trackIDs.count - 1 {
+                                        Divider().padding(.leading, 68)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    .background(Color(.secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.5)
+                            .allowsHitTesting(false)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                }
+            }
+            .padding(16)
+        }
+        .background(Color(.systemGroupedBackground))
+    }
+    #endif
+
+    private func iosQueuesList(canDeleteQueues: Bool) -> some View {
         List {
             Section(L10n.tr("Queues")) {
                 ForEach(queues.queues) { queue in
-                    queueRow(queue)
+                    let isActive = queue.id == queues.activeID
+                    QueueRowView(
+                        queue: queue,
+                        isActive: isActive,
+                        canDelete: canDeleteQueues,
+                        onSelect: { player.switchQueue(to: queue.id) },
+                        onRename: { renaming = queue },
+                        onClear: { clearingQueue = queue },
+                        onDelete: { player.deleteQueue(queue.id) }
+                    )
+                    .deleteDisabled(!canDeleteQueues)
                 }
-                Button(L10n.tr("New Queue"), systemImage: "plus") { queues.addQueue(name: nil) }
+                .onDelete { offsets in
+                    let ids = offsets.compactMap { queues.queues.indices.contains($0) ? queues.queues[$0].id : nil }
+                    for id in ids where queues.queues.count > 1 {
+                        player.deleteQueue(id)
+                    }
+                }
+                Button {
+                    queues.addQueue(name: nil)
+                } label: {
+                    Label(L10n.tr("New Queue"), systemImage: "plus")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
             }
             Section(L10n.displayQueueName(queues.active.name)) {
                 let active = queues.active
@@ -56,15 +258,20 @@ struct QueuesView: View {
                                 onTap: { player.jump(to: index) },
                                 onMove: { from, to in
                                     player.moveInQueue(from: IndexSet(integer: from), to: to)
-                                }
+                                },
+                                onRemove: { player.removeFromQueue(at: index) },
+                                removeHelp: L10n.tr("Remove from Queue")
                             )
                         } else {
                             Button {
                                 player.jump(to: index)
                             } label: {
-                                Text(L10n.tr("Missing song")).foregroundStyle(.secondary)
+                                Text(L10n.tr("Missing song"))
+                                    .foregroundStyle(.secondary)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .contentShape(Rectangle())
                             }
-                            .buttonStyle(.plain)
+                            .buttonStyle(.borderless)
                             .listRowBackground(index == active.currentIndex ? Color.accentColor.opacity(0.12) : nil)
                         }
                     }
@@ -82,65 +289,310 @@ struct QueuesView: View {
                 .onMove { player.moveInQueue(from: $0, to: $1) }
             }
         }
-        .navigationTitle(L10n.tr("Queues"))
-        #if targetEnvironment(macCatalyst)
-        .navigationBarTitleDisplayMode(.inline)
-        #else
-        .navigationBarTitleDisplayMode(embeddedInInspector ? .inline : .automatic)
-        #endif
-        .toolbar {
-            ToolbarItem(placement: .topBarLeading) { EditButton() }
-            ToolbarItemGroup(placement: .topBarTrailing) {
-                TrackSortMenu(selection: queues.active.sortOrder ?? .custom) { order in
-                    player.sortActiveQueue(by: order)
-                }
-                .disabled(queues.active.trackIDs.count < 2)
-                Button(L10n.tr("Clear This Queue"), systemImage: "trash") { confirmClear = true }
-                    .disabled(queues.active.trackIDs.isEmpty)
-                if let onDone {
-                    Button(L10n.tr("Done")) { onDone() }
+    }
+}
+
+#if targetEnvironment(macCatalyst)
+private struct MacQueueRow: View {
+    let queue: PlayQueue
+    let isActive: Bool
+    let canDelete: Bool
+    let onSelect: () -> Void
+    let onRename: () -> Void
+    let onClear: () -> Void
+    let onDelete: () -> Void
+
+    @State private var isHovered = false
+    @State private var isRenameHovered = false
+    @State private var isClearHovered = false
+    @State private var isDeleteHovered = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: onSelect) {
+                HStack(spacing: 8) {
+                    Image(systemName: "checkmark")
+                        .font(.caption.weight(.bold))
+                        .foregroundStyle(Color.accentColor)
+                        .opacity(isActive ? 1 : 0)
+                        .frame(width: 14)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(L10n.displayQueueName(queue.name))
+                            .font(.subheadline.weight(isActive ? .semibold : .medium))
+                            .foregroundStyle(isActive ? Color.accentColor : .primary)
+                            .lineLimit(1)
+                        QueueSummary(queue: queue, isActive: isActive)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
                 }
             }
+            .buttonStyle(.plain)
+
+            HStack(spacing: 2) {
+                Button(action: onRename) {
+                    Image(systemName: "pencil")
+                        .font(.subheadline)
+                        .foregroundStyle(isRenameHovered ? Color.primary : Color.secondary)
+                        .frame(width: 28, height: 28)
+                        .background(
+                            isRenameHovered ? Color.primary.opacity(0.08) : .clear,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .onHover { isRenameHovered = $0 }
+                .help(L10n.tr("Rename…"))
+                .accessibilityLabel(L10n.tr("Rename…"))
+
+                if !queue.trackIDs.isEmpty {
+                    Button(action: onClear) {
+                        Image(systemName: "eraser")
+                            .font(.subheadline)
+                            .foregroundStyle(isClearHovered ? Color.primary : Color.secondary)
+                            .frame(width: 28, height: 28)
+                            .background(
+                                isClearHovered ? Color.primary.opacity(0.08) : .clear,
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .onHover { isClearHovered = $0 }
+                    .help(L10n.tr("Clear Queue"))
+                    .accessibilityLabel(L10n.tr("Clear Queue"))
+                }
+
+                Button(action: onDelete) {
+                    Image(systemName: "trash")
+                        .font(.subheadline)
+                        .foregroundStyle(canDelete ? (isDeleteHovered ? Color.red : Color.secondary) : Color.secondary.opacity(0.35))
+                        .frame(width: 28, height: 28)
+                        .background(
+                            canDelete && isDeleteHovered ? Color.red.opacity(0.12) : .clear,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .disabled(!canDelete)
+                .onHover { isDeleteHovered = $0 }
+                .help(canDelete ? L10n.tr("Delete Queue") : L10n.tr("At least one queue is required"))
+                .accessibilityLabel(L10n.tr("Delete Queue"))
+            }
         }
-        .confirmationDialog(L10n.tr("Remove every song from “%@”?", L10n.displayQueueName(queues.active.name)), isPresented: $confirmClear, titleVisibility: .visible) {
-            Button(L10n.tr("Clear Queue"), role: .destructive) { player.clearQueue() }
-        }
-        .alert(L10n.tr("Rename Queue"), isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField(L10n.tr("Name"), text: $name)
-            Button(L10n.tr("Cancel"), role: .cancel) {}
-            Button(L10n.tr("Rename")) {
-                if let renaming { queues.rename(renaming.id, to: name) }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(
+            isActive
+                ? Color.accentColor.opacity(0.10)
+                : (isHovered ? Color.primary.opacity(0.04) : .clear)
+        )
+        .onHover { isHovered = $0 }
+        .contextMenu {
+            if !isActive {
+                Button(L10n.tr("Switch to Queue"), systemImage: "play.circle", action: onSelect)
+            }
+            Button(L10n.tr("Rename…"), systemImage: "pencil", action: onRename)
+            if !queue.trackIDs.isEmpty {
+                Button(L10n.tr("Clear Queue"), systemImage: "eraser", role: .destructive, action: onClear)
+            }
+            if canDelete {
+                Divider()
+                Button(L10n.tr("Delete Queue"), systemImage: "trash", role: .destructive, action: onDelete)
             }
         }
     }
+}
 
-    private func queueRow(_ queue: PlayQueue) -> some View {
-        let isActive = queue.id == queues.activeID
-        return Button {
-            player.switchQueue(to: queue.id)
-        } label: {
-            HStack {
+private struct MacQueueTrackRow: View {
+    let track: Track?
+    let trackID: String
+    let index: Int
+    let scopeID: String
+    let isActive: Bool
+    let onSelect: () -> Void
+    let onMove: (Int, Int) -> Void
+    let onRemove: () -> Void
+
+    @State private var isHovered = false
+    @State private var isRemoveHovered = false
+    @State private var isDropTargeted = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: onSelect) {
+                Group {
+                    if let track {
+                        TrackRow(track: track)
+                    } else {
+                        Text(L10n.tr("Missing song"))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+
+            Button(action: onRemove) {
+                Image(systemName: "minus.circle")
+                    .font(.subheadline)
+                    .foregroundStyle(isRemoveHovered ? Color.red : Color.secondary)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        isRemoveHovered ? Color.red.opacity(0.12) : .clear,
+                        in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    )
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .onHover { isRemoveHovered = $0 }
+            .help(L10n.tr("Remove from Queue"))
+            .accessibilityLabel(L10n.tr("Remove from Queue"))
+            .opacity(isHovered ? 1 : 0)
+            .allowsHitTesting(isHovered)
+
+            Image(systemName: "line.3.horizontal")
+                .font(.body)
+                .foregroundStyle(.tertiary)
+                .frame(width: 28, height: 36)
+                .contentShape(Rectangle())
+                .accessibilityLabel(L10n.tr("Reorder %@", track?.title ?? L10n.tr("Missing song")))
+                .draggable("\(scopeID):\(index)") {
+                    Text(track?.title ?? L10n.tr("Missing song"))
+                        .font(.subheadline.weight(.medium))
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 8)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background(
+            isDropTargeted
+                ? Color.accentColor.opacity(0.20)
+                : (isActive
+                    ? Color.accentColor.opacity(0.12)
+                    : (isHovered ? Color.primary.opacity(0.04) : .clear))
+        )
+        .onHover { isHovered = $0 }
+        .dropDestination(for: String.self) { items, _ in
+            guard let payload = items.first,
+                  let sourceIndex = ReorderableTrackRow.parseSourceIndex(payload, scopeID: scopeID),
+                  sourceIndex != index else {
+                return false
+            }
+            let destination = sourceIndex < index ? index + 1 : index
+            onMove(sourceIndex, destination)
+            return true
+        } isTargeted: { targeted in
+            isDropTargeted = targeted
+        }
+        .contextMenu {
+            TrackMenuItems(ids: [trackID], favouriteID: trackID)
+            Divider()
+            Button(L10n.tr("Remove from Queue"), systemImage: "minus.circle", role: .destructive, action: onRemove)
+        }
+    }
+}
+#endif
+
+private struct QueueRowView: View {
+    let queue: PlayQueue
+    let isActive: Bool
+    let canDelete: Bool
+    let onSelect: () -> Void
+    let onRename: () -> Void
+    let onClear: () -> Void
+    let onDelete: () -> Void
+
+    @State private var isHovered = false
+    @State private var isDeleteHovered = false
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Button(action: onSelect) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(L10n.displayQueueName(queue.name)).foregroundStyle(.primary)
+                    Text(L10n.displayQueueName(queue.name))
+                        .foregroundStyle(isActive ? Color.accentColor : .primary)
+                        .lineLimit(1)
                     QueueSummary(queue: queue, isActive: isActive)
                 }
-                Spacer()
-                if isActive { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .contentShape(Rectangle())
+            .buttonStyle(.borderless)
+
+            HStack(spacing: 4) {
+                if isActive {
+                    Image(systemName: "checkmark")
+                        .font(.footnote.weight(.semibold))
+                        .foregroundStyle(Color.accentColor)
+                }
+
+                Menu {
+                    queueMenuItems
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                        .frame(width: 26, height: 26)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(L10n.tr("More"))
+
+                if canDelete {
+                    Button(action: onDelete) {
+                        Image(systemName: "trash")
+                            .font(.subheadline)
+                            .foregroundStyle(isDeleteHovered ? Color.red : Color.secondary)
+                            .frame(width: 26, height: 26)
+                            .background(
+                                isDeleteHovered ? Color.red.opacity(0.12) : .clear,
+                                in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                            )
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.borderless)
+                    .onHover { isDeleteHovered = $0 }
+                    .help(L10n.tr("Delete Queue"))
+                    .accessibilityLabel(L10n.tr("Delete Queue"))
+                }
+            }
         }
-        .buttonStyle(.plain)
+        .onHover { isHovered = $0 }
+        .listRowBackground(
+            isActive
+                ? Color.accentColor.opacity(0.10)
+                : (isHovered ? Color.primary.opacity(0.04) : nil)
+        )
+        .contextMenu { queueMenuItems }
         .swipeActions(edge: .trailing) {
-            if queues.queues.count > 1 {
-                Button(L10n.tr("Delete"), systemImage: "trash", role: .destructive) { player.deleteQueue(queue.id) }
+            if canDelete {
+                Button(L10n.tr("Delete"), systemImage: "trash", role: .destructive, action: onDelete)
             }
-            Button(L10n.tr("Rename"), systemImage: "pencil") {
-                name = queue.name
-                renaming = queue
-            }
+            Button(L10n.tr("Rename"), systemImage: "pencil", action: onRename)
         }
     }
 
+    @ViewBuilder
+    private var queueMenuItems: some View {
+        if !isActive {
+            Button(L10n.tr("Switch to Queue"), systemImage: "play.circle", action: onSelect)
+        }
+        Button(L10n.tr("Rename…"), systemImage: "pencil", action: onRename)
+        if !queue.trackIDs.isEmpty {
+            Button(L10n.tr("Clear Queue"), systemImage: "eraser", role: .destructive, action: onClear)
+        }
+        if canDelete {
+            Divider()
+            Button(L10n.tr("Delete Queue"), systemImage: "trash", role: .destructive, action: onDelete)
+        }
+    }
 }
 
 /// Its own view so the playback clock only redraws this line, not the whole queue list.

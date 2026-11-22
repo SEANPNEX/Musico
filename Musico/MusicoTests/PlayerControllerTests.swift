@@ -321,6 +321,47 @@ final class PlayerControllerTests: XCTestCase {
         XCTAssertTrue(cloudPlayer.isPlaying)
         XCTAssertNil(cloudPlayer.errorMessage)
     }
+
+    func testClearAndDeleteSpecificAndActiveQueues() throws {
+        let initialID = queues.activeID
+        player.play([id("a.mp3"), id("b.mp3")], startAt: 0)
+        XCTAssertTrue(player.isPlaying)
+
+        let secondID = queues.addQueue(name: "Secondary")
+        player.addToQueue([id("b.mp3")], queue: secondID)
+        XCTAssertEqual(queues.queues.count, 2)
+
+        // Clearing an inactive queue should empty it without disturbing active playback.
+        player.clearQueue(secondID)
+        XCTAssertEqual(queues.queues.first { $0.id == secondID }?.trackIDs, [])
+        XCTAssertEqual(queues.activeID, initialID)
+        XCTAssertTrue(player.isPlaying)
+
+        // Deleting an inactive queue removes it while keeping active queue intact.
+        player.deleteQueue(secondID)
+        XCTAssertEqual(queues.queues.map(\.id), [initialID])
+        XCTAssertTrue(player.isPlaying)
+
+        // Cannot delete the last remaining queue.
+        player.deleteQueue(initialID)
+        XCTAssertEqual(queues.queues.count, 1)
+
+        // Add another queue, switch playback to it, then delete active queue -> switches cleanly.
+        let thirdID = queues.addQueue(name: "Third")
+        player.playInNamedQueue([id("b.mp3")], name: "Third", startAt: 0, shuffle: false)
+        XCTAssertEqual(queues.activeID, thirdID)
+        XCTAssertTrue(player.isPlaying)
+
+        player.deleteQueue(thirdID)
+        XCTAssertEqual(queues.activeID, initialID)
+        XCTAssertEqual(queues.queues.map(\.id), [initialID])
+
+        // Default clearQueue() clears active queue and stops playback.
+        player.clearQueue()
+        XCTAssertEqual(queues.active.trackIDs, [])
+        XCTAssertFalse(player.isPlaying)
+        XCTAssertNil(player.currentTrack)
+    }
 }
 
 private struct TestCloudFetcher: CloudPlaylistFetching {

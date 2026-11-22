@@ -139,6 +139,71 @@ final class SheetEnvironmentTests: XCTestCase {
         try await present(SaveCloudPlaylistSheet(root: cloudRoot), over: false, attachEmptyHostEnvironment: true)
         try await present(UpdateTrackedFolderSheet(root: cloudRoot), over: false, attachEmptyHostEnvironment: true)
         try await present(DownloadsListView(), over: false, attachEmptyHostEnvironment: true)
+        try await present(AddSongsToPlaylistSheet(playlistID: UUID()), over: false, attachEmptyHostEnvironment: true)
+        try await present(
+            NamePromptSheet(
+                title: "New Playlist",
+                subtitle: "Give your playlist a name.",
+                placeholder: "Playlist name",
+                confirmLabel: "Create",
+                systemImage: "music.note.list",
+                badgeText: "Includes 3 songs",
+                onConfirm: { _ in }
+            ),
+            over: false,
+            attachEmptyHostEnvironment: true
+        )
+    }
+
+    func testPlaylistAndQueueViewsRenderInSidebarAndDetail() async throws {
+        let state = makeTempDir()
+        let docs = makeTempDir()
+        let fixture = try XCTUnwrap(Bundle(for: SheetEnvironmentTests.self).url(forResource: "sample", withExtension: "mp3"))
+        try FileManager.default.copyItem(at: fixture, to: docs.appendingPathComponent("a.mp3"))
+        try FileManager.default.copyItem(at: fixture, to: docs.appendingPathComponent("b.mp3"))
+
+        let library = LibraryStore(directory: state, documentsURL: docs, reader: StubReader(),
+                                   artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")))
+        await library.rescan()
+        let ids = library.tracks.map(\.id)
+        let playlistID = library.createPlaylist(name: "Weekend Mix")
+        library.add(ids, toPlaylist: playlistID)
+        if let first = ids.first {
+            library.toggleFavourite(first)
+        }
+
+        let queues = QueueStore(directory: state)
+        let extraQueue = queues.addQueue(name: "Queue 2")
+        let history = PlayHistoryStore(directory: state)
+        let player = PlayerController(library: library, queues: queues, history: history, engine: AudioEngine(),
+                                      settingsURL: state.appendingPathComponent("settings.json"))
+        defer { player.shutdown() }
+        player.addToQueue(ids, queue: extraQueue)
+
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
+        let rendered = expectation(description: "playlist and queue views rendered")
+        let harness = VStack(spacing: 12) {
+            NavigationStack { PlaylistsView() }
+            NavigationStack { PlaylistDetailView(ref: .favourites) }
+            NavigationStack { PlaylistDetailView(ref: .user(playlistID)) }
+            NavigationStack { QueuesView() }
+            SidebarRootView(openPlayer: {})
+        }
+        .onAppear { rendered.fulfill() }
+        .modifier(NewPlaylistAlert())
+        .modifier(CloudExportHostModifier())
+        .modifier(SongInfoHostModifier())
+        .environment(library)
+        .environment(queues)
+        .environment(player)
+        .environment(history)
+
+        window.rootViewController = UIHostingController(rootView: harness)
+        window.makeKeyAndVisible()
+        await fulfillment(of: [rendered], timeout: 5)
+        try await Task.sleep(for: .milliseconds(400))
+        window.isHidden = true
     }
 
     func testPlayerBarAndMiniPlayerRenderAndControlPlayback() async throws {
@@ -183,6 +248,9 @@ final class SheetEnvironmentTests: XCTestCase {
             FullPlayerView(onClose: {})
         }
         .onAppear { rendered.fulfill() }
+        .modifier(NewPlaylistAlert())
+        .modifier(CloudExportHostModifier())
+        .modifier(SongInfoHostModifier())
         .environment(library)
         .environment(queues)
         .environment(player)

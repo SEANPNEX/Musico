@@ -4,6 +4,7 @@ struct ArtworkView: View {
     let artworkKey: String?
     /// Fixed edge length, or nil to fill the available width as a square.
     var size: CGFloat?
+    var cornerRadius: CGFloat? = nil
 
     @Environment(LibraryStore.self) private var library
     @State private var image: UIImage?
@@ -21,7 +22,7 @@ struct ArtworkView: View {
                 }
             }
             .frame(width: size, height: size)
-            .clipShape(RoundedRectangle(cornerRadius: (size ?? 160) * 0.1, style: .continuous))
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius ?? ((size ?? 160) * 0.1), style: .continuous))
             .task(id: artworkKey) {
                 guard let artworkKey else { image = nil; return }
                 let cache = library.artwork
@@ -86,6 +87,8 @@ struct TrackRows: View {
                 }
             } label: {
                 TrackRow(track: track, subtitle: subtitle?(track))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .disabled(!library.isAvailable(track))
@@ -99,20 +102,60 @@ struct ReorderableTrackRow: View {
     let index: Int
     let scopeID: String
     var subtitle: String? = nil
+    var trackNumber: Int? = nil
     var isActive: Bool = false
     var isAvailable: Bool = true
     let onTap: () -> Void
     let onMove: (Int, Int) -> Void
+    var onRemove: (() -> Void)? = nil
+    var removeHelp: String? = nil
 
     @State private var isDropTargeted = false
+    @State private var isRowHovered = false
+    @State private var isRemoveHovered = false
 
     var body: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             Button(action: onTap) {
-                TrackRow(track: track, subtitle: subtitle)
+                HStack(spacing: 10) {
+                    if let trackNumber {
+                        Text("\(trackNumber)")
+                            .font(.subheadline.monospacedDigit())
+                            .foregroundStyle(isActive ? Color.accentColor : .secondary)
+                            .frame(minWidth: 26, alignment: .trailing)
+                    }
+                    TrackRow(track: track, subtitle: subtitle)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
             .disabled(!isAvailable)
+
+            if let onRemove {
+                let helpLabel = removeHelp ?? L10n.tr("Remove")
+                Button {
+                    onRemove()
+                } label: {
+                    Image(systemName: "minus.circle")
+                        .font(.subheadline)
+                        .foregroundStyle(isRemoveHovered ? Color.red : Color.secondary)
+                        .frame(width: 26, height: 26)
+                        .background(
+                            isRemoveHovered ? Color.red.opacity(0.12) : .clear,
+                            in: RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        )
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .onHover { isRemoveHovered = $0 }
+                .help(helpLabel)
+                .accessibilityLabel(helpLabel)
+                #if targetEnvironment(macCatalyst)
+                .opacity(isRowHovered ? 1 : 0)
+                .allowsHitTesting(isRowHovered)
+                #endif
+            }
 
             Image(systemName: "line.3.horizontal")
                 .font(.body)
@@ -128,10 +171,13 @@ struct ReorderableTrackRow: View {
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
                 }
         }
+        .onHover { isRowHovered = $0 }
         .listRowBackground(
             isDropTargeted
                 ? Color.accentColor.opacity(0.20)
-                : (isActive ? Color.accentColor.opacity(0.12) : nil)
+                : (isActive
+                    ? Color.accentColor.opacity(0.12)
+                    : (isRowHovered ? Color.primary.opacity(0.04) : nil))
         )
         .dropDestination(for: String.self) { items, _ in
             guard let payload = items.first,
@@ -181,33 +227,201 @@ struct TrackSortMenu: View {
 @MainActor @Observable
 final class NewPlaylistPrompt {
     var create: ((String) -> Void)?
+    var songCount: Int?
 }
 
 /// Hosts the "New Playlist" name prompt for the menus inside it. Applied once per presentation
-/// (the tabs, and each sheet), because an alert cannot appear from underneath a sheet.
+/// (the tabs, and each sheet), because a prompt cannot appear from underneath a sheet.
 ///
-/// It must not read stores from the environment: on the Mac, a view that shows an alert at the
+/// It must not read stores from the environment: on the Mac, a view that presents from the
 /// root of a sheet over another sheet is first evaluated with an empty environment, and reading
 /// a store there stops the app.
 struct NewPlaylistAlert: ViewModifier {
     @State private var prompt = NewPlaylistPrompt()
-    @State private var name = ""
 
     func body(content: Content) -> some View {
         content
             .environment(prompt)
-            .alert(L10n.tr("New Playlist"), isPresented: Binding(get: { prompt.create != nil }, set: { if !$0 { prompt.create = nil } })) {
-                TextField(L10n.tr("Name"), text: $name)
-                Button(L10n.tr("Cancel"), role: .cancel) { name = "" }
-                Button(L10n.tr("Create")) {
-                    let trimmed = name.trimmingCharacters(in: .whitespaces)
-                    if !trimmed.isEmpty { prompt.create?(trimmed) }
-                    name = ""
+            .sheet(
+                isPresented: Binding(
+                    get: { prompt.create != nil },
+                    set: {
+                        if !$0 {
+                            prompt.create = nil
+                            prompt.songCount = nil
+                        }
+                    }
+                )
+            ) {
+                NamePromptSheet(
+                    title: L10n.tr("New Playlist"),
+                    subtitle: L10n.tr("Give your playlist a name."),
+                    placeholder: L10n.tr("Playlist name"),
+                    confirmLabel: L10n.tr("Create"),
+                    systemImage: "music.note.list",
+                    badgeText: prompt.songCount.flatMap { $0 > 0 ? L10n.tr("Includes %@", L10n.songCount($0)) : nil }
+                ) { trimmed in
+                    let create = prompt.create
+                    prompt.create = nil
+                    prompt.songCount = nil
+                    create?(trimmed)
                 }
-                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
-            } message: {
-                Text(L10n.tr("Enter a name for the playlist."))
+                .environment(\.locale, LanguageManager.shared.effectiveLocale)
             }
+    }
+}
+
+/// Compact modal sheet for creating or renaming a playlist or queue, styled to match Musico's
+/// native card & material language without depending on environment stores.
+struct NamePromptSheet: View {
+    let title: String
+    let subtitle: String
+    let placeholder: String
+    let confirmLabel: String
+    let systemImage: String
+    var badgeText: String? = nil
+    let onConfirm: (String) -> Void
+
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.languageManager) private var languageManager
+    @State private var text: String
+    @FocusState private var isFocused: Bool
+
+    init(
+        title: String,
+        subtitle: String,
+        placeholder: String,
+        confirmLabel: String,
+        systemImage: String,
+        badgeText: String? = nil,
+        initialName: String = "",
+        onConfirm: @escaping (String) -> Void
+    ) {
+        self.title = title
+        self.subtitle = subtitle
+        self.placeholder = placeholder
+        self.confirmLabel = confirmLabel
+        self.systemImage = systemImage
+        self.badgeText = badgeText
+        self.onConfirm = onConfirm
+        _text = State(initialValue: initialName)
+    }
+
+    private var trimmed: String {
+        text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        let content = VStack(alignment: .leading, spacing: 18) {
+            HStack(alignment: .center, spacing: 14) {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(
+                        LinearGradient(
+                            colors: [Color.accentColor.opacity(0.22), Color.accentColor.opacity(0.08)],
+                            startPoint: .topLeading,
+                            endPoint: .bottomTrailing
+                        )
+                    )
+                    .frame(width: 48, height: 48)
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .strokeBorder(Color.accentColor.opacity(0.20), lineWidth: 0.75)
+                    }
+                    .overlay {
+                        Image(systemName: systemImage)
+                            .font(.title3.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                    }
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(title)
+                        .font(.title3.weight(.semibold))
+                    Text(subtitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    if let badgeText, !badgeText.isEmpty {
+                        Text(badgeText)
+                            .font(.caption.weight(.medium))
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(Color.accentColor.opacity(0.12), in: Capsule())
+                            .padding(.top, 2)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+
+            HStack(spacing: 8) {
+                TextField(placeholder, text: $text)
+                    .textFieldStyle(.plain)
+                    .font(.body)
+                    .focused($isFocused)
+                    .submitLabel(.done)
+                    .onSubmit { submit() }
+
+                if !text.isEmpty {
+                    Button {
+                        text = ""
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundStyle(.secondary)
+                    }
+                    .buttonStyle(.borderless)
+                    .accessibilityLabel(L10n.tr("Clear Filter"))
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(Color(.secondarySystemFill).opacity(0.65), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .strokeBorder(
+                        isFocused ? Color.accentColor : Color.primary.opacity(0.12),
+                        lineWidth: isFocused ? 1.5 : 0.75
+                    )
+            }
+            .task {
+                try? await Task.sleep(for: .milliseconds(120))
+                isFocused = true
+            }
+
+            HStack(spacing: 10) {
+                Spacer()
+                Button(L10n.tr("Cancel"), role: .cancel) {
+                    dismiss()
+                }
+                .buttonStyle(.bordered)
+                .keyboardShortcut(.cancelAction)
+
+                Button(confirmLabel) {
+                    submit()
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(trimmed.isEmpty)
+            }
+        }
+        .padding(20)
+        #if targetEnvironment(macCatalyst)
+        .frame(minWidth: 380, idealWidth: 420, maxWidth: 460)
+        .presentationDragIndicator(.hidden)
+        #endif
+        .presentationCornerRadius(18)
+        .environment(\.locale, languageManager.effectiveLocale)
+
+        if #available(iOS 18.0, macCatalyst 18.0, *) {
+            content.presentationSizing(.fitted)
+        } else {
+            content.presentationDetents([.height(230)])
+        }
+    }
+
+    private func submit() {
+        let value = trimmed
+        guard !value.isEmpty else { return }
+        onConfirm(value)
+        dismiss()
     }
 }
 
@@ -247,6 +461,7 @@ struct TrackMenuItems: View {
                 Button(playlist.name) { library.add(ids, toPlaylist: playlist.id) }
             }
             Button(L10n.tr("New Playlist…"), systemImage: "plus") {
+                newPlaylist.songCount = ids.count
                 newPlaylist.create = { [library, ids] name in
                     library.add(ids, toPlaylist: library.createPlaylist(name: name))
                 }

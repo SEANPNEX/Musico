@@ -64,18 +64,23 @@ struct PlayerBar: View {
 
             HStack(spacing: 4) {
                 if let track {
-                    Menu(L10n.tr("More"), systemImage: "ellipsis.circle") {
+                    Menu {
                         TrackMenuItems(ids: [track.id], favouriteID: track.id)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.body)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 34, height: 32)
+                            .background(
+                                isMoreHovered ? Color.primary.opacity(0.08) : .clear,
+                                in: RoundedRectangle(cornerRadius: 7, style: .continuous)
+                            )
+                            .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
                     }
-                    .labelStyle(.iconOnly)
-                    .buttonStyle(.plain)
-                    .font(.body)
-                    .frame(width: 34, height: 32)
-                    .background(isMoreHovered ? Color.primary.opacity(0.08) : .clear, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .contentShape(Rectangle())
-                    .foregroundStyle(.secondary)
+                    .buttonStyle(.borderless)
                     .onHover { isMoreHovered = $0 }
                     .animation(.easeOut(duration: 0.14), value: isMoreHovered)
+                    .help(L10n.tr("Song options"))
                     .accessibilityLabel(L10n.tr("Song options"))
                 }
                 panelToggle(L10n.tr("Lyrics"), "quote.bubble", .lyrics)
@@ -224,20 +229,45 @@ private struct DockIconButton: View {
     @State private var isHovered = false
 
     var body: some View {
-        Button(title, systemImage: systemImage, action: action)
-            .labelStyle(.iconOnly)
-            .buttonStyle(.plain)
-            .font(font)
-            .frame(width: width, height: height)
-            .foregroundStyle(foreground)
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(font)
+                .foregroundStyle(foreground)
+                .frame(width: width, height: height)
+                .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        }
+        .buttonStyle(DockIconButtonStyle(isSelected: isSelected, isHovered: isHovered))
+        .onHover { isHovered = $0 }
+        .animation(.easeOut(duration: 0.14), value: isHovered)
+        .accessibilityLabel(title)
+        .help(title)
+    }
+}
+
+private struct DockIconButtonStyle: ButtonStyle {
+    let isSelected: Bool
+    let isHovered: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
             .background(
-                isSelected
-                    ? Color.accentColor.opacity(0.15)
-                    : (isHovered ? Color.primary.opacity(0.08) : .clear),
+                backgroundColor(isPressed: configuration.isPressed),
                 in: RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
-            .contentShape(Rectangle())
-            .onHover { isHovered = $0 }
-            .animation(.easeOut(duration: 0.14), value: isHovered)
+            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
+            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+    }
+
+    private func backgroundColor(isPressed: Bool) -> Color {
+        if isPressed {
+            return isSelected ? Color.accentColor.opacity(0.24) : Color.primary.opacity(0.14)
+        }
+        if isSelected {
+            return Color.accentColor.opacity(0.15)
+        }
+        if isHovered {
+            return Color.primary.opacity(0.08)
+        }
+        return .clear
     }
 }

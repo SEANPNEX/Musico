@@ -210,6 +210,16 @@ enum L10n {
     }
 
     @MainActor
+    static func addSongsCount(_ count: Int) -> String {
+        switch resolved {
+        case .en:
+            return count == 1 ? "Add 1 Song" : "Add \(count) Songs"
+        case .zhHans:
+            return "添加 \(count) 首歌曲"
+        }
+    }
+
+    @MainActor
     static func playCount(_ count: Int) -> String {
         switch resolved {
         case .en:
@@ -568,6 +578,27 @@ enum L10n {
         "Rename Queue": "重命名队列",
         "Empty": "空",
         "%@ · %@ at %@": "%@ · %@ (%@)",
+        "Delete Queue": "删除队列",
+        "Switch to Queue": "切换到此队列",
+        "Remove from Playlist": "从歌单移除",
+        "Rename Playlist…": "重命名歌单…",
+        "Delete Playlist": "删除歌单",
+        "Delete “%@”?": "确定要删除“%@”吗？",
+        "This playlist will be removed. Your songs stay in your library.": "此歌单将被删除，歌曲仍会保留在你的资料库中。",
+        "Add Songs": "添加歌曲",
+        "Add Songs…": "添加歌曲…",
+        "Search songs to add": "搜索要添加的歌曲",
+        "Added": "已添加",
+        "Add songs below, or right-click any song, album, or folder to add it to this playlist.": "点击下方按钮添加歌曲，或右键点击任意歌曲、专辑或文件夹将其添加到此歌单。",
+        "Add songs below, or touch and hold any song, album, or folder to add it.": "点击下方按钮添加歌曲，或长按任意歌曲、专辑或文件夹将其添加到此歌单。",
+        "No matching songs": "没有匹配的歌曲",
+        "Playlist name": "歌单名称",
+        "Queue name": "队列名称",
+        "Give your playlist a name.": "为你的歌单起一个名字。",
+        "Choose a new name for this playlist.": "为此歌单输入新名称。",
+        "Choose a new name for this queue.": "为此队列输入新名称。",
+        "Includes %@": "将包含 %@",
+        "At least one queue is required": "至少需要保留一个队列",
         "No Lyrics": "暂无歌词",
         "Import a .lrc or .txt file for this song, or put one with the same name next to it.": "为此歌曲导入 .lrc 或 .txt 文件，或将同名歌词文件放在音频文件旁。",
         "Import from File…": "从文件导入…",

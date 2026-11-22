@@ -183,21 +183,30 @@ private struct PlayerPage: View {
                     .animation(.easeInOut(duration: 0.2), value: track.id)
                     Spacer()
                     let isFavourite = library.isFavourite(track.id)
-                    Button(L10n.tr("Favourite"), systemImage: isFavourite ? "heart.fill" : "heart") {
+                    Button {
                         library.toggleFavourite(track.id)
+                    } label: {
+                        Image(systemName: isFavourite ? "heart.fill" : "heart")
+                            .font(.title2)
+                            .foregroundStyle(isFavourite ? Color.red : Color.secondary)
+                            .frame(width: 36, height: 36)
+                            .contentShape(Rectangle())
                     }
-                    .font(.title2)
-                    .labelStyle(.iconOnly)
-                    .foregroundStyle(isFavourite ? Color.red : Color.secondary)
+                    .buttonStyle(.borderless)
                     .contentTransition(.symbolEffect(.replace))
                     .symbolEffect(.bounce, value: isFavourite)
+                    .accessibilityLabel(L10n.tr("Favourite"))
 
-                    Menu(L10n.tr("More"), systemImage: "ellipsis.circle") {
+                    Menu {
                         TrackMenuItems(ids: [track.id], favouriteID: track.id)
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                            .font(.title2)
+                            .foregroundStyle(.secondary)
+                            .frame(width: 36, height: 36)
+                            .contentShape(Rectangle())
                     }
-                    .font(.title2)
-                    .labelStyle(.iconOnly)
-                    .foregroundStyle(.secondary)
+                    .buttonStyle(.borderless)
                     .accessibilityLabel(L10n.tr("Song options"))
                 }
 
@@ -232,41 +241,47 @@ private struct PlayerPage: View {
     @ViewBuilder
     private var closeButton: some View {
         if #available(iOS 26.0, macCatalyst 26.0, *) {
-            Button(L10n.tr("Close"), systemImage: "chevron.down") { performClose() }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
-                .font(.body.weight(.semibold))
-                .frame(width: 38, height: 38)
-                .contentShape(Capsule())
-                .background {
-                    Color.clear
-                        .glassEffect(.regular, in: Capsule())
-                        .allowsHitTesting(false)
-                }
-                .overlay {
-                    ZStack {
-                        Capsule()
-                            .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
-                        if isCloseHovered {
-                            Capsule()
-                                .fill(Color.primary.opacity(0.08))
-                        }
-                    }
+            Button(action: performClose) {
+                Image(systemName: "chevron.down")
+                    .font(.body.weight(.semibold))
+                    .frame(width: 38, height: 38)
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(L10n.tr("Close"))
+            .help(L10n.tr("Close"))
+            .background {
+                Color.clear
+                    .glassEffect(.regular, in: Capsule())
                     .allowsHitTesting(false)
+            }
+            .overlay {
+                ZStack {
+                    Capsule()
+                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
+                    if isCloseHovered {
+                        Capsule()
+                            .fill(Color.primary.opacity(0.08))
+                    }
                 }
-                .scaleEffect(isCloseHovered ? 1.05 : 1.0)
-                .onHover { isCloseHovered = $0 }
-                .animation(.easeOut(duration: 0.14), value: isCloseHovered)
+                .allowsHitTesting(false)
+            }
+            .scaleEffect(isCloseHovered ? 1.05 : 1.0)
+            .onHover { isCloseHovered = $0 }
+            .animation(.easeOut(duration: 0.14), value: isCloseHovered)
         } else {
-            Button(L10n.tr("Close"), systemImage: "chevron.down") { performClose() }
-                .labelStyle(.iconOnly)
-                .buttonStyle(.plain)
-                .font(.title3.weight(.semibold))
-                .frame(width: 44, height: 32)
-                .background(isCloseHovered ? Color.primary.opacity(0.08) : .clear, in: Capsule())
-                .contentShape(Capsule())
-                .onHover { isCloseHovered = $0 }
-                .animation(.easeOut(duration: 0.14), value: isCloseHovered)
+            Button(action: performClose) {
+                Image(systemName: "chevron.down")
+                    .font(.title3.weight(.semibold))
+                    .frame(width: 44, height: 32)
+                    .background(isCloseHovered ? Color.primary.opacity(0.08) : .clear, in: Capsule())
+                    .contentShape(Capsule())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel(L10n.tr("Close"))
+            .help(L10n.tr("Close"))
+            .onHover { isCloseHovered = $0 }
+            .animation(.easeOut(duration: 0.14), value: isCloseHovered)
         }
     }
 
@@ -278,33 +293,83 @@ private struct PlayerPage: View {
     private var transport: some View {
         let queue = queues.active
         return HStack {
-            Button(L10n.tr("Shuffle"), systemImage: "shuffle") { player.toggleShuffle() }
-                .foregroundStyle(queue.shuffle ? Color.accentColor : .secondary)
+            Button {
+                player.toggleShuffle()
+            } label: {
+                Image(systemName: "shuffle")
+                    .font(.title3)
+                    .foregroundStyle(queue.shuffle ? Color.accentColor : .secondary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(L10n.tr("Shuffle"))
+
             Spacer()
-            Button(L10n.tr("Previous"), systemImage: "backward.fill") { player.previous() }.font(.title)
+
+            Button {
+                player.previous()
+            } label: {
+                Image(systemName: "backward.fill")
+                    .font(.title)
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(L10n.tr("Previous"))
+
             Spacer()
+
             if player.isBuffering {
                 ProgressView()
                     .controlSize(.large)
-                    .frame(width: 68, height: 68)
+                    .frame(width: 76, height: 76)
             } else {
-                Button(L10n.tr("Play or Pause"), systemImage: player.isPlaying ? "pause.circle.fill" : "play.circle.fill") {
+                Button {
                     player.togglePlayPause()
+                } label: {
+                    Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
+                        .font(.system(size: 68))
+                        .foregroundStyle(.primary)
+                        .frame(width: 76, height: 76)
+                        .contentShape(Circle())
                 }
-                .font(.system(size: 68))
+                .buttonStyle(.borderless)
                 .contentTransition(.symbolEffect(.replace))
                 .symbolEffect(.bounce, value: player.isPlaying)
+                .accessibilityLabel(L10n.tr("Play or Pause"))
             }
+
             Spacer()
-            Button(L10n.tr("Next"), systemImage: "forward.fill") { player.next() }.font(.title)
+
+            Button {
+                player.next()
+            } label: {
+                Image(systemName: "forward.fill")
+                    .font(.title)
+                    .foregroundStyle(.primary)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .accessibilityLabel(L10n.tr("Next"))
+
             Spacer()
-            Button(L10n.tr("Repeat"), systemImage: queue.repeatMode == .one ? "repeat.1" : "repeat") { player.cycleRepeat() }
-                .contentTransition(.symbolEffect(.replace))
-                .foregroundStyle(queue.repeatMode == .off ? .secondary : Color.accentColor)
+
+            Button {
+                player.cycleRepeat()
+            } label: {
+                Image(systemName: queue.repeatMode == .one ? "repeat.1" : "repeat")
+                    .font(.title3)
+                    .foregroundStyle(queue.repeatMode == .off ? .secondary : Color.accentColor)
+                    .frame(width: 44, height: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.borderless)
+            .contentTransition(.symbolEffect(.replace))
+            .accessibilityLabel(L10n.tr("Repeat"))
         }
-        .labelStyle(.iconOnly)
-        .font(.title3)
-        .tint(.primary)
     }
 
     private var panelButtons: some View {

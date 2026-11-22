@@ -676,9 +676,14 @@ final class PlayerController {
         }
     }
 
-    func clearQueue() {
-        queues.updateActive { $0.replace(with: [], startAt: 0) }
-        clearPlayback()
+    func clearQueue(_ id: UUID? = nil) {
+        let target = id ?? queues.activeID
+        if target == queues.activeID {
+            queues.updateActive { $0.replace(with: [], startAt: 0) }
+            clearPlayback()
+        } else {
+            queues.update(target) { $0.replace(with: [], startAt: 0) }
+        }
     }
 
     private func trackUpdated(_ track: Track) {

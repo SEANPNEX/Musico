@@ -96,15 +96,11 @@ struct StatsView: View {
         HStack {
             total("\(history.totalPlays)", L10n.playUnit(history.totalPlays))
             Divider()
-            total(listeningTime, L10n.tr("listened"))
+            StatsListeningTimeCell()
             Divider()
             total("\(history.neverPlayed(library.tracks).count)", L10n.tr("never played"))
         }
         .padding(.vertical, 6)
-    }
-
-    private var listeningTime: String {
-        L10n.listeningDuration(history.totalSeconds)
     }
 
     private func total(_ value: String, _ label: String) -> some View {
@@ -126,5 +122,22 @@ struct StatsView: View {
         case .counts: return "\(plays) · \(artist)"
         case .never: return artist
         }
+    }
+}
+
+private struct StatsListeningTimeCell: View {
+    @Environment(PlayHistoryStore.self) private var history
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Text(L10n.listeningDuration(history.totalSeconds))
+                .font(.title3.weight(.semibold).monospacedDigit())
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
+            Text(L10n.tr("listened"))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity)
     }
 }

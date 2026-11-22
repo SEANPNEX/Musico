@@ -25,6 +25,7 @@ struct SidebarRootView: View {
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var lastValidSelection: SidebarItem = .songs
     @State private var showDownloadsSheet = false
+    @State private var renamingPlaylist: Playlist?
 
     private var activeSelection: SidebarItem {
         navigation.sidebarSelection ?? lastValidSelection
@@ -69,23 +70,11 @@ struct SidebarRootView: View {
         }
     }
 
-    private var selectionBinding: Binding<SidebarItem?> {
-        Binding(
-            get: { activeSelection },
-            set: { newValue in
-                guard let newValue else { return }
-                handleSelection(newValue)
-            }
-        )
-    }
-
     private func handleSelection(_ item: SidebarItem) {
         lastValidSelection = item
         if activeSelection == item {
             if !navigation.sidebarDetailPath.isEmpty {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    navigation.sidebarDetailPath = NavigationPath()
-                }
+                navigation.sidebarDetailPath = NavigationPath()
             }
             return
         }
@@ -107,9 +96,6 @@ struct SidebarRootView: View {
         } detail: {
             NavigationStack(path: $navigation.sidebarDetailPath) {
                 detail
-                    .id(activeSelection)
-                    .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.18), value: activeSelection)
             }
         }
         .navigationSplitViewStyle(.balanced)
@@ -137,48 +123,72 @@ struct SidebarRootView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            List(selection: selectionBinding) {
-                link(.folders, L10n.tr("Folders"), "folder")
-                Section(L10n.tr("Library")) {
-                    link(.songs, L10n.tr("Songs"), "music.note")
-                    link(.albums, L10n.tr("Albums"), "square.stack")
-                    link(.artists, L10n.tr("Artists"), "music.mic")
-                }
-                Section {
-                    link(.playlists, L10n.tr("All Playlists"), "square.grid.2x2")
-                    link(.favourites, L10n.tr("Favourites"), "heart", badgeCount: library.favourites.count)
-                    ForEach(library.playlists) { playlist in
-                        link(.playlist(playlist.id), playlist.name, "music.note.list", badgeCount: playlist.trackIDs.count)
-                            .contextMenu {
-                                TrackMenuItems(ids: playlist.trackIDs)
-                                Divider()
-                                Button(L10n.tr("Delete"), systemImage: "trash", role: .destructive) { library.deletePlaylist(playlist.id) }
-                            }
-                    }
-                } header: {
-                    HStack {
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    sidebarRow(.folders, L10n.tr("Folders"), "folder")
+
+                    sidebarSectionHeader(L10n.tr("Library"))
+                    sidebarRow(.songs, L10n.tr("Songs"), "music.note")
+                    sidebarRow(.albums, L10n.tr("Albums"), "square.stack")
+                    sidebarRow(.artists, L10n.tr("Artists"), "music.mic")
+
+                    HStack(spacing: 6) {
                         Text(L10n.tr("Playlists"))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
                         Spacer()
                         Button {
+                            newPlaylist.songCount = nil
                             newPlaylist.create = { [library] name in library.createPlaylist(name: name) }
                         } label: {
                             Image(systemName: "plus")
                                 .font(.caption.weight(.semibold))
                                 .foregroundStyle(.secondary)
-                                .frame(width: 22, height: 22)
+                                .frame(width: 24, height: 24)
                                 .contentShape(Rectangle())
                         }
-                        .buttonStyle(.plain)
+                        .buttonStyle(SidebarFooterButtonStyle())
                         .help(L10n.tr("New Playlist"))
                         .accessibilityLabel(L10n.tr("New Playlist"))
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.top, 12)
+                    .padding(.bottom, 2)
+
+                    sidebarRow(.playlists, L10n.tr("All Playlists"), "square.grid.2x2")
+                    sidebarRow(.favourites, L10n.tr("Favourites"), "heart", badgeCount: library.favourites.count)
+                    ForEach(library.playlists) { playlist in
+                        sidebarRow(.playlist(playlist.id), playlist.name, "music.note.list", badgeCount: playlist.trackIDs.count)
+                            .contextMenu {
+                                if !playlist.trackIDs.isEmpty {
+                                    Button(L10n.tr("Play"), systemImage: "play.fill") {
+                                        player.playInNamedQueue(playlist.trackIDs, name: playlist.name, startAt: 0, shuffle: false)
+                                    }
+                                    Divider()
+                                }
+                                Button(L10n.tr("Rename…"), systemImage: "pencil") {
+                                    renamingPlaylist = playlist
+                                }
+                                if !playlist.trackIDs.isEmpty {
+                                    TrackMenuItems(ids: playlist.trackIDs)
+                                }
+                                Divider()
+                                Button(L10n.tr("Delete"), systemImage: "trash", role: .destructive) {
+                                    library.deletePlaylist(playlist.id)
+                                }
+                            }
+                    }
+
+                    Divider()
+                        .padding(.vertical, 6)
+                        .padding(.horizontal, 8)
+
+                    sidebarRow(.queues, L10n.tr("Queues"), "list.bullet")
+                    sidebarRow(.stats, L10n.tr("Stats"), "chart.bar")
                 }
-                Section {
-                    link(.queues, L10n.tr("Queues"), "list.bullet")
-                    link(.stats, L10n.tr("Stats"), "chart.bar")
-                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
             }
-            .listStyle(.sidebar)
             #if targetEnvironment(macCatalyst)
             Divider()
             sidebarFooter
@@ -186,6 +196,20 @@ struct SidebarRootView: View {
         }
         .navigationTitle("Musico")
         .navigationSplitViewColumnWidth(min: 204, ideal: 232, max: 288)
+        .sheet(item: $renamingPlaylist) { playlist in
+            NamePromptSheet(
+                title: L10n.tr("Rename Playlist"),
+                subtitle: L10n.tr("Choose a new name for this playlist."),
+                placeholder: L10n.tr("Playlist name"),
+                confirmLabel: L10n.tr("Rename"),
+                systemImage: "pencil",
+                initialName: playlist.name
+            ) { trimmed in
+                library.renamePlaylist(playlist.id, to: trimmed)
+            }
+            .environment(\.languageManager, languageManager)
+            .environment(\.locale, languageManager.effectiveLocale)
+        }
         #if targetEnvironment(macCatalyst)
         .sheet(isPresented: $showDownloadsSheet) {
             DownloadsListView(downloadManager: downloadManager)
@@ -203,6 +227,26 @@ struct SidebarRootView: View {
                 .environment(\.locale, languageManager.effectiveLocale)
         }
         #endif
+    }
+
+    private func sidebarSectionHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 10)
+            .padding(.top, 12)
+            .padding(.bottom, 2)
+    }
+
+    private func sidebarRow(_ item: SidebarItem, _ title: String, _ icon: String, badgeCount: Int? = nil) -> some View {
+        SidebarRowButton(
+            title: title,
+            icon: icon,
+            badgeCount: badgeCount,
+            isSelected: activeSelection == item
+        ) {
+            handleSelection(item)
+        }
     }
 
     #if targetEnvironment(macCatalyst)
@@ -227,9 +271,10 @@ struct SidebarRootView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .contentShape(Rectangle())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(SidebarFooterButtonStyle())
 
             Menu {
                 ForEach(AppLanguage.allCases) { lang in
@@ -255,37 +300,16 @@ struct SidebarRootView: View {
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
-                .contentShape(Rectangle())
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
             }
-            .buttonStyle(.plain)
+            .buttonStyle(SidebarFooterButtonStyle())
         }
         .font(.subheadline)
         .padding(.horizontal, 8)
         .padding(.vertical, 8)
     }
     #endif
-
-    private func link(_ item: SidebarItem, _ title: String, _ icon: String, badgeCount: Int? = nil) -> some View {
-        NavigationLink(value: item) {
-            HStack(spacing: 8) {
-                Label(title, systemImage: icon)
-                    .lineLimit(1)
-                if let badgeCount, badgeCount > 0 {
-                    Spacer(minLength: 4)
-                    Text("\(badgeCount)")
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
-        .simultaneousGesture(TapGesture().onEnded {
-            if activeSelection == item && !navigation.sidebarDetailPath.isEmpty {
-                withAnimation(.easeInOut(duration: 0.18)) {
-                    navigation.sidebarDetailPath = NavigationPath()
-                }
-            }
-        })
-    }
 
     @ViewBuilder
     private var detail: some View {
@@ -317,5 +341,86 @@ struct SidebarRootView: View {
                     .navigationBarTitleDisplayMode(.inline)
             }
         }
+    }
+}
+
+private struct SidebarRowButton: View {
+    let title: String
+    let icon: String
+    let badgeCount: Int?
+    let isSelected: Bool
+    let action: () -> Void
+
+    @State private var isHovered = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: icon)
+                    .font(.body)
+                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    .frame(width: 20, alignment: .center)
+                Text(title)
+                    .font(.body)
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                if let badgeCount, badgeCount > 0 {
+                    Text("\(badgeCount)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 7)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        }
+        .buttonStyle(SidebarPillButtonStyle(isSelected: isSelected, isHovered: isHovered))
+        .onHover { isHovered = $0 }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+private struct SidebarPillButtonStyle: ButtonStyle {
+    let isSelected: Bool
+    let isHovered: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                backgroundColor(isPressed: configuration.isPressed),
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+            .scaleEffect(configuration.isPressed ? 0.99 : 1.0)
+            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+    }
+
+    private func backgroundColor(isPressed: Bool) -> Color {
+        if isPressed {
+            return isSelected ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.10)
+        }
+        if isSelected {
+            return Color.accentColor.opacity(0.15)
+        }
+        if isHovered {
+            return Color.primary.opacity(0.06)
+        }
+        return .clear
+    }
+}
+
+private struct SidebarFooterButtonStyle: ButtonStyle {
+    @State private var isHovered = false
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .background(
+                configuration.isPressed
+                    ? Color.primary.opacity(0.10)
+                    : (isHovered ? Color.primary.opacity(0.06) : .clear),
+                in: RoundedRectangle(cornerRadius: 8, style: .continuous)
+            )
+            .onHover { isHovered = $0 }
     }
 }
