@@ -1,53 +1,108 @@
-# Musico
+<div align="center">
+
+# ♪ Musico ♪
+
+**English** | [简体中文](README.zh-CN.md)
 
 [![CI](https://github.com/SEANPNEX/local_music_player/actions/workflows/ci.yml/badge.svg)](https://github.com/SEANPNEX/local_music_player/actions/workflows/ci.yml)
 [![Release](https://github.com/SEANPNEX/local_music_player/actions/workflows/release.yml/badge.svg)](https://github.com/SEANPNEX/local_music_player/actions/workflows/release.yml)
 [![Latest Release](https://img.shields.io/github/v/release/SEANPNEX/local_music_player)](https://github.com/SEANPNEX/local_music_player/releases/latest)
 
-**Musico** is an offline, folder-aware, multi-queue local music player inspired by Musicolet — built natively for each platform with zero cross-platform web wrappers.
+**An offline, folder-loving, multi-queue local music player — built 100% natively for every platform, zero web wrappers allowed! (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧**
+
+*Inspired by Musicolet & paying warm tribute to [YRRLYB/Aria](https://github.com/YRRLYB/Aria) ♪(´▽｀)*
+
+</div>
 
 ---
 
-## Native Platforms
+## 💖 Tribute & Inspiration
 
-| Folder | Target Platforms | Tech Stack | Native UI Language |
+- **[Musicolet](https://krosbits.in/musicolet/)**: The OG folder-first, multi-queue offline player that proved local music players can be super clean and endlessly practical.
+- **[YRRLYB/Aria](https://github.com/YRRLYB/Aria)**: A huge shoutout and tribute to Aria — a minimalist, comfy desktop music player that blends local lossless tracks with online sources like Bilibili so you can just open the app and pick up right where yesterday's song left off `(・ω・)ﾉ`. Musico shares that exact same cozy spirit across Apple, Android, and Windows!
+
+---
+
+## 🖥️ Native Platforms
+
+| Folder | Target Platforms | Tech Stack | Native UI Vibe |
 |---|---|---|---|
-| [`Musico/`](Musico/) | iOS 17+, iPadOS, macOS (Catalyst) | Swift, SwiftUI (`@Observable`), `AVAudioEngine` + `AVAudioUnitEQ`, `MPNowPlayingInfoCenter` | Apple Human Interface Guidelines (iOS Tab/Sheet & macOS/iPadOS Sidebar + Inspector) |
-| [`MusicoAndroid/`](MusicoAndroid/) | Android 8.0+ (API 26+) | Kotlin, Jetpack Compose, AndroidX Media3 (ExoPlayer + `MediaSessionService`), SAF `DocumentFile`, `DynamicsProcessing` EQ | Material 3 / Material You (Dynamic Color, adaptive `NavigationBar` / `NavigationRail`, `ModalBottomSheet`) |
-| [`MusicoWindows/`](MusicoWindows/) | Windows 10 (2004+) & Windows 11 | C# / .NET 8 WPF, NAudio (`BiQuadFilter` 10-band EQ), TagLibSharp, Windows 10 SMTC | Windows 10 Fluent Design (`Segoe UI`, `Segoe MDL2 Assets`, Acrylic `NavigationView`, sharp 0px geometry, Reveal hover, Pivot tabs, Light/Dark theme sync) |
+| [`Musico/`](Musico/) | iOS 17+, iPadOS, macOS (Catalyst) | Swift, SwiftUI (`@Observable`), `AVAudioEngine` + `AVAudioUnitEQ`, `MPNowPlayingInfoCenter` | Apple HIG — cozy Tabs & Sheets on iOS, crisp Sidebar + Inspector on macOS/iPadOS |
+| [`MusicoAndroid/`](MusicoAndroid/) | Android 8.0+ (API 26+) | Kotlin, Jetpack Compose, AndroidX Media3 (ExoPlayer + `MediaSessionService`), SAF `DocumentFile`, `DynamicsProcessing` EQ | Material 3 / Material You — Dynamic Color, adaptive `NavigationBar` / `NavigationRail`, `ModalBottomSheet` |
+| [`MusicoWindows/`](MusicoWindows/) | Windows 10 (2004+) & Windows 11 | C# / .NET 8 WPF, NAudio (`BiQuadFilter` 10-band EQ), TagLibSharp, Windows 10 SMTC | Windows 10 Fluent Design — `Segoe UI`, Acrylic `NavigationView`, sharp 0px geometry, Reveal hover, Light/Dark sync |
 
 ---
 
-## Shared Feature Set
+## ✨ What Can Musico Do?
 
-- **Folder-First Library & Cloud Locations**: Add or remove multiple music folders (`Documents` / `MyMusic` + user-picked folders), preserve folder hierarchies across relaunches, handle disconnected drives gracefully with **Relocate**, incrementally diff rescans, and mount **YouTube** & **Bilibili** playlists/collections/multi-part videos directly under **Folders** (with anonymous public playlist loading, Bilibili WBI signing, and local playback parity).
-- **Library Browsing & Search**: Browse by **Folders**, **Songs** (title/artist/album/date-added sort + instant diacritic-insensitive search), **Albums** (ordered by disc & track number), **Artists**, and **Playlists** (built-in **Favourites** + user playlists with create/rename/delete/reorder).
-- **Multiple Independent Queues**: Create, rename, switch, reorder, clear, and delete queues—each remembering its current track, playback position, shuffle permutation, and repeat mode (`Off` / `All` / `One`).
-- **10-Band Equalizer**: Master toggle, preamp (`-12 dB` to `+12 dB`), 10 ISO bands (`31 Hz`–`16 kHz`), and 8 presets (`Flat`, `Bass Boost`, `Treble Boost`, `Rock`, `Pop`, `Jazz`, `Classical`, `Vocal`) plus `Custom`.
-- **Lyrics Support**: Resolves **Imported** `.lrc`/`.txt` → **Sidecar** `.lrc`/`.txt` → **Embedded** tags; supports multi-timestamp `.lrc`, UTF-8 / UTF-16 BOM / GB18030 decoding, live line auto-scroll, and tap-to-seek.
-- **Sleep Timer & Listening Stats**: Presets (`5`–`90` min), custom duration, or **End of current song**, plus listening statistics (**Recent**, **Plays**, **Not Lately**, **Never**).
-- **System Media Controls**: Lock-screen / Control Center & headphone buttons on iOS/macOS, `MediaSessionService` notification & media keys on Android, and Windows 10 System Media Transport Controls (SMTC) on Windows.
-- **In-App Update Detection & Updater**: Checks GitHub Releases (`releases/latest`) with SHA-256 verification against `SHA256SUMS.txt` and **Skip Version** persistence on **Windows** (supports both Installer `.exe` and self-replacing Portable `.zip`), **Android** (`FileProvider` APK installer), and **macOS Catalyst** (downloads & opens `.dmg`); skipped on iOS for personal-team signing.
+- 📁 **Folder-First Library & Cloud Hangouts**: Mount your favorite local folders (`Documents` / `MyMusic` + custom folders) while keeping your precious folder hierarchy intact! Unplugged a drive? **Relocate** fixes it without losing a thing. You can even mount **YouTube** & **Bilibili** playlists, collections, and multi-part videos right inside **Folders** (anonymous public loading + Bilibili WBI signing!).
+- 🔍 **Browsing & Instant Search**: Hop around **Folders**, **Songs** (sort by title/artist/album/date added + diacritic-insensitive search), **Albums** (properly ordered by disc & track), **Artists**, and **Playlists** (built-in **Favourites** + your own custom playlists).
+- 🎶 **Multiple Independent Queues**: Spin up as many queues as your mood needs — rename, switch, reorder, clear, or delete them anytime. Every queue remembers its own track, playback position, shuffle order, and repeat mode (`Off` / `All` / `One`).
+- 🎛️ **10-Band Equalizer**: Flip the master switch, dial in preamp (`-12 dB` to `+12 dB`), tweak 10 ISO bands (`31 Hz`–`16 kHz`), or pick from 8 presets (`Flat`, `Bass Boost`, `Treble Boost`, `Rock`, `Pop`, `Jazz`, `Classical`, `Vocal`) + `Custom`.
+- 🎤 **Synced & Plain Lyrics**: Automatically checks **Imported** `.lrc`/`.txt` → **Sidecar** `.lrc`/`.txt` → **Embedded** tags. Supports multi-timestamp `.lrc`, UTF-8 / UTF-16 BOM / GB18030 decoding, smooth auto-scroll, and tap-to-seek!
+- ⏱️ **Sleep Timer & Listening Stats**: Drift off with `5`–`90` min presets, custom timers, or **End of current song**, and peek at your habits in **Stats** (**Recent**, **Plays**, **Not Lately**, **Never**).
+- 🎧 **System Media Controls**: Lock-screen / Control Center & headphone controls on Apple, `MediaSessionService` notification & media keys on Android, and Windows 10 SMTC on Windows.
+- 🚀 **In-App Updater**: Checks GitHub Releases (`releases/latest`) with SHA-256 verification (`SHA256SUMS.txt`) and **Skip Version** support on **Windows** (Installer `.exe` & self-replacing Portable `.zip`), **Android** (`FileProvider` APK installer), and **macOS Catalyst** (downloads & opens `.dmg`). *(Skipped on iOS for personal-team signing.)*
 
 ---
 
-## Downloads & Installation
+## 📦 Downloads & Installation
 
-Prebuilt binaries are published on the [**Releases**](https://github.com/SEANPNEX/local_music_player/releases/latest) page:
+Grab the latest builds from the [**Releases**](https://github.com/SEANPNEX/local_music_player/releases/latest) page `(｡・ω・｡)ﾉ♡`:
 
-- **Windows 10 / 11 (x64, self-contained .NET 8 — no runtime install needed)**:
-  - **Installer**: Download `MusicoWindows-<version>-win-x64-Setup.exe` and run the wizard (installs per-user with Start Menu & optional Desktop shortcuts and Add/Remove Programs uninstaller).
-  - **Portable**: Download `MusicoWindows-<version>-win-x64-portable.zip`, extract anywhere, and run `MusicoWindows.exe` (keep `portable.txt` beside it to store library & settings in `.\Data\`).
+- **Windows 10 / 11 (x64, self-contained .NET 8 — zero runtime setup!)**:
+  - **Installer**: Run `MusicoWindows-<version>-win-x64-Setup.exe` for per-user install with Start Menu / Desktop shortcuts and clean uninstall.
+  - **Portable**: Unzip `MusicoWindows-<version>-win-x64-portable.zip` anywhere and launch `MusicoWindows.exe` (keep `portable.txt` next to it to save all library data & settings in `.\Data\`).
 - **Android (8.0+)**:
-  - Download `MusicoAndroid-<version>-debug.apk` (directly sideloadable for personal testing) or `MusicoAndroid-<version>-release-unsigned.apk` (for custom signing).
+  - Sideload `MusicoAndroid-<version>-debug.apk` for quick personal use, or grab `MusicoAndroid-<version>-release-unsigned.apk` for custom signing.
 - **macOS (Catalyst)**:
-  - Download `Musico-<version>-macOS.dmg`, open it, and drag `Musico.app` to `Applications` (ad-hoc signed; right-click → Open on first launch if Gatekeeper prompts).
+  - Open `Musico-<version>-macOS.dmg` and drag `Musico.app` into `Applications` (ad-hoc signed; right-click → Open on first launch if Gatekeeper asks).
 - **iOS (17+)**:
-  - Download `Musico-<version>-iOS-unsigned.ipa` and sideload/re-sign with AltStore, SideStore, Sideloadly, or Xcode.
+  - Sideload/re-sign `Musico-<version>-iOS-unsigned.ipa` with AltStore, SideStore, Sideloadly, or Xcode.
 
 ---
 
-## Building & Testing Locally
+## 🎀 Usage Guide
+
+### 1. Adding Music & Managing Folders
+- **Where Musico Looks First**:
+  - **macOS**: Starts with your Mac's `Music` folder.
+  - **iOS / iPadOS**: Drop songs into `Files › On My iPhone/iPad › Musico` or pick any folder from Files.
+  - **Android**: Uses the app's `Musico Folder` plus any folder you grant via the system picker.
+  - **Windows**: Starts with `MyMusic`. In Portable mode (`portable.txt` beside `MusicoWindows.exe`), everything lives neatly inside `.\Data\` instead of `%LOCALAPPDATA%\Musico`.
+- **Add, Rescan & Relocate**: Head to **Folders** → **Add Folder** to mount local folders. Hit **Rescan** (or pull to refresh on mobile) whenever you add new tracks. Moved a folder or swapped drives? **Locate Again…** (**Relocate**) reconnects it without losing your playlists or stats, and **Restore Removed Subfolders** brings back anything you previously hid.
+- **Supported Audio Formats**:
+  - **Apple (`Musico`)**: `mp3`, `m4a`, `aac`, `flac`, `wav`, `aif`, `aiff`, `caf`, `alac`
+  - **Android (`MusicoAndroid`)**: `mp3`, `m4a`, `aac`, `flac`, `wav`, `aif`, `aiff`, `caf`, `alac`, `ogg`, `opus`, `webm`
+  - **Windows (`MusicoWindows`)**: `mp3`, `m4a`, `aac`, `flac`, `wav`, `aif`, `aiff`, `wma`, `ogg`, `opus`
+
+### 2. Cloud Folders (YouTube & Bilibili)
+- **Mount a Cloud Playlist**: In **Folders**, tap **Add Cloud Folder** and paste a URL or ID:
+  - **YouTube / YouTube Music**: Playlists or videos (`youtube.com/playlist?list=…`, `music.youtube.com/playlist?list=…`, `youtu.be/…`) — public playlists work with no login!
+  - **Bilibili**: `BV` videos (including multi-part), `favlist`, collections/series, and `b23.tv` short links.
+- **Optional Cookie & Proxy**: Add a **Cookie** only if you need private playlists or higher Bilibili audio quality. On Windows, you can also set an **HTTP Proxy** for YouTube (e.g. `7890`, `127.0.0.1:7890`, or `http://127.0.0.1:7890`).
+- **Save Offline & Sync**: Open a cloud folder's menu (or track menu) and pick **Save to Local Folder…** to download tracks locally and optionally add the folder to your library. Tracked local folders get an **Update from Cloud** button to pull newly added songs incrementally!
+
+### 3. Browsing, Queues & Playback
+- **Explore Your Library**: Jump between **Folders**, **Songs**, **Albums**, **Artists**, **Playlists**, **Queues**, and **Stats** (**Recent**, **Plays**, **Not Lately**, **Never**).
+- **Track Menu Goodies**: Tap/click any track to play its list from there, or open its context/ellipsis menu for **Play Next**, **Add to Queue**, **Add to Another Queue**, **Play in New Queue**, **Add to Playlist**, **Add/Remove Favourites**, and **Song Info**.
+- **Queue Juggling & Drag Reorder**: Manage multiple queues in **Queues** (or the desktop side Queue panel). Grab the drag handle (`≡`) in **Folders** and **Queues** to reorder tracks your way.
+- **Lyrics**: Pop open **Lyrics** from the player bar or Full Player. You can import `.lrc`/`.txt` files manually and tap any timed line to jump straight to that moment.
+- **Equalizer & Sleep Timer**: Open **Equalizer** for 10-band tuning & presets, or **Sleep Timer** to wind down after `5`–`90` minutes, a custom duration, or **End of current song**.
+- **Song Info & Tag Editor**: Open **Song Info** on any track to check audio specs (precision, frequency, bit rate, file size, channels, play history), quick-search by Artist/Album/Genre, or edit `Title`, `Artist`, `Album`, `Genre`, and cover art.
+
+### 4. Keyboard Shortcuts
+- **Windows**:
+  - `Space`: Play / Pause (when not typing in a text box)
+  - `Ctrl+Left` / `Ctrl+Right`: Previous / Next track
+  - `Ctrl+F`: Jump to **Songs** & focus search
+  - `Esc`: Close Full Player or active dialog
+- **macOS / iPadOS**:
+  - `Esc`: Close Full Player (plus standard system media keys)
+
+---
+
+## 🛠️ Building & Testing Locally
 
 ### iOS / iPadOS / macOS (`Musico/`)
 Requires Xcode (iOS 17+ SDK):
@@ -81,7 +136,7 @@ cd MusicoWindows
 
 ---
 
-## Repository Structure
+## 📂 Repository Structure
 
 ```text
 .
@@ -91,5 +146,6 @@ cd MusicoWindows
 ├── Musico/                 # Native SwiftUI app (iOS / iPadOS / macOS Catalyst)
 ├── MusicoAndroid/          # Native Kotlin + Compose Material 3 + Media3 app
 ├── MusicoWindows/          # Native C# + WPF Windows 10 Fluent Design app + NSIS installer
-└── README.md
+├── README.md
+└── README.zh-CN.md
 ```

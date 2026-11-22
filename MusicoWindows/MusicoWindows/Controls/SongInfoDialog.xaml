@@ -32,7 +32,7 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                        <TextBlock Text="Song Info"
+                        <TextBlock Text="{DynamicResource Str_SongInfo_Title}"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="18"
                                    FontWeight="SemiBold"
@@ -51,7 +51,7 @@
                             Height="30"
                             FontSize="11"
                             Content="&#xE8BB;"
-                            ToolTip="Close"
+                            ToolTip="{DynamicResource Str_Common_Close}"
                             Click="CloseIcon_Click" />
                 </Grid>
 
@@ -61,7 +61,7 @@
                               Padding="0,0,6,0">
                     <StackPanel>
                         <!-- Top Section: Editable Metadata -->
-                        <TextBlock Text="METADATA"
+                        <TextBlock Text="{DynamicResource Str_SongInfo_MetadataHeader}"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="11"
                                    FontWeight="SemiBold"
@@ -91,13 +91,13 @@
                             <StackPanel Grid.Column="1"
                                         VerticalAlignment="Center"
                                         Margin="16,0,0,0">
-                                <TextBlock Text="Cover Image"
+                                <TextBlock Text="{DynamicResource Str_SongInfo_CoverImage}"
                                            FontFamily="{StaticResource Win10Font}"
                                            FontSize="13"
                                            FontWeight="SemiBold"
                                            Foreground="{DynamicResource TextPrimaryBrush}" />
                                 <TextBlock x:Name="CoverStatusText"
-                                           Text="Embedded or cached artwork"
+                                           Text="{DynamicResource Str_SongInfo_EmbeddedOrCachedCover}"
                                            FontFamily="{StaticResource Win10Font}"
                                            FontSize="12"
                                            Foreground="{DynamicResource TextSecondaryBrush}"
@@ -113,14 +113,14 @@
                                                    FontSize="13"
                                                    VerticalAlignment="Center"
                                                    Margin="0,0,8,0" />
-                                        <TextBlock Text="Change Cover..." VerticalAlignment="Center" />
+                                        <TextBlock Text="{DynamicResource Str_SongInfo_ChangeCover}" VerticalAlignment="Center" />
                                     </StackPanel>
                                 </Button>
                             </StackPanel>
                         </Grid>
 
                         <!-- Title -->
-                        <TextBlock Text="Title"
+                        <TextBlock Text="{DynamicResource Str_SongInfo_FieldTitle}"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="12"
                                    Foreground="{DynamicResource TextSecondaryBrush}"
@@ -137,7 +137,7 @@
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0"
-                                       Text="Artist"
+                                       Text="{DynamicResource Str_SongInfo_FieldArtist}"
                                        FontFamily="{StaticResource Win10Font}"
                                        FontSize="12"
                                        Foreground="{DynamicResource TextSecondaryBrush}"
@@ -147,7 +147,7 @@
                                     Style="{StaticResource Win10FlatButtonStyle}"
                                     HorizontalAlignment="Right"
                                     Padding="6,2"
-                                    ToolTip="Search songs by this Artist"
+                                    ToolTip="{DynamicResource Str_SongInfo_SearchArtistTooltip}"
                                     Click="ArtistLink_Click">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE721;"
@@ -179,7 +179,7 @@
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0"
-                                       Text="Album"
+                                       Text="{DynamicResource Str_SongInfo_FieldAlbum}"
                                        FontFamily="{StaticResource Win10Font}"
                                        FontSize="12"
                                        Foreground="{DynamicResource TextSecondaryBrush}"
@@ -189,7 +189,7 @@
                                     Style="{StaticResource Win10FlatButtonStyle}"
                                     HorizontalAlignment="Right"
                                     Padding="6,2"
-                                    ToolTip="Search songs in this Album"
+                                    ToolTip="{DynamicResource Str_SongInfo_SearchAlbumTooltip}"
                                     Click="AlbumLink_Click">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE721;"
@@ -221,7 +221,7 @@
                                 <ColumnDefinition Width="*" />
                             </Grid.ColumnDefinitions>
                             <TextBlock Grid.Column="0"
-                                       Text="Genre"
+                                       Text="{DynamicResource Str_SongInfo_FieldGenre}"
                                        FontFamily="{StaticResource Win10Font}"
                                        FontSize="12"
                                        Foreground="{DynamicResource TextSecondaryBrush}"
@@ -231,7 +231,7 @@
                                     Style="{StaticResource Win10FlatButtonStyle}"
                                     HorizontalAlignment="Right"
                                     Padding="6,2"
-                                    ToolTip="Search songs with this Genre"
+                                    ToolTip="{DynamicResource Str_SongInfo_SearchGenreTooltip}"
                                     Click="GenreLink_Click">
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="&#xE721;"
@@ -261,7 +261,7 @@
                                 Margin="0,14,0,14" />
 
                         <!-- Bottom Section: File & Playback Info -->
-                        <TextBlock Text="FILE &amp; PLAYBACK INFO"
+                        <TextBlock Text="{DynamicResource Str_SongInfo_FileInfoHeader}"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="11"
                                    FontWeight="SemiBold"
@@ -291,37 +291,37 @@
                                     <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
-                                <TextBlock Grid.Row="0" Grid.Column="0" Text="Precision" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
+                                <TextBlock Grid.Row="0" Grid.Column="0" Text="{DynamicResource Str_SongInfo_Precision}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
                                 <TextBlock x:Name="PrecisionValue" Grid.Row="0" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,3" />
 
-                                <TextBlock Grid.Row="1" Grid.Column="0" Text="Frequency" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
+                                <TextBlock Grid.Row="1" Grid.Column="0" Text="{DynamicResource Str_SongInfo_Frequency}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
                                 <TextBlock x:Name="FrequencyValue" Grid.Row="1" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,3" />
 
-                                <TextBlock Grid.Row="2" Grid.Column="0" Text="Bit Rate" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
+                                <TextBlock Grid.Row="2" Grid.Column="0" Text="{DynamicResource Str_SongInfo_BitRate}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
                                 <TextBlock x:Name="BitRateValue" Grid.Row="2" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,3" />
 
-                                <TextBlock Grid.Row="3" Grid.Column="0" Text="File Size" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
+                                <TextBlock Grid.Row="3" Grid.Column="0" Text="{DynamicResource Str_SongInfo_FileSize}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
                                 <TextBlock x:Name="FileSizeValue" Grid.Row="3" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,3" />
 
-                                <TextBlock Grid.Row="4" Grid.Column="0" Text="Length" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
+                                <TextBlock Grid.Row="4" Grid.Column="0" Text="{DynamicResource Str_SongInfo_Length}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
                                 <TextBlock x:Name="LengthValue" Grid.Row="4" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,3" />
 
-                                <TextBlock Grid.Row="5" Grid.Column="0" Text="Sound Tracks" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
+                                <TextBlock Grid.Row="5" Grid.Column="0" Text="{DynamicResource Str_SongInfo_SoundTracks}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
                                 <TextBlock x:Name="ChannelsValue" Grid.Row="5" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,3" />
 
-                                <TextBlock Grid.Row="6" Grid.Column="0" Text="Time Added" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
+                                <TextBlock Grid.Row="6" Grid.Column="0" Text="{DynamicResource Str_SongInfo_TimeAdded}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
                                 <TextBlock x:Name="TimeAddedValue" Grid.Row="6" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,3" />
 
-                                <TextBlock Grid.Row="7" Grid.Column="0" Text="Time Edited" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
+                                <TextBlock Grid.Row="7" Grid.Column="0" Text="{DynamicResource Str_SongInfo_TimeEdited}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
                                 <TextBlock x:Name="TimeEditedValue" Grid.Row="7" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,3" />
 
-                                <TextBlock Grid.Row="8" Grid.Column="0" Text="Last Played" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
+                                <TextBlock Grid.Row="8" Grid.Column="0" Text="{DynamicResource Str_SongInfo_LastPlayed}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
                                 <TextBlock x:Name="LastPlayedValue" Grid.Row="8" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,3" />
 
-                                <TextBlock Grid.Row="9" Grid.Column="0" Text="Played Times" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
+                                <TextBlock Grid.Row="9" Grid.Column="0" Text="{DynamicResource Str_SongInfo_PlayedTimes}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
                                 <TextBlock x:Name="PlayedTimesValue" Grid.Row="9" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,3" />
 
-                                <TextBlock Grid.Row="10" Grid.Column="0" Text="Source" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
+                                <TextBlock Grid.Row="10" Grid.Column="0" Text="{DynamicResource Str_SongInfo_Source}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
                                 <TextBlock x:Name="LocationValue" Grid.Row="10" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis" Margin="0,3" />
                             </Grid>
                         </Border>
@@ -338,12 +338,12 @@
                     <Button x:Name="SaveButton"
                             Grid.Column="0"
                             Style="{StaticResource Win10PrimaryButtonStyle}"
-                            Content="Save"
+                            Content="{DynamicResource Str_Common_Save}"
                             Click="Save_Click" />
                     <Button x:Name="CancelButton"
                             Grid.Column="2"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Content="Cancel"
+                            Content="{DynamicResource Str_Common_Cancel}"
                             Click="Cancel_Click" />
                 </Grid>
             </Grid>

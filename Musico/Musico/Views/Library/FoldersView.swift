@@ -9,6 +9,7 @@ struct FolderRef: Hashable {
 struct FoldersView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
+    @Environment(\.languageManager) private var languageManager
     @State private var showImporter = false
     @State private var showCloudSheet = false
     /// When set, the next picked folder replaces this unavailable root instead of adding a new one.
@@ -28,7 +29,7 @@ struct FoldersView: View {
                     rootRow(root)
                 }
                 if library.appFolderRemoved {
-                    Button("Add Music Folder Back", systemImage: "music.note.house") {
+                    Button(L10n.tr("Add Music Folder Back"), systemImage: "music.note.house") {
                         Task { await library.restoreAppFolder() }
                     }
                 }
@@ -36,19 +37,19 @@ struct FoldersView: View {
                 Text(Self.hint)
             }
             if !library.cloudSyncErrors.isEmpty {
-                Section("Cloud Sync Issues") {
+                Section(L10n.tr("Cloud Sync Issues")) {
                     ForEach(library.roots.filter { library.cloudSyncErrors[$0.id] != nil }) { root in
                         HStack(alignment: .top, spacing: 10) {
                             Image(systemName: "exclamationmark.triangle.fill")
                                 .foregroundStyle(.orange)
                             VStack(alignment: .leading, spacing: 2) {
-                                Text(root.name).font(.subheadline.weight(.medium))
+                                Text(L10n.displayRootName(root)).font(.subheadline.weight(.medium))
                                 Text(library.cloudSyncErrors[root.id] ?? "")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                             }
                             Spacer()
-                            Button("Retry") { Task { await library.rescan() } }
+                            Button(L10n.tr("Retry")) { Task { await library.rescan() } }
                                 .buttonStyle(.borderless)
                                 .disabled(library.isScanning)
                         }
@@ -60,26 +61,41 @@ struct FoldersView: View {
                     HStack(spacing: 12) {
                         ProgressView()
                         Text(library.scanProgress.total > 0
-                             ? "Reading \(library.scanProgress.done) of \(library.scanProgress.total) songs…"
-                             : "Looking for music…")
+                             ? L10n.tr("Reading %@ of %@ songs…", String(library.scanProgress.done), String(library.scanProgress.total))
+                             : L10n.tr("Looking for music…"))
                             .foregroundStyle(.secondary)
                     }
                 }
             }
         }
-        .navigationTitle("Folders")
+        .navigationTitle(L10n.tr("Folders"))
         .navigationDestination(for: FolderRef.self) { FolderDetailView(ref: $0) }
         .refreshable { await library.rescan() }
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
-                Button("Rescan", systemImage: "arrow.clockwise") { Task { await library.rescan() } }
+                Button(L10n.tr("Rescan"), systemImage: "arrow.clockwise") { Task { await library.rescan() } }
                     .disabled(library.isScanning)
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
-                Button("Add Cloud Folder", systemImage: "icloud.and.arrow.down") {
+                Menu {
+                    ForEach(AppLanguage.allCases) { lang in
+                        Button {
+                            languageManager.setLanguage(lang)
+                        } label: {
+                            if languageManager.selection == lang {
+                                Label(lang.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(lang.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    Label(L10n.tr("Language"), systemImage: "globe")
+                }
+                Button(L10n.tr("Add Cloud Folder"), systemImage: "icloud.and.arrow.down") {
                     showCloudSheet = true
                 }
-                Button("Add Folder", systemImage: "folder.badge.plus") {
+                Button(L10n.tr("Add Folder"), systemImage: "folder.badge.plus") {
                     relocating = nil
                     showImporter = true
                 }
@@ -88,14 +104,17 @@ struct FoldersView: View {
         .sheet(isPresented: $showCloudSheet) {
             AddCloudFolderSheet(library: library)
                 .environment(library)
+                .environment(\.locale, languageManager.effectiveLocale)
         }
         .sheet(item: $exportingRoot) { root in
             SaveCloudPlaylistSheet(root: root, library: library)
                 .environment(library)
+                .environment(\.locale, languageManager.effectiveLocale)
         }
         .sheet(item: $updatingTrackedRoot) { root in
             UpdateTrackedFolderSheet(root: root, library: library)
                 .environment(library)
+                .environment(\.locale, languageManager.effectiveLocale)
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
             guard case .success(let url) = result else { return }
@@ -112,20 +131,20 @@ struct FoldersView: View {
                 }
             }
         }
-        .confirmationDialog("Remove “\(removing?.name ?? "")” from your library?",
+        .confirmationDialog(L10n.tr("Remove “%@” from your library?", removing.map { L10n.displayRootName($0) } ?? ""),
                             isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
                             titleVisibility: .visible, presenting: removing) { root in
-            Button("Remove from Library", role: .destructive) { library.removeRoot(root.id) }
-            Button("Cancel", role: .cancel) {}
+            Button(L10n.tr("Remove from Library"), role: .destructive) { library.removeRoot(root.id) }
+            Button(L10n.tr("Cancel"), role: .cancel) {}
         } message: { root in
             if root.kind.isCloud {
-                Text("Its songs leave your library, playlists and queues.")
+                Text(L10n.tr("Its songs leave your library, playlists and queues."))
             } else {
-                Text("Its songs leave your library, playlists and queues. The files themselves are not deleted.")
+                Text(L10n.tr("Its songs leave your library, playlists and queues. The files themselves are not deleted."))
             }
         }
-        .alert("Couldn’t Add Folder", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
-            Button("OK", role: .cancel) {}
+        .alert(L10n.tr("Couldn’t Add Folder"), isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
+            Button(L10n.tr("OK"), role: .cancel) {}
         } message: {
             Text(importError ?? "")
         }
@@ -133,11 +152,14 @@ struct FoldersView: View {
 
     private static var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
 
+    @MainActor
     private static var hint: String {
         #if targetEnvironment(macCatalyst)
-        "Your Mac’s Music folder is included to start with. Add local folders or YouTube/Bilibili cloud playlists, or remove any you don’t want."
+        L10n.tr("Your Mac’s Music folder is included to start with. Add local folders or YouTube/Bilibili cloud playlists, or remove any you don’t want.")
         #else
-        "Add a folder from Files, link a YouTube or Bilibili playlist, or copy music into the Musico folder in Files › On My \(isPad ? "iPad" : "iPhone")."
+        L10n.tr(isPad
+            ? "Add a folder from Files, link a YouTube or Bilibili playlist, or copy music into the Musico folder in Files › On My iPad."
+            : "Add a folder from Files, link a YouTube or Bilibili playlist, or copy music into the Musico folder in Files › On My iPhone.")
         #endif
     }
 
@@ -158,6 +180,7 @@ struct FoldersView: View {
         }
     }
 
+    @MainActor
     private static func sourceLabel(for root: LibraryRoot) -> String? {
         switch root.kind {
         case .cloudYouTube:
@@ -167,9 +190,9 @@ struct FoldersView: View {
         case .picked, .appFolder:
             guard root.isCloudTrackedLocal else { return nil }
             switch root.linkedCloudKind {
-            case .cloudYouTube: return "YouTube · Local"
-            case .cloudBilibili: return "Bilibili · Local"
-            default: return "Cloud · Local"
+            case .cloudYouTube: return L10n.tr("YouTube · Local")
+            case .cloudBilibili: return L10n.tr("Bilibili · Local")
+            default: return L10n.tr("Cloud · Local")
             }
         }
     }
@@ -180,6 +203,7 @@ struct FoldersView: View {
         let count = library.tracks.lazy.filter { $0.rootID == root.id }.count
         let removable = library.isRemovable(root)
         let syncError = library.cloudSyncErrors[root.id]
+        let rootDisplayName = L10n.displayRootName(root)
         NavigationLink(value: FolderRef(root: root.id, path: "")) {
             HStack(spacing: 12) {
                 Image(systemName: Self.iconName(for: root))
@@ -187,7 +211,7 @@ struct FoldersView: View {
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
-                        Text(root.name)
+                        Text(rootDisplayName)
                             .lineLimit(1)
                         if let label = Self.sourceLabel(for: root) {
                             Text(label)
@@ -199,63 +223,63 @@ struct FoldersView: View {
                         }
                     }
                     if let syncError {
-                        Text("\(count) songs · Sync issue: \(syncError)")
+                        Text(L10n.tr("%@ · Sync issue: %@", L10n.songCount(count), syncError))
                             .font(.subheadline)
                             .foregroundStyle(.orange)
                             .lineLimit(1)
                     } else {
-                        Text(available ? "\(count) songs" : "Unavailable — folder moved or disconnected")
+                        Text(available ? L10n.songCount(count) : L10n.tr("Unavailable — folder moved or disconnected"))
                             .font(.subheadline)
                             .foregroundStyle(available ? Color.secondary : Color.orange)
                     }
                 }
                 if removable {
                     Spacer()
-                    Button("Remove Folder", systemImage: "minus.circle") { removing = root }
+                    Button(L10n.tr("Remove Folder"), systemImage: "minus.circle") { removing = root }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
                         .foregroundStyle(.secondary)
-                        .help("Remove Folder")
-                        .accessibilityLabel("Remove Folder")
+                        .help(L10n.tr("Remove Folder"))
+                        .accessibilityLabel(L10n.tr("Remove Folder"))
                 }
             }
         }
         .swipeActions(edge: .trailing) {
             if removable {
-                Button("Remove", systemImage: "trash", role: .destructive) { library.removeRoot(root.id) }
+                Button(L10n.tr("Remove"), systemImage: "trash", role: .destructive) { library.removeRoot(root.id) }
             }
         }
         .contextMenu {
             let folderIDs = library.orderedTracks(under: root.id, path: "").map(\.id)
             if !folderIDs.isEmpty {
-                Button("Play Folder", systemImage: "play.fill") {
+                Button(L10n.tr("Play Folder"), systemImage: "play.fill") {
                     player.playInNamedQueue(folderIDs, name: root.name)
                 }
             }
             if root.kind.isCloud {
-                Button("Save to Local Folder…", systemImage: "square.and.arrow.down") {
+                Button(L10n.tr("Save to Local Folder…"), systemImage: "square.and.arrow.down") {
                     exportingRoot = root
                 }
             }
             if root.isCloudTrackedLocal {
-                Button("Update from Cloud", systemImage: "icloud.and.arrow.down") {
+                Button(L10n.tr("Update from Cloud"), systemImage: "icloud.and.arrow.down") {
                     updatingTrackedRoot = root
                 }
             }
             if root.kind == .picked {
-                Button("Locate Again…", systemImage: "folder.badge.questionmark") {
+                Button(L10n.tr("Locate Again…"), systemImage: "folder.badge.questionmark") {
                     relocating = root.id
                     showImporter = true
                 }
             }
             if !root.normalizedExcludedPaths.isEmpty {
-                Button("Restore Removed Subfolders (\(root.normalizedExcludedPaths.count))",
+                Button(L10n.tr("Restore Removed Subfolders (%@)", String(root.normalizedExcludedPaths.count)),
                        systemImage: "arrow.uturn.backward") {
                     Task { await library.restoreExcludedFolders(root.id) }
                 }
             }
             if removable {
-                Button("Remove Folder", systemImage: "trash", role: .destructive) { removing = root }
+                Button(L10n.tr("Remove Folder"), systemImage: "trash", role: .destructive) { removing = root }
             }
             TrackMenuItems(ids: library.tracks(under: root.id, path: "").map(\.id))
         }
@@ -286,25 +310,25 @@ struct AddCloudFolderSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    TextField("YouTube or Bilibili URL or ID", text: $urlText)
+                    TextField(L10n.tr("YouTube or Bilibili URL or ID"), text: $urlText)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
                 } header: {
-                    Text("Playlist or Video Link")
+                    Text(L10n.tr("Playlist or Video Link"))
                 } footer: {
-                    Text("Examples: youtube.com/playlist?list=…, music.youtube.com/playlist?list=…, youtu.be/…, bilibili.com/video/BV…, space.bilibili.com/…/favlist?fid=…, b23.tv/…")
+                    Text(L10n.tr("Examples: youtube.com/playlist?list=…, music.youtube.com/playlist?list=…, youtu.be/…, bilibili.com/video/BV…, space.bilibili.com/…/favlist?fid=…, b23.tv/…"))
                 }
 
                 Section {
-                    TextField("Cookie (optional)", text: $cookieText, axis: .vertical)
+                    TextField(L10n.tr("Cookie (optional)"), text: $cookieText, axis: .vertical)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .lineLimit(2...4)
                 } header: {
-                    Text("Authentication")
+                    Text(L10n.tr("Authentication"))
                 } footer: {
-                    Text("Public playlists work without signing in. Add a Cookie only for private playlists or higher Bilibili audio quality.")
+                    Text(L10n.tr("Public playlists work without signing in. Add a Cookie only for private playlists or higher Bilibili audio quality."))
                 }
 
                 if let errorMessage {
@@ -314,18 +338,18 @@ struct AddCloudFolderSheet: View {
                     }
                 }
             }
-            .navigationTitle("Add Cloud Folder")
+            .navigationTitle(L10n.tr("Add Cloud Folder"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
+                    Button(L10n.tr("Cancel")) { dismiss() }
                         .disabled(isLoading)
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if isLoading {
                         ProgressView()
                     } else {
-                        Button("Add") { add() }
+                        Button(L10n.tr("Add")) { add() }
                             .disabled(extractedSource.isEmpty || library == nil)
                     }
                 }
@@ -356,6 +380,7 @@ struct FolderDetailView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
     @Environment(PlayHistoryStore.self) private var history
+    @Environment(\.languageManager) private var languageManager
     @Environment(\.dismiss) private var dismiss
     @State private var confirmRemove = false
     @State private var removingSubfolder: FolderRef?
@@ -370,20 +395,23 @@ struct FolderDetailView: View {
         let isRemovableRoot = ref.path.isEmpty && (root.map { library.isRemovable($0) } ?? false)
         let canRemoveCurrentFolder = !ref.path.isEmpty || isRemovableRoot
         let excludedCount = ref.path.isEmpty ? (root?.normalizedExcludedPaths.count ?? 0) : 0
-        let currentName = ref.path.isEmpty ? (root?.name ?? "Folder") : (ref.path as NSString).lastPathComponent
+        let queueName = ref.path.isEmpty ? (root?.name ?? "Folder") : (ref.path as NSString).lastPathComponent
+        let currentName = ref.path.isEmpty
+            ? (root.map { L10n.displayRootName($0) } ?? L10n.tr("Folder"))
+            : (ref.path as NSString).lastPathComponent
         let currentSortOrder = library.folderSortOrder(root: ref.root, path: ref.path)
 
         List {
             if everything.isEmpty {
                 ContentUnavailableView(
-                    "No Music Here",
+                    L10n.tr("No Music Here"),
                     systemImage: root?.kind.isCloud == true ? "icloud" : "folder",
-                    description: Text(root?.kind.isCloud == true
+                    description: Text(L10n.tr(root?.kind.isCloud == true
                                       ? "Pull to refresh to sync tracks from this cloud source."
-                                      : "Songs you add to this folder appear after a rescan.")
+                                      : "Songs you add to this folder appear after a rescan."))
                 )
             } else {
-                PlayShuffleButtons(ids: everything.map(\.id), queueName: currentName)
+                PlayShuffleButtons(ids: everything.map(\.id), queueName: queueName)
             }
             ForEach(contents.folders, id: \.self) { name in
                 let child = FolderRef(root: ref.root, path: ref.path.isEmpty ? name : ref.path + "/" + name)
@@ -391,29 +419,29 @@ struct FolderDetailView: View {
                     HStack(spacing: 12) {
                         Label(name, systemImage: "folder")
                         Spacer()
-                        Button("Remove Folder", systemImage: "minus.circle") {
+                        Button(L10n.tr("Remove Folder"), systemImage: "minus.circle") {
                             removingSubfolder = child
                         }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
                         .foregroundStyle(.secondary)
-                        .help("Remove Folder")
-                        .accessibilityLabel("Remove Folder")
+                        .help(L10n.tr("Remove Folder"))
+                        .accessibilityLabel(L10n.tr("Remove Folder"))
                     }
                 }
                 .swipeActions(edge: .trailing) {
-                    Button("Remove", systemImage: "trash", role: .destructive) {
+                    Button(L10n.tr("Remove"), systemImage: "trash", role: .destructive) {
                         removingSubfolder = child
                     }
                 }
                 .contextMenu {
                     let childIDs = library.orderedTracks(under: child.root, path: child.path, history: history).map(\.id)
                     if !childIDs.isEmpty {
-                        Button("Play Folder", systemImage: "play.fill") {
+                        Button(L10n.tr("Play Folder"), systemImage: "play.fill") {
                             player.playInNamedQueue(childIDs, name: name)
                         }
                     }
-                    Button("Remove Folder", systemImage: "trash", role: .destructive) {
+                    Button(L10n.tr("Remove Folder"), systemImage: "trash", role: .destructive) {
                         removingSubfolder = child
                     }
                     TrackMenuItems(ids: childIDs)
@@ -424,12 +452,12 @@ struct FolderDetailView: View {
                     track: track,
                     index: index,
                     scopeID: "folder-\(LibraryStore.folderKey(rootID: ref.root, path: ref.path))",
-                    subtitle: track.isCloud ? track.artist : track.fileName,
+                    subtitle: track.isCloud ? L10n.displayArtist(track.artist) : track.fileName,
                     isAvailable: library.isAvailable(track),
                     onTap: {
                         let allIDs = everything.map(\.id)
                         let startAt = allIDs.firstIndex(of: track.id) ?? index
-                        player.playInNamedQueue(allIDs, name: currentName, startAt: startAt)
+                        player.playInNamedQueue(allIDs, name: queueName, startAt: startAt)
                     },
                     onMove: { from, to in
                         library.moveFolderTracks(
@@ -465,28 +493,28 @@ struct FolderDetailView: View {
                     }
                 }
                 if ref.path.isEmpty, let root, root.kind.isCloud {
-                    Button("Save to Local Folder…", systemImage: "square.and.arrow.down") {
+                    Button(L10n.tr("Save to Local Folder…"), systemImage: "square.and.arrow.down") {
                         showExportSheet = true
                     }
-                    .help("Save to Local Folder…")
+                    .help(L10n.tr("Save to Local Folder…"))
                 }
                 if ref.path.isEmpty, let root, root.isCloudTrackedLocal {
-                    Button("Update from Cloud", systemImage: "icloud.and.arrow.down") {
+                    Button(L10n.tr("Update from Cloud"), systemImage: "icloud.and.arrow.down") {
                         showUpdateTrackedSheet = true
                     }
-                    .help("Update from Cloud")
+                    .help(L10n.tr("Update from Cloud"))
                 }
                 if excludedCount > 0 {
-                    Button("Restore Removed Subfolders (\(excludedCount))", systemImage: "arrow.uturn.backward") {
+                    Button(L10n.tr("Restore Removed Subfolders (%@)", String(excludedCount)), systemImage: "arrow.uturn.backward") {
                         Task { await library.restoreExcludedFolders(ref.root) }
                     }
-                    .help("Restore Removed Subfolders (\(excludedCount))")
+                    .help(L10n.tr("Restore Removed Subfolders (%@)", String(excludedCount)))
                 }
                 if canRemoveCurrentFolder {
-                    Button("Remove Folder", systemImage: "trash", role: .destructive) {
+                    Button(L10n.tr("Remove Folder"), systemImage: "trash", role: .destructive) {
                         confirmRemove = true
                     }
-                    .help("Remove Folder")
+                    .help(L10n.tr("Remove Folder"))
                 }
             }
         }
@@ -494,18 +522,20 @@ struct FolderDetailView: View {
             if let root {
                 SaveCloudPlaylistSheet(root: root, library: library)
                     .environment(library)
+                    .environment(\.locale, languageManager.effectiveLocale)
             }
         }
         .sheet(isPresented: $showUpdateTrackedSheet) {
             if let root {
                 UpdateTrackedFolderSheet(root: root, library: library)
                     .environment(library)
+                    .environment(\.locale, languageManager.effectiveLocale)
             }
         }
-        .confirmationDialog("Remove “\(currentName)” from your library?",
+        .confirmationDialog(L10n.tr("Remove “%@” from your library?", currentName),
                             isPresented: $confirmRemove,
                             titleVisibility: .visible) {
-            Button("Remove from Library", role: .destructive) {
+            Button(L10n.tr("Remove from Library"), role: .destructive) {
                 if ref.path.isEmpty {
                     library.removeRoot(ref.root)
                 } else {
@@ -513,27 +543,27 @@ struct FolderDetailView: View {
                 }
                 dismiss()
             }
-            Button("Cancel", role: .cancel) {}
+            Button(L10n.tr("Cancel"), role: .cancel) {}
         } message: {
             if root?.kind.isCloud == true {
-                Text("Its songs leave your library, playlists and queues.")
+                Text(L10n.tr("Its songs leave your library, playlists and queues."))
             } else {
-                Text("Its songs leave your library, playlists and queues. The files themselves are not deleted.")
+                Text(L10n.tr("Its songs leave your library, playlists and queues. The files themselves are not deleted."))
             }
         }
-        .confirmationDialog("Remove “\((removingSubfolder?.path as NSString?)?.lastPathComponent ?? "")” from your library?",
+        .confirmationDialog(L10n.tr("Remove “%@” from your library?", (removingSubfolder?.path as NSString?)?.lastPathComponent ?? ""),
                             isPresented: Binding(get: { removingSubfolder != nil }, set: { if !$0 { removingSubfolder = nil } }),
                             titleVisibility: .visible,
                             presenting: removingSubfolder) { target in
-            Button("Remove from Library", role: .destructive) {
+            Button(L10n.tr("Remove from Library"), role: .destructive) {
                 library.removeSubfolder(rootID: target.root, path: target.path)
             }
-            Button("Cancel", role: .cancel) {}
+            Button(L10n.tr("Cancel"), role: .cancel) {}
         } message: { _ in
             if root?.kind.isCloud == true {
-                Text("Its songs leave your library, playlists and queues.")
+                Text(L10n.tr("Its songs leave your library, playlists and queues."))
             } else {
-                Text("Its songs leave your library, playlists and queues. The files themselves are not deleted.")
+                Text(L10n.tr("Its songs leave your library, playlists and queues. The files themselves are not deleted."))
             }
         }
     }
@@ -570,27 +600,27 @@ struct SaveCloudPlaylistSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Destination") {
-                    TextField("Folder Name", text: $folderName)
+                Section(L10n.tr("Destination")) {
+                    TextField(L10n.tr("Folder Name"), text: $folderName)
                         .disabled(isExporting || summary != nil)
                     HStack {
-                        Text("Location")
+                        Text(L10n.tr("Location"))
                         Spacer()
-                        Button(parentFolderURL?.lastPathComponent ?? "Choose Folder…") {
+                        Button(parentFolderURL?.lastPathComponent ?? L10n.tr("Choose Folder…")) {
                             showLocationPicker = true
                         }
                         .disabled(isExporting || summary != nil)
                     }
-                    Toggle("Add saved folder to Library", isOn: $addToLibrary)
+                    Toggle(L10n.tr("Add saved folder to Library"), isOn: $addToLibrary)
                         .disabled(isExporting || summary != nil)
                 }
 
                 if isExporting {
-                    Section("Progress") {
+                    Section(L10n.tr("Progress")) {
                         VStack(alignment: .leading, spacing: 8) {
                             let currentStep = min(progress.done + (progress.done < progress.total ? 1 : 0), max(progress.total, 1))
                             ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
-                            Text("Saving \(currentStep) of \(progress.total) songs…")
+                            Text(L10n.tr("Saving %@ of %@ songs…", String(currentStep), String(progress.total)))
                                 .font(.subheadline)
                             if !progress.title.isEmpty {
                                 Text(progress.title)
@@ -604,15 +634,15 @@ struct SaveCloudPlaylistSheet: View {
                 }
 
                 if let summary {
-                    Section("Summary") {
+                    Section(L10n.tr("Summary")) {
                         Label(
-                            "Saved \(summary.savedCount) \(summary.savedCount == 1 ? "song" : "songs") to “\(summary.destinationURL.lastPathComponent)”",
+                            L10n.tr("Saved %@ to “%@”", L10n.songCount(summary.savedCount), summary.destinationURL.lastPathComponent),
                             systemImage: summary.failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
                         )
                         .foregroundStyle(summary.failedCount == 0 ? Color.green : Color.orange)
 
                         if summary.failedCount > 0 {
-                            Text("\(summary.failedCount) \(summary.failedCount == 1 ? "song" : "songs") failed to download.")
+                            Text(L10n.tr("%@ failed to download.", L10n.songCount(summary.failedCount)))
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                             ForEach(Array(summary.errors.prefix(5).enumerated()), id: \.offset) { _, errorText in
@@ -631,7 +661,7 @@ struct SaveCloudPlaylistSheet: View {
                     }
                 }
             }
-            .navigationTitle("Save Cloud Playlist")
+            .navigationTitle(L10n.tr("Save Cloud Playlist"))
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(isExporting)
             .fileImporter(isPresented: $showLocationPicker, allowedContentTypes: [.folder]) { result in
@@ -649,18 +679,18 @@ struct SaveCloudPlaylistSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     if isExporting {
-                        Button("Cancel", role: .cancel) {
+                        Button(L10n.tr("Cancel"), role: .cancel) {
                             exportTask?.cancel()
                         }
                     } else {
-                        Button(summary == nil ? "Cancel" : "Done") {
+                        Button(summary == nil ? L10n.tr("Cancel") : L10n.tr("Done")) {
                             dismiss()
                         }
                     }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     if summary == nil && !isExporting {
-                        Button("Save") {
+                        Button(L10n.tr("Save")) {
                             startExport()
                         }
                         .disabled(
@@ -706,13 +736,13 @@ struct SaveCloudPlaylistSheet: View {
                         await library.rescan()
                         library.notifyFolderQueueSync(folderURL: result.destinationURL)
                     } catch {
-                        errorMessage = "Saved songs, but couldn’t add folder to library: \(error.localizedDescription)"
+                        errorMessage = L10n.tr("Saved songs, but couldn’t add folder to library: %@", error.localizedDescription)
                     }
                     library.attachCloudTracking(toFolderURL: result.destinationURL, from: root)
                 }
             } catch is CancellationError {
                 isExporting = false
-                errorMessage = "Export cancelled."
+                errorMessage = L10n.tr("Export cancelled.")
             } catch {
                 isExporting = false
                 errorMessage = error.localizedDescription
@@ -744,7 +774,7 @@ struct UpdateTrackedFolderSheet: View {
         NavigationStack {
             Form {
                 if let sourceURL = root.sourceURL, !sourceURL.isEmpty {
-                    Section("Cloud Source") {
+                    Section(L10n.tr("Cloud Source")) {
                         Text(sourceURL)
                             .font(.caption)
                             .foregroundStyle(.secondary)
@@ -753,16 +783,16 @@ struct UpdateTrackedFolderSheet: View {
                 }
 
                 if isUpdating {
-                    Section("Syncing") {
+                    Section(L10n.tr("Syncing")) {
                         VStack(alignment: .leading, spacing: 8) {
                             if progress.total > 0 {
                                 let step = min(progress.done + (progress.done < progress.total ? 1 : 0), max(progress.total, 1))
                                 ProgressView(value: Double(progress.done), total: Double(max(progress.total, 1)))
-                                Text("Checking \(step) of \(progress.total) songs…")
+                                Text(L10n.tr("Checking %@ of %@ songs…", String(step), String(progress.total)))
                                     .font(.subheadline)
                             } else {
                                 ProgressView()
-                                Text("Fetching latest cloud playlist…")
+                                Text(L10n.tr("Fetching latest cloud playlist…"))
                                     .font(.subheadline)
                             }
                             if !progress.title.isEmpty {
@@ -777,17 +807,17 @@ struct UpdateTrackedFolderSheet: View {
                 }
 
                 if let summary {
-                    Section("Result") {
+                    Section(L10n.tr("Result")) {
                         Label(
                             summary.addedCount > 0
-                                ? "Added \(summary.addedCount) new \(summary.addedCount == 1 ? "song" : "songs") (\(summary.skippedCount) already saved)."
-                                : "Already up to date (\(summary.skippedCount) \(summary.skippedCount == 1 ? "song" : "songs")).",
+                                ? L10n.tr("Added %@ new (%@ already saved).", L10n.songCount(summary.addedCount), String(summary.skippedCount))
+                                : L10n.tr("Already up to date (%@).", L10n.songCount(summary.skippedCount)),
                             systemImage: summary.failedCount == 0 ? "checkmark.circle.fill" : "exclamationmark.circle.fill"
                         )
                         .foregroundStyle(summary.failedCount == 0 ? Color.green : Color.orange)
 
                         if summary.failedCount > 0 {
-                            Text("\(summary.failedCount) \(summary.failedCount == 1 ? "song" : "songs") failed.")
+                            Text(L10n.tr("%@ failed.", L10n.songCount(summary.failedCount)))
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
                             ForEach(Array(summary.errors.prefix(5).enumerated()), id: \.offset) { _, err in
@@ -806,7 +836,7 @@ struct UpdateTrackedFolderSheet: View {
                     }
                 }
             }
-            .navigationTitle("Update “\(root.name)”")
+            .navigationTitle(L10n.tr("Update “%@”", L10n.displayRootName(root)))
             .navigationBarTitleDisplayMode(.inline)
             .interactiveDismissDisabled(isUpdating)
             .onDisappear { syncTask?.cancel() }
@@ -816,11 +846,11 @@ struct UpdateTrackedFolderSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     if isUpdating {
-                        Button("Cancel", role: .cancel) {
+                        Button(L10n.tr("Cancel"), role: .cancel) {
                             syncTask?.cancel()
                         }
                     } else {
-                        Button("Done") { dismiss() }
+                        Button(L10n.tr("Done")) { dismiss() }
                     }
                 }
             }
@@ -842,7 +872,7 @@ struct UpdateTrackedFolderSheet: View {
                 }
                 summary = result
             } catch is CancellationError {
-                errorMessage = "Update cancelled."
+                errorMessage = L10n.tr("Update cancelled.")
             } catch {
                 errorMessage = error.localizedDescription
             }

@@ -40,12 +40,12 @@
                     <Button x:Name="ConfirmButton"
                             Grid.Column="0"
                             Style="{StaticResource Win10PrimaryButtonStyle}"
-                            Content="Confirm"
+                            Content="{DynamicResource Str_Common_Confirm}"
                             Click="Confirm_Click" />
                     <Button x:Name="CancelButton"
                             Grid.Column="2"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Content="Cancel"
+                            Content="{DynamicResource Str_Common_Cancel}"
                             Click="Cancel_Click" />
                 </Grid>
             </StackPanel>

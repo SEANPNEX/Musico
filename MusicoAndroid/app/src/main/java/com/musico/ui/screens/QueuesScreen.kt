@@ -64,6 +64,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.musico.audio.PlayerController
 import com.musico.audio.PlayerUiState
+import com.musico.i18n.LocalStrings
 import com.musico.model.PlayQueue
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
@@ -94,6 +95,7 @@ fun QueuesScreen(
     trackActions: TrackActionState,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     var editing by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
 
@@ -102,14 +104,14 @@ fun QueuesScreen(
         contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(
-                title = { Text("Queues") },
+                title = { Text(strings.queuesTitle) },
                 actions = {
                     if (queueState.active.trackIds.isNotEmpty()) {
                         TextButton(onClick = { editing = !editing }) {
-                            Text(if (editing) "Done" else "Edit")
+                            Text(if (editing) strings.done else strings.edit)
                         }
                         IconButton(onClick = { confirmClear = true }) {
-                            Icon(Icons.Rounded.DeleteSweep, contentDescription = "Clear This Queue")
+                            Icon(Icons.Rounded.DeleteSweep, contentDescription = strings.clearThisQueue)
                         }
                     }
                 }
@@ -134,9 +136,9 @@ fun QueuesScreen(
 
     if (confirmClear) {
         ConfirmDialog(
-            title = "Remove every song from “${queueState.active.name}”?",
-            message = "Your songs remain in your library.",
-            confirmLabel = "Clear Queue",
+            title = strings.clearQueueConfirmTitle(strings.displayQueueName(queueState.active.name)),
+            message = strings.clearQueueConfirmMessage,
+            confirmLabel = strings.clearQueue,
             onDismiss = { confirmClear = false },
             onConfirm = { playerController.clearQueue() }
         )
@@ -156,6 +158,7 @@ fun QueueSheet(
     trackActions: TrackActionState,
     onDismiss: () -> Unit
 ) {
+    val strings = LocalStrings.current
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var editing by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
@@ -177,20 +180,20 @@ fun QueueSheet(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Queues",
+                    text = strings.queuesTitle,
                     style = MaterialTheme.typography.titleLarge
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     if (queueState.active.trackIds.isNotEmpty()) {
                         TextButton(onClick = { editing = !editing }) {
-                            Text(if (editing) "Done" else "Edit")
+                            Text(if (editing) strings.done else strings.edit)
                         }
                         IconButton(onClick = { confirmClear = true }) {
-                            Icon(Icons.Rounded.DeleteSweep, contentDescription = "Clear Queue")
+                            Icon(Icons.Rounded.DeleteSweep, contentDescription = strings.clearQueue)
                         }
                     }
                     TextButton(onClick = onDismiss) {
-                        Text("Done")
+                        Text(strings.done)
                     }
                 }
             }
@@ -214,9 +217,9 @@ fun QueueSheet(
 
     if (confirmClear) {
         ConfirmDialog(
-            title = "Remove every song from “${queueState.active.name}”?",
-            message = "Your songs remain in your library.",
-            confirmLabel = "Clear Queue",
+            title = strings.clearQueueConfirmTitle(strings.displayQueueName(queueState.active.name)),
+            message = strings.clearQueueConfirmMessage,
+            confirmLabel = strings.clearQueue,
             onDismiss = { confirmClear = false },
             onConfirm = { playerController.clearQueue() }
         )
@@ -236,6 +239,7 @@ fun QueuesContent(
     editing: Boolean,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     var renamingQueue by remember { mutableStateOf<PlayQueue?>(null) }
     var deletingQueue by remember { mutableStateOf<PlayQueue?>(null) }
     var queueActionsExpanded by remember { mutableStateOf(false) }
@@ -255,7 +259,7 @@ fun QueuesContent(
                     onClick = { playerController.switchQueue(queue.id) },
                     label = {
                         Text(
-                            text = queue.name,
+                            text = strings.displayQueueName(queue.name),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
@@ -274,7 +278,7 @@ fun QueuesContent(
             item(key = "add_queue") {
                 AssistChip(
                     onClick = { queueStore.addQueue(name = null) },
-                    label = { Text("New Queue") },
+                    label = { Text(strings.newQueue) },
                     leadingIcon = {
                         Icon(
                             imageVector = Icons.Rounded.Add,
@@ -295,13 +299,13 @@ fun QueuesContent(
         ) {
             val currentTrack = active.currentTrackId?.let { libraryStore.track(it) }
             val summary = if (currentTrack != null) {
-                "${active.trackIds.size} songs · ${currentTrack.title} at ${formatTime(playerState.currentTimeSec)}"
+                strings.queueSummary(active.trackIds.size, currentTrack.title, formatTime(playerState.currentTimeSec))
             } else {
-                "Empty"
+                strings.emptyLabel
             }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = active.name,
+                    text = strings.displayQueueName(active.name),
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -319,20 +323,20 @@ fun QueuesContent(
                 SortOrderMenuButton(
                     current = active.sortOrder,
                     onSelect = { order -> playerController.sortQueue(order) },
-                    contentDescription = "Sort queue",
+                    contentDescription = strings.sortQueue,
                 )
             }
 
             Box {
                 IconButton(onClick = { queueActionsExpanded = true }) {
-                    Icon(Icons.Rounded.MoreVert, contentDescription = "Queue actions")
+                    Icon(Icons.Rounded.MoreVert, contentDescription = strings.queueActions)
                 }
                 DropdownMenu(
                     expanded = queueActionsExpanded,
                     onDismissRequest = { queueActionsExpanded = false }
                 ) {
                     DropdownMenuItem(
-                        text = { Text("Rename Queue…") },
+                        text = { Text(strings.renameQueueEllipsis) },
                         leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
                         onClick = {
                             queueActionsExpanded = false
@@ -341,7 +345,7 @@ fun QueuesContent(
                     )
                     if (queueState.queues.size > 1) {
                         DropdownMenuItem(
-                            text = { Text("Delete Queue") },
+                            text = { Text(strings.deleteQueue) },
                             leadingIcon = {
                                 Icon(
                                     Icons.Rounded.Delete,
@@ -357,7 +361,7 @@ fun QueuesContent(
                     }
                     if (active.trackIds.isNotEmpty()) {
                         DropdownMenuItem(
-                            text = { Text("Clear Queue") },
+                            text = { Text(strings.clearQueue) },
                             leadingIcon = { Icon(Icons.Rounded.DeleteSweep, contentDescription = null) },
                             onClick = {
                                 queueActionsExpanded = false
@@ -392,8 +396,8 @@ fun QueuesContent(
                 item(key = "empty_queue") {
                     EmptyState(
                         icon = Icons.AutoMirrored.Rounded.QueueMusic,
-                        title = "Queue is Empty",
-                        description = "This queue is empty. Tap a song in your library to fill it."
+                        title = strings.queueIsEmptyTitle,
+                        description = strings.queueIsEmptyDesc
                     )
                 }
             } else {
@@ -443,20 +447,20 @@ fun QueuesContent(
                                             onClick = { playerController.moveInQueue(index, index - 1) },
                                             enabled = index > 0
                                         ) {
-                                            Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = "Move up")
+                                            Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = strings.moveUp)
                                         }
                                         IconButton(
                                             onClick = { playerController.moveInQueue(index, index + 1) },
                                             enabled = index < active.trackIds.lastIndex
                                         ) {
-                                            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Move down")
+                                            Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = strings.moveDown)
                                         }
                                         IconButton(
                                             onClick = { playerController.removeFromQueue(index) }
                                         ) {
                                             Icon(
                                                 Icons.Rounded.DeleteOutline,
-                                                contentDescription = "Remove from queue",
+                                                contentDescription = strings.removeFromQueueCd,
                                                 tint = MaterialTheme.colorScheme.error
                                             )
                                         }
@@ -476,7 +480,7 @@ fun QueuesContent(
                                     )
                                     HorizontalDivider()
                                     DropdownMenuItem(
-                                        text = { Text("Remove from Queue") },
+                                        text = { Text(strings.removeFromQueue) },
                                         leadingIcon = {
                                             Icon(
                                                 Icons.Rounded.DeleteOutline,
@@ -497,13 +501,13 @@ fun QueuesContent(
                             modifier = rowModifier,
                             headlineContent = {
                                 Text(
-                                    text = "Missing song",
+                                    text = strings.missingSong,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant
                                 )
                             },
                             trailingContent = {
                                 IconButton(onClick = { playerController.removeFromQueue(index) }) {
-                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = "Remove")
+                                    Icon(Icons.Rounded.DeleteOutline, contentDescription = strings.remove)
                                 }
                             }
                         )
@@ -516,10 +520,10 @@ fun QueuesContent(
     val renaming = renamingQueue
     if (renaming != null) {
         TextInputDialog(
-            title = "Rename Queue",
-            label = "Name",
+            title = strings.renameQueueTitle,
+            label = strings.nameLabel,
             initialValue = renaming.name,
-            confirmLabel = "Rename",
+            confirmLabel = strings.rename,
             onDismiss = { renamingQueue = null },
             onConfirm = { newName -> queueStore.rename(renaming.id, newName) }
         )
@@ -528,9 +532,9 @@ fun QueuesContent(
     val deleting = deletingQueue
     if (deleting != null) {
         ConfirmDialog(
-            title = "Delete “${deleting.name}”?",
-            message = "This queue will be deleted. Your songs remain in your library.",
-            confirmLabel = "Delete",
+            title = strings.deleteItemConfirmTitle(strings.displayQueueName(deleting.name)),
+            message = strings.deleteQueueConfirmMessage,
+            confirmLabel = strings.delete,
             onDismiss = { deletingQueue = null },
             onConfirm = { playerController.deleteQueue(deleting.id) }
         )

@@ -42,6 +42,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.musico.audio.PlayerUiState
 import com.musico.core.ArtworkCache
+import com.musico.i18n.LocalStrings
 import com.musico.model.Album
 import com.musico.model.PlayQueue
 import com.musico.store.LibraryStore
@@ -65,12 +66,13 @@ fun AlbumsScreen(
     onAlbumClick: (Album) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     if (libraryState.albums.isEmpty()) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             EmptyState(
                 icon = Icons.Rounded.Album,
-                title = "No Albums Yet",
-                description = "Albums appear once your library has songs."
+                title = strings.noAlbumsYetTitle,
+                description = strings.noAlbumsYetDesc
             )
         }
         return
@@ -108,6 +110,7 @@ fun AlbumGridCard(
     onClick: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     var menuExpanded by remember { mutableStateOf(false) }
 
     Box(modifier = modifier) {
@@ -127,13 +130,13 @@ fun AlbumGridCard(
             )
             Spacer(Modifier.height(8.dp))
             Text(
-                text = album.title,
+                text = strings.displayAlbum(album.title),
                 style = MaterialTheme.typography.titleSmall,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = album.artist,
+                text = strings.displayArtist(album.artist),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -170,6 +173,7 @@ fun AlbumDetailScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     val album = remember(libraryState.albums, albumId) {
         libraryState.albums.firstOrNull { it.id == albumId } ?: fallbackAlbum
     }
@@ -186,14 +190,14 @@ fun AlbumDetailScreen(
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = strings.back)
                     }
                 },
                 title = {},
                 actions = {
                     Box {
                         IconButton(onClick = { menuExpanded = true }) {
-                            Icon(Icons.Rounded.MoreVert, contentDescription = "Album options")
+                            Icon(Icons.Rounded.MoreVert, contentDescription = strings.albumOptions)
                         }
                         DropdownMenu(
                             expanded = menuExpanded,
@@ -234,18 +238,18 @@ fun AlbumDetailScreen(
                     )
                     Spacer(Modifier.height(6.dp))
                     Text(
-                        text = album.title,
+                        text = strings.displayAlbum(album.title),
                         style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
                         textAlign = TextAlign.Center
                     )
                     Text(
-                        text = album.artist,
+                        text = strings.displayArtist(album.artist),
                         style = MaterialTheme.typography.bodyLarge,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         textAlign = TextAlign.Center
                     )
                     Text(
-                        text = "${tracks.size} songs · ${formatTime(totalDuration)}",
+                        text = "${strings.songCount(tracks.size)} · ${formatTime(totalDuration)}",
                         style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                         color = MaterialTheme.colorScheme.onSurfaceVariant
                     )
@@ -270,11 +274,12 @@ fun AlbumDetailScreen(
             }
 
             itemsIndexed(tracks, key = { _, t -> t.id }) { index, track ->
+                val displayArtist = strings.displayArtist(track.artist)
                 val subtitle = if (track.trackNumber != null) {
-                    val discPrefix = if ((track.discNumber ?: 1) > 1) "Disc ${track.discNumber} · " else ""
-                    "$discPrefix${track.trackNumber} · ${track.artist}"
+                    val discPrefix = if ((track.discNumber ?: 1) > 1) strings.discPrefix(track.discNumber!!) else ""
+                    "$discPrefix${track.trackNumber} · $displayArtist"
                 } else {
-                    track.artist
+                    displayArtist
                 }
                 TrackRow(
                     track = track,

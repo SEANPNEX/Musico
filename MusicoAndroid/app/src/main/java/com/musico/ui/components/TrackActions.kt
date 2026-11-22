@@ -36,6 +36,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.musico.audio.PlayerController
 import com.musico.cloud.CloudExporter
+import com.musico.i18n.LocalStrings
 import com.musico.model.PlayQueue
 import com.musico.model.Playlist
 import com.musico.model.SearchField
@@ -85,9 +86,10 @@ fun TrackMenuItems(
     isFavourite: Boolean = false,
     namedQueueTitle: String? = null,
 ) {
+    val strings = LocalStrings.current
     if (ids.size == 1) {
         DropdownMenuItem(
-            text = { Text("Song Info") },
+            text = { Text(strings.songInfo) },
             leadingIcon = { Icon(Icons.Rounded.Info, contentDescription = null) },
             onClick = {
                 actionState.songInfoTrackId = ids[0]
@@ -97,7 +99,7 @@ fun TrackMenuItems(
         HorizontalDivider()
     }
     DropdownMenuItem(
-        text = { Text("Play Next") },
+        text = { Text(strings.playNext) },
         leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistPlay, contentDescription = null) },
         enabled = ids.isNotEmpty(),
         onClick = {
@@ -106,7 +108,7 @@ fun TrackMenuItems(
         }
     )
     DropdownMenuItem(
-        text = { Text("Add to Queue") },
+        text = { Text(strings.addToQueue) },
         leadingIcon = { Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = null) },
         enabled = ids.isNotEmpty(),
         onClick = {
@@ -116,7 +118,7 @@ fun TrackMenuItems(
     )
     if (queues.size > 1) {
         DropdownMenuItem(
-            text = { Text("Add to Another Queue…") },
+            text = { Text(strings.addToAnotherQueueEllipsis) },
             leadingIcon = { Icon(Icons.Rounded.AddToQueue, contentDescription = null) },
             enabled = ids.isNotEmpty(),
             onClick = {
@@ -126,7 +128,7 @@ fun TrackMenuItems(
         )
     }
     DropdownMenuItem(
-        text = { Text("Play in New Queue") },
+        text = { Text(strings.playInNewQueue) },
         leadingIcon = { Icon(Icons.Rounded.Queue, contentDescription = null) },
         enabled = ids.isNotEmpty(),
         onClick = {
@@ -140,7 +142,7 @@ fun TrackMenuItems(
     )
     HorizontalDivider()
     DropdownMenuItem(
-        text = { Text("Add to Playlist…") },
+        text = { Text(strings.addToPlaylistEllipsis) },
         leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, contentDescription = null) },
         enabled = ids.isNotEmpty(),
         onClick = {
@@ -150,7 +152,7 @@ fun TrackMenuItems(
     )
     if (favouriteId != null) {
         DropdownMenuItem(
-            text = { Text(if (isFavourite) "Remove from Favourites" else "Add to Favourites") },
+            text = { Text(if (isFavourite) strings.removeFromFavourites else strings.addToFavourites) },
             leadingIcon = {
                 Icon(
                     imageVector = if (isFavourite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
@@ -170,7 +172,7 @@ fun TrackMenuItems(
     }
     if (singleCloudTrack != null) {
         DropdownMenuItem(
-            text = { Text("Save to Local Folder…") },
+            text = { Text(strings.saveToLocalFolderEllipsis) },
             leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) },
             onClick = {
                 onDismiss()
@@ -190,16 +192,17 @@ fun TrackActionDialogs(
     playlists: List<Playlist>,
     historyState: PlayHistoryUiState,
 ) {
+    val strings = LocalStrings.current
     val queueIds = state.queuePickerIds
     if (queueIds != null) {
         val otherQueues = queues.filter { it.id != activeQueueId }
         OptionPickerDialog(
-            title = "Add to Queue",
+            title = strings.addToQueue,
             options = otherQueues.map { q ->
                 PickerOption(
                     id = q.id,
-                    title = q.name,
-                    subtitle = "${q.trackIds.size} songs"
+                    title = strings.displayQueueName(q.name),
+                    subtitle = strings.songCount(q.trackIds.size)
                 )
             },
             onDismiss = { state.queuePickerIds = null },
@@ -212,15 +215,15 @@ fun TrackActionDialogs(
     val playlistIds = state.playlistPickerIds
     if (playlistIds != null) {
         OptionPickerDialog(
-            title = "Add to Playlist",
+            title = strings.addToPlaylistEllipsis.removeSuffix("…"),
             options = playlists.map { pl ->
                 PickerOption(
                     id = pl.id,
                     title = pl.name,
-                    subtitle = "${pl.trackIds.size} songs"
+                    subtitle = strings.songCount(pl.trackIds.size)
                 )
             },
-            extraActionLabel = "New Playlist…",
+            extraActionLabel = strings.newPlaylistEllipsis,
             onExtraAction = {
                 state.newPlaylistIds = playlistIds
             },
@@ -234,10 +237,10 @@ fun TrackActionDialogs(
     val createIds = state.newPlaylistIds
     if (createIds != null) {
         TextInputDialog(
-            title = "New Playlist",
-            label = "Name",
-            supportingText = "Enter a name for the playlist.",
-            confirmLabel = "Create",
+            title = strings.newPlaylist,
+            label = strings.nameLabel,
+            supportingText = strings.enterPlaylistNameHint,
+            confirmLabel = strings.create,
             onDismiss = { state.newPlaylistIds = null },
             onConfirm = { name ->
                 val newId = state.libraryStore.createPlaylist(name)
@@ -279,6 +282,7 @@ private fun SaveSingleCloudTrackDialog(
     cloudExporter: CloudExporter,
     onDismiss: () -> Unit,
 ) {
+    val strings = LocalStrings.current
     var isExporting by remember(track.id, targetUri) { mutableStateOf(true) }
     var savedFileName by remember(track.id, targetUri) { mutableStateOf<String?>(null) }
     var libraryUpdated by remember(track.id, targetUri) { mutableStateOf(false) }
@@ -303,7 +307,7 @@ private fun SaveSingleCloudTrackDialog(
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (err: Exception) {
-            errorMessage = err.message ?: "Could not save song."
+            errorMessage = err.message ?: strings.couldNotSaveSongFallback
         } finally {
             isExporting = false
         }
@@ -315,9 +319,9 @@ private fun SaveSingleCloudTrackDialog(
         title = {
             Text(
                 when {
-                    isExporting -> "Saving Song"
-                    errorMessage != null -> "Save Failed"
-                    else -> "Song Saved"
+                    isExporting -> strings.savingSongTitle
+                    errorMessage != null -> strings.saveFailedTitle
+                    else -> strings.songSavedTitle
                 }
             )
         },
@@ -331,7 +335,7 @@ private fun SaveSingleCloudTrackDialog(
                 when {
                     isExporting -> {
                         Text(
-                            text = "Downloading ${track.title}…",
+                            text = strings.downloadingTrack(track.title),
                             style = MaterialTheme.typography.bodyMedium,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
@@ -340,19 +344,19 @@ private fun SaveSingleCloudTrackDialog(
                     }
                     errorMessage != null -> {
                         Text(
-                            text = errorMessage ?: "Unknown error",
+                            text = errorMessage ?: strings.unknownError,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
                     else -> {
                         Text(
-                            text = "Saved as “${savedFileName.orEmpty()}”.",
+                            text = strings.savedAsFile(savedFileName.orEmpty()),
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         if (libraryUpdated) {
                             Text(
-                                text = "Library updated.",
+                                text = strings.libraryUpdated,
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
@@ -364,14 +368,14 @@ private fun SaveSingleCloudTrackDialog(
         confirmButton = {
             if (!isExporting) {
                 TextButton(onClick = onDismiss) {
-                    Text(if (errorMessage != null) "Close" else "OK")
+                    Text(if (errorMessage != null) strings.close else strings.ok)
                 }
             }
         },
         dismissButton = {
             if (isExporting) {
                 TextButton(onClick = onDismiss) {
-                    Text("Cancel")
+                    Text(strings.cancel)
                 }
             }
         },

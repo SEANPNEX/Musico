@@ -7,6 +7,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using MusicoWindows.Controls;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -27,6 +28,7 @@ public partial class PlaylistsView : UserControl
         Detach();
         _ctx = ctx;
         _ctx.Services.Library.PropertyChanged += OnLibraryChanged;
+        LocalizationManager.LanguageChanged += OnLanguageChanged;
         Refresh();
     }
 
@@ -34,9 +36,12 @@ public partial class PlaylistsView : UserControl
 
     private void Detach()
     {
+        LocalizationManager.LanguageChanged -= OnLanguageChanged;
         if (_ctx is null) return;
         _ctx.Services.Library.PropertyChanged -= OnLibraryChanged;
     }
+
+    private void OnLanguageChanged(ResolvedLanguage _) => Refresh();
 
     private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -50,14 +55,14 @@ public partial class PlaylistsView : UserControl
         var lib = _ctx.Services.Library;
 
         int total = 1 + lib.Playlists.Count;
-        CountText.Text = $"{total} {(total == 1 ? "playlist" : "playlists")}";
+        CountText.Text = L.PlaylistsCount(total);
 
         PlaylistsStack.Children.Clear();
 
         // Favourites built-in playlist
         var favIds = lib.Tracks.Where(t => lib.Favourites.Contains(t.Id)).Select(t => t.Id).ToList();
         PlaylistsStack.Children.Add(CreatePlaylistCard(
-            title: "Favourites",
+            title: L.Get("Nav_Favourites"),
             count: lib.Favourites.Count,
             glyph: "\uEB52",
             trackIds: favIds,
@@ -124,7 +129,7 @@ public partial class PlaylistsView : UserControl
 
         var countTb = new TextBlock
         {
-            Text = $"{count} {(count == 1 ? "song" : "songs")}",
+            Text = L.SongsCount(count),
             FontFamily = (FontFamily)FindResource("Win10Font"),
             FontSize = 12,
             Margin = new Thickness(0, 2, 0, 0)
@@ -141,7 +146,7 @@ public partial class PlaylistsView : UserControl
             var renameBtn = new Button
             {
                 Content = "\uE70F",
-                ToolTip = "Rename Playlist",
+                ToolTip = L.Get("Playlists_RenameTooltip"),
                 Style = (Style)FindResource("Win10IconButtonStyle"),
                 Margin = new Thickness(0, 0, 4, 0)
             };
@@ -153,7 +158,7 @@ public partial class PlaylistsView : UserControl
             var delBtn = new Button
             {
                 Content = "\uE74D",
-                ToolTip = "Delete Playlist",
+                ToolTip = L.Get("Playlists_DeleteTooltip"),
                 Style = (Style)FindResource("Win10IconButtonStyle")
             };
             delBtn.Click += (_, e) =>
@@ -191,8 +196,8 @@ public partial class PlaylistsView : UserControl
             playlist is null ? null : menu =>
             {
                 menu.Items.Add(new Separator());
-                menu.Items.Add(TrackMenuHelper.CreateItem("Rename...", "\uE70F", () => PromptRename(playlist)));
-                menu.Items.Add(TrackMenuHelper.CreateItem("Delete", "\uE74D", () => ConfirmDelete(playlist)));
+                menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Common_RenameEllipsis"), "\uE70F", () => PromptRename(playlist)));
+                menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Common_Delete"), "\uE74D", () => ConfirmDelete(playlist)));
             });
 
         return card;
@@ -203,10 +208,10 @@ public partial class PlaylistsView : UserControl
         if (_ctx is null) return;
         Guid pid = playlist.Id;
         _ctx.OpenTextPrompt(
-            "Rename Playlist",
-            "Enter a new name for this playlist.",
+            L.Get("Playlists_RenameTitle"),
+            L.Get("Playlists_RenameMessage"),
             playlist.Name,
-            "Rename",
+            L.Get("Common_Rename"),
             name => _ctx.Services.Library.RenamePlaylist(pid, name));
     }
 
@@ -215,9 +220,9 @@ public partial class PlaylistsView : UserControl
         if (_ctx is null) return;
         Guid pid = playlist.Id;
         _ctx.OpenConfirm(
-            $"Delete \"{playlist.Name}\"?",
-            "This removes the playlist. Your music files are not affected.",
-            "Delete",
+            L.Format("Playlists_DeleteConfirmTitle", playlist.Name),
+            L.Get("Playlists_DeleteConfirmMessage"),
+            L.Get("Common_Delete"),
             () => _ctx.Services.Library.DeletePlaylist(pid),
             true);
     }
@@ -226,10 +231,10 @@ public partial class PlaylistsView : UserControl
     {
         if (_ctx is null) return;
         _ctx.OpenTextPrompt(
-            "New Playlist",
-            "Enter a name for the playlist.",
+            L.Get("Nav_NewPlaylist"),
+            L.Get("Playlists_NewMessage"),
             string.Empty,
-            "Create",
+            L.Get("Common_Create"),
             name => _ctx.Services.Library.CreatePlaylist(name));
     }
 }

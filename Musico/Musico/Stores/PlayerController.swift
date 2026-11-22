@@ -175,8 +175,8 @@ final class PlayerController {
                 engine.unload()
                 isPlaying = false
                 errorMessage = failures > 1
-                    ? "Playback stopped: \(failures) songs in a row could not be played."
-                    : "“\(currentTrack?.title ?? "This song")” could not be played."
+                    ? L10n.tr("Playback stopped: %@ songs in a row could not be played.", String(failures))
+                    : L10n.tr("“%@” could not be played.", currentTrack?.title ?? L10n.tr("This song"))
                 updateNowPlaying()
                 return
             }
@@ -246,8 +246,8 @@ final class PlayerController {
                     self.engine.unload()
                     self.isPlaying = false
                     self.errorMessage = nextFailures > 1
-                        ? "Playback stopped: \(nextFailures) songs in a row could not be played."
-                        : "“\(track.title)” could not be played."
+                        ? L10n.tr("Playback stopped: %@ songs in a row could not be played.", String(nextFailures))
+                        : L10n.tr("“%@” could not be played.", track.title)
                     self.updateNowPlaying()
                 }
             }

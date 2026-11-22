@@ -18,7 +18,7 @@
             <StackPanel>
                 <!-- Header -->
                 <Grid Margin="0,0,0,16">
-                    <TextBlock Text="Sleep Timer"
+                    <TextBlock Text="{DynamicResource Str_SleepTimer_Title}"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="20"
                                FontWeight="SemiBold"
@@ -27,7 +27,7 @@
                     <Button Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE711;"
                             HorizontalAlignment="Right"
-                            ToolTip="Close"
+                            ToolTip="{DynamicResource Str_Common_Close}"
                             Click="Done_Click" />
                 </Grid>
 
@@ -55,14 +55,14 @@
                                        VerticalAlignment="Center" />
                         </StackPanel>
                         <Button Style="{StaticResource Win10ButtonStyle}"
-                                Content="Cancel Timer"
+                                Content="{DynamicResource Str_SleepTimer_CancelTimer}"
                                 HorizontalAlignment="Right"
                                 Padding="10,4"
                                 Click="CancelTimer_Click" />
                     </Grid>
                 </Border>
 
-                <TextBlock Text="Stop playing after"
+                <TextBlock Text="{DynamicResource Str_SleepTimer_StopPlayingAfter}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="13"
                            Foreground="{DynamicResource TextSecondaryBrush}"
@@ -87,7 +87,7 @@
                         </Grid.ColumnDefinitions>
                         <TextBlock x:Name="CustomMinutesText"
                                    Grid.Column="0"
-                                   Text="20 minutes"
+                                   Text="{DynamicResource Str_SleepTimer_DefaultMinutes}"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="13"
                                    Foreground="{DynamicResource TextPrimaryBrush}"
@@ -107,7 +107,7 @@
                         </StackPanel>
                         <Button Grid.Column="2"
                                 Style="{StaticResource Win10PrimaryButtonStyle}"
-                                Content="Start"
+                                Content="{DynamicResource Str_SleepTimer_Start}"
                                 Padding="14,6"
                                 Click="StartCustom_Click" />
                     </Grid>
@@ -125,12 +125,12 @@
                                    FontSize="14"
                                    VerticalAlignment="Center"
                                    Margin="0,0,10,0" />
-                        <TextBlock Text="End of current song" VerticalAlignment="Center" />
+                        <TextBlock Text="{DynamicResource Str_SleepTimer_EndOfCurrentSong}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
 
                 <Button Style="{StaticResource Win10ButtonStyle}"
-                        Content="Done"
+                        Content="{DynamicResource Str_Common_Done}"
                         Width="100"
                         HorizontalAlignment="Right"
                         Click="Done_Click" />

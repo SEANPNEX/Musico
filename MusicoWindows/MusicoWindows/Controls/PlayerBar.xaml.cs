@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using MusicoWindows.Converters;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 using MusicoWindows.Views;
@@ -33,6 +34,7 @@ public partial class PlayerBar : UserControl
     public PlayerBar()
     {
         InitializeComponent();
+        LocalizationManager.LanguageChanged += _ => RefreshAll();
     }
 
     public void Initialize(ViewContext ctx)
@@ -90,8 +92,8 @@ public partial class PlayerBar : UserControl
         var track = player.CurrentTrack;
 
         CoverArt.SetSource(_services.Library.Artwork, track?.ArtworkKey, 96);
-        TrackTitleText.Text = track?.Title ?? "Not Playing";
-        TrackArtistText.Text = track?.Artist ?? "Pick a song from your library";
+        TrackTitleText.Text = track?.Title ?? L.Get("PlayerBar_NotPlaying");
+        TrackArtistText.Text = track != null ? L.DisplayArtist(track.Artist) : L.Get("PlayerBar_PickSong");
 
         bool hasTrack = track != null;
         ShuffleButton.IsEnabled = hasTrack;

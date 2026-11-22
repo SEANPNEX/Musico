@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.musico.audio.PlayerUiState
+import com.musico.i18n.LocalStrings
 import com.musico.model.Album
 import com.musico.model.PlayQueue
 import com.musico.store.LibraryStore
@@ -59,12 +60,13 @@ fun ArtistsScreen(
     onArtistClick: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     if (libraryState.artists.isEmpty()) {
         Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             EmptyState(
                 icon = Icons.Rounded.Mic,
-                title = "No Artists Yet",
-                description = "Artists appear once your library has songs."
+                title = strings.noArtistsYetTitle,
+                description = strings.noArtistsYetDesc
             )
         }
         return
@@ -92,18 +94,18 @@ fun ArtistsScreen(
                     },
                     headlineContent = {
                         Text(
-                            text = artist,
+                            text = strings.displayArtist(artist),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     },
                     supportingContent = {
-                        Text("${artistTrackIds.size} songs")
+                        Text(strings.songCount(artistTrackIds.size))
                     },
                     trailingContent = {
                         Box {
                             IconButton(onClick = { menuExpanded = true }) {
-                                Icon(Icons.Rounded.MoreVert, contentDescription = "Artist options")
+                                Icon(Icons.Rounded.MoreVert, contentDescription = strings.artistOptions)
                             }
                             DropdownMenu(
                                 expanded = menuExpanded,
@@ -140,6 +142,7 @@ fun ArtistDetailScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     val tracks = remember(libraryState.tracks, artist) {
         libraryStore.tracksByArtist(artist)
     }
@@ -156,12 +159,12 @@ fun ArtistDetailScreen(
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = strings.back)
                     }
                 },
                 title = {
                     Text(
-                        text = artist,
+                        text = strings.displayArtist(artist),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis
                     )
@@ -169,7 +172,7 @@ fun ArtistDetailScreen(
                 actions = {
                     Box {
                         IconButton(onClick = { menuExpanded = true }) {
-                            Icon(Icons.Rounded.MoreVert, contentDescription = "Artist options")
+                            Icon(Icons.Rounded.MoreVert, contentDescription = strings.artistOptions)
                         }
                         DropdownMenu(
                             expanded = menuExpanded,
@@ -214,7 +217,7 @@ fun ArtistDetailScreen(
             if (albums.isNotEmpty()) {
                 item(key = "albums_header") {
                     Text(
-                        text = "Albums",
+                        text = strings.sectionAlbums,
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                     )
@@ -241,7 +244,7 @@ fun ArtistDetailScreen(
 
             item(key = "songs_header") {
                 Text(
-                    text = "Songs",
+                    text = strings.sectionSongs,
                     style = MaterialTheme.typography.titleMedium,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
                 )
@@ -254,7 +257,7 @@ fun ArtistDetailScreen(
                     isCurrent = playerState.currentTrack?.id == track.id,
                     isPlaying = playerState.isPlaying,
                     isAvailable = libraryStore.isAvailable(track),
-                    subtitle = track.album,
+                    subtitle = strings.displayAlbum(track.album),
                     onClick = { trackActions.playerController.play(trackIds, startAt = index) },
                     modifier = Modifier.animateItem(),
                     menuContent = { onDismiss ->

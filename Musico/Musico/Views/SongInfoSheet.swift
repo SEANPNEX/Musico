@@ -98,18 +98,18 @@ struct SongInfoSheet: View {
                     formContent(for: track, library: library)
                         .environment(library)
                 } else {
-                    ContentUnavailableView("Song Unavailable", systemImage: "music.note",
-                                           description: Text("This song is no longer in your library."))
+                    ContentUnavailableView(L10n.tr("Song Unavailable"), systemImage: "music.note",
+                                           description: Text(L10n.tr("This song is no longer in your library.")))
                 }
             }
-            .navigationTitle("Song Info")
+            .navigationTitle(L10n.tr("Song Info"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("Close") { dismiss() }
+                    Button(L10n.tr("Close")) { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button("Save") { saveChanges() }
+                    Button(L10n.tr("Save")) { saveChanges() }
                         .disabled(!hasChanges)
                 }
             }
@@ -155,7 +155,7 @@ struct SongInfoSheet: View {
     @ViewBuilder
     private func formContent(for track: Track, library: LibraryStore) -> some View {
         Form {
-            Section("Cover & Metadata") {
+            Section(L10n.tr("Cover & Metadata")) {
                 HStack(spacing: 16) {
                     Group {
                         if let pendingPreviewImage {
@@ -169,50 +169,51 @@ struct SongInfoSheet: View {
                         }
                     }
                     VStack(alignment: .leading, spacing: 8) {
+                        let chooseFromPhotosTitle = L10n.tr("Choose from Photos…")
                         PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                            Label("Choose from Photos…", systemImage: "photo")
+                            Label(chooseFromPhotosTitle, systemImage: "photo")
                         }
                         .buttonStyle(.borderless)
 
                         Button {
                             showImageFileImporter = true
                         } label: {
-                            Label("Choose Image File…", systemImage: "folder")
+                            Label(L10n.tr("Choose Image File…"), systemImage: "folder")
                         }
                         .buttonStyle(.borderless)
                     }
                 }
                 .padding(.vertical, 4)
 
-                labeledField("Title", text: $title)
-                labeledField("Artist", text: $artist)
-                labeledField("Album", text: $album)
-                labeledField("Genre", text: $genre)
+                labeledField(L10n.tr("Title"), text: $title)
+                labeledField(L10n.tr("Artist"), text: $artist)
+                labeledField(L10n.tr("Album"), text: $album)
+                labeledField(L10n.tr("Genre"), text: $genre)
 
                 if savedFeedback && !hasChanges {
-                    Label("Metadata saved", systemImage: "checkmark.circle.fill")
+                    Label(L10n.tr("Metadata saved"), systemImage: "checkmark.circle.fill")
                         .font(.footnote)
                         .foregroundStyle(.green)
                 }
             }
 
-            Section("Quick Search") {
-                quickSearchRow(label: "Artist", value: artist.trimmingCharacters(in: .whitespacesAndNewlines), field: .artist, icon: "person.fill")
-                quickSearchRow(label: "Album", value: album.trimmingCharacters(in: .whitespacesAndNewlines), field: .album, icon: "square.stack")
-                quickSearchRow(label: "Genre", value: genre.trimmingCharacters(in: .whitespacesAndNewlines), field: .genre, icon: "guitars")
+            Section(L10n.tr("Quick Search")) {
+                quickSearchRow(label: L10n.tr("Artist"), value: artist.trimmingCharacters(in: .whitespacesAndNewlines), field: .artist, icon: "person.fill")
+                quickSearchRow(label: L10n.tr("Album"), value: album.trimmingCharacters(in: .whitespacesAndNewlines), field: .album, icon: "square.stack")
+                quickSearchRow(label: L10n.tr("Genre"), value: genre.trimmingCharacters(in: .whitespacesAndNewlines), field: .genre, icon: "guitars")
             }
 
-            Section("File & Playback Info") {
-                infoRow("Precision", value: techInfo?.precisionDisplay ?? "Loading…")
-                infoRow("Frequency", value: techInfo?.frequencyDisplay ?? "Loading…")
-                infoRow("Bit Rate", value: techInfo?.bitRateDisplay ?? "Loading…")
-                infoRow("File Size", value: techInfo?.fileSizeDisplay ?? ByteCountFormatter.string(fromByteCount: track.fileSize, countStyle: .file))
-                infoRow("Length", value: formatTime(techInfo?.duration ?? track.duration))
-                infoRow("Sound Tracks", value: techInfo?.channelsDisplay ?? "Loading…")
-                infoRow("Time Added", value: track.dateAdded.formatted(date: .abbreviated, time: .shortened))
-                infoRow("Time Edited", value: track.modified.formatted(date: .abbreviated, time: .shortened))
-                infoRow("Last Played", value: history?.lastPlayed(for: track.id)?.formatted(date: .abbreviated, time: .shortened) ?? "Never")
-                infoRow("Played Times", value: "\(history?.count(for: track.id) ?? 0)")
+            Section(L10n.tr("File & Playback Info")) {
+                infoRow(L10n.tr("Precision"), value: L10n.precisionDisplay(techInfo))
+                infoRow(L10n.tr("Frequency"), value: L10n.frequencyDisplay(techInfo))
+                infoRow(L10n.tr("Bit Rate"), value: L10n.bitRateDisplay(techInfo))
+                infoRow(L10n.tr("File Size"), value: L10n.fileSizeDisplay(techInfo, fallbackBytes: track.fileSize))
+                infoRow(L10n.tr("Length"), value: formatTime(techInfo?.duration ?? track.duration))
+                infoRow(L10n.tr("Sound Tracks"), value: L10n.channelsDisplay(techInfo))
+                infoRow(L10n.tr("Time Added"), value: L10n.formatDateTime(track.dateAdded))
+                infoRow(L10n.tr("Time Edited"), value: L10n.formatDateTime(track.modified))
+                infoRow(L10n.tr("Last Played"), value: history?.lastPlayed(for: track.id).map { L10n.formatDateTime($0) } ?? L10n.tr("Never"))
+                infoRow(L10n.tr("Played Times"), value: "\(history?.count(for: track.id) ?? 0)")
             }
         }
     }

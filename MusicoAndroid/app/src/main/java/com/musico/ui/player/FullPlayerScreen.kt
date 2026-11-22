@@ -71,6 +71,8 @@ import androidx.compose.ui.unit.dp
 import com.musico.audio.PlayerController
 import com.musico.audio.PlayerUiState
 import com.musico.core.LyricsStore
+import com.musico.i18n.AppStrings
+import com.musico.i18n.LocalStrings
 import com.musico.model.RepeatMode
 import com.musico.model.SleepMode
 import com.musico.store.LibraryStore
@@ -92,9 +94,14 @@ enum class PlayerModalSheet {
     SLEEP
 }
 
-enum class PlayerSidePane(val label: String) {
-    LYRICS("Lyrics"),
-    QUEUE("Queue")
+enum class PlayerSidePane {
+    LYRICS,
+    QUEUE;
+
+    fun label(strings: AppStrings): String = when (this) {
+        LYRICS -> strings.lyrics
+        QUEUE -> strings.queue
+    }
 }
 
 @Composable
@@ -112,6 +119,7 @@ fun FullPlayerScreen(
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     var activeSheet by remember { mutableStateOf<PlayerModalSheet?>(null) }
     var sidePane by rememberSaveable { mutableStateOf(PlayerSidePane.LYRICS) }
 
@@ -169,7 +177,7 @@ fun FullPlayerScreen(
                                         index = index,
                                         count = PlayerSidePane.entries.size
                                     ),
-                                    label = { Text(pane.label) }
+                                    label = { Text(pane.label(strings)) }
                                 )
                             }
                         }
@@ -271,6 +279,7 @@ private fun PlayerControlsPane(
     onClose: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     val track = playerState.currentTrack
     val activeQueue = queueState.active
 
@@ -289,7 +298,7 @@ private fun PlayerControlsPane(
             IconButton(onClick = onClose) {
                 Icon(
                     imageVector = Icons.Rounded.KeyboardArrowDown,
-                    contentDescription = "Close player",
+                    contentDescription = strings.closePlayer,
                     modifier = Modifier.size(30.dp)
                 )
             }
@@ -297,7 +306,7 @@ private fun PlayerControlsPane(
                 IconButton(onClick = { onOpenSongInfo(track.id) }) {
                     Icon(
                         imageVector = Icons.Rounded.Info,
-                        contentDescription = "Song Info"
+                        contentDescription = strings.songInfo
                     )
                 }
             }
@@ -408,7 +417,7 @@ private fun PlayerControlsPane(
                             )
                             Spacer(Modifier.height(2.dp))
                             Text(
-                                text = "${currentTrack.artist} — ${currentTrack.album}",
+                                text = "${strings.displayArtist(currentTrack.artist)} — ${strings.displayAlbum(currentTrack.album)}",
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 1,
@@ -420,7 +429,7 @@ private fun PlayerControlsPane(
                     IconButton(onClick = { libraryStore.toggleFavourite(track.id) }) {
                         Icon(
                             imageVector = if (isFav) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                            contentDescription = if (isFav) "Remove from Favourites" else "Add to Favourites",
+                            contentDescription = if (isFav) strings.removeFromFavourites else strings.addToFavourites,
                             tint = if (isFav) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
                         )
                     }
@@ -441,7 +450,7 @@ private fun PlayerControlsPane(
                     IconButton(onClick = { playerController.toggleShuffle() }) {
                         Icon(
                             imageVector = Icons.Rounded.Shuffle,
-                            contentDescription = "Shuffle",
+                            contentDescription = strings.shuffle,
                             tint = if (activeQueue.shuffle) {
                                 MaterialTheme.colorScheme.primary
                             } else {
@@ -452,7 +461,7 @@ private fun PlayerControlsPane(
                     IconButton(onClick = { playerController.previous() }) {
                         Icon(
                             imageVector = Icons.Rounded.SkipPrevious,
-                            contentDescription = "Previous",
+                            contentDescription = strings.previous,
                             modifier = Modifier.size(34.dp)
                         )
                     }
@@ -462,14 +471,14 @@ private fun PlayerControlsPane(
                     ) {
                         Icon(
                             imageVector = if (playerState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                            contentDescription = if (playerState.isPlaying) "Pause" else "Play",
+                            contentDescription = if (playerState.isPlaying) strings.pause else strings.play,
                             modifier = Modifier.size(36.dp)
                         )
                     }
                     IconButton(onClick = { playerController.next() }) {
                         Icon(
                             imageVector = Icons.Rounded.SkipNext,
-                            contentDescription = "Next",
+                            contentDescription = strings.next,
                             modifier = Modifier.size(34.dp)
                         )
                     }
@@ -480,7 +489,7 @@ private fun PlayerControlsPane(
                             } else {
                                 Icons.Rounded.Repeat
                             },
-                            contentDescription = "Repeat",
+                            contentDescription = strings.repeat,
                             tint = if (activeQueue.repeatMode == RepeatMode.OFF) {
                                 MaterialTheme.colorScheme.onSurfaceVariant
                             } else {
@@ -491,12 +500,13 @@ private fun PlayerControlsPane(
                 }
 
                 val positionText = activeQueue.currentIndex?.let { idx ->
-                    "${idx + 1} of ${activeQueue.trackIds.size}"
+                    strings.queuePosition(idx + 1, activeQueue.trackIds.size)
                 }.orEmpty()
+                val queueDisplayName = strings.displayQueueName(activeQueue.name)
                 val queueIndicator = if (positionText.isNotEmpty()) {
-                    "${activeQueue.name} · $positionText"
+                    "$queueDisplayName · $positionText"
                 } else {
-                    activeQueue.name
+                    queueDisplayName
                 }
                 Text(
                     text = queueIndicator,
@@ -509,25 +519,25 @@ private fun PlayerControlsPane(
                     horizontalArrangement = Arrangement.SpaceEvenly
                 ) {
                     PlayerActionButton(
-                        label = "Queue",
+                        label = strings.queue,
                         icon = Icons.AutoMirrored.Rounded.QueueMusic,
                         active = false,
                         onClick = { onOpenSheet(PlayerModalSheet.QUEUE) }
                     )
                     PlayerActionButton(
-                        label = "Lyrics",
+                        label = strings.lyrics,
                         icon = Icons.Rounded.Lyrics,
                         active = false,
                         onClick = { onOpenSheet(PlayerModalSheet.LYRICS) }
                     )
                     PlayerActionButton(
-                        label = "Equalizer",
+                        label = strings.equalizer,
                         icon = Icons.Rounded.Equalizer,
                         active = playerState.eq.enabled,
                         onClick = { onOpenSheet(PlayerModalSheet.EQUALIZER) }
                     )
                     PlayerActionButton(
-                        label = "Sleep Timer",
+                        label = strings.sleepTimer,
                         icon = Icons.Rounded.Bedtime,
                         active = playerState.sleepMode !is SleepMode.Off,
                         onClick = { onOpenSheet(PlayerModalSheet.SLEEP) }
@@ -538,9 +548,9 @@ private fun PlayerControlsPane(
             Spacer(Modifier.weight(1f))
             EmptyState(
                 icon = Icons.Rounded.MusicNote,
-                title = "Nothing Playing",
-                description = "Pick a song from your library.",
-                actionLabel = "Queues",
+                title = strings.nothingPlayingTitle,
+                description = strings.pickSongFromLibrary,
+                actionLabel = strings.tabQueues,
                 onAction = { onOpenSheet(PlayerModalSheet.QUEUE) }
             )
             Spacer(Modifier.weight(1f))

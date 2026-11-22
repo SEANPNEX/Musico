@@ -59,6 +59,7 @@ import com.musico.audio.PlayerController
 import com.musico.audio.PlayerUiState
 import com.musico.core.LyricsStore
 import com.musico.core.LyricsUnreadableException
+import com.musico.i18n.LocalStrings
 import com.musico.model.Lyrics
 import com.musico.model.LyricsSource
 import com.musico.store.LibraryStore
@@ -109,6 +110,7 @@ fun LyricsContent(
     embedded: Boolean = false,
     onDone: (() -> Unit)? = null
 ) {
+    val strings = LocalStrings.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val track = playerState.currentTrack
@@ -156,7 +158,11 @@ fun LyricsContent(
                 result.onSuccess {
                     revision += 1
                 }.onFailure { err ->
-                    importError = err.message ?: "That file could not be read as lyrics text."
+                    importError = if (err is LyricsUnreadableException) {
+                        strings.lyricsImportErrorFallback
+                    } else {
+                        err.message ?: strings.lyricsImportErrorFallback
+                    }
                 }
             }
         }
@@ -171,7 +177,7 @@ fun LyricsContent(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
-                    text = track?.title ?: "Lyrics",
+                    text = track?.title ?: strings.lyrics,
                     style = MaterialTheme.typography.titleMedium,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
@@ -184,7 +190,7 @@ fun LyricsContent(
                         shape = MaterialTheme.shapes.extraSmall
                     ) {
                         Text(
-                            text = sourceBadgeLabel(source),
+                            text = strings.lyricsSourceBadge(source),
                             style = MaterialTheme.typography.labelSmall,
                             color = MaterialTheme.colorScheme.onSecondaryContainer,
                             modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp)
@@ -198,7 +204,7 @@ fun LyricsContent(
                     onClick = { menuExpanded = true },
                     enabled = track != null
                 ) {
-                    Icon(Icons.Rounded.MoreVert, contentDescription = "Lyrics options")
+                    Icon(Icons.Rounded.MoreVert, contentDescription = strings.lyricsOptions)
                 }
                 DropdownMenu(
                     expanded = menuExpanded,
@@ -206,14 +212,14 @@ fun LyricsContent(
                 ) {
                     resolvedSource?.let { source ->
                         DropdownMenuItem(
-                            text = { Text(sourceDescription(source)) },
+                            text = { Text(strings.lyricsSourceDescription(source)) },
                             enabled = false,
                             onClick = {}
                         )
                         HorizontalDivider()
                     }
                     DropdownMenuItem(
-                        text = { Text("Import from File…") },
+                        text = { Text(strings.importFromFileEllipsis) },
                         leadingIcon = { Icon(Icons.Rounded.FileOpen, contentDescription = null) },
                         onClick = {
                             menuExpanded = false
@@ -222,7 +228,7 @@ fun LyricsContent(
                     )
                     if (track != null && lyricsStore.hasImported(track.id)) {
                         DropdownMenuItem(
-                            text = { Text("Remove Imported Lyrics") },
+                            text = { Text(strings.removeImportedLyrics) },
                             leadingIcon = {
                                 Icon(
                                     Icons.Rounded.Delete,
@@ -242,7 +248,7 @@ fun LyricsContent(
 
             if (!embedded && onDone != null) {
                 TextButton(onClick = onDone) {
-                    Text("Done")
+                    Text(strings.done)
                 }
             }
         }
@@ -253,9 +259,9 @@ fun LyricsContent(
         if (lyrics == null) {
             EmptyState(
                 icon = Icons.Rounded.Lyrics,
-                title = "No Lyrics",
-                description = "Import a .lrc or .txt file for this song, or put one with the same name next to it.",
-                actionLabel = if (track != null) "Import from File…" else null,
+                title = strings.noLyricsTitle,
+                description = strings.noLyricsDesc,
+                actionLabel = if (track != null) strings.importFromFileEllipsis else null,
                 onAction = if (track != null) ({ launchImport() }) else null
             )
         } else if (lyrics.isTimed) {
@@ -277,11 +283,11 @@ fun LyricsContent(
     if (err != null) {
         AlertDialog(
             onDismissRequest = { importError = null },
-            title = { Text("Couldn’t Import Lyrics") },
+            title = { Text(strings.couldNotImportLyricsTitle) },
             text = { Text(err) },
             confirmButton = {
                 TextButton(onClick = { importError = null }) {
-                    Text("OK")
+                    Text(strings.ok)
                 }
             }
         )
@@ -369,16 +375,4 @@ private fun PlainLyricsList(
             )
         }
     }
-}
-
-private fun sourceBadgeLabel(source: LyricsSource): String = when (source) {
-    LyricsSource.IMPORTED -> "Imported"
-    LyricsSource.SIDECAR -> "Sidecar"
-    LyricsSource.EMBEDDED -> "Embedded"
-}
-
-private fun sourceDescription(source: LyricsSource): String = when (source) {
-    LyricsSource.IMPORTED -> "From the file you imported"
-    LyricsSource.SIDECAR -> "From a file next to the song"
-    LyricsSource.EMBEDDED -> "From the song’s tags"
 }

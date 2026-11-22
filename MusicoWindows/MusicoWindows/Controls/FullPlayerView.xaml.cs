@@ -4,6 +4,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using MusicoWindows.Converters;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 using MusicoWindows.Theme;
@@ -27,6 +28,7 @@ public partial class FullPlayerView : UserControl
     {
         InitializeComponent();
         EmbeddedLyrics.ErrorOccurred += (title, msg) => ErrorOccurred?.Invoke(title, msg);
+        LocalizationManager.LanguageChanged += _ => RefreshAll();
     }
 
     public bool IsOpen => Visibility == Visibility.Visible;
@@ -93,8 +95,10 @@ public partial class FullPlayerView : UserControl
             Win10Animations.AnimateScale(CoverArt, player.IsPlaying ? 1.0 : 0.94, 260);
         }
 
-        TitleText.Text = track?.Title ?? "Nothing Playing";
-        MetaText.Text = track != null ? $"{track.Artist} — {track.Album}" : "Pick a song from your library";
+        TitleText.Text = track?.Title ?? L.Get("FullPlayer_NothingPlaying");
+        MetaText.Text = track != null
+            ? $"{L.DisplayArtist(track.Artist)} — {L.DisplayAlbum(track.Album)}"
+            : L.Get("PlayerBar_PickSong");
 
         bool hasTrack = track != null;
         SongInfoButton.IsEnabled = hasTrack;
@@ -127,7 +131,7 @@ public partial class FullPlayerView : UserControl
 
         if (queue.CurrentIndex is int idx && queue.TrackIds.Count > 0)
         {
-            QueuePositionText.Text = $"{queue.Name} · {idx + 1} of {queue.TrackIds.Count}";
+            QueuePositionText.Text = L.Format("FullPlayer_QueuePosition", queue.Name, idx + 1, queue.TrackIds.Count);
         }
         else
         {

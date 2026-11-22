@@ -14,13 +14,13 @@ enum CloudSourceError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidURL:
-            "Enter a valid YouTube or Bilibili playlist, collection, or video link."
+            L10n.trNonisolated("Enter a valid YouTube or Bilibili playlist, collection, or video link.")
         case .unsupportedSource:
-            "That link isn’t a supported YouTube or Bilibili playlist or video."
+            L10n.trNonisolated("That link isn’t a supported YouTube or Bilibili playlist or video.")
         case .emptyPlaylist:
-            "No playable tracks were found at that link."
+            L10n.trNonisolated("No playable tracks were found at that link.")
         case .noPlayableStream:
-            "Could not resolve a playable audio stream for this track."
+            L10n.trNonisolated("Could not resolve a playable audio stream for this track.")
         case .apiError(let message):
             message
         case .networkError(let message):
@@ -90,7 +90,7 @@ struct URLSessionCloudTransport: CloudHTTPTransport {
         do {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else {
-                throw CloudSourceError.networkError("Invalid server response.")
+                throw CloudSourceError.networkError(L10n.trNonisolated("Invalid server response."))
             }
             var normalizedHeaders: [String: String] = [:]
             for (key, value) in http.allHeaderFields {
@@ -628,10 +628,10 @@ actor YouTubeClient {
         }
         let response = try await transport.send(req)
         guard (200..<300).contains(response.statusCode) else {
-            throw CloudSourceError.networkError("YouTube returned HTTP \(response.statusCode).")
+            throw CloudSourceError.networkError(L10n.trNonisolated("YouTube returned HTTP %@.", String(response.statusCode)))
         }
         guard let json = try JSONSerialization.jsonObject(with: response.data) as? [String: Any] else {
-            throw CloudSourceError.apiError("Unexpected YouTube response format.")
+            throw CloudSourceError.apiError(L10n.trNonisolated("Unexpected YouTube response format."))
         }
         return json
     }
@@ -1399,7 +1399,7 @@ actor BilibiliClient {
               let wbiImg = data["wbi_img"] as? [String: Any],
               let imgURL = wbiImg["img_url"] as? String,
               let subURL = wbiImg["sub_url"] as? String else {
-            throw CloudSourceError.apiError("Could not obtain Bilibili WBI signing keys.")
+            throw CloudSourceError.apiError(L10n.trNonisolated("Could not obtain Bilibili WBI signing keys."))
         }
         let keys = WBIKeys(
             imgKey: Self.extractWBIKey(from: imgURL),
@@ -1433,10 +1433,10 @@ actor BilibiliClient {
         let req = try await makeRequest(url: url, cookie: cookie)
         let response = try await transport.send(req)
         guard (200..<300).contains(response.statusCode) else {
-            throw CloudSourceError.networkError("Bilibili returned HTTP \(response.statusCode).")
+            throw CloudSourceError.networkError(L10n.trNonisolated("Bilibili returned HTTP %@.", String(response.statusCode)))
         }
         guard let json = try JSONSerialization.jsonObject(with: response.data) as? [String: Any] else {
-            throw CloudSourceError.apiError("Unexpected Bilibili response format.")
+            throw CloudSourceError.apiError(L10n.trNonisolated("Unexpected Bilibili response format."))
         }
         if let code = json["code"] as? Int, code != 0 {
             let msg = (json["message"] as? String) ?? "Bilibili API error (\(code))."

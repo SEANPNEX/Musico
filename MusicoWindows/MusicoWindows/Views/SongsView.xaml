@@ -20,7 +20,7 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                    <TextBlock Text="Songs" Style="{StaticResource Win10PageTitleStyle}" />
+                    <TextBlock Text="{DynamicResource Str_Songs_Title}" Style="{StaticResource Win10PageTitleStyle}" />
                     <TextBlock x:Name="CountText"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="12"
@@ -52,7 +52,7 @@
                                     Height="20"
                                     FontSize="9"
                                     Content="&#xE711;"
-                                    ToolTip="Clear field filter"
+                                    ToolTip="{DynamicResource Str_Songs_ClearFieldFilter}"
                                     Click="ClearSearchField_Click" />
                         </StackPanel>
                     </Border>
@@ -63,7 +63,7 @@
                                  Padding="8,4,28,4"
                                  TextChanged="SearchBox_TextChanged" />
                         <TextBlock x:Name="SearchPlaceholder"
-                                   Text="Search songs, artists, albums (Ctrl+F)"
+                                   Text="{DynamicResource Str_Songs_SearchPlaceholder}"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="12"
                                    Foreground="{DynamicResource TextTertiaryBrush}"
@@ -104,7 +104,7 @@
                         Click="PlayAll_Click">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <TextBlock Text="Play All" VerticalAlignment="Center" />
+                        <TextBlock Text="{DynamicResource Str_Common_PlayAll}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
                 <Button x:Name="ShuffleAllButton"
@@ -112,7 +112,7 @@
                         Click="ShuffleAll_Click">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <TextBlock Text="Shuffle" VerticalAlignment="Center" />
+                        <TextBlock Text="{DynamicResource Str_Common_Shuffle}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
             </StackPanel>
@@ -233,7 +233,7 @@
                            HorizontalAlignment="Center"
                            Margin="0,0,0,12" />
                 <TextBlock x:Name="EmptyTitleText"
-                           Text="No Songs Yet"
+                           Text="{DynamicResource Str_Songs_EmptyTitle}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="17"
                            FontWeight="SemiBold"
@@ -241,7 +241,7 @@
                            HorizontalAlignment="Center"
                            Margin="0,0,0,6" />
                 <TextBlock x:Name="EmptyDescText"
-                           Text="Add a folder in Folders to build your music library."
+                           Text="{DynamicResource Str_Songs_EmptyDesc}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="13"
                            Foreground="{DynamicResource TextSecondaryBrush}"

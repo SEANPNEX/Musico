@@ -21,7 +21,7 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" VerticalAlignment="Center">
                     <TextBlock x:Name="TitleText"
-                               Text="Queues"
+                               Text="{DynamicResource Str_Queues_Title}"
                                Style="{StaticResource Win10PageTitleStyle}" />
                     <TextBlock x:Name="SubtitleText"
                                FontFamily="{StaticResource Win10Font}"
@@ -32,20 +32,20 @@
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
                     <Button Style="{StaticResource Win10ButtonStyle}"
                             Margin="0,0,6,0"
-                            ToolTip="New Queue"
+                            ToolTip="{DynamicResource Str_Queues_NewQueue}"
                             Click="NewQueue_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE710;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
-                            <TextBlock Text="New Queue" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Queues_NewQueue}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button x:Name="ClearButton"
                             Style="{StaticResource Win10ButtonStyle}"
-                            ToolTip="Clear Active Queue"
+                            ToolTip="{DynamicResource Str_Queues_ClearTooltip}"
                             Click="ClearQueue_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE74D;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
-                            <TextBlock Text="Clear" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Queues_Clear}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                 </StackPanel>
@@ -61,7 +61,7 @@
                 Padding="24,12">
             <StackPanel>
                 <Grid Margin="0,0,0,8">
-                    <TextBlock Text="PLAY QUEUES"
+                    <TextBlock Text="{DynamicResource Str_Queues_PlayQueuesHeader}"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="11"
                                FontWeight="SemiBold"
@@ -75,7 +75,7 @@
                                 Click="RenameQueue_Click">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE70F;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,5,0" />
-                                <TextBlock Text="Rename" FontSize="12" VerticalAlignment="Center" />
+                                <TextBlock Text="{DynamicResource Str_Common_Rename}" FontSize="12" VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
                         <Button x:Name="DeleteButton"
@@ -84,7 +84,7 @@
                                 Click="DeleteQueue_Click">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE74D;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,5,0" />
-                                <TextBlock Text="Delete" FontSize="12" VerticalAlignment="Center" />
+                                <TextBlock Text="{DynamicResource Str_Common_Delete}" FontSize="12" VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
                     </StackPanel>
@@ -96,7 +96,7 @@
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0"
-                               Text="Sort:"
+                               Text="{DynamicResource Str_Queues_SortLabel}"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="12"
                                Foreground="{DynamicResource TextSecondaryBrush}"
@@ -131,14 +131,14 @@
                            Foreground="{DynamicResource TextTertiaryBrush}"
                            HorizontalAlignment="Center"
                            Margin="0,0,0,12" />
-                <TextBlock Text="Queue is Empty"
+                <TextBlock Text="{DynamicResource Str_Queues_EmptyTitle}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="17"
                            FontWeight="SemiBold"
                            Foreground="{DynamicResource TextPrimaryBrush}"
                            HorizontalAlignment="Center"
                            Margin="0,0,0,6" />
-                <TextBlock Text="Click any song in your library to start playing."
+                <TextBlock Text="{DynamicResource Str_Queues_EmptyDesc}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="13"
                            Foreground="{DynamicResource TextSecondaryBrush}"

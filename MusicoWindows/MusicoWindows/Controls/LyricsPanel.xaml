@@ -19,7 +19,7 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" VerticalAlignment="Center">
                     <TextBlock x:Name="HeaderTitleText"
-                               Text="Lyrics"
+                               Text="{DynamicResource Str_Lyrics_Title}"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="16"
                                FontWeight="SemiBold"
@@ -37,18 +37,18 @@
                     <Button x:Name="ImportButton"
                             Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE8E5;"
-                            ToolTip="Import .lrc or .txt lyrics"
+                            ToolTip="{DynamicResource Str_Lyrics_ImportTooltip}"
                             Click="Import_Click" />
                     <Button x:Name="RemoveButton"
                             Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE74D;"
-                            ToolTip="Remove imported lyrics"
+                            ToolTip="{DynamicResource Str_Lyrics_RemoveTooltip}"
                             Visibility="Collapsed"
                             Click="Remove_Click" />
                     <Button x:Name="CloseButton"
                             Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE711;"
-                            ToolTip="Close panel"
+                            ToolTip="{DynamicResource Str_Lyrics_ClosePanelTooltip}"
                             Click="Close_Click" />
                 </StackPanel>
             </Grid>
@@ -75,14 +75,14 @@
                            Foreground="{DynamicResource TextTertiaryBrush}"
                            HorizontalAlignment="Center"
                            Margin="0,0,0,12" />
-                <TextBlock Text="No Lyrics"
+                <TextBlock Text="{DynamicResource Str_Lyrics_EmptyTitle}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="17"
                            FontWeight="SemiBold"
                            Foreground="{DynamicResource TextPrimaryBrush}"
                            HorizontalAlignment="Center"
                            Margin="0,0,0,6" />
-                <TextBlock Text="Import a .lrc or .txt file for this song, or place one with the same name next to it."
+                <TextBlock Text="{DynamicResource Str_Lyrics_EmptyDesc}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="12"
                            Foreground="{DynamicResource TextSecondaryBrush}"
@@ -91,7 +91,7 @@
                            Margin="0,0,0,16" />
                 <Button x:Name="EmptyImportButton"
                         Style="{StaticResource Win10PrimaryButtonStyle}"
-                        Content="Import from File..."
+                        Content="{DynamicResource Str_Lyrics_ImportFromFile}"
                         HorizontalAlignment="Center"
                         Click="Import_Click" />
             </StackPanel>

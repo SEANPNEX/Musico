@@ -34,6 +34,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.musico.core.ArtworkCache
+import com.musico.i18n.LocalStrings
 import com.musico.model.Track
 
 @Composable
@@ -45,12 +46,14 @@ fun TrackRow(
     isAvailable: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
-    subtitle: String = track.artist,
+    subtitle: String? = null,
     backgroundColor: Color = Color.Transparent,
     dragHandleModifier: Modifier? = null,
     trailingActions: (@Composable () -> Unit)? = null,
     menuContent: (@Composable ColumnScope.(onDismiss: () -> Unit) -> Unit)? = null
 ) {
+    val strings = LocalStrings.current
+    val resolvedSubtitle = subtitle ?: strings.displayArtist(track.artist)
     var menuExpanded by remember { mutableStateOf(false) }
 
     Row(
@@ -80,7 +83,7 @@ fun TrackRow(
                 overflow = TextOverflow.Ellipsis
             )
             Text(
-                text = subtitle,
+                text = resolvedSubtitle,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
@@ -91,7 +94,7 @@ fun TrackRow(
         if (isCurrent) {
             Icon(
                 imageVector = if (isPlaying) Icons.Rounded.GraphicEq else Icons.Rounded.Pause,
-                contentDescription = if (isPlaying) "Playing" else "Paused",
+                contentDescription = if (isPlaying) strings.playing else strings.paused,
                 tint = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.size(20.dp)
             )
@@ -108,7 +111,7 @@ fun TrackRow(
         if (dragHandleModifier != null) {
             Icon(
                 imageVector = Icons.Rounded.DragHandle,
-                contentDescription = "Reorder",
+                contentDescription = strings.reorder,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = dragHandleModifier.padding(horizontal = 8.dp, vertical = 10.dp)
             )
@@ -118,7 +121,7 @@ fun TrackRow(
                 IconButton(onClick = { menuExpanded = true }) {
                     Icon(
                         imageVector = Icons.Rounded.MoreVert,
-                        contentDescription = "Track options",
+                        contentDescription = strings.trackOptions,
                         tint = MaterialTheme.colorScheme.onSurfaceVariant
                     )
                 }

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 using MusicoWindows.Theme;
@@ -11,6 +12,11 @@ namespace MusicoWindows.Controls;
 
 public partial class EqualizerDialog : UserControl
 {
+    private sealed record PresetOption(string? CanonicalName, string DisplayName)
+    {
+        public override string ToString() => DisplayName;
+    }
+
     private static readonly string[] BandLabels = ["31", "62", "125", "250", "500", "1K", "2K", "4K", "8K", "16K"];
 
     private readonly List<VerticalEqSlider> _sliders = new();
@@ -24,6 +30,11 @@ public partial class EqualizerDialog : UserControl
         InitializeComponent();
         BuildBands();
         BuildPresetItems();
+        LocalizationManager.LanguageChanged += _ =>
+        {
+            BuildPresetItems();
+            SyncUiFromWorking();
+        };
     }
 
     public bool IsOpen => Visibility == Visibility.Visible;
@@ -83,12 +94,20 @@ public partial class EqualizerDialog : UserControl
 
     private void BuildPresetItems()
     {
-        PresetCombo.Items.Clear();
-        foreach (var preset in EqPreset.All)
+        _syncing = true;
+        try
         {
-            PresetCombo.Items.Add(preset.Name);
+            PresetCombo.Items.Clear();
+            foreach (var preset in EqPreset.All)
+            {
+                PresetCombo.Items.Add(new PresetOption(preset.Name, L.EqPresetName(preset.Name)));
+            }
+            PresetCombo.Items.Add(new PresetOption(null, L.Get("Equalizer_PresetCustom")));
         }
-        PresetCombo.Items.Add("Custom");
+        finally
+        {
+            _syncing = false;
+        }
     }
 
     public void Show(AppServices services)
@@ -118,11 +137,21 @@ public partial class EqualizerDialog : UserControl
         }
 
         PreampSlider.Value = _working.PreampDb;
-        PreampLabel.Text = $"Preamp {FormatGain(_working.PreampDb)} dB";
+        PreampLabel.Text = L.Format("Equalizer_PreampFormat", FormatGain(_working.PreampDb));
 
-        PresetCombo.SelectedItem = _working.PresetName is { Length: > 0 } name && PresetCombo.Items.Contains(name)
-            ? name
-            : "Custom";
+        PresetOption? selected = null;
+        if (_working.PresetName is { Length: > 0 } name)
+        {
+            foreach (PresetOption opt in PresetCombo.Items)
+            {
+                if (string.Equals(opt.CanonicalName, name, StringComparison.Ordinal))
+                {
+                    selected = opt;
+                    break;
+                }
+            }
+        }
+        PresetCombo.SelectedItem = selected ?? PresetCombo.Items[^1];
 
         BandsContainer.IsEnabled = _working.Enabled;
         BandsContainer.Opacity = _working.Enabled ? 1.0 : 0.42;
@@ -143,7 +172,7 @@ public partial class EqualizerDialog : UserControl
         _working.PresetName = null;
         _gainLabels[index].Text = FormatGain(newGain);
         _syncing = true;
-        PresetCombo.SelectedItem = "Custom";
+        PresetCombo.SelectedItem = PresetCombo.Items[^1];
         _syncing = false;
         PushEq();
     }
@@ -159,7 +188,7 @@ public partial class EqualizerDialog : UserControl
     private void PresetCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (_syncing) return;
-        if (PresetCombo.SelectedItem is not string name || name == "Custom") return;
+        if (PresetCombo.SelectedItem is not PresetOption { CanonicalName: string name }) return;
 
         foreach (var preset in EqPreset.All)
         {
@@ -178,7 +207,7 @@ public partial class EqualizerDialog : UserControl
     {
         if (_syncing) return;
         _working.PreampDb = (float)e.NewValue;
-        PreampLabel.Text = $"Preamp {FormatGain(_working.PreampDb)} dB";
+        PreampLabel.Text = L.Format("Equalizer_PreampFormat", FormatGain(_working.PreampDb));
         PushEq();
     }
 

@@ -1,3 +1,4 @@
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -20,13 +21,13 @@ public static class TrackSorter
 
     public static string Label(TrackSortMode mode) => mode switch
     {
-        TrackSortMode.Custom => "Custom",
-        TrackSortMode.NameAscending => "Name (A-Z)",
-        TrackSortMode.NameDescending => "Name (Z-A)",
-        TrackSortMode.DateModified => "Date Modified",
-        TrackSortMode.MostPlayed => "Most Played",
-        TrackSortMode.LeastPlayed => "Least Played",
-        _ => "Custom"
+        TrackSortMode.Custom => L.Get("Sort_Custom"),
+        TrackSortMode.NameAscending => L.Get("Sort_NameAsc"),
+        TrackSortMode.NameDescending => L.Get("Sort_NameDesc"),
+        TrackSortMode.DateModified => L.Get("Sort_DateModified"),
+        TrackSortMode.MostPlayed => L.Get("Sort_MostPlayed"),
+        TrackSortMode.LeastPlayed => L.Get("Sort_LeastPlayed"),
+        _ => L.Get("Sort_Custom")
     };
 
     public static List<Track> Sort(

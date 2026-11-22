@@ -45,7 +45,7 @@ struct TrackRow: View {
                 Text(track.title)
                     .foregroundStyle(isCurrent ? Color.accentColor : .primary)
                     .lineLimit(1)
-                Text(subtitle ?? track.artist)
+                Text(subtitle ?? L10n.displayArtist(track.artist))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
@@ -119,7 +119,7 @@ struct ReorderableTrackRow: View {
                 .foregroundStyle(.tertiary)
                 .frame(width: 28, height: 36)
                 .contentShape(Rectangle())
-                .accessibilityLabel("Reorder \(track.title)")
+                .accessibilityLabel(L10n.tr("Reorder %@", track.title))
                 .draggable("\(scopeID):\(index)") {
                     Text(track.title)
                         .font(.subheadline.weight(.medium))
@@ -159,15 +159,15 @@ struct TrackSortMenu: View {
     let onSelect: (TrackSortOrder) -> Void
 
     var body: some View {
-        Menu("Sort", systemImage: "arrow.up.arrow.down") {
+        Menu(L10n.tr("Sort"), systemImage: "arrow.up.arrow.down") {
             ForEach(TrackSortOrder.allCases) { order in
                 Button {
                     onSelect(order)
                 } label: {
                     if selection == order {
-                        Label(order.rawValue, systemImage: "checkmark")
+                        Label(order.localizedTitle, systemImage: "checkmark")
                     } else {
-                        Text(order.rawValue)
+                        Text(order.localizedTitle)
                     }
                 }
             }
@@ -196,17 +196,17 @@ struct NewPlaylistAlert: ViewModifier {
     func body(content: Content) -> some View {
         content
             .environment(prompt)
-            .alert("New Playlist", isPresented: Binding(get: { prompt.create != nil }, set: { if !$0 { prompt.create = nil } })) {
-                TextField("Name", text: $name)
-                Button("Cancel", role: .cancel) { name = "" }
-                Button("Create") {
+            .alert(L10n.tr("New Playlist"), isPresented: Binding(get: { prompt.create != nil }, set: { if !$0 { prompt.create = nil } })) {
+                TextField(L10n.tr("Name"), text: $name)
+                Button(L10n.tr("Cancel"), role: .cancel) { name = "" }
+                Button(L10n.tr("Create")) {
                     let trimmed = name.trimmingCharacters(in: .whitespaces)
                     if !trimmed.isEmpty { prompt.create?(trimmed) }
                     name = ""
                 }
                 .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
             } message: {
-                Text("Enter a name for the playlist.")
+                Text(L10n.tr("Enter a name for the playlist."))
             }
     }
 }
@@ -226,27 +226,27 @@ struct TrackMenuItems: View {
     @Environment(\.appNavigation) private var navigation
 
     var body: some View {
-        Button("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") { player.playNext(ids) }
-        Button("Add to Queue", systemImage: "text.append") { player.addToQueue(ids, queue: nil) }
+        Button(L10n.tr("Play Next"), systemImage: "text.line.first.and.arrowtriangle.forward") { player.playNext(ids) }
+        Button(L10n.tr("Add to Queue"), systemImage: "text.append") { player.addToQueue(ids, queue: nil) }
         if queues.queues.count > 1 {
-            Menu("Add to Another Queue", systemImage: "rectangle.stack.badge.plus") {
+            Menu(L10n.tr("Add to Another Queue"), systemImage: "rectangle.stack.badge.plus") {
                 ForEach(queues.queues.filter { $0.id != queues.activeID }) { queue in
-                    Button(queue.name) { player.addToQueue(ids, queue: queue.id) }
+                    Button(L10n.displayQueueName(queue.name)) { player.addToQueue(ids, queue: queue.id) }
                 }
             }
         }
-        Button("Play in New Queue", systemImage: "plus.rectangle.on.rectangle") { player.playInNewQueue(ids) }
+        Button(L10n.tr("Play in New Queue"), systemImage: "plus.rectangle.on.rectangle") { player.playInNewQueue(ids) }
         if ids.count == 1, let trackID = ids.first, library.track(trackID) != nil {
-            Button("Song Info", systemImage: "info.circle") {
+            Button(L10n.tr("Song Info"), systemImage: "info.circle") {
                 songInfo.show(trackID, library: library, history: history, navigation: navigation)
             }
         }
         Divider()
-        Menu("Add to Playlist", systemImage: "music.note.list") {
+        Menu(L10n.tr("Add to Playlist"), systemImage: "music.note.list") {
             ForEach(library.playlists) { playlist in
                 Button(playlist.name) { library.add(ids, toPlaylist: playlist.id) }
             }
-            Button("New Playlist…", systemImage: "plus") {
+            Button(L10n.tr("New Playlist…"), systemImage: "plus") {
                 newPlaylist.create = { [library, ids] name in
                     library.add(ids, toPlaylist: library.createPlaylist(name: name))
                 }
@@ -254,13 +254,13 @@ struct TrackMenuItems: View {
         }
         if let favouriteID {
             let isFavourite = library.isFavourite(favouriteID)
-            Button(isFavourite ? "Remove from Favourites" : "Add to Favourites", systemImage: isFavourite ? "heart.slash" : "heart") {
+            Button(isFavourite ? L10n.tr("Remove from Favourites") : L10n.tr("Add to Favourites"), systemImage: isFavourite ? "heart.slash" : "heart") {
                 library.toggleFavourite(favouriteID)
             }
         }
         if ids.count == 1, let trackID = ids.first, let track = library.track(trackID), track.isCloud {
             Divider()
-            Button("Save to Local Folder…", systemImage: "square.and.arrow.down") {
+            Button(L10n.tr("Save to Local Folder…"), systemImage: "square.and.arrow.down") {
                 let root = library.root(track.rootID)
                 cloudExport.request = CloudExportPrompt.Request(track: track, root: root) { [library] savedURL in
                     if library.containsLocalURL(savedURL) {
@@ -309,7 +309,7 @@ struct PlayShuffleButtons: View {
                 player.play(ids, startAt: 0)
             }
         } label: {
-            Label("Play", systemImage: "play.fill").frame(maxWidth: .infinity)
+            Label(L10n.tr("Play"), systemImage: "play.fill").frame(maxWidth: .infinity)
         }
     }
 
@@ -323,7 +323,7 @@ struct PlayShuffleButtons: View {
                 player.play(ids, startAt: startIndex)
             }
         } label: {
-            Label("Shuffle", systemImage: "shuffle").frame(maxWidth: .infinity)
+            Label(L10n.tr("Shuffle"), systemImage: "shuffle").frame(maxWidth: .infinity)
         }
     }
 }

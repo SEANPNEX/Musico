@@ -60,17 +60,17 @@
                 <Button x:Name="MinimizeButton"
                         Style="{StaticResource Win10CaptionButtonStyle}"
                         Content="&#xE921;"
-                        ToolTip="Minimize"
+                        ToolTip="{DynamicResource Str_Window_Minimize}"
                         Click="Minimize_Click" />
                 <Button x:Name="MaxRestoreButton"
                         Style="{StaticResource Win10CaptionButtonStyle}"
                         Content="&#xE922;"
-                        ToolTip="Maximize"
+                        ToolTip="{DynamicResource Str_Window_Maximize}"
                         Click="MaxRestore_Click" />
                 <Button x:Name="CloseButton"
                         Style="{StaticResource Win10CloseButtonStyle}"
                         Content="&#xE8BB;"
-                        ToolTip="Close"
+                        ToolTip="{DynamicResource Str_Window_Close}"
                         Click="Close_Click" />
             </StackPanel>
         </Grid>
@@ -109,7 +109,7 @@
                                     Height="40"
                                     HorizontalContentAlignment="Left"
                                     Padding="15,0"
-                                    ToolTip="Toggle navigation pane"
+                                    ToolTip="{DynamicResource Str_Nav_TogglePane}"
                                     Click="Hamburger_Click">
                                 <TextBlock Text="&#xE700;"
                                            FontFamily="{StaticResource Win10GlyphFont}"
@@ -129,12 +129,12 @@
                                                  Checked="NavItem_Checked">
                                         <StackPanel Orientation="Horizontal" Margin="14,0">
                                             <TextBlock Text="&#xE8B7;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="15" Width="22" VerticalAlignment="Center" />
-                                            <TextBlock x:Name="LblFolders" Text="Folders" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="LblFolders" Text="{DynamicResource Str_Nav_Folders}" Margin="12,0,0,0" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </RadioButton>
 
                                     <TextBlock x:Name="HdrLibrary"
-                                               Text="LIBRARY"
+                                               Text="{DynamicResource Str_Nav_HeaderLibrary}"
                                                FontSize="11"
                                                FontWeight="SemiBold"
                                                Foreground="{DynamicResource TextTertiaryBrush}"
@@ -148,7 +148,7 @@
                                                  Checked="NavItem_Checked">
                                         <StackPanel Orientation="Horizontal" Margin="14,0">
                                             <TextBlock Text="&#xE8D6;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="15" Width="22" VerticalAlignment="Center" />
-                                            <TextBlock x:Name="LblSongs" Text="Songs" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="LblSongs" Text="{DynamicResource Str_Nav_Songs}" Margin="12,0,0,0" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </RadioButton>
 
@@ -159,7 +159,7 @@
                                                  Checked="NavItem_Checked">
                                         <StackPanel Orientation="Horizontal" Margin="14,0">
                                             <TextBlock Text="&#xE93C;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="15" Width="22" VerticalAlignment="Center" />
-                                            <TextBlock x:Name="LblAlbums" Text="Albums" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="LblAlbums" Text="{DynamicResource Str_Nav_Albums}" Margin="12,0,0,0" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </RadioButton>
 
@@ -170,12 +170,12 @@
                                                  Checked="NavItem_Checked">
                                         <StackPanel Orientation="Horizontal" Margin="14,0">
                                             <TextBlock Text="&#xE720;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="15" Width="22" VerticalAlignment="Center" />
-                                            <TextBlock x:Name="LblArtists" Text="Artists" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="LblArtists" Text="{DynamicResource Str_Nav_Artists}" Margin="12,0,0,0" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </RadioButton>
 
                                     <TextBlock x:Name="HdrPlaylists"
-                                               Text="PLAYLISTS"
+                                               Text="{DynamicResource Str_Nav_HeaderPlaylists}"
                                                FontSize="11"
                                                FontWeight="SemiBold"
                                                Foreground="{DynamicResource TextTertiaryBrush}"
@@ -188,7 +188,7 @@
                                                  Checked="NavItem_Checked">
                                         <StackPanel Orientation="Horizontal" Margin="14,0">
                                             <TextBlock Text="&#xE8FD;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="15" Width="22" VerticalAlignment="Center" />
-                                            <TextBlock x:Name="LblPlaylists" Text="All Playlists" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="LblPlaylists" Text="{DynamicResource Str_Nav_AllPlaylists}" Margin="12,0,0,0" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </RadioButton>
 
@@ -199,7 +199,7 @@
                                                  Checked="NavItem_Checked">
                                         <StackPanel Orientation="Horizontal" Margin="14,0">
                                             <TextBlock Text="&#xEB51;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="15" Width="22" VerticalAlignment="Center" />
-                                            <TextBlock x:Name="LblFavourites" Text="Favourites" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="LblFavourites" Text="{DynamicResource Str_Nav_Favourites}" Margin="12,0,0,0" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </RadioButton>
 
@@ -211,7 +211,7 @@
                                             Height="38"
                                             Padding="0"
                                             HorizontalContentAlignment="Left"
-                                            ToolTip="New Playlist"
+                                            ToolTip="{DynamicResource Str_Nav_NewPlaylist}"
                                             Click="NewPlaylist_Click">
                                         <StackPanel Orientation="Horizontal" Margin="14,0">
                                             <TextBlock Text="&#xE710;"
@@ -221,7 +221,7 @@
                                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                                        VerticalAlignment="Center" />
                                             <TextBlock x:Name="LblNewPlaylist"
-                                                       Text="New Playlist"
+                                                       Text="{DynamicResource Str_Nav_NewPlaylist}"
                                                        Foreground="{DynamicResource TextSecondaryBrush}"
                                                        Margin="12,0,0,0"
                                                        VerticalAlignment="Center" />
@@ -237,7 +237,7 @@
                                                  Checked="NavItem_Checked">
                                         <StackPanel Orientation="Horizontal" Margin="14,0">
                                             <TextBlock Text="&#xE90B;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="15" Width="22" VerticalAlignment="Center" />
-                                            <TextBlock x:Name="LblQueues" Text="Queues" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="LblQueues" Text="{DynamicResource Str_Nav_Queues}" Margin="12,0,0,0" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </RadioButton>
 
@@ -248,13 +248,13 @@
                                                  Checked="NavItem_Checked">
                                         <StackPanel Orientation="Horizontal" Margin="14,0">
                                             <TextBlock Text="&#xE9D9;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="15" Width="22" VerticalAlignment="Center" />
-                                            <TextBlock x:Name="LblStats" Text="Stats" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="LblStats" Text="{DynamicResource Str_Nav_Stats}" Margin="12,0,0,0" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </RadioButton>
                                 </StackPanel>
                             </ScrollViewer>
 
-                            <!-- Sidebar Footer: Theme Toggle & Rescan -->
+                            <!-- Sidebar Footer: Theme Toggle, Language, Rescan & Updates -->
                             <StackPanel Grid.Row="2"
                                         Margin="0,4,0,6">
                                 <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,0,0,4" />
@@ -263,7 +263,7 @@
                                         Height="38"
                                         Padding="0"
                                         HorizontalContentAlignment="Left"
-                                        ToolTip="Switch Light / Dark theme"
+                                        ToolTip="{DynamicResource Str_Nav_ThemeTooltip}"
                                         Click="ToggleTheme_Click">
                                     <StackPanel Orientation="Horizontal" Margin="14,0">
                                         <TextBlock x:Name="ThemeGlyph"
@@ -273,7 +273,26 @@
                                                    Width="22"
                                                    VerticalAlignment="Center" />
                                         <TextBlock x:Name="LblTheme"
-                                                   Text="Light Theme"
+                                                   Text="{DynamicResource Str_Nav_LightTheme}"
+                                                   Margin="12,0,0,0"
+                                                   VerticalAlignment="Center" />
+                                    </StackPanel>
+                                </Button>
+                                <Button x:Name="LanguageButton"
+                                        Style="{StaticResource Win10FlatButtonStyle}"
+                                        Height="38"
+                                        Padding="0"
+                                        HorizontalContentAlignment="Left"
+                                        ToolTip="{DynamicResource Str_Nav_LanguageTooltip}"
+                                        Click="LanguageFooter_Click">
+                                    <StackPanel Orientation="Horizontal" Margin="14,0">
+                                        <TextBlock Text="&#xE774;"
+                                                   FontFamily="{StaticResource Win10GlyphFont}"
+                                                   FontSize="15"
+                                                   Width="22"
+                                                   VerticalAlignment="Center" />
+                                        <TextBlock x:Name="LblLanguage"
+                                                   Text="{DynamicResource Str_Nav_Language}"
                                                    Margin="12,0,0,0"
                                                    VerticalAlignment="Center" />
                                     </StackPanel>
@@ -283,7 +302,7 @@
                                         Height="38"
                                         Padding="0"
                                         HorizontalContentAlignment="Left"
-                                        ToolTip="Rescan library folders"
+                                        ToolTip="{DynamicResource Str_Nav_RescanTooltip}"
                                         Click="RescanFooter_Click">
                                     <StackPanel Orientation="Horizontal" Margin="14,0">
                                         <TextBlock Text="&#xE72C;"
@@ -292,7 +311,7 @@
                                                    Width="22"
                                                    VerticalAlignment="Center" />
                                         <TextBlock x:Name="LblRescan"
-                                                   Text="Rescan Library"
+                                                   Text="{DynamicResource Str_Nav_Rescan}"
                                                    Margin="12,0,0,0"
                                                    VerticalAlignment="Center" />
                                     </StackPanel>
@@ -302,7 +321,7 @@
                                         Height="38"
                                         Padding="0"
                                         HorizontalContentAlignment="Left"
-                                        ToolTip="Check for Updates"
+                                        ToolTip="{DynamicResource Str_Nav_CheckUpdates}"
                                         Click="CheckUpdatesFooter_Click">
                                     <StackPanel Orientation="Horizontal" Margin="14,0">
                                         <Grid Width="22" Height="22" VerticalAlignment="Center">
@@ -321,7 +340,7 @@
                                                      Visibility="Collapsed" />
                                         </Grid>
                                         <TextBlock x:Name="LblCheckUpdates"
-                                                   Text="Check for Updates"
+                                                   Text="{DynamicResource Str_Nav_CheckUpdates}"
                                                    Margin="12,0,0,0"
                                                    VerticalAlignment="Center" />
                                     </StackPanel>

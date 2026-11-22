@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using Microsoft.Win32;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -30,8 +31,8 @@ public static class TrackMenuHelper
         var ids = trackIds.ToList();
         bool hasTracks = ids.Count > 0;
 
-        var playNext = CreateItem("Play Next", "\uE8B2", () => services.Player.PlayNext(ids), hasTracks);
-        var addToQueue = CreateItem("Add to Queue", "\uE710", () => services.Player.AddToQueue(ids, null), hasTracks);
+        var playNext = CreateItem(L.Get("Menu_PlayNext"), "\uE8B2", () => services.Player.PlayNext(ids), hasTracks);
+        var addToQueue = CreateItem(L.Get("Menu_AddToQueue"), "\uE710", () => services.Player.AddToQueue(ids, null), hasTracks);
         menu.Items.Add(playNext);
         menu.Items.Add(addToQueue);
 
@@ -39,7 +40,7 @@ public static class TrackMenuHelper
         {
             var otherQueues = new MenuItem
             {
-                Header = "Add to Another Queue",
+                Header = L.Get("Menu_AddToAnotherQueue"),
                 Icon = CreateGlyph("\uE90B"),
                 IsEnabled = hasTracks
             };
@@ -51,14 +52,14 @@ public static class TrackMenuHelper
             menu.Items.Add(otherQueues);
         }
 
-        var playInNew = CreateItem("Play in New Queue", "\uE8A9", () => services.Player.PlayInNewQueue(ids), hasTracks);
+        var playInNew = CreateItem(L.Get("Menu_PlayInNewQueue"), "\uE8A9", () => services.Player.PlayInNewQueue(ids), hasTracks);
         menu.Items.Add(playInNew);
 
         menu.Items.Add(new Separator());
 
         var addToPlaylist = new MenuItem
         {
-            Header = "Add to Playlist",
+            Header = L.Get("Menu_AddToPlaylist"),
             Icon = CreateGlyph("\uE8D6"),
             IsEnabled = hasTracks
         };
@@ -71,13 +72,13 @@ public static class TrackMenuHelper
         {
             addToPlaylist.Items.Add(new Separator());
         }
-        addToPlaylist.Items.Add(CreateItem("New Playlist...", "\uE710", () =>
+        addToPlaylist.Items.Add(CreateItem(L.Get("Menu_NewPlaylistEllipsis"), "\uE710", () =>
         {
             openTextPrompt(
-                "New Playlist",
-                "Enter a name for the playlist.",
+                L.Get("Nav_NewPlaylist"),
+                L.Get("Playlists_NewMessage"),
                 string.Empty,
-                "Create",
+                L.Get("Common_Create"),
                 name =>
                 {
                     var id = services.Library.CreatePlaylist(name);
@@ -90,7 +91,7 @@ public static class TrackMenuHelper
         {
             bool isFav = services.Library.IsFavourite(favouriteTrackId);
             menu.Items.Add(CreateItem(
-                isFav ? "Remove from Favourites" : "Add to Favourites",
+                isFav ? L.Get("Menu_RemoveFromFavourites") : L.Get("Menu_AddToFavourites"),
                 isFav ? "\uEB52" : "\uEB51",
                 () => services.Library.ToggleFavourite(favouriteTrackId),
                 true));
@@ -101,7 +102,7 @@ public static class TrackMenuHelper
             services.Library.GetTrack(ids[0]) is { } singleTrack)
         {
             menu.Items.Add(CreateItem(
-                "Song Info",
+                L.Get("SongInfo_Title"),
                 "\uE946",
                 () =>
                 {
@@ -120,7 +121,7 @@ public static class TrackMenuHelper
         {
             menu.Items.Add(new Separator());
             menu.Items.Add(CreateItem(
-                "Save to Local Folder...",
+                L.Get("Folders_SaveToLocal"),
                 "\uE896",
                 () => PromptAndExportCloudTrack(services, cloudTrack, openSaveCloudTrack)));
         }
@@ -136,7 +137,7 @@ public static class TrackMenuHelper
     {
         var dlg = new OpenFolderDialog
         {
-            Title = $"Save \"{track.Title}\" to Local Folder"
+            Title = L.Format("Menu_SaveTrackToLocalTitle", track.Title)
         };
         if (!string.IsNullOrWhiteSpace(services.MusicDirectory) && Directory.Exists(services.MusicDirectory))
         {

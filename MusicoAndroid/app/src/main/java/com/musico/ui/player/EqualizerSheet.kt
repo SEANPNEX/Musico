@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.musico.i18n.LocalStrings
 import com.musico.model.EqPreset
 import com.musico.model.EqSettings
 import kotlin.math.roundToInt
@@ -82,6 +83,7 @@ fun EqualizerSheetContent(
     onUpdateEq: (EqSettings) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val strings = LocalStrings.current
     var presetExpanded by remember { mutableStateOf(false) }
 
     Column(
@@ -109,14 +111,14 @@ fun EqualizerSheetContent(
                     )
                 }
             ) {
-                Text("Reset")
+                Text(strings.reset)
             }
             Text(
-                text = "Equalizer",
+                text = strings.equalizer,
                 style = MaterialTheme.typography.titleLarge
             )
             TextButton(onClick = onDismiss) {
-                Text("Done")
+                Text(strings.done)
             }
         }
 
@@ -128,7 +130,7 @@ fun EqualizerSheetContent(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "Equalizer",
+                text = strings.equalizer,
                 style = MaterialTheme.typography.titleMedium
             )
             Switch(
@@ -142,11 +144,11 @@ fun EqualizerSheetContent(
             onExpandedChange = { if (eq.enabled) presetExpanded = it }
         ) {
             OutlinedTextField(
-                value = eq.presetName ?: "Custom",
+                value = strings.eqPresetLabel(eq.presetName),
                 onValueChange = {},
                 readOnly = true,
                 enabled = eq.enabled,
-                label = { Text("Preset") },
+                label = { Text(strings.presetLabel) },
                 trailingIcon = {
                     ExposedDropdownMenuDefaults.TrailingIcon(expanded = presetExpanded)
                 },
@@ -161,7 +163,7 @@ fun EqualizerSheetContent(
             ) {
                 EqPreset.ALL.forEach { preset ->
                     DropdownMenuItem(
-                        text = { Text(preset.name) },
+                        text = { Text(strings.eqPresetLabel(preset.name)) },
                         onClick = {
                             onUpdateEq(
                                 eq.copy(
@@ -189,7 +191,7 @@ fun EqualizerSheetContent(
                     modifier = Modifier
                         .weight(1f)
                         .semantics(mergeDescendants = true) {
-                            contentDescription = "$label hertz, ${formatGain(gain)} decibels"
+                            contentDescription = strings.bandAccessibility(label, formatGain(gain))
                         },
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.spacedBy(6.dp)
@@ -239,7 +241,7 @@ fun EqualizerSheetContent(
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Text(
-                text = "Preamp ${formatGain(eq.preampDb)} dB",
+                text = strings.preampLabel(formatGain(eq.preampDb)),
                 style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

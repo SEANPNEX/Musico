@@ -41,6 +41,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -50,9 +51,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.unit.dp
+import androidx.core.os.ConfigurationCompat
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.musico.audio.PlaybackError
+import com.musico.i18n.AppStrings
+import com.musico.i18n.LocalStrings
+import com.musico.i18n.resolveLanguage
+import com.musico.i18n.stringsFor
 import com.musico.model.SearchField
+import java.util.Locale
 import com.musico.store.AppContainer
 import com.musico.ui.components.TrackActionDialogs
 import com.musico.ui.components.rememberTrackActionState
@@ -70,13 +79,19 @@ import com.musico.ui.screens.StatsScreen
 import com.musico.ui.theme.MusicoMotion
 
 enum class TopDestination(
-    val label: String,
     val icon: ImageVector
 ) {
-    FOLDERS("Folders", Icons.Rounded.Folder),
-    LIBRARY("Library", Icons.Rounded.LibraryMusic),
-    QUEUES("Queues", Icons.AutoMirrored.Rounded.QueueMusic),
-    STATS("Stats", Icons.Rounded.BarChart)
+    FOLDERS(Icons.Rounded.Folder),
+    LIBRARY(Icons.Rounded.LibraryMusic),
+    QUEUES(Icons.AutoMirrored.Rounded.QueueMusic),
+    STATS(Icons.Rounded.BarChart);
+
+    fun label(strings: AppStrings): String = when (this) {
+        FOLDERS -> strings.tabFolders
+        LIBRARY -> strings.tabLibrary
+        QUEUES -> strings.tabQueues
+        STATS -> strings.tabStats
+    }
 }
 
 @Composable
@@ -86,6 +101,35 @@ fun MusicoApp(
     onPickLyricsFile: ((Uri) -> Unit) -> Unit,
     onPickImage: ((Uri) -> Unit) -> Unit,
 ) {
+    val languageStore = appContainer.languageStore
+    val selectedLanguage by languageStore.language.collectAsStateWithLifecycle()
+    val configuration = LocalConfiguration.current
+    val systemLocale = remember(configuration) {
+        ConfigurationCompat.getLocales(configuration)[0] ?: Locale.getDefault()
+    }
+    val resolvedLanguage = remember(selectedLanguage, systemLocale) {
+        resolveLanguage(selectedLanguage, systemLocale)
+    }
+    val strings = stringsFor(resolvedLanguage)
+
+    CompositionLocalProvider(LocalStrings provides strings) {
+        MusicoAppContent(
+            appContainer = appContainer,
+            onPickFolder = onPickFolder,
+            onPickLyricsFile = onPickLyricsFile,
+            onPickImage = onPickImage,
+        )
+    }
+}
+
+@Composable
+private fun MusicoAppContent(
+    appContainer: AppContainer,
+    onPickFolder: ((Uri) -> Unit) -> Unit,
+    onPickLyricsFile: ((Uri) -> Unit) -> Unit,
+    onPickImage: ((Uri) -> Unit) -> Unit,
+) {
+    val strings = LocalStrings.current
     val libraryStore = appContainer.libraryStore
     val queueStore = appContainer.queueStore
     val historyStore = appContainer.historyStore
@@ -163,11 +207,12 @@ fun MusicoApp(
                         }
                         NavigationBar {
                             TopDestination.entries.forEach { dest ->
+                                val destLabel = dest.label(strings)
                                 NavigationBarItem(
                                     selected = selectedDestination == dest,
                                     onClick = { selectedDestination = dest },
-                                    icon = { Icon(dest.icon, contentDescription = dest.label) },
-                                    label = { Text(dest.label) }
+                                    icon = { Icon(dest.icon, contentDescription = destLabel) },
+                                    label = { Text(destLabel) }
                                 )
                             }
                         }
@@ -209,11 +254,12 @@ fun MusicoApp(
                             }
                     ) {
                         TopDestination.entries.forEach { dest ->
+                            val destLabel = dest.label(strings)
                             NavigationRailItem(
                                 selected = selectedDestination == dest,
                                 onClick = { selectedDestination = dest },
-                                icon = { Icon(dest.icon, contentDescription = dest.label) },
-                                label = { Text(dest.label) }
+                                icon = { Icon(dest.icon, contentDescription = destLabel) },
+                                label = { Text(destLabel) }
                             )
                         }
                     }
@@ -260,11 +306,11 @@ fun MusicoApp(
                                         horizontalArrangement = Arrangement.SpaceBetween
                                     ) {
                                         Text(
-                                            text = if (displayedPanel == SidePanel.LYRICS) "Lyrics" else "Queue",
+                                            text = if (displayedPanel == SidePanel.LYRICS) strings.lyrics else strings.queue,
                                             style = MaterialTheme.typography.titleMedium
                                         )
                                         IconButton(onClick = { sidePanel = null }) {
-                                            Icon(Icons.Rounded.Close, contentDescription = "Close panel")
+                                            Icon(Icons.Rounded.Close, contentDescription = strings.closePanel)
                                         }
                                     }
                                     Crossfade(
@@ -364,14 +410,21 @@ fun MusicoApp(
     )
 
     val errorMsg = playerState.errorMessage
-    if (errorMsg != null) {
+    val structuredError = playerState.playbackError
+    if (errorMsg != null || structuredError != null) {
+        val displayError = when (structuredError) {
+            is PlaybackError.ConsecutiveFailures -> strings.playbackStoppedConsecutive(structuredError.count)
+            is PlaybackError.TrackFailed -> strings.playbackFailedTrack(structuredError.title ?: strings.thisSong)
+            is PlaybackError.EngineError -> structuredError.message ?: strings.playbackErrorGeneric
+            null -> errorMsg ?: strings.playbackErrorGeneric
+        }
         AlertDialog(
             onDismissRequest = { playerController.clearError() },
-            title = { Text("Playback Problem") },
-            text = { Text(errorMsg) },
+            title = { Text(strings.playbackProblem) },
+            text = { Text(displayError) },
             confirmButton = {
                 TextButton(onClick = { playerController.clearError() }) {
-                    Text("OK")
+                    Text(strings.ok)
                 }
             }
         )
@@ -409,6 +462,7 @@ private fun DestinationContent(
                     trackActions = trackActions,
                     updateManager = appContainer.updateManager,
                     cloudExporter = appContainer.cloudExporter,
+                    languageStore = appContainer.languageStore,
                     onPickFolder = onPickFolder,
                     modifier = Modifier.fillMaxSize()
                 )
@@ -420,6 +474,7 @@ private fun DestinationContent(
                     queues = queueState.queues,
                     activeQueue = queueState.active,
                     trackActions = trackActions,
+                    languageStore = appContainer.languageStore,
                     pendingSearchRequest = pendingSearchRequest,
                     onConsumeSearchRequest = onConsumeSearchRequest,
                     modifier = Modifier.fillMaxSize()
@@ -444,6 +499,7 @@ private fun DestinationContent(
                     queues = queueState.queues,
                     activeQueue = queueState.active,
                     trackActions = trackActions,
+                    languageStore = appContainer.languageStore,
                     modifier = Modifier.fillMaxSize()
                 )
             }

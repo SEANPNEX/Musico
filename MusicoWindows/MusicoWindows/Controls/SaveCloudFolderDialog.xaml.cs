@@ -9,6 +9,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Win32;
 using MusicoWindows.Cloud;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 using MusicoWindows.Theme;
@@ -41,10 +42,10 @@ public partial class SaveCloudFolderDialog : UserControl
         _completedFile = null;
         ResetCts();
 
-        TitleText.Text = "Save Cloud Playlist to Local Folder";
-        SourceSummaryText.Text = $"{root.Name} · {tracks.Count} {(tracks.Count == 1 ? "song" : "songs")}";
+        TitleText.Text = L.Get("SaveCloud_Title");
+        SourceSummaryText.Text = $"{root.Name} · {L.SongsCount(tracks.Count)}";
 
-        string initialFolderName = CloudExporter.SanitizeFileName(root.Name, "Cloud Playlist");
+        string initialFolderName = CloudExporter.SanitizeFileName(root.Name, L.Get("SaveCloud_DefaultFolderName"));
         string defaultLocation = ResolveDefaultSaveLocation(services);
 
         FormPanel.Visibility = Visibility.Visible;
@@ -80,8 +81,8 @@ public partial class SaveCloudFolderDialog : UserControl
         _completedFile = null;
         ResetCts();
 
-        TitleText.Text = "Save Song to Local Folder";
-        SourceSummaryText.Text = $"{track.Title} · {track.Artist}";
+        TitleText.Text = L.Get("SaveCloud_SingleTrackTitle");
+        SourceSummaryText.Text = $"{track.Title} · {L.DisplayArtist(track.Artist)}";
 
         FormPanel.Visibility = Visibility.Collapsed;
         SummaryPanel.Visibility = Visibility.Collapsed;
@@ -95,7 +96,7 @@ public partial class SaveCloudFolderDialog : UserControl
         Grid.SetColumnSpan(CancelButton, 3);
 
         ProgressPanel.Visibility = Visibility.Visible;
-        ProgressStatusText.Text = $"Saving \"{track.Title}\"...";
+        ProgressStatusText.Text = L.Format("SaveCloud_SavingItem", track.Title);
         ProgressCountText.Text = string.Empty;
         ExportProgressBar.IsIndeterminate = true;
         ExportProgressBar.Value = 0;
@@ -128,9 +129,9 @@ public partial class SaveCloudFolderDialog : UserControl
             SetBusy(false);
             ProgressPanel.Visibility = Visibility.Collapsed;
             SummaryPanel.Visibility = Visibility.Visible;
-            SummaryHeadlineText.Text = "Saved song to local folder";
+            SummaryHeadlineText.Text = L.Get("SaveCloud_SavedSingleTrack");
             SummaryPathText.Text = savedPath;
-            LibraryStatusText.Text = "Library rescanned.";
+            LibraryStatusText.Text = L.Get("SaveCloud_LibraryRescanned");
             LibraryStatusText.Visibility = rescanned ? Visibility.Visible : Visibility.Collapsed;
 
             ActiveActionsPanel.Visibility = Visibility.Collapsed;
@@ -141,7 +142,7 @@ public partial class SaveCloudFolderDialog : UserControl
         {
             SetBusy(false);
             ProgressPanel.Visibility = Visibility.Collapsed;
-            ShowError("Export cancelled.");
+            ShowError(L.Get("SaveCloud_ExportCancelled"));
             ShowCloseOnlyFooter();
         }
         catch (Exception ex)
@@ -163,7 +164,7 @@ public partial class SaveCloudFolderDialog : UserControl
         ResetCts();
 
         string sourceLabel = root.EffectiveCloudKind == RootKind.CloudBilibili ? "Bilibili" : "YouTube";
-        TitleText.Text = "Update from Cloud";
+        TitleText.Text = L.Get("Folders_UpdateFromCloud");
         SourceSummaryText.Text = string.IsNullOrWhiteSpace(root.SourceUrl)
             ? $"{root.Name} · {sourceLabel}"
             : $"{root.Name} · {sourceLabel} · {root.SourceUrl}";
@@ -180,7 +181,7 @@ public partial class SaveCloudFolderDialog : UserControl
         Grid.SetColumnSpan(CancelButton, 3);
 
         ProgressPanel.Visibility = Visibility.Visible;
-        ProgressStatusText.Text = "Checking cloud playlist...";
+        ProgressStatusText.Text = L.Get("SaveCloud_CheckingPlaylist");
         ProgressCountText.Text = string.Empty;
         ExportProgressBar.IsIndeterminate = true;
         ExportProgressBar.Value = 0;
@@ -199,8 +200,8 @@ public partial class SaveCloudFolderDialog : UserControl
             ExportProgressBar.Value = p.Completed;
             ProgressCountText.Text = $"{p.Completed} / {p.Total}";
             ProgressStatusText.Text = string.IsNullOrWhiteSpace(p.CurrentTrackTitle)
-                ? "Finishing..."
-                : $"Syncing \"{p.CurrentTrackTitle}\"...";
+                ? L.Get("SaveCloud_Finishing")
+                : L.Format("SaveCloud_SyncingItem", p.CurrentTrackTitle);
         });
 
         try
@@ -222,19 +223,19 @@ public partial class SaveCloudFolderDialog : UserControl
 
             if (result.AddedCount == 0 && result.FailedCount == 0)
             {
-                SummaryHeadlineText.Text = $"Already up to date ({result.SkippedCount} {(result.SkippedCount == 1 ? "song" : "songs")})";
+                SummaryHeadlineText.Text = L.Format("SaveCloud_AlreadyUpToDate", L.SongsCount(result.SkippedCount));
             }
             else if (result.FailedCount == 0)
             {
-                SummaryHeadlineText.Text = $"Downloaded {result.AddedCount} new {(result.AddedCount == 1 ? "song" : "songs")}, skipped {result.SkippedCount} existing";
+                SummaryHeadlineText.Text = L.Format("SaveCloud_UpdateDownloaded", L.SongsCount(result.AddedCount), result.SkippedCount);
             }
             else
             {
-                SummaryHeadlineText.Text = $"Downloaded {result.AddedCount}, skipped {result.SkippedCount}, failed {result.FailedCount}";
+                SummaryHeadlineText.Text = L.Format("SaveCloud_UpdateWithFailures", result.AddedCount, result.SkippedCount, result.FailedCount);
             }
 
             SummaryPathText.Text = root.Path ?? string.Empty;
-            LibraryStatusText.Text = "Library rescanned.";
+            LibraryStatusText.Text = L.Get("SaveCloud_LibraryRescanned");
             LibraryStatusText.Visibility = result.AddedCount > 0 ? Visibility.Visible : Visibility.Collapsed;
 
             if (result.Errors.Count > 0)
@@ -251,7 +252,7 @@ public partial class SaveCloudFolderDialog : UserControl
         {
             SetBusy(false);
             ProgressPanel.Visibility = Visibility.Collapsed;
-            ShowError("Update cancelled.");
+            ShowError(L.Get("SaveCloud_UpdateCancelled"));
             ShowCloseOnlyFooter();
         }
         catch (Exception ex)
@@ -296,7 +297,7 @@ public partial class SaveCloudFolderDialog : UserControl
         AddToLibraryCheckBox.IsEnabled = !busy;
         CloseIconButton.IsEnabled = !busy;
         CancelButton.IsEnabled = true;
-        CancelButton.Content = "Cancel";
+        CancelButton.Content = L.Get("Common_Cancel");
         if (busy)
         {
             SaveButton.IsEnabled = false;
@@ -321,14 +322,14 @@ public partial class SaveCloudFolderDialog : UserControl
         if (!string.IsNullOrWhiteSpace(location))
         {
             string fallback = _root is not null
-                ? CloudExporter.SanitizeFileName(_root.Name, "Cloud Playlist")
-                : "Cloud Playlist";
+                ? CloudExporter.SanitizeFileName(_root.Name, L.Get("SaveCloud_DefaultFolderName"))
+                : L.Get("SaveCloud_DefaultFolderName");
             string safeFolder = CloudExporter.SanitizeFileName(folderName, fallback);
-            DestinationPreviewText.Text = $"Destination: {Path.Combine(location, safeFolder)}";
+            DestinationPreviewText.Text = L.Format("SaveCloud_DestinationPreview", Path.Combine(location, safeFolder));
         }
         else
         {
-            DestinationPreviewText.Text = "Choose a destination folder.";
+            DestinationPreviewText.Text = L.Get("SaveCloud_ChooseDestinationHint");
         }
     }
 
@@ -342,12 +343,12 @@ public partial class SaveCloudFolderDialog : UserControl
         string parentDir = LocationBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(folderName))
         {
-            ShowError("Enter a folder name.");
+            ShowError(L.Get("SaveCloud_EnterFolderName"));
             return;
         }
         if (string.IsNullOrWhiteSpace(parentDir))
         {
-            ShowError("Choose a save location.");
+            ShowError(L.Get("SaveCloud_ChooseSaveLocation"));
             return;
         }
 
@@ -365,7 +366,7 @@ public partial class SaveCloudFolderDialog : UserControl
         ExportProgressBar.Minimum = 0;
         ExportProgressBar.Maximum = Math.Max(_tracks.Count, 1);
         ExportProgressBar.Value = 0;
-        ProgressStatusText.Text = "Preparing export...";
+        ProgressStatusText.Text = L.Get("SaveCloud_Preparing");
         ProgressCountText.Text = $"0 / {_tracks.Count}";
 
         SetBusy(true);
@@ -379,8 +380,8 @@ public partial class SaveCloudFolderDialog : UserControl
             ExportProgressBar.Value = p.Completed;
             ProgressCountText.Text = $"{p.Completed} / {p.Total}";
             ProgressStatusText.Text = string.IsNullOrWhiteSpace(p.CurrentTrackTitle)
-                ? "Finishing..."
-                : $"Saving \"{p.CurrentTrackTitle}\"...";
+                ? L.Get("SaveCloud_Finishing")
+                : L.Format("SaveCloud_SavingItem", p.CurrentTrackTitle);
         });
 
         try
@@ -405,17 +406,17 @@ public partial class SaveCloudFolderDialog : UserControl
                         _services.Library.AttachCloudTracking(result.DestinationFolder, _root);
                         await _services.Library.RescanAsync();
                         _services.Library.NotifyFolderAddedByPath(result.DestinationFolder);
-                        libraryNote = "Library rescanned.";
+                        libraryNote = L.Get("SaveCloud_LibraryRescanned");
                     }
                     else
                     {
                         await _services.Library.AddRootAsync(result.DestinationFolder, _root);
-                        libraryNote = "Added saved folder to Library.";
+                        libraryNote = L.Get("SaveCloud_AddedToLibrary");
                     }
                 }
                 catch (Exception libEx)
                 {
-                    libraryNote = $"Saved, but could not update library: {libEx.Message}";
+                    libraryNote = L.Format("SaveCloud_SavedLibError", libEx.Message);
                 }
             }
             else if (_services.Library.IsFolderIndexed(result.DestinationFolder))
@@ -439,8 +440,8 @@ public partial class SaveCloudFolderDialog : UserControl
             SummaryPanel.Visibility = Visibility.Visible;
 
             SummaryHeadlineText.Text = result.FailedCount == 0
-                ? $"Saved {result.SavedCount} {(result.SavedCount == 1 ? "song" : "songs")}"
-                : $"Saved {result.SavedCount} {(result.SavedCount == 1 ? "song" : "songs")}, {result.FailedCount} failed";
+                ? L.Format("SaveCloud_ExportSuccess", L.SongsCount(result.SavedCount))
+                : L.Format("SaveCloud_ExportWithFailures", L.SongsCount(result.SavedCount), result.FailedCount);
             SummaryPathText.Text = result.DestinationFolder;
 
             if (!string.IsNullOrWhiteSpace(libraryNote))
@@ -467,11 +468,11 @@ public partial class SaveCloudFolderDialog : UserControl
         {
             SetBusy(false);
             ProgressPanel.Visibility = Visibility.Collapsed;
-            ShowError("Export cancelled.");
+            ShowError(L.Get("SaveCloud_ExportCancelled"));
             SaveButton.Visibility = Visibility.Visible;
             Grid.SetColumn(CancelButton, 2);
             Grid.SetColumnSpan(CancelButton, 1);
-            CancelButton.Content = "Close";
+            CancelButton.Content = L.Get("Common_Close");
         }
         catch (Exception ex)
         {
@@ -498,7 +499,7 @@ public partial class SaveCloudFolderDialog : UserControl
         if (_isBusy) return;
         var dlg = new OpenFolderDialog
         {
-            Title = "Select Save Location"
+            Title = L.Get("SaveCloud_SelectSaveLocationTitle")
         };
         if (!string.IsNullOrWhiteSpace(LocationBox.Text) && Directory.Exists(LocationBox.Text))
         {
@@ -531,7 +532,7 @@ public partial class SaveCloudFolderDialog : UserControl
         }
         catch (Exception ex)
         {
-            ShowError($"Unable to open folder: {ex.Message}");
+            ShowError(L.Format("SaveCloud_OpenFolderError", ex.Message));
         }
     }
 
@@ -562,7 +563,7 @@ public partial class SaveCloudFolderDialog : UserControl
         if (_isBusy)
         {
             CancelButton.IsEnabled = false;
-            CancelButton.Content = "Cancelling...";
+            CancelButton.Content = L.Get("Common_Cancelling");
             _cts?.Cancel();
             return;
         }

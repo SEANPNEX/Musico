@@ -37,6 +37,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOff
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.MoreVert
@@ -97,6 +98,9 @@ import com.musico.cloud.CloudExportSummary
 import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudUpdateSummary
 import com.musico.cloud.extractCloudSourceInput
+import com.musico.i18n.AppStrings
+import com.musico.i18n.LanguageStore
+import com.musico.i18n.LocalStrings
 import com.musico.model.LibraryRoot
 import com.musico.model.PlayQueue
 import com.musico.model.RootKind
@@ -107,6 +111,7 @@ import com.musico.store.LibraryUiState
 import com.musico.store.PlayHistoryUiState
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
+import com.musico.ui.components.LanguageDialog
 import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.SortOrderMenuButton
 import com.musico.ui.components.TrackActionState
@@ -137,6 +142,23 @@ private fun folderDepth(ref: FolderRef?): Int {
     return 1 + ref.path.split('/').count { it.isNotEmpty() }
 }
 
+private fun displayRootName(root: LibraryRoot, strings: AppStrings): String {
+    return if (root.kind == RootKind.APP_FOLDER && root.name == LibraryStore.APP_FOLDER_NAME) {
+        strings.musicoFolderName
+    } else {
+        root.name
+    }
+}
+
+private fun localizeLibraryError(err: Throwable, fallback: String, strings: AppStrings): String {
+    return when (err) {
+        is LibraryException.DuplicateRoot -> strings.errorDuplicateRoot
+        is LibraryException.NotAFolder -> strings.errorNotAFolder
+        is LibraryException.UnsupportedCloudUrl -> strings.errorUnsupportedCloudUrl
+        else -> err.message ?: fallback
+    }
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun FoldersScreen(
@@ -149,9 +171,11 @@ fun FoldersScreen(
     trackActions: TrackActionState,
     updateManager: UpdateManager,
     cloudExporter: CloudExporter,
+    languageStore: LanguageStore? = null,
     onPickFolder: ((Uri) -> Unit) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     val scope = rememberCoroutineScope()
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     var currentFolder by remember { mutableStateOf<FolderRef?>(null) }
@@ -162,6 +186,7 @@ fun FoldersScreen(
     var updatingTrackedRoot by remember { mutableStateOf<LibraryRoot?>(null) }
     var showAddCloudDialog by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
+    var showLanguageDialog by remember { mutableStateOf(false) }
     var detailMenuExpanded by remember { mutableStateOf(false) }
 
     BackHandler(enabled = currentFolder != null) {
@@ -181,7 +206,7 @@ fun FoldersScreen(
         onPickFolder { uri ->
             scope.launch {
                 libraryStore.addPickedRoot(uri).onFailure { err ->
-                    importError = err.message ?: "Could not add that folder."
+                    importError = localizeLibraryError(err, strings.couldNotAddFolderFallback, strings)
                 }
             }
         }
@@ -191,7 +216,7 @@ fun FoldersScreen(
         onPickFolder { uri ->
             scope.launch {
                 libraryStore.relocateRoot(rootId, uri).onFailure { err ->
-                    importError = err.message ?: "Could not relocate that folder."
+                    importError = localizeLibraryError(err, strings.couldNotRelocateFolderFallback, strings)
                 }
             }
         }
@@ -203,8 +228,16 @@ fun FoldersScreen(
         topBar = {
             if (activeRef == null) {
                 TopAppBar(
-                    title = { Text("Folders") },
+                    title = { Text(strings.foldersTitle) },
                     actions = {
+                        if (languageStore != null) {
+                            IconButton(onClick = { showLanguageDialog = true }) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Language,
+                                    contentDescription = strings.languageTitle,
+                                )
+                            }
+                        }
                         IconButton(
                             onClick = {
                                 showUpdateDialog = true
@@ -225,24 +258,24 @@ fun FoldersScreen(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.SystemUpdate,
-                                    contentDescription = "Check for Updates"
+                                    contentDescription = strings.checkForUpdates
                                 )
                             }
                         }
                         IconButton(onClick = { showAddCloudDialog = true }) {
-                            Icon(Icons.Rounded.CloudQueue, contentDescription = "Add Cloud Folder")
+                            Icon(Icons.Rounded.CloudQueue, contentDescription = strings.addCloudFolder)
                         }
                         IconButton(
                             onClick = { scope.launch { libraryStore.rescan() } },
                             enabled = !libraryState.isScanning
                         ) {
-                            Icon(Icons.Rounded.Refresh, contentDescription = "Rescan")
+                            Icon(Icons.Rounded.Refresh, contentDescription = strings.rescan)
                         }
                     }
                 )
             } else {
                 val title = if (activeRef.path.isEmpty()) {
-                    currentRoot?.name ?: "Folder"
+                    currentRoot?.let { displayRootName(it, strings) } ?: strings.folderFallbackTitle
                 } else {
                     activeRef.path.substringAfterLast('/')
                 }
@@ -269,7 +302,7 @@ fun FoldersScreen(
                                 }
                             }
                         ) {
-                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                            Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = strings.back)
                         }
                     },
                     title = {
@@ -288,19 +321,19 @@ fun FoldersScreen(
                             onSelect = { selected ->
                                 libraryStore.setFolderSortOrder(activeRef.rootId, activeRef.path, selected)
                             },
-                            contentDescription = "Sort folder",
+                            contentDescription = strings.sortFolder,
                         )
                         IconButton(
                             onClick = { scope.launch { libraryStore.rescan() } },
                             enabled = !libraryState.isScanning
                         ) {
-                            Icon(Icons.Rounded.Refresh, contentDescription = "Rescan")
+                            Icon(Icons.Rounded.Refresh, contentDescription = strings.rescan)
                         }
                         if (showDetailMenu) {
                             val rootForMenu = currentRoot
                             Box {
                                 IconButton(onClick = { detailMenuExpanded = true }) {
-                                    Icon(Icons.Rounded.MoreVert, contentDescription = "Folder options")
+                                    Icon(Icons.Rounded.MoreVert, contentDescription = strings.folderOptions)
                                 }
                                 DropdownMenu(
                                     expanded = detailMenuExpanded,
@@ -309,7 +342,7 @@ fun FoldersScreen(
                                     if (rootForMenu != null && rootForMenu.kind.isCloud) {
                                         val cloudTracks = libraryStore.tracksUnder(rootForMenu.id, activeRef.path)
                                         DropdownMenuItem(
-                                            text = { Text("Save to Local Folder…") },
+                                            text = { Text(strings.saveToLocalFolderEllipsis) },
                                             leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) },
                                             enabled = cloudTracks.isNotEmpty(),
                                             onClick = {
@@ -321,7 +354,7 @@ fun FoldersScreen(
                                     if (isTrackedLocalDetail) {
                                         currentRoot?.let { trackedRoot ->
                                             DropdownMenuItem(
-                                                text = { Text("Update from Cloud") },
+                                                text = { Text(strings.updateFromCloud) },
                                                 leadingIcon = { Icon(Icons.Rounded.CloudDownload, contentDescription = null) },
                                                 onClick = {
                                                     detailMenuExpanded = false
@@ -332,7 +365,7 @@ fun FoldersScreen(
                                     }
                                     if (activeRef.path.isNotEmpty()) {
                                         DropdownMenuItem(
-                                            text = { Text("Remove Folder") },
+                                            text = { Text(strings.removeFolder) },
                                             leadingIcon = {
                                                 Icon(
                                                     Icons.Rounded.Delete,
@@ -348,7 +381,7 @@ fun FoldersScreen(
                                     } else if (rootForMenu != null) {
                                         if (rootForMenu.kind == RootKind.PICKED) {
                                             DropdownMenuItem(
-                                                text = { Text("Locate Again…") },
+                                                text = { Text(strings.locateAgainEllipsis) },
                                                 leadingIcon = { Icon(Icons.Rounded.Folder, contentDescription = null) },
                                                 onClick = {
                                                     detailMenuExpanded = false
@@ -358,7 +391,7 @@ fun FoldersScreen(
                                         }
                                         if (rootForMenu.excludedPaths.isNotEmpty()) {
                                             DropdownMenuItem(
-                                                text = { Text("Restore Removed Subfolders (${rootForMenu.excludedPaths.size})") },
+                                                text = { Text(strings.restoreRemovedSubfolders(rootForMenu.excludedPaths.size)) },
                                                 leadingIcon = { Icon(Icons.Rounded.Restore, contentDescription = null) },
                                                 onClick = {
                                                     detailMenuExpanded = false
@@ -368,7 +401,7 @@ fun FoldersScreen(
                                         }
                                         if (isRemovableRootDetail) {
                                             DropdownMenuItem(
-                                                text = { Text("Remove Folder") },
+                                                text = { Text(strings.removeFolder) },
                                                 leadingIcon = {
                                                     Icon(
                                                         Icons.Rounded.Delete,
@@ -395,7 +428,7 @@ fun FoldersScreen(
                 ExtendedFloatingActionButton(
                     onClick = { launchAddFolder() },
                     icon = { Icon(Icons.Rounded.CreateNewFolder, contentDescription = null) },
-                    text = { Text("Add Folder") }
+                    text = { Text(strings.addFolder) }
                 )
             }
         }
@@ -442,7 +475,7 @@ fun FoldersScreen(
                     val rootForRef = libraryState.roots.firstOrNull { it.id == ref.rootId }
                     FolderDetailContent(
                         ref = ref,
-                        rootName = rootForRef?.name ?: "Folder",
+                        rootName = rootForRef?.let { displayRootName(it, strings) } ?: strings.folderFallbackTitle,
                         libraryStore = libraryStore,
                         libraryState = libraryState,
                         historyState = historyState,
@@ -474,6 +507,15 @@ fun FoldersScreen(
         )
     }
 
+    if (showLanguageDialog && languageStore != null) {
+        val currentLanguage by languageStore.language.collectAsStateWithLifecycle()
+        LanguageDialog(
+            current = currentLanguage,
+            onSelect = { languageStore.setLanguage(it) },
+            onDismiss = { showLanguageDialog = false },
+        )
+    }
+
     val pendingSaveCloud = savingCloudTarget
     if (pendingSaveCloud != null) {
         SaveCloudPlaylistDialog(
@@ -502,9 +544,13 @@ fun FoldersScreen(
     val pendingRemove = removingRoot
     if (pendingRemove != null) {
         ConfirmDialog(
-            title = "Remove “${pendingRemove.name}” from your library?",
-            message = "Its songs leave your library, playlists and queues. The files themselves are not deleted.",
-            confirmLabel = "Remove Folder",
+            title = strings.removeFolderConfirmTitle(displayRootName(pendingRemove, strings)),
+            message = if (pendingRemove.kind.isCloud) {
+                strings.removeCloudFolderConfirmMessage
+            } else {
+                strings.removeLocalFolderConfirmMessage
+            },
+            confirmLabel = strings.removeFolder,
             onDismiss = { removingRoot = null },
             onConfirm = {
                 libraryStore.removeRoot(pendingRemove.id)
@@ -520,13 +566,13 @@ fun FoldersScreen(
         val folderTitle = pendingSubfolder.path.substringAfterLast('/')
         val parentIsCloud = libraryState.roots.firstOrNull { it.id == pendingSubfolder.rootId }?.kind?.isCloud == true
         ConfirmDialog(
-            title = "Remove “$folderTitle” from your library?",
+            title = strings.removeFolderConfirmTitle(folderTitle),
             message = if (parentIsCloud) {
-                "Its songs leave your library, playlists and queues."
+                strings.removeCloudFolderConfirmMessage
             } else {
-                "Its songs leave your library, playlists and queues. The files themselves are not deleted."
+                strings.removeLocalFolderConfirmMessage
             },
-            confirmLabel = "Remove Folder",
+            confirmLabel = strings.removeFolder,
             onDismiss = { removingSubfolder = null },
             onConfirm = {
                 libraryStore.removeSubfolder(pendingSubfolder.rootId, pendingSubfolder.path)
@@ -547,11 +593,11 @@ fun FoldersScreen(
     if (err != null) {
         AlertDialog(
             onDismissRequest = { importError = null },
-            title = { Text("Couldn’t Add Folder") },
+            title = { Text(strings.couldNotAddFolderTitle) },
             text = { Text(err) },
             confirmButton = {
                 TextButton(onClick = { importError = null }) {
-                    Text("OK")
+                    Text(strings.ok)
                 }
             }
         )
@@ -563,6 +609,7 @@ private fun AddCloudFolderDialog(
     onDismiss: () -> Unit,
     onAdd: suspend (url: String, cookie: String?) -> Result<Unit>
 ) {
+    val strings = LocalStrings.current
     val scope = rememberCoroutineScope()
     var url by remember { mutableStateOf("") }
     var cookie by remember { mutableStateOf("") }
@@ -572,7 +619,7 @@ private fun AddCloudFolderDialog(
     AlertDialog(
         onDismissRequest = { if (!isAdding) onDismiss() },
         icon = { Icon(Icons.Rounded.CloudQueue, contentDescription = null) },
-        title = { Text("Add Cloud Folder") },
+        title = { Text(strings.addCloudFolder) },
         text = {
             Column(
                 modifier = Modifier
@@ -586,10 +633,10 @@ private fun AddCloudFolderDialog(
                         url = it
                         errorText = null
                     },
-                    label = { Text("YouTube or Bilibili URL") },
-                    placeholder = { Text("Playlist, collection, or video URL") },
+                    label = { Text(strings.cloudUrlLabel) },
+                    placeholder = { Text(strings.cloudUrlPlaceholder) },
                     supportingText = {
-                        Text("Supports YouTube / YT Music playlists & videos, Bilibili favlists, collections, series, and BV / b23.tv links.")
+                        Text(strings.cloudUrlSupportingText)
                     },
                     singleLine = true,
                     enabled = !isAdding,
@@ -598,8 +645,8 @@ private fun AddCloudFolderDialog(
                 OutlinedTextField(
                     value = cookie,
                     onValueChange = { cookie = it },
-                    label = { Text("Cookie (optional)") },
-                    placeholder = { Text("Only needed for private playlists") },
+                    label = { Text(strings.cookieOptionalLabel) },
+                    placeholder = { Text(strings.cookiePlaceholder) },
                     minLines = 2,
                     maxLines = 3,
                     enabled = !isAdding,
@@ -631,12 +678,12 @@ private fun AddCloudFolderDialog(
                         result.onSuccess {
                             onDismiss()
                         }.onFailure { err ->
-                            errorText = err.message ?: "Could not load that cloud playlist."
+                            errorText = localizeLibraryError(err, strings.cloudPlaylistLoadErrorFallback, strings)
                         }
                     }
                 }
             ) {
-                Text(if (isAdding) "Adding…" else "Add")
+                Text(if (isAdding) strings.addingEllipsis else strings.add)
             }
         },
         dismissButton = {
@@ -644,7 +691,7 @@ private fun AddCloudFolderDialog(
                 enabled = !isAdding,
                 onClick = onDismiss
             ) {
-                Text("Cancel")
+                Text(strings.cancel)
             }
         }
     )
@@ -660,10 +707,11 @@ private fun SaveCloudPlaylistDialog(
     onFolderSavedWithoutLibrary: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val strings = LocalStrings.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
-    val defaultName = remember(root.id, root.name) {
-        CloudExporter.sanitizeFileName(root.name, "Cloud Playlist")
+    val defaultName = remember(root.id, root.name, strings.cloudPlaylistDefaultName) {
+        CloudExporter.sanitizeFileName(root.name, strings.cloudPlaylistDefaultName)
     }
     var folderName by remember(root.id) { mutableStateOf(defaultName) }
     var pickedParentUri by remember(root.id) { mutableStateOf<Uri?>(null) }
@@ -677,8 +725,8 @@ private fun SaveCloudPlaylistDialog(
     var errorText by remember(root.id) { mutableStateOf<String?>(null) }
     var exportJob by remember(root.id) { mutableStateOf<Job?>(null) }
 
-    val pickedLocationLabel = remember(pickedParentUri) {
-        val uri = pickedParentUri ?: return@remember "No folder selected"
+    val pickedLocationLabel = remember(pickedParentUri, strings.noFolderSelected) {
+        val uri = pickedParentUri ?: return@remember strings.noFolderSelected
         if (uri.scheme == "file" && uri.path != null) {
             File(uri.path!!).name.ifBlank { uri.path!! }
         } else {
@@ -695,9 +743,9 @@ private fun SaveCloudPlaylistDialog(
         title = {
             Text(
                 when {
-                    isExporting -> "Saving Playlist"
-                    summary != null -> "Save Complete"
-                    else -> "Save to Local Folder"
+                    isExporting -> strings.savingPlaylistTitle
+                    summary != null -> strings.saveCompleteTitle
+                    else -> strings.saveToLocalFolderTitle
                 }
             )
         },
@@ -712,14 +760,14 @@ private fun SaveCloudPlaylistDialog(
                     OutlinedTextField(
                         value = folderName,
                         onValueChange = { folderName = it },
-                        label = { Text("Folder Name") },
+                        label = { Text(strings.folderNameLabel) },
                         singleLine = true,
                         enabled = !isExporting,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         Text(
-                            text = "Location",
+                            text = strings.locationLabel,
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -749,7 +797,7 @@ private fun SaveCloudPlaylistDialog(
                                     }
                                 },
                             ) {
-                                Text("Choose Folder")
+                                Text(strings.chooseFolder)
                             }
                         }
                     }
@@ -768,7 +816,7 @@ private fun SaveCloudPlaylistDialog(
                         )
                         Spacer(Modifier.width(4.dp))
                         Text(
-                            text = "Add saved folder to Library",
+                            text = strings.addSavedFolderToLibrary,
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
@@ -785,9 +833,9 @@ private fun SaveCloudPlaylistDialog(
                         modifier = Modifier.fillMaxWidth(),
                     )
                     val statusLine = if (progressTitle.isNotBlank()) {
-                        "Saving $progressDone of $progressTotal: $progressTitle"
+                        strings.savingProgressWithTitle(progressDone, progressTotal, progressTitle)
                     } else {
-                        "Saving $progressDone of $progressTotal…"
+                        strings.savingProgress(progressDone, progressTotal)
                     }
                     Text(
                         text = statusLine,
@@ -800,12 +848,7 @@ private fun SaveCloudPlaylistDialog(
 
                 val result = summary
                 if (result != null) {
-                    val summaryMsg = buildString {
-                        append("Saved ${result.savedCount} of ${tracks.size} songs.")
-                        if (result.failedCount > 0) {
-                            append(" ${result.failedCount} failed.")
-                        }
-                    }
+                    val summaryMsg = strings.savePlaylistSummary(result.savedCount, tracks.size, result.failedCount)
                     Text(
                         text = summaryMsg,
                         style = MaterialTheme.typography.bodyMedium,
@@ -831,7 +874,7 @@ private fun SaveCloudPlaylistDialog(
                             }
                             if (result.errors.size > 5) {
                                 Text(
-                                    text = "…and ${result.errors.size - 5} more.",
+                                    text = strings.andMoreErrors(result.errors.size - 5),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -853,7 +896,7 @@ private fun SaveCloudPlaylistDialog(
         confirmButton = {
             if (summary != null) {
                 Button(onClick = onDismiss) {
-                    Text("Done")
+                    Text(strings.done)
                 }
             } else if (!isExporting) {
                 Button(
@@ -892,10 +935,14 @@ private fun SaveCloudPlaylistDialog(
                                         trackedSubfolderName = trackedSub,
                                     )
                                     if (addResult.isSuccess) {
-                                        libraryStatusText = "Added saved folder to Library with cloud tracking."
+                                        libraryStatusText = strings.addedSavedFolderWithCloudTracking
                                     } else {
-                                        libraryStatusText = addResult.exceptionOrNull()?.message
-                                            ?: "Could not add folder to Library."
+                                        val addErr = addResult.exceptionOrNull()
+                                        libraryStatusText = if (addErr != null) {
+                                            localizeLibraryError(addErr, strings.couldNotAddFolderToLibraryFallback, strings)
+                                        } else {
+                                            strings.couldNotAddFolderToLibraryFallback
+                                        }
                                     }
                                 } else if (!addToLibrary && res.savedCount > 0) {
                                     val savedName = res.savedFolderName?.trim()?.takeIf { it.isNotEmpty() }
@@ -907,7 +954,7 @@ private fun SaveCloudPlaylistDialog(
                             } catch (cancel: CancellationException) {
                                 throw cancel
                             } catch (err: Exception) {
-                                errorText = err.message ?: "Could not save playlist."
+                                errorText = err.message ?: strings.couldNotSavePlaylistFallback
                             } finally {
                                 isExporting = false
                                 exportJob = null
@@ -915,7 +962,7 @@ private fun SaveCloudPlaylistDialog(
                         }
                     },
                 ) {
-                    Text("Save")
+                    Text(strings.save)
                 }
             }
         },
@@ -931,7 +978,7 @@ private fun SaveCloudPlaylistDialog(
                         onDismiss()
                     },
                 ) {
-                    Text("Cancel")
+                    Text(strings.cancel)
                 }
             }
         },
@@ -945,11 +992,12 @@ private fun UpdateTrackedFolderDialog(
     cloudExporter: CloudExporter,
     onDismiss: () -> Unit,
 ) {
+    val strings = LocalStrings.current
     val scope = rememberCoroutineScope()
     var isUpdating by remember { mutableStateOf(true) }
     var progressDone by remember { mutableIntStateOf(0) }
     var progressTotal by remember { mutableIntStateOf(0) }
-    var progressTitle by remember { mutableStateOf("") }
+    var progressTitle by remember(root.id) { mutableStateOf("") }
     var summary by remember { mutableStateOf<CloudUpdateSummary?>(null) }
     var errorText by remember { mutableStateOf<String?>(null) }
     var syncJob by remember { mutableStateOf<Job?>(null) }
@@ -957,7 +1005,7 @@ private fun UpdateTrackedFolderDialog(
     androidx.compose.runtime.LaunchedEffect(root.id) {
         val treeUri = root.treeUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
         if (treeUri == null) {
-            errorText = "Saved folder location is unavailable."
+            errorText = strings.savedFolderLocationUnavailable
             isUpdating = false
             return@LaunchedEffect
         }
@@ -983,7 +1031,7 @@ private fun UpdateTrackedFolderDialog(
             } catch (cancel: CancellationException) {
                 throw cancel
             } catch (err: Exception) {
-                errorText = err.message ?: "Could not update from cloud."
+                errorText = err.message ?: strings.couldNotUpdateFromCloudFallback
             } finally {
                 isUpdating = false
                 syncJob = null
@@ -997,9 +1045,9 @@ private fun UpdateTrackedFolderDialog(
         title = {
             Text(
                 when {
-                    isUpdating -> "Updating “${root.name}”"
-                    summary != null -> "Update Complete"
-                    else -> "Update from Cloud"
+                    isUpdating -> strings.updatingFolderTitle(displayRootName(root, strings))
+                    summary != null -> strings.updateCompleteTitle
+                    else -> strings.updateFromCloud
                 }
             )
         },
@@ -1029,9 +1077,9 @@ private fun UpdateTrackedFolderDialog(
                         )
                         Text(
                             text = if (progressTitle.isNotBlank()) {
-                                "Checking $progressDone of $progressTotal: $progressTitle"
+                                strings.checkingProgressWithTitle(progressDone, progressTotal, progressTitle)
                             } else {
-                                "Checking $progressDone of $progressTotal…"
+                                strings.checkingProgress(progressDone, progressTotal)
                             },
                             style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -1041,7 +1089,7 @@ private fun UpdateTrackedFolderDialog(
                     } else {
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         Text(
-                            text = "Fetching latest cloud playlist…",
+                            text = strings.fetchingLatestCloudPlaylist,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -1051,14 +1099,14 @@ private fun UpdateTrackedFolderDialog(
                 val result = summary
                 if (result != null) {
                     val summaryLine = if (result.addedCount > 0) {
-                        "Added ${result.addedCount} new ${if (result.addedCount == 1) "song" else "songs"} (${result.skippedCount} already saved)."
+                        strings.updateAddedSongsSummary(result.addedCount, result.skippedCount)
                     } else {
-                        "Already up to date (${result.skippedCount} ${if (result.skippedCount == 1) "song" else "songs"})."
+                        strings.alreadyUpToDateSummary(result.skippedCount)
                     }
                     Text(summaryLine, style = MaterialTheme.typography.bodyMedium)
                     if (result.failedCount > 0) {
                         Text(
-                            text = "${result.failedCount} failed.",
+                            text = strings.failedCountLine(result.failedCount),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                         )
@@ -1087,7 +1135,7 @@ private fun UpdateTrackedFolderDialog(
         confirmButton = {
             if (!isUpdating) {
                 Button(onClick = onDismiss) {
-                    Text("Done")
+                    Text(strings.done)
                 }
             }
         },
@@ -1101,7 +1149,7 @@ private fun UpdateTrackedFolderDialog(
                         onDismiss()
                     },
                 ) {
-                    Text("Cancel")
+                    Text(strings.cancel)
                 }
             }
         },
@@ -1126,6 +1174,7 @@ private fun FolderRootList(
     onAddFolder: () -> Unit,
     onAddCloudFolder: () -> Unit
 ) {
+    val strings = LocalStrings.current
     val userRoots = libraryState.roots.filter { it.kind != RootKind.APP_FOLDER }
 
     LazyColumn(
@@ -1145,9 +1194,9 @@ private fun FolderRootList(
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
                         val message = if (libraryState.scanTotal > 0) {
-                            "Reading ${libraryState.scanDone} of ${libraryState.scanTotal} songs…"
+                            strings.readingScanProgress(libraryState.scanDone, libraryState.scanTotal)
                         } else {
-                            "Looking for music…"
+                            strings.lookingForMusic
                         }
                         Text(message, style = MaterialTheme.typography.bodyMedium)
                         if (libraryState.scanTotal > 0) {
@@ -1206,7 +1255,7 @@ private fun FolderRootList(
                             ) {
                                 Icon(
                                     imageVector = Icons.Rounded.Delete,
-                                    contentDescription = "Remove Folder",
+                                    contentDescription = strings.removeFolder,
                                     tint = MaterialTheme.colorScheme.error
                                 )
                             }
@@ -1264,7 +1313,7 @@ private fun FolderRootList(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text("Add Cloud Folder")
+                    Text(strings.addCloudFolder)
                 }
             }
         }
@@ -1273,16 +1322,16 @@ private fun FolderRootList(
             item(key = "empty_hint_card") {
                 EmptyState(
                     icon = Icons.Rounded.CreateNewFolder,
-                    title = "Add Your Music Folders",
-                    description = "Pick folders on your device, add a YouTube or Bilibili playlist, or copy songs into the Musico Folder and pull down to rescan.",
-                    actionLabel = "Add Folder",
+                    title = strings.addYourMusicFoldersTitle,
+                    description = strings.addYourMusicFoldersDesc,
+                    actionLabel = strings.addFolder,
                     onAction = onAddFolder
                 )
             }
         } else {
             item(key = "footer_hint") {
                 Text(
-                    text = "Add local folders, link YouTube or Bilibili playlists, or copy music into the Musico Folder and pull down to rescan.",
+                    text = strings.foldersFooterHint,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
@@ -1308,6 +1357,7 @@ private fun RootItemRow(
     onRestoreExcluded: () -> Unit,
     onRemove: () -> Unit
 ) {
+    val strings = LocalStrings.current
     var menuExpanded by remember { mutableStateOf(false) }
     val isRemovable = root.kind != RootKind.APP_FOLDER
 
@@ -1337,18 +1387,18 @@ private fun RootItemRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
                     Text(
-                        text = root.name,
+                        text = displayRootName(root, strings),
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
                     val badgeLabel = when {
-                        root.kind == RootKind.CLOUD_YOUTUBE -> "YouTube"
-                        root.kind == RootKind.CLOUD_BILIBILI -> "Bilibili"
+                        root.kind == RootKind.CLOUD_YOUTUBE -> strings.badgeYouTube
+                        root.kind == RootKind.CLOUD_BILIBILI -> strings.badgeBilibili
                         root.isCloudTrackedLocal -> when (root.linkedCloudKind) {
-                            RootKind.CLOUD_YOUTUBE -> "YouTube · Local"
-                            RootKind.CLOUD_BILIBILI -> "Bilibili · Local"
-                            else -> "Cloud · Local"
+                            RootKind.CLOUD_YOUTUBE -> strings.badgeYouTubeLocal
+                            RootKind.CLOUD_BILIBILI -> strings.badgeBilibiliLocal
+                            else -> strings.badgeCloudLocal
                         }
                         else -> null
                     }
@@ -1369,14 +1419,14 @@ private fun RootItemRow(
             },
             supportingContent = {
                 Text(
-                    text = if (available) "$songCount songs" else "Unavailable — folder moved or disconnected",
+                    text = if (available) strings.songCount(songCount) else strings.folderUnavailable,
                     color = if (available) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
                 )
             },
             trailingContent = {
                 Box {
                     IconButton(onClick = { menuExpanded = true }) {
-                        Icon(Icons.Rounded.MoreVert, contentDescription = "Folder options")
+                        Icon(Icons.Rounded.MoreVert, contentDescription = strings.folderOptions)
                     }
                     DropdownMenu(
                         expanded = menuExpanded,
@@ -1384,7 +1434,7 @@ private fun RootItemRow(
                     ) {
                         if (root.kind.isCloud) {
                             DropdownMenuItem(
-                                text = { Text("Save to Local Folder…") },
+                                text = { Text(strings.saveToLocalFolderEllipsis) },
                                 leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) },
                                 enabled = rootTrackIds.isNotEmpty(),
                                 onClick = {
@@ -1395,7 +1445,7 @@ private fun RootItemRow(
                         }
                         if (root.isCloudTrackedLocal) {
                             DropdownMenuItem(
-                                text = { Text("Update from Cloud") },
+                                text = { Text(strings.updateFromCloud) },
                                 leadingIcon = { Icon(Icons.Rounded.CloudDownload, contentDescription = null) },
                                 onClick = {
                                     menuExpanded = false
@@ -1405,7 +1455,7 @@ private fun RootItemRow(
                         }
                         if (root.kind == RootKind.PICKED) {
                             DropdownMenuItem(
-                                text = { Text("Locate Again…") },
+                                text = { Text(strings.locateAgainEllipsis) },
                                 leadingIcon = { Icon(Icons.Rounded.Folder, contentDescription = null) },
                                 onClick = {
                                     menuExpanded = false
@@ -1415,7 +1465,7 @@ private fun RootItemRow(
                         }
                         if (root.excludedPaths.isNotEmpty()) {
                             DropdownMenuItem(
-                                text = { Text("Restore Removed Subfolders (${root.excludedPaths.size})") },
+                                text = { Text(strings.restoreRemovedSubfolders(root.excludedPaths.size)) },
                                 leadingIcon = { Icon(Icons.Rounded.Restore, contentDescription = null) },
                                 onClick = {
                                     menuExpanded = false
@@ -1425,7 +1475,7 @@ private fun RootItemRow(
                         }
                         if (isRemovable) {
                             DropdownMenuItem(
-                                text = { Text("Remove Folder") },
+                                text = { Text(strings.removeFolder) },
                                 leadingIcon = {
                                     Icon(
                                         Icons.Rounded.Delete,
@@ -1480,13 +1530,13 @@ private fun RootItemRow(
                     )
                     Spacer(Modifier.width(10.dp))
                     Text(
-                        text = "Folder permission lost or moved.",
+                        text = strings.folderPermissionLost,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onErrorContainer,
                         modifier = Modifier.weight(1f)
                     )
                     FilledTonalButton(onClick = onRelocate) {
-                        Text("Relocate")
+                        Text(strings.relocate)
                     }
                 }
             }
@@ -1509,6 +1559,7 @@ private fun FolderDetailContent(
     onNavigate: (FolderRef) -> Unit,
     onRequestRemoveSubfolder: (FolderRef) -> Unit
 ) {
+    val strings = LocalStrings.current
     val playCounts: (String) -> Int = { id -> historyState.entries[id]?.count ?: 0 }
     val (subfolders, directTracks) = remember(
         libraryState.tracks,
@@ -1569,8 +1620,8 @@ private fun FolderDetailContent(
             item(key = "empty_folder") {
                 EmptyState(
                     icon = Icons.Rounded.Folder,
-                    title = "No Music Here",
-                    description = "Songs you add to this folder appear after a rescan."
+                    title = strings.noMusicHereTitle,
+                    description = strings.noMusicHereDesc
                 )
             }
         } else {
@@ -1633,7 +1684,7 @@ private fun FolderDetailContent(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Delete,
-                                contentDescription = "Remove Folder",
+                                contentDescription = strings.removeFolder,
                                 tint = MaterialTheme.colorScheme.error
                             )
                         }
@@ -1649,18 +1700,18 @@ private fun FolderDetailContent(
                             )
                         },
                         headlineContent = { Text(folderName) },
-                        supportingContent = { Text("${childIds.size} songs") },
+                        supportingContent = { Text(strings.songCount(childIds.size)) },
                         trailingContent = {
                             Box {
                                 IconButton(onClick = { menuExpanded = true }) {
-                                    Icon(Icons.Rounded.MoreVert, contentDescription = "Folder options")
+                                    Icon(Icons.Rounded.MoreVert, contentDescription = strings.folderOptions)
                                 }
                                 DropdownMenu(
                                     expanded = menuExpanded,
                                     onDismissRequest = { menuExpanded = false }
                                 ) {
                                     DropdownMenuItem(
-                                        text = { Text("Remove Folder") },
+                                        text = { Text(strings.removeFolder) },
                                         leadingIcon = {
                                             Icon(
                                                 Icons.Rounded.Delete,
@@ -1720,7 +1771,7 @@ private fun FolderDetailContent(
                 isCurrent = playerState.currentTrack?.id == track.id,
                 isPlaying = playerState.isPlaying,
                 isAvailable = libraryStore.isAvailable(track),
-                subtitle = if (track.isCloud) track.artist else track.fileName,
+                subtitle = if (track.isCloud) strings.displayArtist(track.artist) else track.fileName,
                 backgroundColor = rowBg,
                 onClick = {
                     val orderedIds = dragState.items.map { it.value.id }

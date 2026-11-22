@@ -28,25 +28,25 @@ struct LyricsView: View {
                     if lyrics.isTimed { timed(lyrics) } else { plain(lyrics) }
                 } else {
                     ContentUnavailableView {
-                        Label("No Lyrics", systemImage: "quote.bubble")
+                        Label(L10n.tr("No Lyrics"), systemImage: "quote.bubble")
                     } description: {
-                        Text("Import a .lrc or .txt file for this song, or put one with the same name next to it.")
+                        Text(L10n.tr("Import a .lrc or .txt file for this song, or put one with the same name next to it."))
                     } actions: {
-                        Button("Import from File…") { showImporter = true }
+                        Button(L10n.tr("Import from File…")) { showImporter = true }
                             .buttonStyle(.borderedProminent)
                             .disabled(player?.currentTrack == nil)
                     }
                 }
             }
-            .navigationTitle(player?.currentTrack?.title ?? "Lyrics")
+            .navigationTitle(player?.currentTrack?.title ?? L10n.tr("Lyrics"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Menu("Lyrics Options", systemImage: "ellipsis.circle") {
+                    Menu(L10n.tr("Lyrics Options"), systemImage: "ellipsis.circle") {
                         if let source { Text(sourceText(source)) }
-                        Button("Import from File…", systemImage: "square.and.arrow.down") { showImporter = true }
+                        Button(L10n.tr("Import from File…"), systemImage: "square.and.arrow.down") { showImporter = true }
                         if let id = player?.currentTrack?.id, store.hasImported(trackID: id) {
-                            Button("Remove Imported Lyrics", systemImage: "trash", role: .destructive) {
+                            Button(L10n.tr("Remove Imported Lyrics"), systemImage: "trash", role: .destructive) {
                                 store.removeImported(trackID: id)
                                 revision += 1
                             }
@@ -56,7 +56,7 @@ struct LyricsView: View {
                 }
                 if !embedded {
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button("Done") { if let onDone { onDone() } else { dismiss() } }
+                        Button(L10n.tr("Done")) { if let onDone { onDone() } else { dismiss() } }
                     }
                 }
             }
@@ -71,8 +71,8 @@ struct LyricsView: View {
                     importError = error.localizedDescription
                 }
             }
-            .alert("Couldn’t Import Lyrics", isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
-                Button("OK", role: .cancel) {}
+            .alert(L10n.tr("Couldn’t Import Lyrics"), isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
+                Button(L10n.tr("OK"), role: .cancel) {}
             } message: {
                 Text(importError ?? "")
             }
@@ -81,9 +81,9 @@ struct LyricsView: View {
 
     private func sourceText(_ source: LyricsSource) -> String {
         switch source {
-        case .imported: "From the file you imported"
-        case .sidecar: "From a file next to the song"
-        case .embedded: "From the song’s tags"
+        case .imported: L10n.tr("From the file you imported")
+        case .sidecar: L10n.tr("From a file next to the song")
+        case .embedded: L10n.tr("From the song’s tags")
         }
     }
 

@@ -36,6 +36,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.musico.i18n.LocalStrings
 import com.musico.update.UpdateManager
 import com.musico.update.UpdateUiState
 import kotlinx.coroutines.launch
@@ -46,6 +47,7 @@ fun UpdateDialog(
     updateManager: UpdateManager,
     onDismiss: () -> Unit,
 ) {
+    val strings = LocalStrings.current
     val state by updateManager.state.collectAsStateWithLifecycle()
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -75,12 +77,12 @@ fun UpdateDialog(
         title = {
             val titleText = when (state) {
                 is UpdateUiState.Idle,
-                is UpdateUiState.Checking -> "Checking for Updates"
-                is UpdateUiState.UpToDate -> "You’re Up to Date"
-                is UpdateUiState.Available -> "Update Available"
-                is UpdateUiState.Downloading -> "Downloading Update"
-                is UpdateUiState.ReadyToInstall -> "Ready to Install"
-                is UpdateUiState.Error -> "Update Error"
+                is UpdateUiState.Checking -> strings.checkingForUpdates
+                is UpdateUiState.UpToDate -> strings.youreUpToDate
+                is UpdateUiState.Available -> strings.updateAvailable
+                is UpdateUiState.Downloading -> strings.downloadingUpdate
+                is UpdateUiState.ReadyToInstall -> strings.readyToInstall
+                is UpdateUiState.Error -> strings.updateError
             }
             Text(titleText)
         },
@@ -95,13 +97,13 @@ fun UpdateDialog(
                     is UpdateUiState.Idle,
                     is UpdateUiState.Checking -> {
                         Text(
-                            text = "Current version: $currentVersion",
+                            text = strings.currentVersionLabel(currentVersion),
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                         LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                         Text(
-                            text = "Checking GitHub Releases…",
+                            text = strings.checkingGithubReleases,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -109,7 +111,7 @@ fun UpdateDialog(
 
                     is UpdateUiState.UpToDate -> {
                         Text(
-                            text = "Musico $currentVersion is the latest version.",
+                            text = strings.musicoIsLatest(currentVersion),
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         TextButton(
@@ -121,7 +123,7 @@ fun UpdateDialog(
                                 modifier = Modifier.size(18.dp),
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text("Open Release Page")
+                            Text(strings.openReleasePage)
                         }
                     }
 
@@ -142,7 +144,7 @@ fun UpdateDialog(
                                 modifier = Modifier.size(18.dp),
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text("Open Release Page")
+                            Text(strings.openReleasePage)
                         }
                     }
 
@@ -159,7 +161,7 @@ fun UpdateDialog(
                                 modifier = Modifier.fillMaxWidth(),
                             )
                             Text(
-                                text = "Downloading ${release.apkAsset.name} (${(current.progress * 100).toInt()}%)…",
+                                text = strings.downloadingAssetProgress(release.apkAsset.name, (current.progress * 100).toInt()),
                                 style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 2,
@@ -168,7 +170,7 @@ fun UpdateDialog(
                         } else {
                             LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                             Text(
-                                text = "Downloading ${release.apkAsset.name}…",
+                                text = strings.downloadingAsset(release.apkAsset.name),
                                 style = MaterialTheme.typography.bodySmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 2,
@@ -185,7 +187,7 @@ fun UpdateDialog(
                             sizeBytes = release.apkAsset.sizeBytes,
                         )
                         Text(
-                            text = "Package verified and ready to install.",
+                            text = strings.packageVerifiedReady,
                             style = MaterialTheme.typography.bodyMedium,
                         )
                         ReleaseNotesBox(notes = release.body)
@@ -198,7 +200,7 @@ fun UpdateDialog(
                                 modifier = Modifier.size(18.dp),
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text("Open Release Page")
+                            Text(strings.openReleasePage)
                         }
                     }
 
@@ -209,7 +211,7 @@ fun UpdateDialog(
                             color = MaterialTheme.colorScheme.error,
                         )
                         Text(
-                            text = "Current version: $currentVersion",
+                            text = strings.currentVersionLabel(currentVersion),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -222,7 +224,7 @@ fun UpdateDialog(
                                 modifier = Modifier.size(18.dp),
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text("Open Release Page")
+                            Text(strings.openReleasePage)
                         }
                     }
                 }
@@ -241,7 +243,7 @@ fun UpdateDialog(
                             }
                         },
                     ) {
-                        Text("Download & Install")
+                        Text(strings.downloadAndInstall)
                     }
                 }
 
@@ -251,7 +253,7 @@ fun UpdateDialog(
                             updateManager.installApk(context, current.apkFile)
                         },
                     ) {
-                        Text("Install")
+                        Text(strings.install)
                     }
                 }
 
@@ -261,7 +263,7 @@ fun UpdateDialog(
                             scope.launch { updateManager.checkForUpdates(silent = false) }
                         },
                     ) {
-                        Text("Check Again")
+                        Text(strings.checkAgain)
                     }
                 }
 
@@ -271,7 +273,7 @@ fun UpdateDialog(
                             scope.launch { updateManager.checkForUpdates(silent = false) }
                         },
                     ) {
-                        Text("Retry")
+                        Text(strings.retry)
                     }
                 }
 
@@ -292,23 +294,23 @@ fun UpdateDialog(
                                 onDismiss()
                             },
                         ) {
-                            Text("Skip Version")
+                            Text(strings.skipVersion)
                         }
                         TextButton(onClick = onDismiss) {
-                            Text("Later")
+                            Text(strings.later)
                         }
                     }
                 }
 
                 is UpdateUiState.Downloading -> {
                     TextButton(onClick = onDismiss) {
-                        Text("Hide")
+                        Text(strings.hide)
                     }
                 }
 
                 else -> {
                     TextButton(onClick = onDismiss) {
-                        Text("Close")
+                        Text(strings.close)
                     }
                 }
             }
@@ -351,6 +353,7 @@ private fun VersionTransitionRow(
 
 @Composable
 private fun ReleaseNotesBox(notes: String) {
+    val strings = LocalStrings.current
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
         shape = MaterialTheme.shapes.small,
@@ -364,7 +367,7 @@ private fun ReleaseNotesBox(notes: String) {
                 .padding(12.dp),
         ) {
             Text(
-                text = notes.ifBlank { "No release notes provided." },
+                text = notes.ifBlank { strings.noReleaseNotes },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

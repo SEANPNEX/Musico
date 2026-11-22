@@ -609,7 +609,7 @@
                                      Margin="3,0,0,0" />
                         </Border>
                         <TextBlock x:Name="StateText"
-                                   Text="Off"
+                                   Text="{DynamicResource Str_Toggle_Off}"
                                    Margin="10,0,0,0"
                                    VerticalAlignment="Center"
                                    Foreground="{DynamicResource TextPrimaryBrush}" />
@@ -621,7 +621,7 @@
                             <Setter TargetName="Knob" Property="Fill" Value="#FFFFFF" />
                             <Setter TargetName="Knob" Property="HorizontalAlignment" Value="Right" />
                             <Setter TargetName="Knob" Property="Margin" Value="0,0,3,0" />
-                            <Setter TargetName="StateText" Property="Text" Value="On" />
+                            <Setter TargetName="StateText" Property="Text" Value="{DynamicResource Str_Toggle_On}" />
                         </Trigger>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="Track" Property="Opacity" Value="0.88" />

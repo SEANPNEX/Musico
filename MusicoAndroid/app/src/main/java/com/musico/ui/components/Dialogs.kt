@@ -2,17 +2,24 @@ package com.musico.ui.components
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -20,8 +27,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.musico.i18n.AppLanguage
+import com.musico.i18n.LocalStrings
 
 @Composable
 fun TextInputDialog(
@@ -29,11 +39,12 @@ fun TextInputDialog(
     label: String,
     initialValue: String = "",
     supportingText: String? = null,
-    confirmLabel: String = "Save",
+    confirmLabel: String? = null,
     allowBlankWithDefault: String? = null,
     onDismiss: () -> Unit,
     onConfirm: (String) -> Unit
 ) {
+    val strings = LocalStrings.current
     var value by remember(initialValue) { mutableStateOf(initialValue) }
     val trimmed = value.trim()
     val canConfirm = trimmed.isNotEmpty() || allowBlankWithDefault != null
@@ -64,12 +75,12 @@ fun TextInputDialog(
                     onDismiss()
                 }
             ) {
-                Text(confirmLabel)
+                Text(confirmLabel ?: strings.save)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(strings.cancel)
             }
         }
     )
@@ -83,6 +94,7 @@ fun ConfirmDialog(
     onDismiss: () -> Unit,
     onConfirm: () -> Unit
 ) {
+    val strings = LocalStrings.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -99,7 +111,7 @@ fun ConfirmDialog(
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(strings.cancel)
             }
         }
     )
@@ -120,6 +132,7 @@ fun OptionPickerDialog(
     onDismiss: () -> Unit,
     onSelect: (String) -> Unit
 ) {
+    val strings = LocalStrings.current
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text(title) },
@@ -154,8 +167,62 @@ fun OptionPickerDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel")
+                Text(strings.cancel)
             }
         }
+    )
+}
+
+@Composable
+fun LanguageDialog(
+    current: AppLanguage,
+    onSelect: (AppLanguage) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val strings = LocalStrings.current
+    val options = listOf(
+        AppLanguage.SYSTEM to strings.languageFollowSystem,
+        AppLanguage.ENGLISH to strings.languageEnglish,
+        AppLanguage.SIMPLIFIED_CHINESE to strings.languageSimplifiedChinese,
+    )
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Rounded.Language, contentDescription = null) },
+        title = { Text(strings.languageTitle) },
+        text = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                options.forEach { (lang, label) ->
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                onSelect(lang)
+                                onDismiss()
+                            }
+                            .padding(vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        RadioButton(
+                            selected = current == lang,
+                            onClick = {
+                                onSelect(lang)
+                                onDismiss()
+                            },
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = label,
+                            style = MaterialTheme.typography.bodyLarge,
+                        )
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) {
+                Text(strings.close)
+            }
+        },
     )
 }

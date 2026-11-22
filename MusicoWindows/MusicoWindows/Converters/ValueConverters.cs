@@ -2,6 +2,7 @@ using System;
 using System.Globalization;
 using System.Windows;
 using System.Windows.Data;
+using MusicoWindows.Localization;
 
 namespace MusicoWindows.Converters;
 
@@ -21,13 +22,8 @@ public static class TimeFormatter
             : $"{minutes}:{secs:D2}";
     }
 
-    public static string FormatListeningDuration(double totalSeconds)
-    {
-        int minutes = (int)(Math.Max(0, totalSeconds) / 60);
-        return minutes >= 60
-            ? $"{minutes / 60} h {minutes % 60} min"
-            : $"{minutes} min";
-    }
+    public static string FormatListeningDuration(double totalSeconds) =>
+        L.FormatListeningDuration(totalSeconds);
 }
 
 public sealed class TimeFormatConverter : IValueConverter
@@ -94,7 +90,7 @@ public sealed class CountToSongsTextConverter : IValueConverter
     public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
     {
         int count = value is int i ? i : 0;
-        return count == 1 ? "1 song" : $"{count} songs";
+        return L.SongsCount(count);
     }
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)

@@ -39,6 +39,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.musico.i18n.LocalStrings
 import com.musico.model.SleepMode
 import com.musico.ui.components.formatTime
 import kotlinx.coroutines.delay
@@ -73,6 +74,7 @@ fun SleepTimerSheetContent(
     onSetSleep: (SleepMode) -> Unit,
     onDismiss: () -> Unit
 ) {
+    val strings = LocalStrings.current
     var customMinutes by remember { mutableIntStateOf(20) }
     var nowMs by remember { mutableLongStateOf(System.currentTimeMillis()) }
 
@@ -98,11 +100,11 @@ fun SleepTimerSheetContent(
             horizontalArrangement = Arrangement.SpaceBetween
         ) {
             Text(
-                text = "Sleep Timer",
+                text = strings.sleepTimer,
                 style = MaterialTheme.typography.titleLarge
             )
             TextButton(onClick = onDismiss) {
-                Text("Done")
+                Text(strings.done)
             }
         }
 
@@ -130,9 +132,9 @@ fun SleepTimerSheetContent(
                     val statusText = when (sleepMode) {
                         is SleepMode.Until -> {
                             val remainingSec = max((sleepMode.targetEpochMs - nowMs) / 1000.0, 0.0)
-                            "Stops in ${formatTime(remainingSec)}"
+                            strings.stopsIn(formatTime(remainingSec))
                         }
-                        SleepMode.EndOfTrack -> "Stops at the end of this song"
+                        SleepMode.EndOfTrack -> strings.stopsAtEndOfSong
                         SleepMode.Off -> ""
                     }
                     Text(
@@ -142,14 +144,14 @@ fun SleepTimerSheetContent(
                         modifier = Modifier.weight(1f)
                     )
                     TextButton(onClick = { onSetSleep(SleepMode.Off) }) {
-                        Text("Cancel Timer", color = MaterialTheme.colorScheme.error)
+                        Text(strings.cancelTimer, color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
         }
 
         Text(
-            text = "Stop playing after",
+            text = strings.stopPlayingAfter,
             style = MaterialTheme.typography.labelLarge,
             color = MaterialTheme.colorScheme.primary,
             modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp)
@@ -157,7 +159,7 @@ fun SleepTimerSheetContent(
 
         SLEEP_PRESETS.forEach { minutes ->
             ListItem(
-                headlineContent = { Text("$minutes minutes") },
+                headlineContent = { Text(strings.minutesCount(minutes)) },
                 modifier = Modifier.clickable {
                     val target = System.currentTimeMillis() + minutes * 60_000L
                     onSetSleep(SleepMode.Until(target))
@@ -180,7 +182,7 @@ fun SleepTimerSheetContent(
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
                 Text(
-                    text = "Custom: $customMinutes minutes",
+                    text = strings.customMinutes(customMinutes),
                     style = MaterialTheme.typography.bodyLarge.copy(fontFeatureSettings = "tnum")
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -188,13 +190,13 @@ fun SleepTimerSheetContent(
                         onClick = { customMinutes = (customMinutes - 1).coerceAtLeast(1) },
                         enabled = customMinutes > 1
                     ) {
-                        Icon(Icons.Rounded.Remove, contentDescription = "Decrease minutes")
+                        Icon(Icons.Rounded.Remove, contentDescription = strings.decreaseMinutes)
                     }
                     IconButton(
                         onClick = { customMinutes = (customMinutes + 1).coerceAtMost(240) },
                         enabled = customMinutes < 240
                     ) {
-                        Icon(Icons.Rounded.Add, contentDescription = "Increase minutes")
+                        Icon(Icons.Rounded.Add, contentDescription = strings.increaseMinutes)
                     }
                     Spacer(Modifier.width(4.dp))
                     FilledTonalButton(
@@ -204,7 +206,7 @@ fun SleepTimerSheetContent(
                             onDismiss()
                         }
                     ) {
-                        Text("Start")
+                        Text(strings.start)
                     }
                 }
             }
@@ -218,7 +220,7 @@ fun SleepTimerSheetContent(
         HorizontalDivider(modifier = Modifier.padding(vertical = 4.dp))
 
         ListItem(
-            headlineContent = { Text("End of current song") },
+            headlineContent = { Text(strings.endOfCurrentSong) },
             modifier = Modifier.clickable {
                 onSetSleep(SleepMode.EndOfTrack)
                 onDismiss()

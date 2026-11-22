@@ -25,7 +25,7 @@
                                    Foreground="{DynamicResource AccentBrush}"
                                    VerticalAlignment="Center"
                                    Margin="0,0,10,0" />
-                        <TextBlock Text="Add Cloud Folder"
+                        <TextBlock Text="{DynamicResource Str_AddCloud_Title}"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="20"
                                    FontWeight="SemiBold"
@@ -36,12 +36,12 @@
                             Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE711;"
                             HorizontalAlignment="Right"
-                            ToolTip="Close"
+                            ToolTip="{DynamicResource Str_Common_Close}"
                             Click="Cancel_Click" />
                 </Grid>
 
                 <!-- URL Field -->
-                <TextBlock Text="Playlist or Video URL"
+                <TextBlock Text="{DynamicResource Str_AddCloud_UrlLabel}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="13"
                            FontWeight="SemiBold"
@@ -52,7 +52,7 @@
                          Height="34"
                          KeyDown="InputBox_KeyDown"
                          TextChanged="UrlBox_TextChanged" />
-                <TextBlock Text="Supports YouTube / YouTube Music playlists &amp; videos (no login required), Bilibili favlists, collections, series, b23.tv &amp; BV links."
+                <TextBlock Text="{DynamicResource Str_AddCloud_UrlHint}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="11"
                            Foreground="{DynamicResource TextSecondaryBrush}"
@@ -60,7 +60,7 @@
                            Margin="0,4,0,14" />
 
                 <!-- Optional Cookie -->
-                <TextBlock Text="Cookie (Optional)"
+                <TextBlock Text="{DynamicResource Str_AddCloud_CookieLabel}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="13"
                            FontWeight="SemiBold"
@@ -70,7 +70,7 @@
                          Style="{StaticResource Win10TextBoxStyle}"
                          Height="34"
                          KeyDown="InputBox_KeyDown" />
-                <TextBlock Text="Only needed for private/authenticated playlists or higher Bilibili audio quality."
+                <TextBlock Text="{DynamicResource Str_AddCloud_CookieHint}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="11"
                            Foreground="{DynamicResource TextSecondaryBrush}"
@@ -78,7 +78,7 @@
                            Margin="0,4,0,14" />
 
                 <!-- Optional YouTube HTTP Proxy -->
-                <TextBlock Text="HTTP Proxy (Optional — YouTube)"
+                <TextBlock Text="{DynamicResource Str_AddCloud_ProxyLabel}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="13"
                            FontWeight="SemiBold"
@@ -88,7 +88,7 @@
                          Style="{StaticResource Win10TextBoxStyle}"
                          Height="34"
                          KeyDown="InputBox_KeyDown" />
-                <TextBlock Text="e.g. 7890, 127.0.0.1:7890, or http://127.0.0.1:7890"
+                <TextBlock Text="{DynamicResource Str_AddCloud_ProxyHint}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="11"
                            Foreground="{DynamicResource TextSecondaryBrush}"
@@ -113,7 +113,7 @@
                 <StackPanel x:Name="BusyPanel"
                             Margin="0,0,0,14"
                             Visibility="Collapsed">
-                    <TextBlock Text="Fetching playlist tracks..."
+                    <TextBlock Text="{DynamicResource Str_AddCloud_Fetching}"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="12"
                                Foreground="{DynamicResource TextSecondaryBrush}"
@@ -132,13 +132,13 @@
                     <Button x:Name="SubmitButton"
                             Grid.Column="0"
                             Style="{StaticResource Win10PrimaryButtonStyle}"
-                            Content="Add Cloud Folder"
+                            Content="{DynamicResource Str_AddCloud_Title}"
                             IsEnabled="False"
                             Click="Submit_Click" />
                     <Button x:Name="CancelButton"
                             Grid.Column="2"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Content="Cancel"
+                            Content="{DynamicResource Str_Common_Cancel}"
                             Click="Cancel_Click" />
                 </Grid>
             </StackPanel>

@@ -56,6 +56,7 @@ import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.musico.audio.PlayerUiState
+import com.musico.i18n.LocalStrings
 import com.musico.model.PlayQueue
 import com.musico.model.Playlist
 import com.musico.model.TrackSortOrder
@@ -90,6 +91,7 @@ fun PlaylistsScreen(
     onPlaylistClick: (PlaylistRef) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     var showCreateDialog by remember { mutableStateOf(false) }
     var renamingPlaylist by remember { mutableStateOf<Playlist?>(null) }
     var deletingPlaylist by remember { mutableStateOf<Playlist?>(null) }
@@ -99,7 +101,7 @@ fun PlaylistsScreen(
         contentWindowInsets = WindowInsets(0),
         floatingActionButton = {
             FloatingActionButton(onClick = { showCreateDialog = true }) {
-                Icon(Icons.Rounded.Add, contentDescription = "New Playlist")
+                Icon(Icons.Rounded.Add, contentDescription = strings.newPlaylist)
             }
         }
     ) { innerPadding ->
@@ -127,8 +129,8 @@ fun PlaylistsScreen(
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         },
-                        headlineContent = { Text("Favourites") },
-                        supportingContent = { Text("${libraryState.favourites.size} songs") }
+                        headlineContent = { Text(strings.favourites) },
+                        supportingContent = { Text(strings.songCount(libraryState.favourites.size)) }
                     )
                 }
             }
@@ -153,18 +155,18 @@ fun PlaylistsScreen(
                                 overflow = TextOverflow.Ellipsis
                             )
                         },
-                        supportingContent = { Text("${playlist.trackIds.size} songs") },
+                        supportingContent = { Text(strings.songCount(playlist.trackIds.size)) },
                         trailingContent = {
                             Box {
                                 IconButton(onClick = { menuExpanded = true }) {
-                                    Icon(Icons.Rounded.MoreVert, contentDescription = "Playlist options")
+                                    Icon(Icons.Rounded.MoreVert, contentDescription = strings.playlistOptions)
                                 }
                                 DropdownMenu(
                                     expanded = menuExpanded,
                                     onDismissRequest = { menuExpanded = false }
                                 ) {
                                     DropdownMenuItem(
-                                        text = { Text("Rename…") },
+                                        text = { Text(strings.renameEllipsis) },
                                         leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
                                         onClick = {
                                             menuExpanded = false
@@ -172,7 +174,7 @@ fun PlaylistsScreen(
                                         }
                                     )
                                     DropdownMenuItem(
-                                        text = { Text("Delete") },
+                                        text = { Text(strings.delete) },
                                         leadingIcon = {
                                             Icon(
                                                 Icons.Rounded.Delete,
@@ -207,10 +209,10 @@ fun PlaylistsScreen(
 
     if (showCreateDialog) {
         TextInputDialog(
-            title = "New Playlist",
-            label = "Name",
-            confirmLabel = "Create",
-            allowBlankWithDefault = "New Playlist",
+            title = strings.newPlaylist,
+            label = strings.nameLabel,
+            confirmLabel = strings.create,
+            allowBlankWithDefault = strings.newPlaylist,
             onDismiss = { showCreateDialog = false },
             onConfirm = { name -> libraryStore.createPlaylist(name) }
         )
@@ -219,10 +221,10 @@ fun PlaylistsScreen(
     val renaming = renamingPlaylist
     if (renaming != null) {
         TextInputDialog(
-            title = "Rename Playlist",
-            label = "Name",
+            title = strings.renamePlaylistTitle,
+            label = strings.nameLabel,
             initialValue = renaming.name,
-            confirmLabel = "Rename",
+            confirmLabel = strings.rename,
             onDismiss = { renamingPlaylist = null },
             onConfirm = { newName -> libraryStore.renamePlaylist(renaming.id, newName) }
         )
@@ -231,9 +233,9 @@ fun PlaylistsScreen(
     val deleting = deletingPlaylist
     if (deleting != null) {
         ConfirmDialog(
-            title = "Delete “${deleting.name}”?",
-            message = "This playlist will be removed. Your songs will stay in your library.",
-            confirmLabel = "Delete",
+            title = strings.deleteItemConfirmTitle(deleting.name),
+            message = strings.deletePlaylistConfirmMessage,
+            confirmLabel = strings.delete,
             onDismiss = { deletingPlaylist = null },
             onConfirm = { libraryStore.deletePlaylist(deleting.id) }
         )
@@ -254,6 +256,7 @@ fun PlaylistDetailScreen(
     onBack: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     var editing by remember { mutableStateOf(false) }
 
     val playlist = remember(libraryState.playlists, ref) {
@@ -264,8 +267,8 @@ fun PlaylistDetailScreen(
     }
 
     val title = when (ref) {
-        PlaylistRef.Favourites -> "Favourites"
-        is PlaylistRef.User -> playlist?.name ?: "Playlist"
+        PlaylistRef.Favourites -> strings.favourites
+        is PlaylistRef.User -> playlist?.name ?: strings.playlistFallbackTitle
     }
 
     val sortOrder = when (ref) {
@@ -309,7 +312,7 @@ fun PlaylistDetailScreen(
             TopAppBar(
                 navigationIcon = {
                     IconButton(onClick = onBack) {
-                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = strings.back)
                     }
                 },
                 title = {
@@ -340,7 +343,7 @@ fun PlaylistDetailScreen(
                     }
                     if (ref is PlaylistRef.User && tracks.isNotEmpty()) {
                         TextButton(onClick = { editing = !editing }) {
-                            Text(if (editing) "Done" else "Edit")
+                            Text(if (editing) strings.done else strings.edit)
                         }
                     }
                 }
@@ -358,8 +361,8 @@ fun PlaylistDetailScreen(
                 item(key = "empty_playlist") {
                     EmptyState(
                         icon = Icons.AutoMirrored.Rounded.QueueMusic,
-                        title = "Nothing Here Yet",
-                        description = "Open the menu on a song, album or folder to add it."
+                        title = strings.nothingHereYetTitle,
+                        description = strings.nothingHereYetDesc
                     )
                 }
             } else {
@@ -445,7 +448,7 @@ fun PlaylistDetailScreen(
                                         },
                                         enabled = index > 0
                                     ) {
-                                        Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = "Move up")
+                                        Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = strings.moveUp)
                                     }
                                     IconButton(
                                         onClick = {
@@ -456,7 +459,7 @@ fun PlaylistDetailScreen(
                                         },
                                         enabled = index < tracks.lastIndex
                                     ) {
-                                        Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = "Move down")
+                                        Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = strings.moveDown)
                                     }
                                     IconButton(
                                         onClick = {
@@ -465,7 +468,7 @@ fun PlaylistDetailScreen(
                                     ) {
                                         Icon(
                                             Icons.Rounded.DeleteOutline,
-                                            contentDescription = "Remove from playlist",
+                                            contentDescription = strings.removeFromPlaylistCd,
                                             tint = MaterialTheme.colorScheme.error
                                         )
                                     }
@@ -486,7 +489,7 @@ fun PlaylistDetailScreen(
                                 if (ref is PlaylistRef.User) {
                                     HorizontalDivider()
                                     DropdownMenuItem(
-                                        text = { Text("Remove from Playlist") },
+                                        text = { Text(strings.removeFromPlaylist) },
                                         leadingIcon = {
                                             Icon(
                                                 Icons.Rounded.DeleteOutline,

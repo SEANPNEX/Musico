@@ -9,6 +9,7 @@ using System.Windows.Media;
 using Microsoft.Win32;
 using MusicoWindows.Controls;
 using MusicoWindows.Core;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 using MusicoWindows.Theme;
@@ -25,12 +26,28 @@ public partial class FoldersView : UserControl
     public FoldersView()
     {
         InitializeComponent();
-        foreach (var mode in TrackSorter.AllModes)
-        {
-            SortCombo.Items.Add(TrackSorter.Label(mode));
-        }
-        SortCombo.SelectedIndex = 1;
+        RebuildSortCombo(selectedIndex: 1);
         Unloaded += OnUnloaded;
+    }
+
+    private void RebuildSortCombo(int? selectedIndex = null)
+    {
+        int prev = selectedIndex ?? Math.Max(0, SortCombo.SelectedIndex);
+        _suppressSortSelection = true;
+        try
+        {
+            SortCombo.Items.Clear();
+            foreach (var mode in TrackSorter.AllModes)
+            {
+                SortCombo.Items.Add(TrackSorter.Label(mode));
+            }
+            if (SortCombo.Items.Count > 0)
+                SortCombo.SelectedIndex = Math.Clamp(prev, 0, SortCombo.Items.Count - 1);
+        }
+        finally
+        {
+            _suppressSortSelection = false;
+        }
     }
 
     public void Bind(ViewContext ctx)
@@ -39,6 +56,7 @@ public partial class FoldersView : UserControl
         _ctx = ctx;
         _ctx.Services.Library.PropertyChanged += OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged += OnPlayerChanged;
+        LocalizationManager.LanguageChanged += OnLanguageChanged;
         Refresh();
     }
 
@@ -58,9 +76,16 @@ public partial class FoldersView : UserControl
 
     private void Detach()
     {
+        LocalizationManager.LanguageChanged -= OnLanguageChanged;
         if (_ctx is null) return;
         _ctx.Services.Library.PropertyChanged -= OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged -= OnPlayerChanged;
+    }
+
+    private void OnLanguageChanged(ResolvedLanguage _)
+    {
+        RebuildSortCombo();
+        Refresh();
     }
 
     private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
@@ -84,14 +109,14 @@ public partial class FoldersView : UserControl
             ScanBanner.Visibility = Visibility.Visible;
             if (lib.ScanTotal > 0)
             {
-                ScanStatusText.Text = $"Reading {lib.ScanDone} of {lib.ScanTotal} songs...";
+                ScanStatusText.Text = L.Format("Folders_ScanningProgress", lib.ScanDone, lib.ScanTotal);
                 ScanProgressBar.IsIndeterminate = false;
                 ScanProgressBar.Maximum = lib.ScanTotal;
                 ScanProgressBar.Value = lib.ScanDone;
             }
             else
             {
-                ScanStatusText.Text = "Looking for music...";
+                ScanStatusText.Text = L.Get("Folders_ScanningDefault");
                 ScanProgressBar.IsIndeterminate = true;
             }
         }
@@ -135,8 +160,8 @@ public partial class FoldersView : UserControl
         if (_ctx is null) return;
         var lib = _ctx.Services.Library;
 
-        TitleText.Text = "Folders";
-        SubtitleText.Text = "Your Music folder is included by default. Add any folder with music, or remove one you don't want.";
+        TitleText.Text = L.Get("Folders_Title");
+        SubtitleText.Text = L.Get("Folders_RootsSubtitle");
         DrillBar.Visibility = Visibility.Collapsed;
         ContentStack.Children.Clear();
 
@@ -182,7 +207,7 @@ public partial class FoldersView : UserControl
             var titleRow = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };
             var nameTb = new TextBlock
             {
-                Text = root.Name,
+                Text = L.DisplayRootName(root),
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 15,
                 FontWeight = FontWeights.SemiBold,
@@ -207,7 +232,7 @@ public partial class FoldersView : UserControl
                 string cloudName = root.EffectiveCloudKind == RootKind.CloudBilibili ? "Bilibili" : "YouTube";
                 var badgeText = new TextBlock
                 {
-                    Text = root.IsCloud ? cloudName : $"{cloudName} · Local",
+                    Text = root.IsCloud ? cloudName : L.Format("Folders_CloudLocalBadge", cloudName),
                     FontFamily = (FontFamily)FindResource("Win10Font"),
                     FontSize = 10,
                     FontWeight = FontWeights.SemiBold
@@ -225,8 +250,8 @@ public partial class FoldersView : UserControl
             var detailTb = new TextBlock
             {
                 Text = available
-                    ? $"{count} {(count == 1 ? "song" : "songs")} · {locationDisplay}"
-                    : "Unavailable — folder moved or disconnected",
+                    ? $"{L.SongsCount(count)} · {locationDisplay}"
+                    : L.Get("Folders_Unavailable"),
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 12,
                 TextTrimming = TextTrimming.CharacterEllipsis,
@@ -243,7 +268,7 @@ public partial class FoldersView : UserControl
             {
                 var locateBtn = new Button
                 {
-                    Content = "Locate Again...",
+                    Content = L.Get("Folders_LocateAgain"),
                     Style = (Style)FindResource("Win10ButtonStyle"),
                     Margin = new Thickness(0, 0, 8, 0)
                 };
@@ -260,7 +285,7 @@ public partial class FoldersView : UserControl
                 var saveBtn = new Button
                 {
                     Style = (Style)FindResource("Win10ButtonStyle"),
-                    ToolTip = "Save Cloud Playlist to Local Folder",
+                    ToolTip = L.Get("Folders_SaveCloudTooltip"),
                     Margin = new Thickness(0, 0, 8, 0),
                     IsEnabled = count > 0
                 };
@@ -275,7 +300,7 @@ public partial class FoldersView : UserControl
                 });
                 saveContent.Children.Add(new TextBlock
                 {
-                    Text = "Save to Local Folder...",
+                    Text = L.Get("Folders_SaveToLocal"),
                     VerticalAlignment = VerticalAlignment.Center
                 });
                 saveBtn.Content = saveContent;
@@ -293,7 +318,7 @@ public partial class FoldersView : UserControl
                 var updateBtn = new Button
                 {
                     Style = (Style)FindResource("Win10ButtonStyle"),
-                    ToolTip = "Update from Cloud",
+                    ToolTip = L.Get("Folders_UpdateFromCloud"),
                     Margin = new Thickness(0, 0, 8, 0)
                 };
                 var updateContent = new StackPanel { Orientation = Orientation.Horizontal };
@@ -307,7 +332,7 @@ public partial class FoldersView : UserControl
                 });
                 updateContent.Children.Add(new TextBlock
                 {
-                    Text = "Update from Cloud",
+                    Text = L.Get("Folders_UpdateFromCloud"),
                     VerticalAlignment = VerticalAlignment.Center
                 });
                 updateBtn.Content = updateContent;
@@ -322,7 +347,7 @@ public partial class FoldersView : UserControl
             var removeBtn = new Button
             {
                 Style = (Style)FindResource("Win10ButtonStyle"),
-                ToolTip = "Remove Folder from Library"
+                ToolTip = L.Get("Folders_RemoveFromLibraryTooltip")
             };
             var removeContent = new StackPanel { Orientation = Orientation.Horizontal };
             removeContent.Children.Add(new TextBlock
@@ -335,7 +360,7 @@ public partial class FoldersView : UserControl
             });
             removeContent.Children.Add(new TextBlock
             {
-                Text = "Remove Folder",
+                Text = L.Get("Folders_RemoveFolder"),
                 VerticalAlignment = VerticalAlignment.Center
             });
             removeBtn.Content = removeContent;
@@ -382,16 +407,16 @@ public partial class FoldersView : UserControl
                     if (rootTrackIds.Count > 0)
                     {
                         menu.Items.Insert(0, TrackMenuHelper.CreateItem(
-                            "Play",
+                            L.Get("Common_Play"),
                             "\uE768",
-                            () => _ctx.Services.Player.PlayInNamedQueue(root.Name, rootTrackIds)));
+                            () => _ctx.Services.Player.PlayInNamedQueue(L.DisplayRootName(root), rootTrackIds)));
                         menu.Items.Insert(1, new Separator());
                     }
                     menu.Items.Add(new Separator());
                     if (root.IsCloud)
                     {
                         menu.Items.Add(TrackMenuHelper.CreateItem(
-                            "Save to Local Folder...",
+                            L.Get("Folders_SaveToLocal"),
                             "\uE896",
                             () => _ctx.OpenSaveCloudPlaylist?.Invoke(root, rootTracks),
                             rootTracks.Count > 0));
@@ -399,24 +424,24 @@ public partial class FoldersView : UserControl
                     if (root.IsCloudTrackedLocal)
                     {
                         menu.Items.Add(TrackMenuHelper.CreateItem(
-                            "Update from Cloud",
+                            L.Get("Folders_UpdateFromCloud"),
                             "\uE896",
                             () => _ctx.OpenUpdateTrackedFolder?.Invoke(root),
                             available));
                     }
                     if (root.Kind == RootKind.Picked)
                     {
-                        menu.Items.Add(TrackMenuHelper.CreateItem("Locate Again...", "\uE8DA", async () => await PickAndRelocateAsync(rootId)));
+                        menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Folders_LocateAgain"), "\uE8DA", async () => await PickAndRelocateAsync(rootId)));
                     }
                     int excludedCount = root.ExcludedPaths?.Count ?? 0;
                     if (excludedCount > 0)
                     {
                         menu.Items.Add(TrackMenuHelper.CreateItem(
-                            $"Restore Removed Subfolders ({excludedCount})",
+                            L.Format("Folders_RestoreRemovedSubfolders", excludedCount),
                             "\uE7A7",
                             async () => await lib.RestoreExcludedFoldersAsync(rootId)));
                     }
-                    menu.Items.Add(TrackMenuHelper.CreateItem("Remove Folder", "\uE74D", () => ConfirmRemoveRoot(root)));
+                    menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Folders_RemoveFolder"), "\uE74D", () => ConfirmRemoveRoot(root)));
                 });
 
             ContentStack.Children.Add(card);
@@ -439,7 +464,7 @@ public partial class FoldersView : UserControl
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 8, 0)
             });
-            sp.Children.Add(new TextBlock { Text = "Restore Music Folder", VerticalAlignment = VerticalAlignment.Center });
+            sp.Children.Add(new TextBlock { Text = L.Get("Folders_RestoreMusicFolder"), VerticalAlignment = VerticalAlignment.Center });
             restoreBtn.Content = sp;
             restoreBtn.Click += async (_, _) => await lib.RestoreAppFolderAsync();
             ContentStack.Children.Add(restoreBtn);
@@ -454,7 +479,7 @@ public partial class FoldersView : UserControl
         if (root is null) return;
 
         string leafName = string.IsNullOrEmpty(_currentPath)
-            ? root.Name
+            ? L.DisplayRootName(root)
             : _currentPath.Split('/').Last();
         TitleText.Text = leafName;
         SubtitleText.Text = root.IsCloud
@@ -510,7 +535,7 @@ public partial class FoldersView : UserControl
             });
             var t1 = new TextBlock
             {
-                Text = "No Music Here",
+                Text = L.Get("Folders_EmptyTitle"),
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 17,
                 FontWeight = FontWeights.SemiBold,
@@ -519,7 +544,7 @@ public partial class FoldersView : UserControl
             t1.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
             var t2 = new TextBlock
             {
-                Text = "Songs you add to this folder appear after a rescan.",
+                Text = L.Get("Folders_EmptyDesc"),
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 13,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -576,7 +601,7 @@ public partial class FoldersView : UserControl
 
             var countTb = new TextBlock
             {
-                Text = $"{folderTracks.Count} {(folderTracks.Count == 1 ? "song" : "songs")}",
+                Text = L.SongsCount(folderTracks.Count),
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 12,
                 VerticalAlignment = VerticalAlignment.Center
@@ -587,7 +612,7 @@ public partial class FoldersView : UserControl
             var removeSubBtn = new Button
             {
                 Style = (Style)FindResource("Win10ButtonStyle"),
-                ToolTip = "Remove Folder from Library",
+                ToolTip = L.Get("Folders_RemoveFromLibraryTooltip"),
                 Margin = new Thickness(12, 0, 0, 0),
                 Padding = new Thickness(8, 4, 8, 4)
             };
@@ -602,7 +627,7 @@ public partial class FoldersView : UserControl
             });
             removeSubContent.Children.Add(new TextBlock
             {
-                Text = "Remove Folder",
+                Text = L.Get("Folders_RemoveFolder"),
                 FontSize = 12,
                 VerticalAlignment = VerticalAlignment.Center
             });
@@ -648,14 +673,14 @@ public partial class FoldersView : UserControl
                     if (folderTrackIds.Count > 0)
                     {
                         menu.Items.Insert(0, TrackMenuHelper.CreateItem(
-                            "Play",
+                            L.Get("Common_Play"),
                             "\uE768",
                             () => _ctx.Services.Player.PlayInNamedQueue(capturedFolderName, folderTrackIds)));
                         menu.Items.Insert(1, new Separator());
                     }
                     menu.Items.Add(new Separator());
                     menu.Items.Add(TrackMenuHelper.CreateItem(
-                        "Remove Folder",
+                        L.Get("Folders_RemoveFolder"),
                         "\uE74D",
                         () => ConfirmRemoveSubfolder(root, childPath, navigateUpOnConfirm: false)));
                 });
@@ -677,7 +702,7 @@ public partial class FoldersView : UserControl
             row.Bind(
                 _ctx.Services,
                 track,
-                track.IsCloud ? track.Artist : track.FileName,
+                track.IsCloud ? L.DisplayArtist(track.Artist) : track.FileName,
                 isCurrent,
                 isPlaying,
                 isAvail,
@@ -739,8 +764,8 @@ public partial class FoldersView : UserControl
         }
 
         string[] segments = string.IsNullOrEmpty(_currentPath) ? Array.Empty<string>() : _currentPath.Split('/');
-        AddCrumb("Folders", ResetToRoots, false);
-        AddCrumb(root.Name, () => { _currentPath = string.Empty; Refresh(); Win10Animations.AnimateSlideX(ContentStack, -24); }, segments.Length == 0);
+        AddCrumb(L.Get("Folders_Title"), ResetToRoots, false);
+        AddCrumb(L.DisplayRootName(root), () => { _currentPath = string.Empty; Refresh(); Win10Animations.AnimateSlideX(ContentStack, -24); }, segments.Length == 0);
 
         string accum = string.Empty;
         for (int i = 0; i < segments.Length; i++)
@@ -756,7 +781,7 @@ public partial class FoldersView : UserControl
         if (_ctx is null) return;
         var dlg = new OpenFolderDialog
         {
-            Title = "Select Music Folder"
+            Title = L.Get("Folders_SelectMusicFolderTitle")
         };
         if (dlg.ShowDialog() != true) return;
 
@@ -766,7 +791,7 @@ public partial class FoldersView : UserControl
         }
         catch (Exception ex)
         {
-            _ctx.OpenConfirm("Couldn't Add Folder", ex.Message, "OK", null, false);
+            _ctx.OpenConfirm(L.Get("Folders_CouldNotAddTitle"), ex.Message, L.Get("Common_OK"), null, false);
         }
     }
 
@@ -775,7 +800,7 @@ public partial class FoldersView : UserControl
         if (_ctx is null) return;
         var dlg = new OpenFolderDialog
         {
-            Title = "Locate Music Folder"
+            Title = L.Get("Folders_LocateFolderTitle")
         };
         if (dlg.ShowDialog() != true) return;
 
@@ -785,7 +810,7 @@ public partial class FoldersView : UserControl
         }
         catch (Exception ex)
         {
-            _ctx.OpenConfirm("Couldn't Locate Folder", ex.Message, "OK", null, false);
+            _ctx.OpenConfirm(L.Get("Folders_CouldNotLocateTitle"), ex.Message, L.Get("Common_OK"), null, false);
         }
     }
 
@@ -793,11 +818,11 @@ public partial class FoldersView : UserControl
     {
         if (_ctx is null) return;
         _ctx.OpenConfirm(
-            $"Remove \"{root.Name}\" from your library?",
+            L.Format("Folders_RemoveConfirmTitle", L.DisplayRootName(root)),
             root.IsCloud
-                ? "Its songs leave your library, playlists and queues."
-                : "Its songs leave your library, playlists and queues. The files themselves are not deleted.",
-            "Remove from Library",
+                ? L.Get("Folders_RemoveConfirmCloudMessage")
+                : L.Get("Folders_RemoveConfirmLocalMessage"),
+            L.Get("Folders_RemoveConfirmAction"),
             () => _ctx.Services.Library.RemoveRoot(root.Id),
             true);
     }
@@ -807,11 +832,11 @@ public partial class FoldersView : UserControl
         if (_ctx is null) return;
         string leaf = path.Split('/').LastOrDefault() ?? path;
         _ctx.OpenConfirm(
-            $"Remove \"{leaf}\" from your library?",
+            L.Format("Folders_RemoveConfirmTitle", leaf),
             root.IsCloud
-                ? "Its songs leave your library, playlists and queues."
-                : "Its songs leave your library, playlists and queues. The files themselves are not deleted.",
-            "Remove from Library",
+                ? L.Get("Folders_RemoveConfirmCloudMessage")
+                : L.Get("Folders_RemoveConfirmLocalMessage"),
+            L.Get("Folders_RemoveConfirmAction"),
             () =>
             {
                 _ctx.Services.Library.RemoveSubfolder(root.Id, path);
@@ -882,10 +907,10 @@ public partial class FoldersView : UserControl
     {
         if (_ctx is null || _currentRootId is not Guid rid) return;
         _ctx.OpenTextPrompt(
-            "New Folder",
-            "Enter a name for the new folder.",
+            L.Get("Folders_NewFolder"),
+            L.Get("Folders_NewFolderPrompt"),
             string.Empty,
-            "Create",
+            L.Get("Common_Create"),
             async name =>
             {
                 try
@@ -894,7 +919,7 @@ public partial class FoldersView : UserControl
                 }
                 catch (Exception ex)
                 {
-                    _ctx.OpenConfirm("Couldn't Create Folder", ex.Message, "OK", null, false);
+                    _ctx.OpenConfirm(L.Get("Folders_CouldNotCreateTitle"), ex.Message, L.Get("Common_OK"), null, false);
                 }
             });
     }

@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using MusicoWindows.Localization;
 using MusicoWindows.Stores;
 using MusicoWindows.Theme;
 using MusicoWindows.Update;
@@ -22,6 +23,11 @@ public partial class UpdateDialog : UserControl
     public UpdateDialog()
     {
         InitializeComponent();
+        LocalizationManager.LanguageChanged += _ =>
+        {
+            if (IsOpen && _currentResult is not null && !_isBusy)
+                ApplyCheckResult(_currentResult);
+        };
     }
 
     public bool IsOpen => Visibility == Visibility.Visible;
@@ -62,15 +68,15 @@ public partial class UpdateDialog : UserControl
         _cts?.Dispose();
         _cts = new CancellationTokenSource();
 
-        SetBusy(true, "Checking for updates...", indeterminate: true);
+        SetBusy(true, L.Get("Update_Checking"), indeterminate: true);
         ErrorBanner.Visibility = Visibility.Collapsed;
         ReleaseNotesSection.Visibility = Visibility.Collapsed;
         UpdateActionsPanel.Visibility = Visibility.Collapsed;
         SecondaryActionsPanel.Visibility = Visibility.Visible;
 
-        TitleText.Text = "Checking for Updates";
-        VersionSummaryText.Text = $"Current version: {_services.Update.CurrentVersion}";
-        ModeSubtitleText.Text = _services.Update.IsPortable ? "Portable mode (.zip)" : "Installer mode (.exe)";
+        TitleText.Text = L.Get("Update_CheckingTitle");
+        VersionSummaryText.Text = L.Format("Update_CurrentVersion", _services.Update.CurrentVersion);
+        ModeSubtitleText.Text = _services.Update.IsPortable ? L.Get("Update_ModePortable") : L.Get("Update_ModeInstaller");
         AssetSizeText.Text = string.Empty;
 
         try
@@ -88,27 +94,27 @@ public partial class UpdateDialog : UserControl
     private void ApplyCheckResult(UpdateCheckResult result)
     {
         _currentResult = result;
-        string modeLabel = result.IsPortable ? "Portable (.zip)" : "Installer (.exe)";
+        string modeLabel = result.IsPortable ? L.Get("Update_PackagePortable") : L.Get("Update_PackageInstaller");
 
         if (result.Status == UpdateCheckStatus.UpdateAvailable && result.Release is { } rel)
         {
-            TitleText.Text = "Update Available";
+            TitleText.Text = L.Get("Update_AvailableTitle");
             VersionSummaryText.Text = $"{result.CurrentVersion}  \u2192  {rel.Version}";
             ModeSubtitleText.Text = string.IsNullOrWhiteSpace(rel.Title)
-                ? $"Package: {modeLabel}"
+                ? L.Format("Update_PackageLabel", modeLabel)
                 : $"{rel.Title} \u00B7 {modeLabel}";
             AssetSizeText.Text = result.SelectedAsset is { Size: > 0 } asset
                 ? FormatBytes(asset.Size)
                 : string.Empty;
 
             ReleaseNotesText.Text = string.IsNullOrWhiteSpace(rel.ReleaseNotes)
-                ? "No release notes provided for this release."
+                ? L.Get("Update_NoReleaseNotes")
                 : rel.ReleaseNotes.Trim();
             ReleaseNotesSection.Visibility = Visibility.Visible;
 
             if (result.SelectedAsset is null)
             {
-                ShowError($"No compatible {modeLabel} package was found in release {rel.TagName}. You can open the release page to download it manually.");
+                ShowError(L.Format("Update_NoCompatibleAsset", modeLabel, rel.TagName));
                 UpdateNowButton.IsEnabled = false;
             }
             else
@@ -129,18 +135,18 @@ public partial class UpdateDialog : UserControl
 
         if (result.Status == UpdateCheckStatus.Error)
         {
-            TitleText.Text = "Update Check Failed";
-            VersionSummaryText.Text = $"Current version: {result.CurrentVersion}";
-            ModeSubtitleText.Text = $"Package: {modeLabel}";
+            TitleText.Text = L.Get("Update_FailedTitle");
+            VersionSummaryText.Text = L.Format("Update_CurrentVersion", result.CurrentVersion);
+            ModeSubtitleText.Text = L.Format("Update_PackageLabel", modeLabel);
             ShowError(string.IsNullOrWhiteSpace(result.ErrorMessage)
-                ? "Unable to reach GitHub Releases."
+                ? L.Get("Update_UnableToReach")
                 : result.ErrorMessage);
         }
         else
         {
-            TitleText.Text = "You're Up to Date";
-            VersionSummaryText.Text = $"Musico {result.CurrentVersion} is the latest version";
-            ModeSubtitleText.Text = $"Package: {modeLabel}";
+            TitleText.Text = L.Get("Update_UpToDateTitle");
+            VersionSummaryText.Text = L.Format("Update_UpToDateVersion", result.CurrentVersion);
+            ModeSubtitleText.Text = L.Format("Update_PackageLabel", modeLabel);
             ErrorBanner.Visibility = Visibility.Collapsed;
         }
     }
@@ -154,7 +160,7 @@ public partial class UpdateDialog : UserControl
         _cts = new CancellationTokenSource();
 
         ErrorBanner.Visibility = Visibility.Collapsed;
-        SetBusy(true, "Preparing update...", indeterminate: true);
+        SetBusy(true, L.Get("Update_Preparing"), indeterminate: true);
 
         var progress = new Progress<UpdateProgress>(p =>
         {
@@ -212,7 +218,7 @@ public partial class UpdateDialog : UserControl
         }
         catch (Exception ex)
         {
-            ShowError($"Unable to open browser: {ex.Message}");
+            ShowError(L.Format("Update_OpenBrowserError", ex.Message));
         }
     }
 

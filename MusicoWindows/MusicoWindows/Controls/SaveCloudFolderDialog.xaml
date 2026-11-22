@@ -26,7 +26,7 @@
                                    VerticalAlignment="Center"
                                    Margin="0,0,10,0" />
                         <TextBlock x:Name="TitleText"
-                                   Text="Save Cloud Playlist to Local Folder"
+                                   Text="{DynamicResource Str_SaveCloud_Title}"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="19"
                                    FontWeight="SemiBold"
@@ -37,7 +37,7 @@
                             Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE711;"
                             HorizontalAlignment="Right"
-                            ToolTip="Close"
+                            ToolTip="{DynamicResource Str_Common_Close}"
                             Click="CloseIcon_Click" />
                 </Grid>
 
@@ -57,7 +57,7 @@
 
                 <!-- Playlist Export Form -->
                 <StackPanel x:Name="FormPanel">
-                    <TextBlock Text="Folder Name"
+                    <TextBlock Text="{DynamicResource Str_SaveCloud_FolderName}"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="13"
                                FontWeight="SemiBold"
@@ -69,7 +69,7 @@
                              KeyDown="InputBox_KeyDown"
                              TextChanged="FormInput_TextChanged" />
 
-                    <TextBlock Text="Save Location"
+                    <TextBlock Text="{DynamicResource Str_SaveCloud_SaveLocation}"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="13"
                                FontWeight="SemiBold"
@@ -90,7 +90,7 @@
                         <Button x:Name="BrowseButton"
                                 Grid.Column="2"
                                 Style="{StaticResource Win10ButtonStyle}"
-                                Content="Browse..."
+                                Content="{DynamicResource Str_Common_Browse}"
                                 Height="34"
                                 Click="Browse_Click" />
                     </Grid>
@@ -104,7 +104,7 @@
 
                     <CheckBox x:Name="AddToLibraryCheckBox"
                               Style="{StaticResource Win10CheckBoxStyle}"
-                              Content="Add saved folder to Library"
+                              Content="{DynamicResource Str_SaveCloud_AddToLibrary}"
                               IsChecked="True"
                               Margin="0,0,0,14" />
                 </StackPanel>
@@ -209,12 +209,12 @@
                     <Button x:Name="SaveButton"
                             Grid.Column="0"
                             Style="{StaticResource Win10PrimaryButtonStyle}"
-                            Content="Save Folder"
+                            Content="{DynamicResource Str_SaveCloud_SaveFolder}"
                             Click="Save_Click" />
                     <Button x:Name="CancelButton"
                             Grid.Column="2"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Content="Cancel"
+                            Content="{DynamicResource Str_Common_Cancel}"
                             Click="Cancel_Click" />
                 </Grid>
 
@@ -230,12 +230,12 @@
                     <Button x:Name="OpenFolderButton"
                             Grid.Column="0"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Content="Open Folder"
+                            Content="{DynamicResource Str_SaveCloud_OpenFolder}"
                             Click="OpenFolder_Click" />
                     <Button x:Name="DoneButton"
                             Grid.Column="2"
                             Style="{StaticResource Win10PrimaryButtonStyle}"
-                            Content="Done"
+                            Content="{DynamicResource Str_Common_Done}"
                             Click="Done_Click" />
                 </Grid>
             </StackPanel>

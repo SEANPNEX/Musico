@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Musico</string>
+    <string name="playback_notification_channel_name">播放控制</string>
+    <string name="playback_notification_channel_description">媒体播放控制和正在播放状态</string>
+</resources>

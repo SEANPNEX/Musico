@@ -8,6 +8,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using MusicoWindows.Controls;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 using MusicoWindows.Theme;
@@ -57,11 +58,11 @@ public partial class MainWindow : Window
         FullPlayer.Initialize(_ctx);
         FullPlayer.OpenEqualizerRequested += () => EqDialog.Show(_services);
         FullPlayer.OpenSleepTimerRequested += () => SleepDialog.Show(_services);
-        FullPlayer.ErrorOccurred += (title, msg) => ShowConfirmDialog(title, msg, "OK", null, false);
+        FullPlayer.ErrorOccurred += (title, msg) => ShowConfirmDialog(title, msg, L.Get("Common_OK"), null, false);
 
         SideLyricsPanel.Initialize(_services);
         SideLyricsPanel.CloseRequested += () => ToggleSidePanel(_sidePanel ?? SidePanelKind.Lyrics);
-        SideLyricsPanel.ErrorOccurred += (title, msg) => ShowConfirmDialog(title, msg, "OK", null, false);
+        SideLyricsPanel.ErrorOccurred += (title, msg) => ShowConfirmDialog(title, msg, L.Get("Common_OK"), null, false);
         SideQueuesView.Bind(_ctx);
 
         _services.Library.PropertyChanged += OnLibraryChanged;
@@ -69,12 +70,14 @@ public partial class MainWindow : Window
         _services.Update.UpdateStateChanged += OnUpdateStateChanged;
 
         ThemeManager.ThemeChanged += OnThemeChanged;
+        LocalizationManager.LanguageChanged += OnLanguageChanged;
         SourceInitialized += (_, _) => AcrylicBackdrop.Apply(this, ThemeManager.IsDark);
         Loaded += OnMainWindowLoaded;
         StateChanged += (_, _) => UpdateMaximizedState();
         Closed += (_, _) =>
         {
             ThemeManager.ThemeChanged -= OnThemeChanged;
+            LocalizationManager.LanguageChanged -= OnLanguageChanged;
             _services.Library.PropertyChanged -= OnLibraryChanged;
             _services.Player.PropertyChanged -= OnPlayerChanged;
             _services.Update.UpdateStateChanged -= OnUpdateStateChanged;
@@ -91,17 +94,24 @@ public partial class MainWindow : Window
         UpdateThemeButton();
     }
 
+    private void OnLanguageChanged(ResolvedLanguage _)
+    {
+        UpdateThemeButton();
+        UpdateMaximizedState();
+        RebuildDynamicPlaylists();
+    }
+
     private void UpdateThemeButton()
     {
         if (ThemeManager.IsDark)
         {
             ThemeGlyph.Text = "\uE706";
-            LblTheme.Text = "Light Theme";
+            LblTheme.Text = L.Get("Nav_LightTheme");
         }
         else
         {
             ThemeGlyph.Text = "\uE708";
-            LblTheme.Text = "Dark Theme";
+            LblTheme.Text = L.Get("Nav_DarkTheme");
         }
     }
 
@@ -110,7 +120,7 @@ public partial class MainWindow : Window
         bool maximized = WindowState == WindowState.Maximized;
         RootGrid.Margin = maximized ? new Thickness(7) : new Thickness(0);
         MaxRestoreButton.Content = maximized ? "\uE923" : "\uE922";
-        MaxRestoreButton.ToolTip = maximized ? "Restore" : "Maximize";
+        MaxRestoreButton.ToolTip = maximized ? L.Get("Window_Restore") : L.Get("Window_Maximize");
     }
 
     private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e)
@@ -138,7 +148,7 @@ public partial class MainWindow : Window
             !string.IsNullOrWhiteSpace(_services.Player.ErrorMessage))
         {
             string msg = _services.Player.ErrorMessage;
-            ShowConfirmDialog("Playback Problem", msg, "OK", () => _services.Player.ClearError(), false);
+            ShowConfirmDialog(L.Get("Player_PlaybackProblemTitle"), msg, L.Get("Common_OK"), () => _services.Player.ClearError(), false);
         }
     }
 
@@ -193,16 +203,16 @@ public partial class MainWindow : Window
                 menu =>
                 {
                     menu.Items.Add(new Separator());
-                    menu.Items.Add(TrackMenuHelper.CreateItem("Rename...", "\uE70F", () =>
+                    menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Common_RenameEllipsis"), "\uE70F", () =>
                     {
-                        ShowTextPrompt("Rename Playlist", "Enter a new name for this playlist.", pl.Name, "Rename",
+                        ShowTextPrompt(L.Get("Playlists_RenameTitle"), L.Get("Playlists_RenameMessage"), pl.Name, L.Get("Common_Rename"),
                             name => _services.Library.RenamePlaylist(pid, name));
                     }));
-                    menu.Items.Add(TrackMenuHelper.CreateItem("Delete", "\uE74D", () =>
+                    menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Common_Delete"), "\uE74D", () =>
                     {
-                        ShowConfirmDialog($"Delete \"{pl.Name}\"?",
-                            "This removes the playlist. Your music files are not affected.",
-                            "Delete",
+                        ShowConfirmDialog(L.Format("Playlists_DeleteConfirmTitle", pl.Name),
+                            L.Get("Playlists_DeleteConfirmMessage"),
+                            L.Get("Common_Delete"),
                             () => _services.Library.DeletePlaylist(pid),
                             true);
                     }));
@@ -420,6 +430,7 @@ public partial class MainWindow : Window
         LblQueues.Visibility = labelVis;
         LblStats.Visibility = labelVis;
         LblTheme.Visibility = labelVis;
+        LblLanguage.Visibility = labelVis;
         LblRescan.Visibility = labelVis;
         LblCheckUpdates.Visibility = labelVis;
 
@@ -435,16 +446,52 @@ public partial class MainWindow : Window
     private void NewPlaylist_Click(object sender, RoutedEventArgs e)
     {
         ShowTextPrompt(
-            "New Playlist",
-            "Enter a name for the playlist.",
+            L.Get("Nav_NewPlaylist"),
+            L.Get("Playlists_NewMessage"),
             string.Empty,
-            "Create",
+            L.Get("Common_Create"),
             name => _services.Library.CreatePlaylist(name));
     }
 
     private void ToggleTheme_Click(object sender, RoutedEventArgs e)
     {
         ThemeManager.ToggleTheme(Application.Current);
+    }
+
+    private void LanguageFooter_Click(object sender, RoutedEventArgs e)
+    {
+        var menu = new ContextMenu();
+        menu.Items.Add(CreateLanguageMenuItem(L.Get("Lang_FollowSystem"), AppLanguage.System));
+        menu.Items.Add(CreateLanguageMenuItem(L.Get("Lang_English"), AppLanguage.English));
+        menu.Items.Add(CreateLanguageMenuItem(L.Get("Lang_SimplifiedChinese"), AppLanguage.SimplifiedChinese));
+        menu.PlacementTarget = LanguageButton;
+        menu.Placement = PlacementMode.Right;
+        menu.IsOpen = true;
+    }
+
+    private MenuItem CreateLanguageMenuItem(string header, AppLanguage mode)
+    {
+        bool isSelected = LocalizationManager.CurrentMode == mode;
+        var item = new MenuItem
+        {
+            Header = header,
+            IsCheckable = true,
+            IsChecked = isSelected
+        };
+        if (isSelected)
+        {
+            item.Icon = new TextBlock
+            {
+                Text = "\uE73E",
+                FontFamily = (FontFamily)FindResource("Win10GlyphFont"),
+                FontSize = 12,
+                Foreground = (Brush)FindResource("AccentBrush"),
+                VerticalAlignment = VerticalAlignment.Center,
+                HorizontalAlignment = HorizontalAlignment.Center
+            };
+        }
+        item.Click += (_, _) => LocalizationManager.SetMode(Application.Current, mode);
+        return item;
     }
 
     private async void OnMainWindowLoaded(object sender, RoutedEventArgs e)

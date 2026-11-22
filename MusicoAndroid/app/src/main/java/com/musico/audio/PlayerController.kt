@@ -33,12 +33,19 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.math.max
 
+sealed interface PlaybackError {
+    data class ConsecutiveFailures(val count: Int) : PlaybackError
+    data class TrackFailed(val title: String?) : PlaybackError
+    data class EngineError(val message: String?) : PlaybackError
+}
+
 data class PlayerUiState(
     val currentTrack: Track? = null,
     val isPlaying: Boolean = false,
     val durationSec: Double = 0.0,
     val currentTimeSec: Double = 0.0,
     val errorMessage: String? = null,
+    val playbackError: PlaybackError? = null,
     val sleepMode: SleepMode = SleepMode.Off,
     val eq: EqSettings = EqSettings(),
     val isLoadingCloud: Boolean = false,
@@ -114,6 +121,7 @@ class PlayerController(
                     isPlaying = false,
                     isLoadingCloud = false,
                     errorMessage = message,
+                    playbackError = PlaybackError.EngineError(message),
                 )
                 stopTicker()
             }
@@ -384,10 +392,16 @@ class PlayerController(
         } else {
             "“$title” could not be played."
         }
+        val structuredError = if (failures > 1) {
+            PlaybackError.ConsecutiveFailures(failures)
+        } else {
+            PlaybackError.TrackFailed(_state.value.currentTrack?.title)
+        }
         _state.value = _state.value.copy(
             isPlaying = false,
             isLoadingCloud = false,
             errorMessage = message,
+            playbackError = structuredError,
         )
     }
 
@@ -421,7 +435,7 @@ class PlayerController(
 
     fun play(ids: List<String>, startAt: Int) {
         if (ids.isEmpty()) return
-        _state.value = _state.value.copy(errorMessage = null)
+        _state.value = _state.value.copy(errorMessage = null, playbackError = null)
         queues.updateActive { it.replace(ids, startAt) }
         startCurrent(autoplay = true)
     }
@@ -451,7 +465,7 @@ class PlayerController(
         if (shuffle) {
             queues.update(newId) { it.withShuffle(true) }
         }
-        _state.value = _state.value.copy(errorMessage = null)
+        _state.value = _state.value.copy(errorMessage = null, playbackError = null)
         startCurrent(autoplay = true)
     }
 
@@ -504,7 +518,7 @@ class PlayerController(
 
     fun resume() {
         if (_state.value.isPlaying) return
-        _state.value = _state.value.copy(errorMessage = null)
+        _state.value = _state.value.copy(errorMessage = null, playbackError = null)
         if (_state.value.isLoadingCloud) {
             cloudAutoplayRequested = true
             return
@@ -565,7 +579,7 @@ class PlayerController(
     }
 
     fun jump(index: Int) {
-        _state.value = _state.value.copy(errorMessage = null)
+        _state.value = _state.value.copy(errorMessage = null, playbackError = null)
         queues.updateActive { it.jump(index) }
         startCurrent(autoplay = true)
     }
@@ -640,7 +654,7 @@ class PlayerController(
         val wasPlaying = isActiveOrLoadingToPlay
         persistPosition()
         queues.setActive(id)
-        _state.value = _state.value.copy(errorMessage = null)
+        _state.value = _state.value.copy(errorMessage = null, playbackError = null)
         startCurrent(autoplay = wasPlaying, positionSec = queues.active.positionSec)
     }
 
@@ -728,7 +742,7 @@ class PlayerController(
     }
 
     fun clearError() {
-        _state.value = _state.value.copy(errorMessage = null)
+        _state.value = _state.value.copy(errorMessage = null, playbackError = null)
     }
 
     fun restore() {

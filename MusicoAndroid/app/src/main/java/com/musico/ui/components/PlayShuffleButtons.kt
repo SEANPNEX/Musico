@@ -18,6 +18,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.musico.i18n.LocalStrings
 
 @Composable
 fun PlayShuffleButtons(
@@ -26,6 +27,7 @@ fun PlayShuffleButtons(
     onShuffle: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -43,7 +45,7 @@ fun PlayShuffleButtons(
                 modifier = Modifier.size(ButtonDefaults.IconSize)
             )
             Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-            Text("Play")
+            Text(strings.play)
         }
         OutlinedButton(
             onClick = onShuffle,
@@ -56,7 +58,7 @@ fun PlayShuffleButtons(
                 modifier = Modifier.size(ButtonDefaults.IconSize)
             )
             Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-            Text("Shuffle")
+            Text(strings.shuffle)
         }
     }
 }

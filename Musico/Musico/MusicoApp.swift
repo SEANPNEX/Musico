@@ -9,6 +9,7 @@ final class AppModel {
     let lyrics: LyricsStore
     let history: PlayHistoryStore
     let navigation = AppNavigation()
+    let language = LanguageManager.shared
     #if targetEnvironment(macCatalyst)
     let updateManager: UpdateManager
     #endif
@@ -55,6 +56,8 @@ struct MusicoApp: App {
                 .environment(model.history)
                 .environment(\.lyricsStore, model.lyrics)
                 .environment(\.appNavigation, model.navigation)
+                .environment(\.languageManager, model.language)
+                .environment(\.locale, model.language.effectiveLocale)
                 #if targetEnvironment(macCatalyst)
                 .environment(\.updateManager, model.updateManager)
                 .task {
@@ -74,8 +77,18 @@ struct MusicoApp: App {
         #if targetEnvironment(macCatalyst)
         .commands {
             CommandGroup(after: .appInfo) {
-                Button("Check for Updates…") {
+                Button(L10n.tr("Check for Updates…")) {
                     model.updateManager.presentManualCheck()
+                }
+                Menu(L10n.tr("Language")) {
+                    Picker(L10n.tr("Language"), selection: Binding(
+                        get: { model.language.selection },
+                        set: { model.language.setLanguage($0) }
+                    )) {
+                        ForEach(AppLanguage.allCases) { lang in
+                            Text(lang.displayName).tag(lang)
+                        }
+                    }
                 }
             }
         }

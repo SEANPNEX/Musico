@@ -13,7 +13,7 @@
                 BorderThickness="0,0,0,1">
             <Grid>
                 <StackPanel VerticalAlignment="Center">
-                    <TextBlock Text="Playlists" Style="{StaticResource Win10PageTitleStyle}" />
+                    <TextBlock Text="{DynamicResource Str_Playlists_Title}" Style="{StaticResource Win10PageTitleStyle}" />
                     <TextBlock x:Name="CountText"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="12"
@@ -26,7 +26,7 @@
                         Click="NewPlaylist_Click">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE710;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <TextBlock Text="New Playlist" VerticalAlignment="Center" />
+                        <TextBlock Text="{DynamicResource Str_Nav_NewPlaylist}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
             </Grid>

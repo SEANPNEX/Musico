@@ -12,6 +12,9 @@ struct FullPlayerView: View {
     enum SidePane: String, CaseIterable, Identifiable {
         case lyrics = "Lyrics", queue = "Queue"
         var id: String { rawValue }
+
+        @MainActor
+        var localizedTitle: String { L10n.tr(rawValue) }
     }
 
     /// Narrowest player that still fits the controls and a second column side by side.
@@ -25,6 +28,7 @@ struct FullPlayerView: View {
     @Environment(PlayHistoryStore.self) private var history: PlayHistoryStore?
     @Environment(\.appNavigation) private var navigation
     @Environment(\.lyricsStore) private var lyricsStore
+    @Environment(\.languageManager) private var languageManager
 
     var body: some View {
         GeometryReader { proxy in
@@ -51,6 +55,8 @@ struct FullPlayerView: View {
             sheetContent(for: panel)
                 .environment(\.appNavigation, navigation)
                 .environment(\.lyricsStore, lyricsStore)
+                .environment(\.languageManager, languageManager)
+                .environment(\.locale, languageManager.effectiveLocale)
         }
     }
 
@@ -88,8 +94,8 @@ struct FullPlayerView: View {
 
     private var sideColumn: some View {
         VStack(spacing: 0) {
-            Picker("Show", selection: $sidePane) {
-                ForEach(SidePane.allCases) { Text($0.rawValue).tag($0) }
+            Picker(L10n.tr("Show"), selection: $sidePane) {
+                ForEach(SidePane.allCases) { Text($0.localizedTitle).tag($0) }
             }
             .pickerStyle(.segmented)
             .frame(maxWidth: 320)
@@ -135,16 +141,16 @@ private struct PlayerPage: View {
                     .frame(maxHeight: .infinity)
                     .onTapGesture { panel = .lyrics }
                     .accessibilityAddTraits(.isButton)
-                    .accessibilityLabel("Show lyrics")
+                    .accessibilityLabel(L10n.tr("Show lyrics"))
 
                 HStack(alignment: .center) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(track.title).font(.title2.weight(.semibold)).lineLimit(2)
-                        Text("\(track.artist) — \(track.album)").foregroundStyle(.secondary).lineLimit(1)
+                        Text("\(L10n.displayArtist(track.artist)) — \(L10n.displayAlbum(track.album))").foregroundStyle(.secondary).lineLimit(1)
                     }
                     Spacer()
                     let isFavourite = library.isFavourite(track.id)
-                    Button("Favourite", systemImage: isFavourite ? "heart.fill" : "heart") {
+                    Button(L10n.tr("Favourite"), systemImage: isFavourite ? "heart.fill" : "heart") {
                         library.toggleFavourite(track.id)
                     }
                     .font(.title2)
@@ -153,25 +159,25 @@ private struct PlayerPage: View {
                     .contentTransition(.symbolEffect(.replace))
                     .symbolEffect(.bounce, value: isFavourite)
 
-                    Menu("More", systemImage: "ellipsis.circle") {
+                    Menu(L10n.tr("More"), systemImage: "ellipsis.circle") {
                         TrackMenuItems(ids: [track.id], favouriteID: track.id)
                     }
                     .font(.title2)
                     .labelStyle(.iconOnly)
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("Song options")
+                    .accessibilityLabel(L10n.tr("Song options"))
                 }
 
                 PlaybackScrubber()
                 transport
-                Text(queues.active.name + " · " + positionText)
+                Text(L10n.displayQueueName(queues.active.name) + " · " + positionText)
                     .font(.footnote)
                     .foregroundStyle(.secondary)
                 panelButtons
             } else {
-                ContentUnavailableView("Nothing Playing", systemImage: "music.note",
-                                       description: Text("Pick a song from your library."))
-                Button("Queues", systemImage: "list.bullet") { panel = .queue }
+                ContentUnavailableView(L10n.tr("Nothing Playing"), systemImage: "music.note",
+                                       description: Text(L10n.tr("Pick a song from your library.")))
+                Button(L10n.tr("Queues"), systemImage: "list.bullet") { panel = .queue }
             }
         }
         // Keeps the player a comfortable size in wide iPad and Mac windows.
@@ -185,13 +191,13 @@ private struct PlayerPage: View {
     @ViewBuilder
     private var closeButton: some View {
         if #available(iOS 26.0, macCatalyst 26.0, *) {
-            Button("Close", systemImage: "chevron.down") { dismiss() }
+            Button(L10n.tr("Close"), systemImage: "chevron.down") { dismiss() }
                 .labelStyle(.iconOnly)
                 .font(.body.weight(.semibold))
                 .frame(width: 38, height: 38)
                 .glassEffect(.regular.interactive(), in: Capsule())
         } else {
-            Button("Close", systemImage: "chevron.down") { dismiss() }
+            Button(L10n.tr("Close"), systemImage: "chevron.down") { dismiss() }
                 .labelStyle(.iconOnly)
                 .font(.title3.weight(.semibold))
                 .frame(width: 44, height: 32)
@@ -200,23 +206,23 @@ private struct PlayerPage: View {
 
     private var positionText: String {
         guard let index = queues.active.currentIndex else { return "" }
-        return "\(index + 1) of \(queues.active.trackIDs.count)"
+        return L10n.tr("%@ of %@", String(index + 1), String(queues.active.trackIDs.count))
     }
 
     private var transport: some View {
         let queue = queues.active
         return HStack {
-            Button("Shuffle", systemImage: "shuffle") { player.toggleShuffle() }
+            Button(L10n.tr("Shuffle"), systemImage: "shuffle") { player.toggleShuffle() }
                 .foregroundStyle(queue.shuffle ? Color.accentColor : .secondary)
             Spacer()
-            Button("Previous", systemImage: "backward.fill") { player.previous() }.font(.title)
+            Button(L10n.tr("Previous"), systemImage: "backward.fill") { player.previous() }.font(.title)
             Spacer()
             if player.isBuffering {
                 ProgressView()
                     .controlSize(.large)
                     .frame(width: 68, height: 68)
             } else {
-                Button("Play or Pause", systemImage: player.isPlaying ? "pause.circle.fill" : "play.circle.fill") {
+                Button(L10n.tr("Play or Pause"), systemImage: player.isPlaying ? "pause.circle.fill" : "play.circle.fill") {
                     player.togglePlayPause()
                 }
                 .font(.system(size: 68))
@@ -224,9 +230,9 @@ private struct PlayerPage: View {
                 .symbolEffect(.bounce, value: player.isPlaying)
             }
             Spacer()
-            Button("Next", systemImage: "forward.fill") { player.next() }.font(.title)
+            Button(L10n.tr("Next"), systemImage: "forward.fill") { player.next() }.font(.title)
             Spacer()
-            Button("Repeat", systemImage: queue.repeatMode == .one ? "repeat.1" : "repeat") { player.cycleRepeat() }
+            Button(L10n.tr("Repeat"), systemImage: queue.repeatMode == .one ? "repeat.1" : "repeat") { player.cycleRepeat() }
                 .contentTransition(.symbolEffect(.replace))
                 .foregroundStyle(queue.repeatMode == .off ? .secondary : Color.accentColor)
         }
@@ -240,22 +246,22 @@ private struct PlayerPage: View {
         if #available(iOS 26.0, macCatalyst 26.0, *) {
             GlassEffectContainer(spacing: 10) {
                 HStack(spacing: 8) {
-                    panelButton("Queue", "list.bullet", .queue, active: false)
-                    panelButton("Lyrics", "quote.bubble", .lyrics, active: false)
-                    panelButton("Equalizer", "slider.vertical.3", .equalizer, active: player.eq.enabled)
-                    panelButton("Sleep Timer", "moon.zzz", .sleep, active: player.sleepMode != .off)
+                    panelButton(L10n.tr("Queue"), "list.bullet", .queue, active: false)
+                    panelButton(L10n.tr("Lyrics"), "quote.bubble", .lyrics, active: false)
+                    panelButton(L10n.tr("Equalizer"), "slider.vertical.3", .equalizer, active: player.eq.enabled)
+                    panelButton(L10n.tr("Sleep Timer"), "moon.zzz", .sleep, active: player.sleepMode != .off)
                 }
             }
             .padding(.top, 4)
         } else {
             HStack {
-                panelButton("Queue", "list.bullet", .queue, active: false)
+                panelButton(L10n.tr("Queue"), "list.bullet", .queue, active: false)
                 Spacer()
-                panelButton("Lyrics", "quote.bubble", .lyrics, active: false)
+                panelButton(L10n.tr("Lyrics"), "quote.bubble", .lyrics, active: false)
                 Spacer()
-                panelButton("Equalizer", "slider.vertical.3", .equalizer, active: player.eq.enabled)
+                panelButton(L10n.tr("Equalizer"), "slider.vertical.3", .equalizer, active: player.eq.enabled)
                 Spacer()
-                panelButton("Sleep Timer", "moon.zzz", .sleep, active: player.sleepMode != .off)
+                panelButton(L10n.tr("Sleep Timer"), "moon.zzz", .sleep, active: player.sleepMode != .off)
             }
             .padding(.top, 4)
         }

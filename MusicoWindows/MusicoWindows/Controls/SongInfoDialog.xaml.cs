@@ -8,6 +8,7 @@ using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using MusicoWindows.Converters;
 using MusicoWindows.Core;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Theme;
 using MusicoWindows.Views;
@@ -46,8 +47,8 @@ public partial class SongInfoDialog : UserControl
         CoverArt.Visibility = Visibility.Visible;
         CoverArt.SetSource(ctx.Services.Library.Artwork, _track.ArtworkKey, 240);
         CoverStatusText.Text = string.IsNullOrEmpty(_track.ArtworkKey)
-            ? "No cover artwork"
-            : "Embedded or cached artwork";
+            ? L.Get("SongInfo_NoCover")
+            : L.Get("SongInfo_EmbeddedOrCachedCover");
 
         UpdateQuickSearchLinks();
         PopulateBasePlaybackInfo(_track);
@@ -94,7 +95,7 @@ public partial class SongInfoDialog : UserControl
         TimeEditedValue.Text = FormatTimestamp(track.ModifiedUtc);
 
         DateTimeOffset? lastPlayed = history.GetLastPlayed(track.Id);
-        LastPlayedValue.Text = lastPlayed is DateTimeOffset lp ? FormatTimestamp(lp) : "Never";
+        LastPlayedValue.Text = lastPlayed is DateTimeOffset lp ? FormatTimestamp(lp) : L.Get("SongInfo_Never");
         PlayedTimesValue.Text = history.GetCount(track.Id).ToString();
 
         string? filePath = !track.IsCloud ? _ctx.Services.Library.GetFilePath(track) : null;
@@ -109,7 +110,7 @@ public partial class SongInfoDialog : UserControl
 
     private void ApplyAudioDetails(AudioFileDetails details, Track track)
     {
-        PrecisionValue.Text = details.BitDepth is int bits ? $"{bits}-bit" : "—";
+        PrecisionValue.Text = details.BitDepth is int bits ? L.Format("SongInfo_BitsFormat", bits) : "—";
         FrequencyValue.Text = details.SampleRateHz is int hz ? FormatSampleRate(hz) : "—";
         BitRateValue.Text = details.BitRateKbps is int kbps ? $"{kbps} kbps" : "—";
 
@@ -133,19 +134,20 @@ public partial class SongInfoDialog : UserControl
 
     private static string FormatChannels(int channels) => channels switch
     {
-        1 => "1 (Mono)",
-        2 => "2 (Stereo)",
-        6 => "6 (5.1)",
-        8 => "8 (7.1)",
+        1 => L.Get("SongInfo_ChannelsMono"),
+        2 => L.Get("SongInfo_ChannelsStereo"),
+        6 => L.Get("SongInfo_Channels51"),
+        8 => L.Get("SongInfo_Channels71"),
         _ => channels.ToString()
     };
 
     private static string FormatFileSize(long bytes)
     {
+        string unit = L.Get("SongInfo_BytesUnit");
         if (bytes < 1024) return $"{bytes:N0} B";
-        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:0.##} KB ({bytes:N0} bytes)";
-        if (bytes < 1024L * 1024L * 1024L) return $"{bytes / (1024.0 * 1024.0):0.##} MB ({bytes:N0} bytes)";
-        return $"{bytes / (1024.0 * 1024.0 * 1024.0):0.##} GB ({bytes:N0} bytes)";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:0.##} KB ({bytes:N0} {unit})";
+        if (bytes < 1024L * 1024L * 1024L) return $"{bytes / (1024.0 * 1024.0):0.##} MB ({bytes:N0} {unit})";
+        return $"{bytes / (1024.0 * 1024.0 * 1024.0):0.##} GB ({bytes:N0} {unit})";
     }
 
     private static string FormatTimestamp(DateTimeOffset timestamp) =>
@@ -153,9 +155,9 @@ public partial class SongInfoDialog : UserControl
 
     private void UpdateQuickSearchLinks()
     {
-        UpdateLink(ArtistLinkButton, ArtistLinkText, "Artist", ArtistBox.Text);
-        UpdateLink(AlbumLinkButton, AlbumLinkText, "Album", AlbumBox.Text);
-        UpdateLink(GenreLinkButton, GenreLinkText, "Genre", GenreBox.Text);
+        UpdateLink(ArtistLinkButton, ArtistLinkText, L.Get("SongInfo_FieldArtist"), ArtistBox.Text);
+        UpdateLink(AlbumLinkButton, AlbumLinkText, L.Get("SongInfo_FieldAlbum"), AlbumBox.Text);
+        UpdateLink(GenreLinkButton, GenreLinkText, L.Get("SongInfo_FieldGenre"), GenreBox.Text);
     }
 
     private static void UpdateLink(Button button, TextBlock label, string fieldName, string value)
@@ -166,7 +168,7 @@ public partial class SongInfoDialog : UserControl
         if (hasValue)
         {
             label.Text = trimmed;
-            button.ToolTip = $"Search {fieldName}: {trimmed}";
+            button.ToolTip = L.Format("SongInfo_SearchFieldTooltip", fieldName, trimmed);
         }
     }
 
@@ -192,8 +194,8 @@ public partial class SongInfoDialog : UserControl
     {
         var dlg = new OpenFileDialog
         {
-            Title = "Select Cover Image",
-            Filter = "Image Files|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp|All Files|*.*"
+            Title = L.Get("SongInfo_SelectCoverTitle"),
+            Filter = L.Get("SongInfo_SelectCoverFilter")
         };
         if (dlg.ShowDialog() != true) return;
 
@@ -217,7 +219,7 @@ public partial class SongInfoDialog : UserControl
         }
         catch (Exception ex)
         {
-            _ctx?.OpenConfirm("Invalid Image", $"Could not load that image: {ex.Message}", "OK", null, false);
+            _ctx?.OpenConfirm(L.Get("SongInfo_InvalidImageTitle"), L.Format("SongInfo_InvalidImageMsg", ex.Message), L.Get("Common_OK"), null, false);
         }
     }
 
@@ -242,7 +244,7 @@ public partial class SongInfoDialog : UserControl
         {
             _isSaving = false;
             SetBusy(false);
-            _ctx.OpenConfirm("Couldn't Save Song Info", ex.Message, "OK", null, false);
+            _ctx.OpenConfirm(L.Get("SongInfo_CouldNotSaveTitle"), ex.Message, L.Get("Common_OK"), null, false);
         }
     }
 

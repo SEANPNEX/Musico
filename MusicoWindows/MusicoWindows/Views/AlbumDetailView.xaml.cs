@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using MusicoWindows.Controls;
 using MusicoWindows.Converters;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -30,6 +31,7 @@ public partial class AlbumDetailView : UserControl
         _album = album;
         _ctx.Services.Library.PropertyChanged += OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged += OnPlayerChanged;
+        LocalizationManager.LanguageChanged += OnLanguageChanged;
         Refresh();
     }
 
@@ -37,10 +39,13 @@ public partial class AlbumDetailView : UserControl
 
     private void Detach()
     {
+        LocalizationManager.LanguageChanged -= OnLanguageChanged;
         if (_ctx is null) return;
         _ctx.Services.Library.PropertyChanged -= OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged -= OnPlayerChanged;
     }
+
+    private void OnLanguageChanged(ResolvedLanguage _) => Refresh();
 
     private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
 
@@ -63,9 +68,9 @@ public partial class AlbumDetailView : UserControl
         double totalDuration = tracks.Sum(t => t.DurationSeconds);
 
         AlbumArt.SetSource(lib.Artwork, live.ArtworkKey, 240);
-        AlbumTitleText.Text = live.Title;
-        AlbumArtistText.Text = live.Artist;
-        AlbumMetaText.Text = $"{tracks.Count} {(tracks.Count == 1 ? "song" : "songs")} · {TimeFormatter.Format(totalDuration)}";
+        AlbumTitleText.Text = L.DisplayAlbum(live.Title);
+        AlbumArtistText.Text = L.DisplayArtist(live.Artist);
+        AlbumMetaText.Text = $"{L.SongsCount(tracks.Count)} · {TimeFormatter.Format(totalDuration)}";
 
         TracksStack.Children.Clear();
         var ids = live.TrackIds.ToList();
@@ -73,7 +78,8 @@ public partial class AlbumDetailView : UserControl
         {
             int idx = i;
             var track = tracks[i];
-            string sub = track.TrackNumber is int num ? $"{num} · {track.Artist}" : track.Artist;
+            string displayArtist = L.DisplayArtist(track.Artist);
+            string sub = track.TrackNumber is int num ? $"{num} · {displayArtist}" : displayArtist;
             bool isCurrent = _ctx.Services.Player.CurrentTrack?.Id == track.Id;
             bool isPlaying = isCurrent && _ctx.Services.Player.IsPlaying;
 

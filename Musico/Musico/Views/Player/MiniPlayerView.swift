@@ -20,14 +20,14 @@ struct MiniPlayerView: View {
                             .animation(.easeInOut(duration: 0.2), value: track.id)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(track.title).font(.subheadline.weight(.medium)).lineLimit(1)
-                            Text(track.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                            Text(L10n.displayArtist(track.artist)).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                         }
                         Spacer(minLength: 8)
                     }
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Open Now Playing")
+                .accessibilityLabel(L10n.tr("Open Now Playing"))
                 .contextMenu {
                     TrackMenuItems(ids: [track.id], favouriteID: track.id)
                 }
@@ -36,7 +36,7 @@ struct MiniPlayerView: View {
                     ProgressView()
                         .frame(width: buttonSize, height: buttonSize)
                 } else {
-                    Button("Play or Pause", systemImage: player.isPlaying ? "pause.fill" : "play.fill") {
+                    Button(L10n.tr("Play or Pause"), systemImage: player.isPlaying ? "pause.fill" : "play.fill") {
                         player.togglePlayPause()
                     }
                     .font(.title3)
@@ -46,7 +46,7 @@ struct MiniPlayerView: View {
                     .frame(width: buttonSize, height: buttonSize)
                     .contentShape(Rectangle())
                 }
-                Button("Next", systemImage: "forward.fill") { player.next() }
+                Button(L10n.tr("Next"), systemImage: "forward.fill") { player.next() }
                     .font(.title3)
                     .buttonStyle(.plain)
                     .frame(width: buttonSize, height: buttonSize)

@@ -4,7 +4,7 @@ enum LyricsSource: Equatable, Sendable { case imported, sidecar, embedded }
 
 enum LyricsError: LocalizedError {
     case unreadable
-    var errorDescription: String? { "That file could not be read as lyrics text." }
+    var errorDescription: String? { L10n.trNonisolated("That file could not be read as lyrics text.") }
 }
 
 /// Finds lyrics for a track: a file imported for it, then a sibling .lrc/.txt, then the embedded tag.

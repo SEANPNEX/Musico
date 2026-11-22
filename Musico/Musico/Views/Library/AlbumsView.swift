@@ -6,8 +6,8 @@ struct AlbumsView: View {
     var body: some View {
         ScrollView {
             if library.albums.isEmpty {
-                ContentUnavailableView("No Albums Yet", systemImage: "square.stack",
-                                       description: Text("Albums appear once your library has songs."))
+                ContentUnavailableView(L10n.tr("No Albums Yet"), systemImage: "square.stack",
+                                       description: Text(L10n.tr("Albums appear once your library has songs.")))
                     .padding(.top, 80)
             } else {
                 AlbumGrid(albums: library.albums)
@@ -15,7 +15,7 @@ struct AlbumsView: View {
                     .padding(.top, 8)
             }
         }
-        .navigationTitle("Albums")
+        .navigationTitle(L10n.tr("Albums"))
         .navigationDestination(for: LibraryStore.Album.self) { AlbumDetailView(album: $0) }
     }
 }
@@ -29,8 +29,8 @@ struct AlbumGrid: View {
                 NavigationLink(value: album) {
                     VStack(alignment: .leading, spacing: 6) {
                         ArtworkView(artworkKey: album.artworkKey)
-                        Text(album.title).font(.subheadline.weight(.medium)).lineLimit(1)
-                        Text(album.artist).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                        Text(L10n.displayAlbum(album.title)).font(.subheadline.weight(.medium)).lineLimit(1)
+                        Text(L10n.displayArtist(album.artist)).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 .buttonStyle(.plain)
@@ -51,22 +51,23 @@ struct AlbumDetailView: View {
         List {
             VStack(spacing: 8) {
                 ArtworkView(artworkKey: album.artworkKey, size: 220)
-                Text(album.title).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
-                Text(album.artist).foregroundStyle(.secondary)
-                Text("\(tracks.count) songs · \(formatTime(tracks.reduce(0) { $0 + $1.duration }))")
+                Text(L10n.displayAlbum(album.title)).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
+                Text(L10n.displayArtist(album.artist)).foregroundStyle(.secondary)
+                Text("\(L10n.songCount(tracks.count)) · \(formatTime(tracks.reduce(0) { $0 + $1.duration }))")
                     .font(.footnote).foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity)
             .listRowSeparator(.hidden)
             PlayShuffleButtons(ids: album.trackIDs)
             TrackRows(tracks: tracks) { track in
-                track.trackNumber.map { "\($0) · \(track.artist)" } ?? track.artist
+                let artist = L10n.displayArtist(track.artist)
+                return track.trackNumber.map { "\($0) · \(artist)" } ?? artist
             }
         }
         .listStyle(.plain)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            Menu("More", systemImage: "ellipsis.circle") { TrackMenuItems(ids: album.trackIDs) }
+            Menu(L10n.tr("More"), systemImage: "ellipsis.circle") { TrackMenuItems(ids: album.trackIDs) }
         }
     }
 }
@@ -77,18 +78,18 @@ struct ArtistsView: View {
     var body: some View {
         List {
             if library.artists.isEmpty {
-                ContentUnavailableView("No Artists Yet", systemImage: "music.mic",
-                                       description: Text("Artists appear once your library has songs."))
+                ContentUnavailableView(L10n.tr("No Artists Yet"), systemImage: "music.mic",
+                                       description: Text(L10n.tr("Artists appear once your library has songs.")))
             }
             ForEach(library.artists, id: \.self) { artist in
                 NavigationLink(value: artist) {
-                    Label(artist, systemImage: "person.fill")
+                    Label(L10n.displayArtist(artist), systemImage: "person.fill")
                 }
                 .contextMenu { TrackMenuItems(ids: library.tracks(byArtist: artist).map(\.id)) }
             }
         }
         .listStyle(.plain)
-        .navigationTitle("Artists")
+        .navigationTitle(L10n.tr("Artists"))
         .navigationDestination(for: String.self) { ArtistDetailView(artist: $0) }
         .navigationDestination(for: LibraryStore.Album.self) { AlbumDetailView(album: $0) }
     }
@@ -104,19 +105,19 @@ struct ArtistDetailView: View {
         List {
             PlayShuffleButtons(ids: tracks.map(\.id))
             if !albums.isEmpty {
-                Section("Albums") {
+                Section(L10n.tr("Albums")) {
                     AlbumGrid(albums: albums).listRowSeparator(.hidden)
                 }
             }
-            Section("Songs") {
-                TrackRows(tracks: tracks) { $0.album }
+            Section(L10n.tr("Songs")) {
+                TrackRows(tracks: tracks) { L10n.displayAlbum($0.album) }
             }
         }
         .listStyle(.plain)
-        .navigationTitle(artist)
+        .navigationTitle(L10n.displayArtist(artist))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
-            Menu("More", systemImage: "ellipsis.circle") { TrackMenuItems(ids: tracks.map(\.id)) }
+            Menu(L10n.tr("More"), systemImage: "ellipsis.circle") { TrackMenuItems(ids: tracks.map(\.id)) }
         }
     }
 }

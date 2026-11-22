@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using MusicoWindows.Controls;
 using MusicoWindows.Core;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -23,12 +24,28 @@ public partial class PlaylistDetailView : UserControl
     public PlaylistDetailView()
     {
         InitializeComponent();
-        foreach (var mode in TrackSorter.AllModes)
-        {
-            SortCombo.Items.Add(TrackSorter.Label(mode));
-        }
-        SortCombo.SelectedIndex = 0;
+        RebuildSortCombo(selectedIndex: 0);
         Unloaded += OnUnloaded;
+    }
+
+    private void RebuildSortCombo(int? selectedIndex = null)
+    {
+        int prev = selectedIndex ?? Math.Max(0, SortCombo.SelectedIndex);
+        _suppressSortSelection = true;
+        try
+        {
+            SortCombo.Items.Clear();
+            foreach (var mode in TrackSorter.AllModes)
+            {
+                SortCombo.Items.Add(TrackSorter.Label(mode));
+            }
+            if (SortCombo.Items.Count > 0)
+                SortCombo.SelectedIndex = Math.Clamp(prev, 0, SortCombo.Items.Count - 1);
+        }
+        finally
+        {
+            _suppressSortSelection = false;
+        }
     }
 
     public void Bind(ViewContext ctx, PlaylistRef playlistRef, bool showBackButton = true)
@@ -39,6 +56,7 @@ public partial class PlaylistDetailView : UserControl
         BackBar.Visibility = showBackButton ? Visibility.Visible : Visibility.Collapsed;
         _ctx.Services.Library.PropertyChanged += OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged += OnPlayerChanged;
+        LocalizationManager.LanguageChanged += OnLanguageChanged;
         Refresh();
     }
 
@@ -46,9 +64,16 @@ public partial class PlaylistDetailView : UserControl
 
     private void Detach()
     {
+        LocalizationManager.LanguageChanged -= OnLanguageChanged;
         if (_ctx is null) return;
         _ctx.Services.Library.PropertyChanged -= OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged -= OnPlayerChanged;
+    }
+
+    private void OnLanguageChanged(ResolvedLanguage _)
+    {
+        RebuildSortCombo();
+        Refresh();
     }
 
     private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
@@ -68,14 +93,14 @@ public partial class PlaylistDetailView : UserControl
 
         if (_ref.Kind == PlaylistKind.Favourites)
         {
-            TitleText.Text = "Favourites";
+            TitleText.Text = L.Get("Nav_Favourites");
             _tracks = lib.GetFavouriteTracks(history);
             sortMode = lib.GetFavouritesSortMode();
         }
         else if (_ref.Id is Guid pid)
         {
             var pl = lib.Playlists.FirstOrDefault(p => p.Id == pid);
-            TitleText.Text = pl?.Name ?? "Playlist";
+            TitleText.Text = pl?.Name ?? L.Get("PlaylistDetail_FallbackTitle");
             _tracks = pl is null ? Array.Empty<Track>() : lib.GetPlaylistTracks(pid, history);
             sortMode = pl?.SortMode ?? TrackSortMode.Custom;
         }
@@ -94,7 +119,7 @@ public partial class PlaylistDetailView : UserControl
         _suppressSortSelection = false;
         SortCombo.IsEnabled = _tracks.Count > 1;
 
-        CountText.Text = $"{_tracks.Count} {(_tracks.Count == 1 ? "song" : "songs")}";
+        CountText.Text = L.SongsCount(_tracks.Count);
         PlayAllButton.IsEnabled = _tracks.Count > 0;
         ShuffleAllButton.IsEnabled = _tracks.Count > 0;
 
@@ -124,7 +149,7 @@ public partial class PlaylistDetailView : UserControl
             row.Bind(
                 _ctx.Services,
                 track,
-                track.Artist,
+                L.DisplayArtist(track.Artist),
                 isCurrent,
                 isPlaying,
                 lib.IsAvailable(track),
@@ -133,7 +158,7 @@ public partial class PlaylistDetailView : UserControl
                 isUser ? menu =>
                 {
                     menu.Items.Add(new Separator());
-                    menu.Items.Add(TrackMenuHelper.CreateItem("Remove from Playlist", "\uE74D",
+                    menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("PlaylistDetail_RemoveFromPlaylist"), "\uE74D",
                         () => lib.RemoveFromPlaylist(userPlaylistId, idx, history)));
                 } : null,
                 _ctx.OpenSaveCloudTrack,
@@ -143,9 +168,9 @@ public partial class PlaylistDetailView : UserControl
             {
                 row.EnableDragReorder($"playlist:{userPlaylistId:D}", idx, _tracks.Count,
                     (from, to) => lib.MovePlaylistTrack(userPlaylistId, from, to, history));
-                row.AddRowActionButton("\uE74A", "Move Up", () => lib.MovePlaylistTrack(userPlaylistId, idx, idx - 1, history), idx > 0);
-                row.AddRowActionButton("\uE74B", "Move Down", () => lib.MovePlaylistTrack(userPlaylistId, idx, idx + 1, history), idx < _tracks.Count - 1);
-                row.AddRowActionButton("\uE711", "Remove from Playlist", () => lib.RemoveFromPlaylist(userPlaylistId, idx, history));
+                row.AddRowActionButton("\uE74A", L.Get("Common_MoveUp"), () => lib.MovePlaylistTrack(userPlaylistId, idx, idx - 1, history), idx > 0);
+                row.AddRowActionButton("\uE74B", L.Get("Common_MoveDown"), () => lib.MovePlaylistTrack(userPlaylistId, idx, idx + 1, history), idx < _tracks.Count - 1);
+                row.AddRowActionButton("\uE711", L.Get("PlaylistDetail_RemoveFromPlaylist"), () => lib.RemoveFromPlaylist(userPlaylistId, idx, history));
             }
             else
             {

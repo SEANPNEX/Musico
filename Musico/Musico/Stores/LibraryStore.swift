@@ -7,9 +7,9 @@ enum LibraryError: LocalizedError {
     case invalidCloudURL
     var errorDescription: String? {
         switch self {
-        case .duplicateRoot: "That location is already in your library."
-        case .notAFolder: "That location could not be opened as a folder."
-        case .invalidCloudURL: "Enter a valid YouTube or Bilibili playlist or video URL."
+        case .duplicateRoot: L10n.trNonisolated("That location is already in your library.")
+        case .notAFolder: L10n.trNonisolated("That location could not be opened as a folder.")
+        case .invalidCloudURL: L10n.trNonisolated("Enter a valid YouTube or Bilibili playlist or video URL.")
         }
     }
 }

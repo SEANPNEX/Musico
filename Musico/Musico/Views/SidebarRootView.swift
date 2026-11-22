@@ -16,6 +16,7 @@ struct SidebarRootView: View {
     @Environment(CloudExportPrompt.self) private var cloudExport
     @Environment(SongInfoPrompt.self) private var songInfo
     @Environment(\.appNavigation) private var navigation
+    @Environment(\.languageManager) private var languageManager
     #if targetEnvironment(macCatalyst)
     @Environment(\.updateManager) private var updateManager
     #endif
@@ -62,37 +63,39 @@ struct SidebarRootView: View {
                 .environment(cloudExport)
                 .environment(songInfo)
                 .environment(\.appNavigation, navigation)
+                .environment(\.languageManager, languageManager)
+                .environment(\.locale, languageManager.effectiveLocale)
         }
     }
 
     private var sidebar: some View {
         @Bindable var navigation = navigation
         return List(selection: $navigation.sidebarSelection) {
-            link(.folders, "Folders", "folder")
-            Section("Library") {
-                link(.songs, "Songs", "music.note")
-                link(.albums, "Albums", "square.stack")
-                link(.artists, "Artists", "music.mic")
+            link(.folders, L10n.tr("Folders"), "folder")
+            Section(L10n.tr("Library")) {
+                link(.songs, L10n.tr("Songs"), "music.note")
+                link(.albums, L10n.tr("Albums"), "square.stack")
+                link(.artists, L10n.tr("Artists"), "music.mic")
             }
-            Section("Playlists") {
-                link(.playlists, "All Playlists", "square.grid.2x2")
-                link(.favourites, "Favourites", "heart")
+            Section(L10n.tr("Playlists")) {
+                link(.playlists, L10n.tr("All Playlists"), "square.grid.2x2")
+                link(.favourites, L10n.tr("Favourites"), "heart")
                 ForEach(library.playlists) { playlist in
                     link(.playlist(playlist.id), playlist.name, "music.note.list")
                         .contextMenu {
                             TrackMenuItems(ids: playlist.trackIDs)
                             Divider()
-                            Button("Delete", systemImage: "trash", role: .destructive) { library.deletePlaylist(playlist.id) }
+                            Button(L10n.tr("Delete"), systemImage: "trash", role: .destructive) { library.deletePlaylist(playlist.id) }
                         }
                 }
-                Button("New Playlist", systemImage: "plus") {
+                Button(L10n.tr("New Playlist"), systemImage: "plus") {
                     newPlaylist.create = { [library] name in library.createPlaylist(name: name) }
                 }
                 .foregroundStyle(.secondary)
             }
             Section {
-                link(.queues, "Queues", "list.bullet")
-                link(.stats, "Stats", "chart.bar")
+                link(.queues, L10n.tr("Queues"), "list.bullet")
+                link(.stats, L10n.tr("Stats"), "chart.bar")
             }
             #if targetEnvironment(macCatalyst)
             Section {
@@ -100,14 +103,38 @@ struct SidebarRootView: View {
                     updateManager.presentManualCheck()
                 } label: {
                     HStack(spacing: 8) {
-                        Label("Check for Updates", systemImage: "arrow.down.circle")
+                        Label(L10n.tr("Check for Updates"), systemImage: "arrow.down.circle")
                         Spacer()
                         if updateManager.hasAvailableUpdate {
                             Circle()
                                 .fill(Color.accentColor)
                                 .frame(width: 8, height: 8)
-                                .accessibilityLabel("Update available")
+                                .accessibilityLabel(L10n.tr("Update available"))
                         }
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+
+                Menu {
+                    ForEach(AppLanguage.allCases) { lang in
+                        Button {
+                            languageManager.setLanguage(lang)
+                        } label: {
+                            if languageManager.selection == lang {
+                                Label(lang.displayName, systemImage: "checkmark")
+                            } else {
+                                Text(lang.displayName)
+                            }
+                        }
+                    }
+                } label: {
+                    HStack(spacing: 8) {
+                        Label(L10n.tr("Language"), systemImage: "globe")
+                        Spacer()
+                        Text(languageManager.selection.displayName)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .contentShape(Rectangle())
                 }
@@ -124,6 +151,8 @@ struct SidebarRootView: View {
         )) {
             UpdateSheet()
                 .environment(\.updateManager, updateManager)
+                .environment(\.languageManager, languageManager)
+                .environment(\.locale, languageManager.effectiveLocale)
         }
         #endif
     }

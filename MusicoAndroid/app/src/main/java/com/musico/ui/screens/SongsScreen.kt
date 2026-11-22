@@ -44,6 +44,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.musico.audio.PlayerUiState
+import com.musico.i18n.AppStrings
+import com.musico.i18n.LocalStrings
 import com.musico.model.PlayQueue
 import com.musico.model.SearchField
 import com.musico.store.LibraryStore
@@ -62,11 +64,18 @@ data class SearchRequest(
     val token: Long,
 )
 
-enum class SongSort(val label: String) {
-    TITLE("Title"),
-    ARTIST("Artist"),
-    ALBUM("Album"),
-    DATE_ADDED("Recently Added")
+enum class SongSort {
+    TITLE,
+    ARTIST,
+    ALBUM,
+    DATE_ADDED;
+
+    fun label(strings: AppStrings): String = when (this) {
+        TITLE -> strings.sortOptionTitle
+        ARTIST -> strings.sortOptionArtist
+        ALBUM -> strings.sortOptionAlbum
+        DATE_ADDED -> strings.sortOptionRecentlyAdded
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -82,6 +91,7 @@ fun SongsScreen(
     onConsumeSearchRequest: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     val scope = rememberCoroutineScope()
     var query by rememberSaveable { mutableStateOf("") }
     var searchField by rememberSaveable { mutableStateOf(SearchField.KEYWORD) }
@@ -129,7 +139,7 @@ fun SongsScreen(
                     query = it
                     searchField = SearchField.KEYWORD
                 },
-                placeholder = { Text("Songs, artists, albums, genres") },
+                placeholder = { Text(strings.searchPlaceholder) },
                 leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
                 trailingIcon = {
                     if (query.isNotEmpty()) {
@@ -137,7 +147,7 @@ fun SongsScreen(
                             query = ""
                             searchField = SearchField.KEYWORD
                         }) {
-                            Icon(Icons.Rounded.Close, contentDescription = "Clear search")
+                            Icon(Icons.Rounded.Close, contentDescription = strings.clearSearch)
                         }
                     }
                 },
@@ -154,7 +164,7 @@ fun SongsScreen(
             )
             Box {
                 IconButton(onClick = { sortMenuExpanded = true }) {
-                    Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = "Sort songs")
+                    Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = strings.sortSongs)
                 }
                 DropdownMenu(
                     expanded = sortMenuExpanded,
@@ -162,7 +172,7 @@ fun SongsScreen(
                 ) {
                     SongSort.entries.forEach { option ->
                         DropdownMenuItem(
-                            text = { Text(option.label) },
+                            text = { Text(option.label(strings)) },
                             trailingIcon = {
                                 if (sort == option) {
                                     Icon(Icons.Rounded.Check, contentDescription = null)
@@ -188,11 +198,11 @@ fun SongsScreen(
                 InputChip(
                     selected = true,
                     onClick = { searchField = SearchField.KEYWORD },
-                    label = { Text("${searchField.label}: ${query.trim()}") },
+                    label = { Text("${strings.searchFieldLabel(searchField)}: ${query.trim()}") },
                     trailingIcon = {
                         Icon(
                             imageVector = Icons.Rounded.Close,
-                            contentDescription = "Reset field filter",
+                            contentDescription = strings.resetFieldFilter,
                             modifier = Modifier.size(16.dp)
                         )
                     }
@@ -213,16 +223,16 @@ fun SongsScreen(
                     item(key = "empty_library") {
                         EmptyState(
                             icon = Icons.Rounded.MusicNote,
-                            title = "No Songs Yet",
-                            description = "Add a folder in the Folders tab to build your library."
+                            title = strings.noSongsYetTitle,
+                            description = strings.noSongsYetDesc
                         )
                     }
                 } else if (songs.isEmpty()) {
                     item(key = "empty_search") {
                         EmptyState(
                             icon = Icons.Rounded.SearchOff,
-                            title = "No Results for “$query”",
-                            description = "Try searching for another song, artist, or album."
+                            title = strings.noSearchResultsTitle(query),
+                            description = strings.noSearchResultsDesc
                         )
                     }
                 } else {
@@ -253,13 +263,17 @@ fun SongsScreen(
                             isCurrent = playerState.currentTrack?.id == track.id,
                             isPlaying = playerState.isPlaying,
                             isAvailable = libraryStore.isAvailable(track),
-                            subtitle = if (sort == SongSort.ALBUM) "${track.artist} — ${track.album}" else track.artist,
+                            subtitle = if (sort == SongSort.ALBUM) {
+                                "${strings.displayArtist(track.artist)} — ${strings.displayAlbum(track.album)}"
+                            } else {
+                                strings.displayArtist(track.artist)
+                            },
                             onClick = {
                                 if (query.isNotBlank()) {
                                     trackActions.playerController.playInNewQueue(
                                         ids = songIds,
                                         startAt = index,
-                                        name = "${searchField.label}: ${query.trim()}",
+                                        name = "${strings.searchFieldLabel(searchField)}: ${query.trim()}",
                                     )
                                 } else {
                                     trackActions.playerController.play(songIds, startAt = index)

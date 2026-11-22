@@ -1,4 +1,5 @@
 using System.Windows;
+using MusicoWindows.Localization;
 using MusicoWindows.Stores;
 using MusicoWindows.Theme;
 
@@ -13,6 +14,7 @@ public partial class App : Application
         base.OnStartup(e);
 
         ThemeManager.Initialize(this);
+        LocalizationManager.Initialize(this);
 
         Services = new AppServices();
         var window = new MainWindow(Services);

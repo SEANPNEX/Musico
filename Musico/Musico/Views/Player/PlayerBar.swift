@@ -17,15 +17,15 @@ struct PlayerBar: View {
                         .transition(.opacity)
                         .animation(.easeInOut(duration: 0.2), value: track?.id)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(track?.title ?? "Not Playing").font(.subheadline.weight(.medium)).lineLimit(1)
-                        Text(track?.artist ?? "Pick a song from your library").font(.footnote).foregroundStyle(.secondary).lineLimit(1)
+                        Text(track?.title ?? L10n.tr("Not Playing")).font(.subheadline.weight(.medium)).lineLimit(1)
+                        Text(track.map { L10n.displayArtist($0.artist) } ?? L10n.tr("Pick a song from your library")).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
                     }
                 }
                 .frame(minWidth: 170, maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Open Now Playing")
+            .accessibilityLabel(L10n.tr("Open Now Playing"))
             .contextMenu {
                 if let track {
                     TrackMenuItems(ids: [track.id], favouriteID: track.id)
@@ -41,7 +41,7 @@ struct PlayerBar: View {
 
             HStack(spacing: 4) {
                 if let track {
-                    Menu("More", systemImage: "ellipsis.circle") {
+                    Menu(L10n.tr("More"), systemImage: "ellipsis.circle") {
                         TrackMenuItems(ids: [track.id], favouriteID: track.id)
                     }
                     .labelStyle(.iconOnly)
@@ -50,10 +50,10 @@ struct PlayerBar: View {
                     .frame(width: 36, height: 32)
                     .contentShape(Rectangle())
                     .foregroundStyle(.secondary)
-                    .accessibilityLabel("Song options")
+                    .accessibilityLabel(L10n.tr("Song options"))
                 }
-                panelToggle("Lyrics", "quote.bubble", .lyrics)
-                panelToggle("Queue", "list.bullet", .queue)
+                panelToggle(L10n.tr("Lyrics"), "quote.bubble", .lyrics)
+                panelToggle(L10n.tr("Queue"), "list.bullet", .queue)
             }
             .frame(minWidth: 80, maxWidth: .infinity, alignment: .trailing)
         }
@@ -81,14 +81,14 @@ struct PlayerBar: View {
     private var transport: some View {
         let queue = queues.active
         return HStack(spacing: 14) {
-            Button("Shuffle", systemImage: "shuffle") {
+            Button(L10n.tr("Shuffle"), systemImage: "shuffle") {
                 withAnimation(.spring(duration: 0.25)) { player.toggleShuffle() }
             }
             .foregroundStyle(queue.shuffle ? Color.accentColor : .secondary)
             .frame(width: 32, height: 30)
             .contentShape(Rectangle())
 
-            Button("Previous", systemImage: "backward.fill") { player.previous() }
+            Button(L10n.tr("Previous"), systemImage: "backward.fill") { player.previous() }
                 .frame(width: 34, height: 30)
                 .contentShape(Rectangle())
 
@@ -96,7 +96,7 @@ struct PlayerBar: View {
                 ProgressView()
                     .frame(width: 36, height: 30)
             } else {
-                Button("Play or Pause", systemImage: player.isPlaying ? "pause.fill" : "play.fill") {
+                Button(L10n.tr("Play or Pause"), systemImage: player.isPlaying ? "pause.fill" : "play.fill") {
                     player.togglePlayPause()
                 }
                 .font(.title2)
@@ -106,11 +106,11 @@ struct PlayerBar: View {
                 .contentShape(Rectangle())
             }
 
-            Button("Next", systemImage: "forward.fill") { player.next() }
+            Button(L10n.tr("Next"), systemImage: "forward.fill") { player.next() }
                 .frame(width: 34, height: 30)
                 .contentShape(Rectangle())
 
-            Button("Repeat", systemImage: queue.repeatMode == .one ? "repeat.1" : "repeat") {
+            Button(L10n.tr("Repeat"), systemImage: queue.repeatMode == .one ? "repeat.1" : "repeat") {
                 withAnimation(.spring(duration: 0.25)) { player.cycleRepeat() }
             }
             .contentTransition(.symbolEffect(.replace))

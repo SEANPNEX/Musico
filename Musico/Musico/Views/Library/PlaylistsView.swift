@@ -14,45 +14,45 @@ struct PlaylistsView: View {
     var body: some View {
         List {
             NavigationLink(value: PlaylistRef.favourites) {
-                row("Favourites", icon: "heart.fill", count: library.favourites.count)
+                row(L10n.tr("Favourites"), icon: "heart.fill", count: library.favourites.count)
             }
             ForEach(library.playlists) { playlist in
                 NavigationLink(value: PlaylistRef.user(playlist.id)) {
                     row(playlist.name, icon: "music.note.list", count: playlist.trackIDs.count)
                 }
                 .swipeActions(edge: .trailing) {
-                    Button("Delete", systemImage: "trash", role: .destructive) { library.deletePlaylist(playlist.id) }
+                    Button(L10n.tr("Delete"), systemImage: "trash", role: .destructive) { library.deletePlaylist(playlist.id) }
                 }
                 .contextMenu {
-                    Button("Rename…", systemImage: "pencil") {
+                    Button(L10n.tr("Rename…"), systemImage: "pencil") {
                         name = playlist.name
                         renaming = playlist
                     }
-                    Button("Delete", systemImage: "trash", role: .destructive) { library.deletePlaylist(playlist.id) }
+                    Button(L10n.tr("Delete"), systemImage: "trash", role: .destructive) { library.deletePlaylist(playlist.id) }
                     TrackMenuItems(ids: playlist.trackIDs)
                 }
             }
         }
-        .navigationTitle("Playlists")
+        .navigationTitle(L10n.tr("Playlists"))
         .navigationDestination(for: PlaylistRef.self) { PlaylistDetailView(ref: $0) }
         .toolbar {
-            Button("New Playlist", systemImage: "plus") {
+            Button(L10n.tr("New Playlist"), systemImage: "plus") {
                 name = ""
                 showNew = true
             }
         }
-        .alert("New Playlist", isPresented: $showNew) {
-            TextField("Name", text: $name)
-            Button("Cancel", role: .cancel) {}
-            Button("Create") {
+        .alert(L10n.tr("New Playlist"), isPresented: $showNew) {
+            TextField(L10n.tr("Name"), text: $name)
+            Button(L10n.tr("Cancel"), role: .cancel) {}
+            Button(L10n.tr("Create")) {
                 let trimmed = name.trimmingCharacters(in: .whitespaces)
-                library.createPlaylist(name: trimmed.isEmpty ? "New Playlist" : trimmed)
+                library.createPlaylist(name: trimmed.isEmpty ? L10n.tr("New Playlist") : trimmed)
             }
         }
-        .alert("Rename Playlist", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("Name", text: $name)
-            Button("Cancel", role: .cancel) {}
-            Button("Rename") {
+        .alert(L10n.tr("Rename Playlist"), isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField(L10n.tr("Name"), text: $name)
+            Button(L10n.tr("Cancel"), role: .cancel) {}
+            Button(L10n.tr("Rename")) {
                 let trimmed = name.trimmingCharacters(in: .whitespaces)
                 if let renaming, !trimmed.isEmpty { library.renamePlaylist(renaming.id, to: trimmed) }
             }
@@ -64,7 +64,7 @@ struct PlaylistsView: View {
             Image(systemName: icon).foregroundStyle(Color.accentColor).frame(width: 28)
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
-                Text("\(count) songs").font(.subheadline).foregroundStyle(.secondary)
+                Text(L10n.songCount(count)).font(.subheadline).foregroundStyle(.secondary)
             }
         }
     }
@@ -78,8 +78,8 @@ struct PlaylistDetailView: View {
 
     private var title: String {
         switch ref {
-        case .favourites: "Favourites"
-        case .user(let id): library.playlists.first { $0.id == id }?.name ?? "Playlist"
+        case .favourites: L10n.tr("Favourites")
+        case .user(let id): library.playlists.first { $0.id == id }?.name ?? L10n.tr("Playlist")
         }
     }
 
@@ -101,8 +101,8 @@ struct PlaylistDetailView: View {
         let tracks = self.tracks
         List {
             if tracks.isEmpty {
-                ContentUnavailableView("Nothing Here Yet", systemImage: "music.note.list",
-                                       description: Text("Touch and hold a song, album or folder to add it."))
+                ContentUnavailableView(L10n.tr("Nothing Here Yet"), systemImage: "music.note.list",
+                                       description: Text(L10n.tr("Touch and hold a song, album or folder to add it.")))
             } else {
                 PlayShuffleButtons(ids: tracks.map(\.id))
             }

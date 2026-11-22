@@ -18,7 +18,7 @@
                     Click="Back_Click">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="&#xE72B;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
-                    <TextBlock Text="Playlists" VerticalAlignment="Center" />
+                    <TextBlock Text="{DynamicResource Str_Playlists_Title}" VerticalAlignment="Center" />
                 </StackPanel>
             </Button>
         </Border>
@@ -53,7 +53,7 @@
                             Click="PlayAll_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBlock Text="Play" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Common_Play}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button x:Name="ShuffleAllButton"
@@ -62,13 +62,13 @@
                             Click="ShuffleAll_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBlock Text="Shuffle" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Common_Shuffle}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button x:Name="MoreButton"
                             Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE712;"
-                            ToolTip="More options"
+                            ToolTip="{DynamicResource Str_Common_MoreOptions}"
                             Click="More_Click" />
                 </StackPanel>
             </Grid>
@@ -91,14 +91,14 @@
                            Foreground="{DynamicResource TextTertiaryBrush}"
                            HorizontalAlignment="Center"
                            Margin="0,0,0,12" />
-                <TextBlock Text="Nothing Here Yet"
+                <TextBlock Text="{DynamicResource Str_PlaylistDetail_EmptyTitle}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="17"
                            FontWeight="SemiBold"
                            Foreground="{DynamicResource TextPrimaryBrush}"
                            HorizontalAlignment="Center"
                            Margin="0,0,0,6" />
-                <TextBlock Text="Right-click any song, album, or folder to add it to this playlist."
+                <TextBlock Text="{DynamicResource Str_PlaylistDetail_EmptyDesc}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="13"
                            Foreground="{DynamicResource TextSecondaryBrush}"

@@ -4,6 +4,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
 using MusicoWindows.Converters;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 using MusicoWindows.Theme;
@@ -22,10 +23,21 @@ public partial class SleepTimerDialog : UserControl
     {
         InitializeComponent();
         BuildPresets();
+        UpdateCustomMinutesText();
 
         _countdownTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _countdownTimer.Tick += (_, _) => RefreshStatus();
+
+        LocalizationManager.LanguageChanged += _ =>
+        {
+            BuildPresets();
+            UpdateCustomMinutesText();
+            RefreshStatus();
+        };
     }
+
+    private void UpdateCustomMinutesText() =>
+        CustomMinutesText.Text = L.Format("SleepTimer_CustomMinutes", _customMinutes);
 
     public bool IsOpen => Visibility == Visibility.Visible;
 
@@ -37,7 +49,7 @@ public partial class SleepTimerDialog : UserControl
             int captured = mins;
             var btn = new Button
             {
-                Content = $"{mins} min",
+                Content = L.Format("SleepTimer_PresetMin", mins),
                 Margin = new Thickness(0, 0, 6, 6),
                 Style = (Style)FindResource("Win10ButtonStyle")
             };
@@ -74,12 +86,12 @@ public partial class SleepTimerDialog : UserControl
         ActiveBanner.Visibility = Visibility.Visible;
         if (state.Kind == SleepModeKind.EndOfTrack)
         {
-            ActiveStatusText.Text = "Stops at the end of this song";
+            ActiveStatusText.Text = L.Get("SleepTimer_StopsAtEndOfSong");
         }
         else if (state.UntilUtc is DateTimeOffset until)
         {
             double remaining = Math.Max(0, (until - DateTimeOffset.UtcNow).TotalSeconds);
-            ActiveStatusText.Text = $"Stops in {TimeFormatter.Format(remaining)}";
+            ActiveStatusText.Text = L.Format("SleepTimer_StopsIn", TimeFormatter.Format(remaining));
         }
     }
 
@@ -92,13 +104,13 @@ public partial class SleepTimerDialog : UserControl
     private void DecreaseCustom_Click(object sender, RoutedEventArgs e)
     {
         _customMinutes = Math.Max(1, _customMinutes - 5);
-        CustomMinutesText.Text = $"{_customMinutes} minutes";
+        UpdateCustomMinutesText();
     }
 
     private void IncreaseCustom_Click(object sender, RoutedEventArgs e)
     {
         _customMinutes = Math.Min(240, _customMinutes + 5);
-        CustomMinutesText.Text = $"{_customMinutes} minutes";
+        UpdateCustomMinutesText();
     }
 
     private void StartCustom_Click(object sender, RoutedEventArgs e) => StartMinutes(_customMinutes);

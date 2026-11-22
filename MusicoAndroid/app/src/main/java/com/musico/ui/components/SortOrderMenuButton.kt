@@ -14,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import com.musico.i18n.LocalStrings
 import com.musico.model.TrackSortOrder
 
 @Composable
@@ -21,13 +22,17 @@ fun SortOrderMenuButton(
     current: TrackSortOrder,
     onSelect: (TrackSortOrder) -> Unit,
     options: List<TrackSortOrder> = TrackSortOrder.entries,
-    contentDescription: String = "Sort songs",
+    contentDescription: String? = null,
 ) {
+    val strings = LocalStrings.current
     var expanded by remember { mutableStateOf(false) }
 
     Box {
         IconButton(onClick = { expanded = true }) {
-            Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = contentDescription)
+            Icon(
+                Icons.AutoMirrored.Rounded.Sort,
+                contentDescription = contentDescription ?: strings.sortSongs
+            )
         }
         DropdownMenu(
             expanded = expanded,
@@ -35,7 +40,7 @@ fun SortOrderMenuButton(
         ) {
             options.forEach { option ->
                 DropdownMenuItem(
-                    text = { Text(option.label) },
+                    text = { Text(strings.sortOrderLabel(option)) },
                     trailingIcon = {
                         if (current == option) {
                             Icon(Icons.Rounded.Check, contentDescription = null)

@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import com.musico.audio.PlayerController
 import com.musico.audio.PlayerUiState
 import com.musico.core.ArtworkCache
+import com.musico.i18n.LocalStrings
 import com.musico.model.PlayQueue
 import com.musico.model.RepeatMode
 import com.musico.ui.components.ArtworkImage
@@ -58,6 +59,7 @@ fun PlayerBar(
     onOpenFullPlayer: () -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
     val track = playerState.currentTrack
 
     Surface(
@@ -91,13 +93,13 @@ fun PlayerBar(
                     Spacer(Modifier.width(12.dp))
                     Column {
                         Text(
-                            text = track?.title ?: "Not Playing",
+                            text = track?.title ?: strings.notPlaying,
                             style = MaterialTheme.typography.titleSmall.copy(fontWeight = FontWeight.Medium),
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                         Text(
-                            text = track?.artist ?: "Pick a song from your library",
+                            text = track?.let { strings.displayArtist(it.artist) } ?: strings.pickSongHint,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -120,7 +122,7 @@ fun PlayerBar(
                         ) {
                             Icon(
                                 imageVector = Icons.Rounded.Shuffle,
-                                contentDescription = "Shuffle",
+                                contentDescription = strings.shuffle,
                                 tint = if (activeQueue.shuffle) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
@@ -132,7 +134,7 @@ fun PlayerBar(
                             onClick = { playerController.previous() },
                             enabled = track != null
                         ) {
-                            Icon(Icons.Rounded.SkipPrevious, contentDescription = "Previous")
+                            Icon(Icons.Rounded.SkipPrevious, contentDescription = strings.previous)
                         }
                         IconButton(
                             onClick = { playerController.togglePlayPause() },
@@ -140,14 +142,14 @@ fun PlayerBar(
                         ) {
                             Icon(
                                 imageVector = if (playerState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                                contentDescription = if (playerState.isPlaying) "Pause" else "Play"
+                                contentDescription = if (playerState.isPlaying) strings.pause else strings.play
                             )
                         }
                         IconButton(
                             onClick = { playerController.next() },
                             enabled = track != null
                         ) {
-                            Icon(Icons.Rounded.SkipNext, contentDescription = "Next")
+                            Icon(Icons.Rounded.SkipNext, contentDescription = strings.next)
                         }
                         IconButton(
                             onClick = { playerController.cycleRepeat() },
@@ -159,7 +161,7 @@ fun PlayerBar(
                                 } else {
                                     Icons.Rounded.Repeat
                                 },
-                                contentDescription = "Repeat",
+                                contentDescription = strings.repeat,
                                 tint = if (activeQueue.repeatMode == RepeatMode.OFF) {
                                     MaterialTheme.colorScheme.onSurfaceVariant
                                 } else {
@@ -185,20 +187,20 @@ fun PlayerBar(
                 ) {
                     if (track != null) {
                         IconButton(onClick = { onOpenSongInfo(track.id) }) {
-                            Icon(Icons.Rounded.Info, contentDescription = "Song Info")
+                            Icon(Icons.Rounded.Info, contentDescription = strings.songInfo)
                         }
                     }
                     IconToggleButton(
                         checked = sidePanel == SidePanel.LYRICS,
                         onCheckedChange = { onToggleSidePanel(SidePanel.LYRICS) }
                     ) {
-                        Icon(Icons.Rounded.Lyrics, contentDescription = "Lyrics panel")
+                        Icon(Icons.Rounded.Lyrics, contentDescription = strings.lyricsPanel)
                     }
                     IconToggleButton(
                         checked = sidePanel == SidePanel.QUEUE,
                         onCheckedChange = { onToggleSidePanel(SidePanel.QUEUE) }
                     ) {
-                        Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = "Queue panel")
+                        Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = strings.queuePanel)
                     }
                 }
             }

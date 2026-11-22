@@ -16,7 +16,7 @@
                     Click="Back_Click">
                 <StackPanel Orientation="Horizontal">
                     <TextBlock Text="&#xE72B;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
-                    <TextBlock Text="Artists" VerticalAlignment="Center" />
+                    <TextBlock Text="{DynamicResource Str_Artists_Title}" VerticalAlignment="Center" />
                 </StackPanel>
             </Button>
         </Border>
@@ -43,7 +43,7 @@
                                 Click="PlayAll_Click">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
-                                <TextBlock Text="Play" VerticalAlignment="Center" />
+                                <TextBlock Text="{DynamicResource Str_Common_Play}" VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
                         <Button Style="{StaticResource Win10ButtonStyle}"
@@ -51,27 +51,27 @@
                                 Click="ShuffleAll_Click">
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
-                                <TextBlock Text="Shuffle" VerticalAlignment="Center" />
+                                <TextBlock Text="{DynamicResource Str_Common_Shuffle}" VerticalAlignment="Center" />
                             </StackPanel>
                         </Button>
                         <Button x:Name="MoreButton"
                                 Style="{StaticResource Win10IconButtonStyle}"
                                 Content="&#xE712;"
-                                ToolTip="More options"
+                                ToolTip="{DynamicResource Str_Common_MoreOptions}"
                                 Click="More_Click" />
                     </StackPanel>
                 </Grid>
 
                 <!-- Albums Section -->
                 <StackPanel x:Name="AlbumsSection" Margin="0,0,0,22">
-                    <TextBlock Text="Albums"
+                    <TextBlock Text="{DynamicResource Str_Albums_Title}"
                                Style="{StaticResource Win10SectionTitleStyle}"
                                Margin="0,0,0,12" />
                     <WrapPanel x:Name="AlbumsWrap" Orientation="Horizontal" />
                 </StackPanel>
 
                 <!-- Songs Section -->
-                <TextBlock Text="Songs"
+                <TextBlock Text="{DynamicResource Str_Songs_Title}"
                            Style="{StaticResource Win10SectionTitleStyle}"
                            Margin="0,0,0,10" />
                 <StackPanel x:Name="TracksStack" />

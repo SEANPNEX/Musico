@@ -329,22 +329,22 @@ struct CloudExportHostModifier: ViewModifier {
                 pendingRequest = nil
                 switch result {
                 case .failure(let error):
-                    alertTitle = "Couldn’t Save Song"
+                    alertTitle = L10n.tr("Couldn’t Save Song")
                     alertMessage = error.localizedDescription
                 case .success(let folderURL):
                     startSingleExport(req, to: folderURL)
                 }
             }
             .alert(
-                "Saving Song",
+                L10n.tr("Saving Song"),
                 isPresented: Binding(
                     get: { exportingTitle != nil },
                     set: { if !$0 { exportTask?.cancel(); exportingTitle = nil } }
                 )
             ) {
-                Button("Cancel", role: .cancel) { exportTask?.cancel() }
+                Button(L10n.tr("Cancel"), role: .cancel) { exportTask?.cancel() }
             } message: {
-                Text("Saving “\(exportingTitle ?? "")”…")
+                Text(L10n.tr("Saving “%@”…", exportingTitle ?? ""))
             }
             .alert(
                 alertTitle,
@@ -353,7 +353,7 @@ struct CloudExportHostModifier: ViewModifier {
                     set: { if !$0 { alertMessage = nil } }
                 )
             ) {
-                Button("OK", role: .cancel) {}
+                Button(L10n.tr("OK"), role: .cancel) {}
             } message: {
                 Text(alertMessage ?? "")
             }
@@ -371,13 +371,13 @@ struct CloudExportHostModifier: ViewModifier {
                 let savedURL = try await CloudExporter.exportTrack(req.track, root: req.root, toFolder: folderURL)
                 await req.onSaved(savedURL)
                 exportingTitle = nil
-                alertTitle = "Saved Song"
-                alertMessage = "Saved “\(savedURL.lastPathComponent)” to “\(folderURL.lastPathComponent)”."
+                alertTitle = L10n.tr("Saved Song")
+                alertMessage = L10n.tr("Saved “%@” to “%@”.", savedURL.lastPathComponent, folderURL.lastPathComponent)
             } catch is CancellationError {
                 exportingTitle = nil
             } catch {
                 exportingTitle = nil
-                alertTitle = "Couldn’t Save Song"
+                alertTitle = L10n.tr("Couldn’t Save Song")
                 alertMessage = error.localizedDescription
             }
         }

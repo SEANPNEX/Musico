@@ -7,6 +7,7 @@
             <ResourceDictionary.MergedDictionaries>
                 <ResourceDictionary Source="Theme/Win10Dark.xaml" />
                 <ResourceDictionary Source="Theme/Win10Controls.xaml" />
+                <ResourceDictionary Source="Localization/Strings.en.xaml" />
             </ResourceDictionary.MergedDictionaries>
 
             <conv:TimeFormatConverter x:Key="TimeFormatConverter" />

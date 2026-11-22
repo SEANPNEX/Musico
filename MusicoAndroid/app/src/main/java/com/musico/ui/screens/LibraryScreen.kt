@@ -7,7 +7,11 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -25,20 +29,32 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.musico.audio.PlayerUiState
+import com.musico.i18n.AppStrings
+import com.musico.i18n.LanguageStore
+import com.musico.i18n.LocalStrings
 import com.musico.model.Album
 import com.musico.model.PlayQueue
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
 import com.musico.store.PlayHistoryUiState
+import com.musico.ui.components.LanguageDialog
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.theme.MusicoMotion
 
-enum class LibrarySection(val label: String) {
-    SONGS("Songs"),
-    ALBUMS("Albums"),
-    ARTISTS("Artists"),
-    PLAYLISTS("Playlists")
+enum class LibrarySection {
+    SONGS,
+    ALBUMS,
+    ARTISTS,
+    PLAYLISTS;
+
+    fun label(strings: AppStrings): String = when (this) {
+        SONGS -> strings.sectionSongs
+        ALBUMS -> strings.sectionAlbums
+        ARTISTS -> strings.sectionArtists
+        PLAYLISTS -> strings.sectionPlaylists
+    }
 }
 
 sealed interface LibraryDetail {
@@ -57,10 +73,13 @@ fun LibraryScreen(
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
+    languageStore: LanguageStore? = null,
     pendingSearchRequest: SearchRequest? = null,
     onConsumeSearchRequest: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
+    var showLanguageDialog by remember { mutableStateOf(false) }
     var section by rememberSaveable { mutableStateOf(LibrarySection.SONGS) }
     val detailStack = remember { mutableStateListOf<LibraryDetail>() }
 
@@ -138,7 +157,17 @@ fun LibraryScreen(
                 contentWindowInsets = WindowInsets(0),
                 topBar = {
                     TopAppBar(
-                        title = { Text("Library") }
+                        title = { Text(strings.libraryTitle) },
+                        actions = {
+                            if (languageStore != null) {
+                                IconButton(onClick = { showLanguageDialog = true }) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Language,
+                                        contentDescription = strings.languageTitle,
+                                    )
+                                }
+                            }
+                        }
                     )
                 }
             ) { innerPadding ->
@@ -162,7 +191,7 @@ fun LibraryScreen(
                                 ),
                                 label = {
                                     Text(
-                                        text = item.label,
+                                        text = item.label(strings),
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis
                                     )
@@ -225,5 +254,14 @@ fun LibraryScreen(
                 }
             }
         }
+    }
+
+    if (showLanguageDialog && languageStore != null) {
+        val currentLanguage by languageStore.language.collectAsStateWithLifecycle()
+        LanguageDialog(
+            current = currentLanguage,
+            onSelect = { languageStore.setLanguage(it) },
+            onDismiss = { showLanguageDialog = false },
+        )
     }
 }

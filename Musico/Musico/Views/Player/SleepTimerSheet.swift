@@ -17,10 +17,10 @@ struct SleepTimerSheet: View {
                 }
             }
             .tint(.primary)
-            .navigationTitle("Sleep Timer")
+            .navigationTitle(L10n.tr("Sleep Timer"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) { Button(L10n.tr("Done")) { dismiss() } }
             }
         }
     }
@@ -33,21 +33,21 @@ struct SleepTimerSheet: View {
                         Image(systemName: "moon.zzz.fill").foregroundStyle(Color.accentColor)
                         status(for: player)
                         Spacer()
-                        Button("Cancel Timer", role: .destructive) { player.setSleep(.off) }
+                        Button(L10n.tr("Cancel Timer"), role: .destructive) { player.setSleep(.off) }
                             .buttonStyle(.borderless)
                     }
                 }
             }
-            Section("Stop playing after") {
+            Section(L10n.tr("Stop playing after")) {
                 ForEach(Self.presets, id: \.self) { minutes in
-                    Button("\(minutes) minutes") { start(minutes, player: player) }
+                    Button(L10n.tr("%@ minutes", String(minutes))) { start(minutes, player: player) }
                 }
                 HStack {
-                    Stepper("\(customMinutes) minutes", value: $customMinutes, in: 1...240)
-                    Button("Start") { start(customMinutes, player: player) }
+                    Stepper(L10n.tr("%@ minutes", String(customMinutes)), value: $customMinutes, in: 1...240)
+                    Button(L10n.tr("Start")) { start(customMinutes, player: player) }
                         .buttonStyle(.borderedProminent)
                 }
-                Button("End of current song") {
+                Button(L10n.tr("End of current song")) {
                     player.setSleep(.endOfTrack)
                     dismiss()
                 }
@@ -60,10 +60,10 @@ struct SleepTimerSheet: View {
         switch player.sleepMode {
         case .until(let date):
             TimelineView(.periodic(from: .now, by: 1)) { context in
-                Text("Stops in \(formatTime(max(date.timeIntervalSince(context.date), 0)))").monospacedDigit()
+                Text(L10n.tr("Stops in %@", formatTime(max(date.timeIntervalSince(context.date), 0)))).monospacedDigit()
             }
         case .endOfTrack:
-            Text("Stops at the end of this song")
+            Text(L10n.tr("Stops at the end of this song"))
         case .off:
             EmptyView()
         }

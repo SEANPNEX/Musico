@@ -14,6 +14,7 @@ struct RootView: View {
     @Environment(PlayHistoryStore.self) private var history
     @Environment(\.appNavigation) private var navigation
     @Environment(\.lyricsStore) private var lyricsStore
+    @Environment(\.languageManager) private var languageManager
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var localShowPlayer: Bool
     @State private var didApplyInitialPlayerState = false
@@ -69,8 +70,8 @@ struct RootView: View {
         .modifier(NewPlaylistAlert())
         .modifier(CloudExportHostModifier())
         .modifier(SongInfoHostModifier())
-        .alert("Playback Problem", isPresented: Binding(get: { player.errorMessage != nil }, set: { if !$0 { player.errorMessage = nil } })) {
-            Button("OK", role: .cancel) {}
+        .alert(L10n.tr("Playback Problem"), isPresented: Binding(get: { player.errorMessage != nil }, set: { if !$0 { player.errorMessage = nil } })) {
+            Button(L10n.tr("OK"), role: .cancel) {}
         } message: {
             Text(player.errorMessage ?? "")
         }
@@ -90,16 +91,16 @@ struct RootView: View {
     private var modernTabs: some View {
         @Bindable var navigation = navigation
         let baseTabs = TabView(selection: $navigation.selectedTab) {
-            Tab("Folders", systemImage: "folder", value: AppTab.folders) {
+            Tab(L10n.tr("Folders"), systemImage: "folder", value: AppTab.folders) {
                 NavigationStack { FoldersView() }
             }
-            Tab("Library", systemImage: "music.note.list", value: AppTab.library) {
+            Tab(L10n.tr("Library"), systemImage: "music.note.list", value: AppTab.library) {
                 NavigationStack(path: $navigation.libraryPath) { LibraryView() }
             }
-            Tab("Queues", systemImage: "list.bullet", value: AppTab.queues) {
+            Tab(L10n.tr("Queues"), systemImage: "list.bullet", value: AppTab.queues) {
                 NavigationStack { QueuesView() }
             }
-            Tab("Stats", systemImage: "chart.bar", value: AppTab.stats) {
+            Tab(L10n.tr("Stats"), systemImage: "chart.bar", value: AppTab.stats) {
                 NavigationStack { StatsView() }
             }
         }
@@ -121,10 +122,10 @@ struct RootView: View {
     private var legacyTabs: some View {
         @Bindable var navigation = navigation
         return TabView(selection: $navigation.selectedTab) {
-            tab("Folders", "folder", tag: .folders) { FoldersView() }
-            tab("Library", "music.note.list", tag: .library, path: $navigation.libraryPath) { LibraryView() }
-            tab("Queues", "list.bullet", tag: .queues) { QueuesView() }
-            tab("Stats", "chart.bar", tag: .stats) { StatsView() }
+            tab(L10n.tr("Folders"), "folder", tag: .folders) { FoldersView() }
+            tab(L10n.tr("Library"), "music.note.list", tag: .library, path: $navigation.libraryPath) { LibraryView() }
+            tab(L10n.tr("Queues"), "list.bullet", tag: .queues) { QueuesView() }
+            tab(L10n.tr("Stats"), "chart.bar", tag: .stats) { StatsView() }
         }
     }
 
@@ -148,6 +149,8 @@ struct RootView: View {
             .environment(history)
             .environment(\.appNavigation, navigation)
             .environment(\.lyricsStore, lyricsStore)
+            .environment(\.languageManager, languageManager)
+            .environment(\.locale, languageManager.effectiveLocale)
     }
 
     @ViewBuilder

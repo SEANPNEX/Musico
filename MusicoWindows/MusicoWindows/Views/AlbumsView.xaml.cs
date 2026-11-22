@@ -5,6 +5,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using MusicoWindows.Controls;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -25,6 +26,7 @@ public partial class AlbumsView : UserControl
         Detach();
         _ctx = ctx;
         _ctx.Services.Library.PropertyChanged += OnLibraryChanged;
+        LocalizationManager.LanguageChanged += OnLanguageChanged;
         Refresh();
     }
 
@@ -32,9 +34,12 @@ public partial class AlbumsView : UserControl
 
     private void Detach()
     {
+        LocalizationManager.LanguageChanged -= OnLanguageChanged;
         if (_ctx is null) return;
         _ctx.Services.Library.PropertyChanged -= OnLibraryChanged;
     }
+
+    private void OnLanguageChanged(ResolvedLanguage _) => Refresh();
 
     private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -46,7 +51,7 @@ public partial class AlbumsView : UserControl
     {
         if (_ctx is null) return;
         var albums = _ctx.Services.Library.Albums;
-        CountText.Text = $"{albums.Count} {(albums.Count == 1 ? "album" : "albums")}";
+        CountText.Text = L.AlbumsCount(albums.Count);
 
         AlbumsWrap.Children.Clear();
         if (albums.Count == 0)
@@ -90,7 +95,7 @@ public partial class AlbumsView : UserControl
 
         var titleTb = new TextBlock
         {
-            Text = album.Title,
+            Text = L.DisplayAlbum(album.Title),
             FontFamily = new FontFamily("Segoe UI"),
             FontSize = 13,
             FontWeight = FontWeights.SemiBold,
@@ -101,7 +106,7 @@ public partial class AlbumsView : UserControl
 
         var artistTb = new TextBlock
         {
-            Text = album.Artist,
+            Text = L.DisplayArtist(album.Artist),
             FontFamily = new FontFamily("Segoe UI"),
             FontSize = 12,
             TextTrimming = TextTrimming.CharacterEllipsis,

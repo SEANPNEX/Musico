@@ -10,10 +10,10 @@ struct EqualizerSheet: View {
         } else {
             NavigationStack {
                 ProgressView()
-                    .navigationTitle("Equalizer")
+                    .navigationTitle(L10n.tr("Equalizer"))
                     .navigationBarTitleDisplayMode(.inline)
                     .toolbar {
-                        ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                        ToolbarItem(placement: .topBarTrailing) { Button(L10n.tr("Done")) { dismiss() } }
                     }
             }
         }
@@ -30,14 +30,14 @@ private struct EqualizerContent: View {
         NavigationStack {
             ScrollView {
             VStack(spacing: 24) {
-                Toggle("Equalizer", isOn: $player.eq.enabled)
+                Toggle(L10n.tr("Equalizer"), isOn: $player.eq.enabled)
 
                 HStack {
-                    Text("Preset")
+                    Text(L10n.tr("Preset"))
                     Spacer()
-                    Menu(player.eq.presetName ?? "Custom") {
+                    Menu(L10n.eqPresetName(player.eq.presetName)) {
                         ForEach(EQPreset.all, id: \.name) { preset in
-                            Button(preset.name) {
+                            Button(L10n.eqPresetName(preset.name)) {
                                 player.eq.gains = preset.gains
                                 player.eq.presetName = preset.name
                             }
@@ -57,14 +57,14 @@ private struct EqualizerContent: View {
                         }
                         .frame(maxWidth: .infinity)
                         .accessibilityElement(children: .combine)
-                        .accessibilityLabel("\(label) hertz")
+                        .accessibilityLabel(L10n.tr("%@ hertz", label))
                     }
                 }
                 .disabled(!player.eq.enabled)
                 .opacity(player.eq.enabled ? 1 : 0.4)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("Preamp \(gainText(player.eq.preamp)) dB").font(.footnote).foregroundStyle(.secondary)
+                    Text(L10n.tr("Preamp %@ dB", gainText(player.eq.preamp))).font(.footnote).foregroundStyle(.secondary)
                     Slider(value: $player.eq.preamp, in: EQSettings.gainRange, step: 0.5)
                 }
                 .disabled(!player.eq.enabled)
@@ -72,17 +72,17 @@ private struct EqualizerContent: View {
             }
             .padding(20)
             }
-            .navigationTitle("Equalizer")
+            .navigationTitle(L10n.tr("Equalizer"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Reset") {
+                    Button(L10n.tr("Reset")) {
                         player.eq.gains = EQPreset.all[0].gains
                         player.eq.preamp = 0
                         player.eq.presetName = "Flat"
                     }
                 }
-                ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .topBarTrailing) { Button(L10n.tr("Done")) { dismiss() } }
             }
         }
     }

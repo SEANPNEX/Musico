@@ -115,7 +115,7 @@ actor CloudAudioCache {
                         throw CloudSourceError.noPlayableStream
                     }
                     guard (200..<300).contains(result.statusCode) else {
-                        throw CloudSourceError.networkError("Stream returned HTTP \(result.statusCode).")
+                        throw CloudSourceError.networkError(L10n.trNonisolated("Stream returned HTTP %@.", String(result.statusCode)))
                     }
                     let attrs = try FileManager.default.attributesOfItem(atPath: result.tempFile.path)
                     let size = (attrs[.size] as? NSNumber)?.int64Value ?? 0
@@ -232,7 +232,7 @@ actor CloudAudioCache {
         }
         let (downloadedTemp, response) = try await session.download(for: request)
         guard let http = response as? HTTPURLResponse else {
-            throw CloudSourceError.networkError("Invalid download response.")
+            throw CloudSourceError.networkError(L10n.trNonisolated("Invalid download response."))
         }
         let contentType = http.value(forHTTPHeaderField: "Content-Type")
         // Move out of URLSession's ephemeral location before `download(for:)` deletes it on return.

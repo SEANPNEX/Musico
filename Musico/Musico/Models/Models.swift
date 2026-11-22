@@ -132,6 +132,11 @@ enum SearchField: String, Codable, Hashable, Sendable {
     case album = "Album"
     case genre = "Genre"
 
+    @MainActor
+    var localizedTitle: String {
+        L10n.tr(rawValue)
+    }
+
     static func queueName(field: SearchField, query: String) -> String {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return "\(field.rawValue): \(trimmed)"
@@ -147,6 +152,11 @@ enum TrackSortOrder: String, Codable, CaseIterable, Identifiable, Sendable {
     case leastPlayed = "Least Played"
 
     var id: String { rawValue }
+
+    @MainActor
+    var localizedTitle: String {
+        L10n.tr(rawValue)
+    }
 }
 
 struct FolderOrderState: Codable, Hashable, Sendable {

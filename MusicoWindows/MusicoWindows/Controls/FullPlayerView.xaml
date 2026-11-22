@@ -19,7 +19,7 @@
             <Grid>
                 <Button Style="{StaticResource Win10FlatButtonStyle}"
                         HorizontalAlignment="Left"
-                        ToolTip="Close Now Playing (Esc)"
+                        ToolTip="{DynamicResource Str_FullPlayer_CloseTooltip}"
                         Click="Close_Click">
                     <StackPanel Orientation="Horizontal">
                         <TextBlock Text="&#xE70D;"
@@ -27,11 +27,11 @@
                                    FontSize="13"
                                    VerticalAlignment="Center"
                                    Margin="0,0,8,0" />
-                        <TextBlock Text="Back" VerticalAlignment="Center" />
+                        <TextBlock Text="{DynamicResource Str_Common_Back}" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
 
-                <TextBlock Text="Now Playing"
+                <TextBlock Text="{DynamicResource Str_FullPlayer_NowPlaying}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="15"
                            FontWeight="SemiBold"
@@ -69,7 +69,7 @@
                                        MaxHeight="360"
                                        Margin="0,0,0,22"
                                        Cursor="Hand"
-                                       ToolTip="Show Lyrics"
+                                       ToolTip="{DynamicResource Str_FullPlayer_ShowLyricsTooltip}"
                                        MouseLeftButtonUp="Artwork_MouseLeftButtonUp" />
 
                 <!-- Track Info + Song Info + Favourite Heart -->
@@ -85,14 +85,14 @@
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
                         <TextBlock x:Name="TitleText"
-                                   Text="Nothing Playing"
+                                   Text="{DynamicResource Str_FullPlayer_NothingPlaying}"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="22"
                                    FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextPrimaryBrush}"
                                    TextTrimming="CharacterEllipsis" />
                         <TextBlock x:Name="MetaText"
-                                   Text="Pick a song from your library"
+                                   Text="{DynamicResource Str_PlayerBar_PickSong}"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="14"
                                    Foreground="{DynamicResource TextSecondaryBrush}"
@@ -106,7 +106,7 @@
                             Height="40"
                             FontSize="17"
                             Content="&#xE946;"
-                            ToolTip="Song Info"
+                            ToolTip="{DynamicResource Str_SongInfo_Title}"
                             Margin="4,0,2,0"
                             Click="SongInfo_Click" />
                     <Button x:Name="FavouriteButton"
@@ -116,7 +116,7 @@
                             Height="40"
                             FontSize="18"
                             Content="&#xEB51;"
-                            ToolTip="Toggle Favourite"
+                            ToolTip="{DynamicResource Str_FullPlayer_ToggleFavTooltip}"
                             Click="Favourite_Click" />
                 </Grid>
 
@@ -222,7 +222,7 @@
                             Click="Eq_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE9E9;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBlock Text="Equalizer" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Equalizer_Title}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button x:Name="SleepButton"
@@ -230,7 +230,7 @@
                             Click="Sleep_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE708;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBlock Text="Sleep Timer" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_SleepTimer_Title}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                 </StackPanel>
@@ -253,13 +253,13 @@
                     <StackPanel Orientation="Horizontal">
                         <RadioButton x:Name="LyricsPivotTab"
                                      Style="{StaticResource Win10PivotTabStyle}"
-                                     Content="Lyrics"
+                                     Content="{DynamicResource Str_Lyrics_Title}"
                                      GroupName="FullPlayerPivot"
                                      IsChecked="True"
                                      Checked="PivotTab_Checked" />
                         <RadioButton x:Name="QueuePivotTab"
                                      Style="{StaticResource Win10PivotTabStyle}"
-                                     Content="Queue"
+                                     Content="{DynamicResource Str_FullPlayer_QueueTab}"
                                      GroupName="FullPlayerPivot"
                                      Margin="16,0,0,0"
                                      Checked="PivotTab_Checked" />

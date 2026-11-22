@@ -26,7 +26,7 @@
                                    VerticalAlignment="Center"
                                    Margin="0,0,10,0" />
                         <TextBlock x:Name="TitleText"
-                                   Text="Software Update"
+                                   Text="{DynamicResource Str_Update_Title}"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="20"
                                    FontWeight="SemiBold"
@@ -37,7 +37,7 @@
                             Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE711;"
                             HorizontalAlignment="Right"
-                            ToolTip="Close"
+                            ToolTip="{DynamicResource Str_Common_Close}"
                             Click="Close_Click" />
                 </Grid>
 
@@ -80,7 +80,7 @@
                 <StackPanel x:Name="ReleaseNotesSection"
                             Margin="0,0,0,14"
                             Visibility="Collapsed">
-                    <TextBlock Text="Release Notes"
+                    <TextBlock Text="{DynamicResource Str_Update_ReleaseNotes}"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="13"
                                FontWeight="SemiBold"
@@ -109,7 +109,7 @@
                             Visibility="Collapsed">
                     <Grid Margin="0,0,0,6">
                         <TextBlock x:Name="ProgressStatusText"
-                                   Text="Checking for updates..."
+                                   Text="{DynamicResource Str_Update_Checking}"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="12"
                                    Foreground="{DynamicResource TextSecondaryBrush}" />
@@ -155,17 +155,17 @@
                     <Button x:Name="UpdateNowButton"
                             Grid.Column="0"
                             Style="{StaticResource Win10PrimaryButtonStyle}"
-                            Content="Update Now"
+                            Content="{DynamicResource Str_Update_UpdateNow}"
                             Click="UpdateNow_Click" />
                     <Button x:Name="SkipVersionButton"
                             Grid.Column="2"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Content="Skip Version"
+                            Content="{DynamicResource Str_Update_SkipVersion}"
                             Click="SkipVersion_Click" />
                     <Button x:Name="OpenReleaseFromUpdateButton"
                             Grid.Column="4"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Content="Open Release Page"
+                            Content="{DynamicResource Str_Update_OpenReleasePage}"
                             Click="OpenReleasePage_Click" />
                 </Grid>
 
@@ -182,17 +182,17 @@
                     <Button x:Name="CheckAgainButton"
                             Grid.Column="0"
                             Style="{StaticResource Win10PrimaryButtonStyle}"
-                            Content="Check Again"
+                            Content="{DynamicResource Str_Update_CheckAgain}"
                             Click="CheckAgain_Click" />
                     <Button x:Name="OpenReleasePageButton"
                             Grid.Column="2"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Content="Open Release Page"
+                            Content="{DynamicResource Str_Update_OpenReleasePage}"
                             Click="OpenReleasePage_Click" />
                     <Button x:Name="CloseButton"
                             Grid.Column="4"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Content="Close"
+                            Content="{DynamicResource Str_Common_Close}"
                             Click="Close_Click" />
                 </Grid>
             </StackPanel>

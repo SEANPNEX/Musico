@@ -46,11 +46,11 @@
                     <Button x:Name="ConfirmButton"
                             Grid.Column="0"
                             Style="{StaticResource Win10PrimaryButtonStyle}"
-                            Content="Save"
+                            Content="{DynamicResource Str_Common_Save}"
                             Click="Confirm_Click" />
                     <Button Grid.Column="2"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Content="Cancel"
+                            Content="{DynamicResource Str_Common_Cancel}"
                             Click="Cancel_Click" />
                 </Grid>
             </StackPanel>

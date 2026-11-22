@@ -3,6 +3,9 @@ import SwiftUI
 enum SongSort: String, CaseIterable, Identifiable {
     case title = "Title", artist = "Artist", album = "Album", dateAdded = "Recently Added"
     var id: String { rawValue }
+
+    @MainActor
+    var localizedTitle: String { L10n.tr(rawValue) }
 }
 
 struct SongsView: View {
@@ -42,10 +45,10 @@ struct SongsView: View {
                 HStack(spacing: 8) {
                     Image(systemName: "line.3.horizontal.decrease.circle.fill")
                         .foregroundStyle(Color.accentColor)
-                    Text("\(navigation.searchField.rawValue): \(trimmedQuery)")
+                    Text("\(navigation.searchField.localizedTitle): \(trimmedQuery)")
                         .font(.subheadline.weight(.medium))
                     Spacer()
-                    Button("Clear Filter") {
+                    Button(L10n.tr("Clear Filter")) {
                         navigation.clearSearchFieldTag()
                     }
                     .font(.caption)
@@ -54,8 +57,8 @@ struct SongsView: View {
                 .listRowSeparator(.hidden)
             }
             if library.tracks.isEmpty {
-                ContentUnavailableView("No Songs Yet", systemImage: "music.note",
-                                       description: Text("Add a folder in the Folders tab to build your library."))
+                ContentUnavailableView(L10n.tr("No Songs Yet"), systemImage: "music.note",
+                                       description: Text(L10n.tr("Add a folder in the Folders tab to build your library.")))
             } else if songs.isEmpty {
                 ContentUnavailableView.search(text: trimmedQuery)
             } else {
@@ -64,7 +67,7 @@ struct SongsView: View {
                 }
                 TrackRows(
                     tracks: songs,
-                    subtitle: { sort == .album || isSearching ? "\($0.artist) — \($0.album)" : $0.artist },
+                    subtitle: { sort == .album || isSearching ? "\(L10n.displayArtist($0.artist)) — \(L10n.displayAlbum($0.album))" : L10n.displayArtist($0.artist) },
                     onTap: isSearching ? { index, _ in
                         let queueName = SearchField.queueName(field: navigation.searchField, query: trimmedQuery)
                         player.playInNewQueue(songs.map(\.id), startAt: index, name: queueName)
@@ -73,13 +76,13 @@ struct SongsView: View {
             }
         }
         .listStyle(.plain)
-        .navigationTitle("Songs")
-        .searchable(text: searchTextBinding, isPresented: $navigation.isSearchPresented, prompt: "Songs, artists, albums, genres")
+        .navigationTitle(L10n.tr("Songs"))
+        .searchable(text: searchTextBinding, isPresented: $navigation.isSearchPresented, prompt: L10n.tr("Songs, artists, albums, genres"))
         .refreshable { await library.rescan() }
         .toolbar {
-            Menu("Sort", systemImage: "arrow.up.arrow.down") {
-                Picker("Sort By", selection: $sort) {
-                    ForEach(SongSort.allCases) { Text($0.rawValue).tag($0) }
+            Menu(L10n.tr("Sort"), systemImage: "arrow.up.arrow.down") {
+                Picker(L10n.tr("Sort By"), selection: $sort) {
+                    ForEach(SongSort.allCases) { Text($0.localizedTitle).tag($0) }
                 }
             }
         }

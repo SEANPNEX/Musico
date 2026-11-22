@@ -1,0 +1,196 @@
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+                    xmlns:sys="clr-namespace:System;assembly=mscorlib">
+
+    <!-- Window & Navigation -->
+    <sys:String x:Key="Str_Window_Minimize">Minimize</sys:String>
+    <sys:String x:Key="Str_Window_Maximize">Maximize</sys:String>
+    <sys:String x:Key="Str_Window_Close">Close</sys:String>
+    <sys:String x:Key="Str_Nav_TogglePane">Toggle navigation pane</sys:String>
+    <sys:String x:Key="Str_Nav_Folders">Folders</sys:String>
+    <sys:String x:Key="Str_Nav_HeaderLibrary">LIBRARY</sys:String>
+    <sys:String x:Key="Str_Nav_Songs">Songs</sys:String>
+    <sys:String x:Key="Str_Nav_Albums">Albums</sys:String>
+    <sys:String x:Key="Str_Nav_Artists">Artists</sys:String>
+    <sys:String x:Key="Str_Nav_HeaderPlaylists">PLAYLISTS</sys:String>
+    <sys:String x:Key="Str_Nav_AllPlaylists">All Playlists</sys:String>
+    <sys:String x:Key="Str_Nav_Favourites">Favourites</sys:String>
+    <sys:String x:Key="Str_Nav_NewPlaylist">New Playlist</sys:String>
+    <sys:String x:Key="Str_Nav_Queues">Queues</sys:String>
+    <sys:String x:Key="Str_Nav_Stats">Stats</sys:String>
+    <sys:String x:Key="Str_Nav_LightTheme">Light Theme</sys:String>
+    <sys:String x:Key="Str_Nav_ThemeTooltip">Switch Light / Dark theme</sys:String>
+    <sys:String x:Key="Str_Nav_Language">Language</sys:String>
+    <sys:String x:Key="Str_Nav_LanguageTooltip">Switch language</sys:String>
+    <sys:String x:Key="Str_Nav_Rescan">Rescan Library</sys:String>
+    <sys:String x:Key="Str_Nav_RescanTooltip">Rescan library folders</sys:String>
+    <sys:String x:Key="Str_Nav_CheckUpdates">Check for Updates</sys:String>
+
+    <!-- Common -->
+    <sys:String x:Key="Str_Common_Cancel">Cancel</sys:String>
+    <sys:String x:Key="Str_Common_Close">Close</sys:String>
+    <sys:String x:Key="Str_Common_Confirm">Confirm</sys:String>
+    <sys:String x:Key="Str_Common_Save">Save</sys:String>
+    <sys:String x:Key="Str_Common_Done">Done</sys:String>
+    <sys:String x:Key="Str_Common_Back">Back</sys:String>
+    <sys:String x:Key="Str_Common_Rename">Rename</sys:String>
+    <sys:String x:Key="Str_Common_Delete">Delete</sys:String>
+    <sys:String x:Key="Str_Common_Play">Play</sys:String>
+    <sys:String x:Key="Str_Common_PlayAll">Play All</sys:String>
+    <sys:String x:Key="Str_Common_Shuffle">Shuffle</sys:String>
+    <sys:String x:Key="Str_Common_MoreOptions">More options</sys:String>
+    <sys:String x:Key="Str_Common_Browse">Browse...</sys:String>
+    <sys:String x:Key="Str_Toggle_Off">Off</sys:String>
+    <sys:String x:Key="Str_Toggle_On">On</sys:String>
+
+    <!-- FoldersView -->
+    <sys:String x:Key="Str_Folders_Title">Folders</sys:String>
+    <sys:String x:Key="Str_Folders_Subtitle">Your Music folder and added music directories</sys:String>
+    <sys:String x:Key="Str_Folders_Rescan">Rescan</sys:String>
+    <sys:String x:Key="Str_Folders_AddCloudFolder">Add Cloud Folder</sys:String>
+    <sys:String x:Key="Str_Folders_AddFolder">Add Folder</sys:String>
+    <sys:String x:Key="Str_Folders_ScanningDefault">Looking for music...</sys:String>
+    <sys:String x:Key="Str_Folders_NewFolder">New Folder</sys:String>
+    <sys:String x:Key="Str_Folders_SaveToLocal">Save to Local Folder...</sys:String>
+    <sys:String x:Key="Str_Folders_UpdateFromCloud">Update from Cloud</sys:String>
+    <sys:String x:Key="Str_Folders_RemoveFolder">Remove Folder</sys:String>
+
+    <!-- SongsView -->
+    <sys:String x:Key="Str_Songs_Title">Songs</sys:String>
+    <sys:String x:Key="Str_Songs_ClearFieldFilter">Clear field filter</sys:String>
+    <sys:String x:Key="Str_Songs_SearchPlaceholder">Search songs, artists, albums (Ctrl+F)</sys:String>
+    <sys:String x:Key="Str_Songs_EmptyTitle">No Songs Yet</sys:String>
+    <sys:String x:Key="Str_Songs_EmptyDesc">Add a folder in Folders to build your music library.</sys:String>
+
+    <!-- AlbumsView -->
+    <sys:String x:Key="Str_Albums_Title">Albums</sys:String>
+    <sys:String x:Key="Str_Albums_EmptyTitle">No Albums Yet</sys:String>
+    <sys:String x:Key="Str_Albums_EmptyDesc">Albums appear once your library has songs.</sys:String>
+
+    <!-- ArtistsView -->
+    <sys:String x:Key="Str_Artists_Title">Artists</sys:String>
+    <sys:String x:Key="Str_Artists_EmptyTitle">No Artists Yet</sys:String>
+    <sys:String x:Key="Str_Artists_EmptyDesc">Artists appear once your library has songs.</sys:String>
+
+    <!-- PlaylistsView & PlaylistDetailView -->
+    <sys:String x:Key="Str_Playlists_Title">Playlists</sys:String>
+    <sys:String x:Key="Str_PlaylistDetail_EmptyTitle">Nothing Here Yet</sys:String>
+    <sys:String x:Key="Str_PlaylistDetail_EmptyDesc">Right-click any song, album, or folder to add it to this playlist.</sys:String>
+
+    <!-- QueuesView -->
+    <sys:String x:Key="Str_Queues_Title">Queues</sys:String>
+    <sys:String x:Key="Str_Queues_NewQueue">New Queue</sys:String>
+    <sys:String x:Key="Str_Queues_Clear">Clear</sys:String>
+    <sys:String x:Key="Str_Queues_ClearTooltip">Clear Active Queue</sys:String>
+    <sys:String x:Key="Str_Queues_PlayQueuesHeader">PLAY QUEUES</sys:String>
+    <sys:String x:Key="Str_Queues_SortLabel">Sort:</sys:String>
+    <sys:String x:Key="Str_Queues_EmptyTitle">Queue is Empty</sys:String>
+    <sys:String x:Key="Str_Queues_EmptyDesc">Click any song in your library to start playing.</sys:String>
+
+    <!-- StatsView -->
+    <sys:String x:Key="Str_Stats_Title">Stats</sys:String>
+    <sys:String x:Key="Str_Stats_PlaysUnitPlural">plays</sys:String>
+    <sys:String x:Key="Str_Stats_ListenedLabel">listened</sys:String>
+    <sys:String x:Key="Str_Stats_NeverPlayedLabel">never played</sys:String>
+    <sys:String x:Key="Str_Stats_TabRecent">Recent</sys:String>
+    <sys:String x:Key="Str_Stats_TabPlays">Plays</sys:String>
+    <sys:String x:Key="Str_Stats_TabNotLately">Not Lately</sys:String>
+    <sys:String x:Key="Str_Stats_TabNever">Never</sys:String>
+
+    <!-- PlayerBar & FullPlayerView -->
+    <sys:String x:Key="Str_PlayerBar_NowPlayingTooltip">Open Now Playing (Right-click for Song Info &amp; options)</sys:String>
+    <sys:String x:Key="Str_PlayerBar_NotPlaying">Not Playing</sys:String>
+    <sys:String x:Key="Str_PlayerBar_PickSong">Pick a song from your library</sys:String>
+    <sys:String x:Key="Str_PlayerBar_PrevTooltip">Previous (Ctrl+Left)</sys:String>
+    <sys:String x:Key="Str_PlayerBar_PlayPauseTooltip">Play / Pause (Space)</sys:String>
+    <sys:String x:Key="Str_PlayerBar_NextTooltip">Next (Ctrl+Right)</sys:String>
+    <sys:String x:Key="Str_PlayerBar_RepeatTooltip">Repeat</sys:String>
+    <sys:String x:Key="Str_PlayerBar_MuteTooltip">Mute</sys:String>
+    <sys:String x:Key="Str_PlayerBar_VolumeTooltip">Volume</sys:String>
+    <sys:String x:Key="Str_FullPlayer_CloseTooltip">Close Now Playing (Esc)</sys:String>
+    <sys:String x:Key="Str_FullPlayer_NowPlaying">Now Playing</sys:String>
+    <sys:String x:Key="Str_FullPlayer_ShowLyricsTooltip">Show Lyrics</sys:String>
+    <sys:String x:Key="Str_FullPlayer_NothingPlaying">Nothing Playing</sys:String>
+    <sys:String x:Key="Str_FullPlayer_ToggleFavTooltip">Toggle Favourite</sys:String>
+    <sys:String x:Key="Str_FullPlayer_QueueTab">Queue</sys:String>
+
+    <!-- LyricsPanel -->
+    <sys:String x:Key="Str_Lyrics_Title">Lyrics</sys:String>
+    <sys:String x:Key="Str_Lyrics_ImportTooltip">Import .lrc or .txt lyrics</sys:String>
+    <sys:String x:Key="Str_Lyrics_RemoveTooltip">Remove imported lyrics</sys:String>
+    <sys:String x:Key="Str_Lyrics_ClosePanelTooltip">Close panel</sys:String>
+    <sys:String x:Key="Str_Lyrics_EmptyTitle">No Lyrics</sys:String>
+    <sys:String x:Key="Str_Lyrics_EmptyDesc">Import a .lrc or .txt file for this song, or place one with the same name next to it.</sys:String>
+    <sys:String x:Key="Str_Lyrics_ImportFromFile">Import from File...</sys:String>
+
+    <!-- EqualizerDialog -->
+    <sys:String x:Key="Str_Equalizer_Title">Equalizer</sys:String>
+    <sys:String x:Key="Str_Equalizer_Preset">Preset</sys:String>
+    <sys:String x:Key="Str_Equalizer_PreampDefault">Preamp 0 dB</sys:String>
+    <sys:String x:Key="Str_Equalizer_ResetToFlat">Reset to Flat</sys:String>
+
+    <!-- SleepTimerDialog -->
+    <sys:String x:Key="Str_SleepTimer_Title">Sleep Timer</sys:String>
+    <sys:String x:Key="Str_SleepTimer_CancelTimer">Cancel Timer</sys:String>
+    <sys:String x:Key="Str_SleepTimer_StopPlayingAfter">Stop playing after</sys:String>
+    <sys:String x:Key="Str_SleepTimer_DefaultMinutes">20 minutes</sys:String>
+    <sys:String x:Key="Str_SleepTimer_Start">Start</sys:String>
+    <sys:String x:Key="Str_SleepTimer_EndOfCurrentSong">End of current song</sys:String>
+
+    <!-- SongInfoDialog -->
+    <sys:String x:Key="Str_SongInfo_Title">Song Info</sys:String>
+    <sys:String x:Key="Str_SongInfo_MetadataHeader">METADATA</sys:String>
+    <sys:String x:Key="Str_SongInfo_CoverImage">Cover Image</sys:String>
+    <sys:String x:Key="Str_SongInfo_EmbeddedOrCachedCover">Embedded or cached artwork</sys:String>
+    <sys:String x:Key="Str_SongInfo_ChangeCover">Change Cover...</sys:String>
+    <sys:String x:Key="Str_SongInfo_FieldTitle">Title</sys:String>
+    <sys:String x:Key="Str_SongInfo_FieldArtist">Artist</sys:String>
+    <sys:String x:Key="Str_SongInfo_SearchArtistTooltip">Search songs by this Artist</sys:String>
+    <sys:String x:Key="Str_SongInfo_FieldAlbum">Album</sys:String>
+    <sys:String x:Key="Str_SongInfo_SearchAlbumTooltip">Search songs in this Album</sys:String>
+    <sys:String x:Key="Str_SongInfo_FieldGenre">Genre</sys:String>
+    <sys:String x:Key="Str_SongInfo_SearchGenreTooltip">Search songs with this Genre</sys:String>
+    <sys:String x:Key="Str_SongInfo_FileInfoHeader">FILE &amp; PLAYBACK INFO</sys:String>
+    <sys:String x:Key="Str_SongInfo_Precision">Precision</sys:String>
+    <sys:String x:Key="Str_SongInfo_Frequency">Frequency</sys:String>
+    <sys:String x:Key="Str_SongInfo_BitRate">Bit Rate</sys:String>
+    <sys:String x:Key="Str_SongInfo_FileSize">File Size</sys:String>
+    <sys:String x:Key="Str_SongInfo_Length">Length</sys:String>
+    <sys:String x:Key="Str_SongInfo_SoundTracks">Sound Tracks</sys:String>
+    <sys:String x:Key="Str_SongInfo_TimeAdded">Time Added</sys:String>
+    <sys:String x:Key="Str_SongInfo_TimeEdited">Time Edited</sys:String>
+    <sys:String x:Key="Str_SongInfo_LastPlayed">Last Played</sys:String>
+    <sys:String x:Key="Str_SongInfo_PlayedTimes">Played Times</sys:String>
+    <sys:String x:Key="Str_SongInfo_Source">Source</sys:String>
+
+    <!-- UpdateDialog -->
+    <sys:String x:Key="Str_Update_Title">Software Update</sys:String>
+    <sys:String x:Key="Str_Update_ReleaseNotes">Release Notes</sys:String>
+    <sys:String x:Key="Str_Update_Checking">Checking for updates...</sys:String>
+    <sys:String x:Key="Str_Update_UpdateNow">Update Now</sys:String>
+    <sys:String x:Key="Str_Update_SkipVersion">Skip Version</sys:String>
+    <sys:String x:Key="Str_Update_OpenReleasePage">Open Release Page</sys:String>
+    <sys:String x:Key="Str_Update_CheckAgain">Check Again</sys:String>
+
+    <!-- AddCloudFolderDialog -->
+    <sys:String x:Key="Str_AddCloud_Title">Add Cloud Folder</sys:String>
+    <sys:String x:Key="Str_AddCloud_UrlLabel">Playlist or Video URL</sys:String>
+    <sys:String x:Key="Str_AddCloud_UrlHint">Supports YouTube / YouTube Music playlists &amp; videos (no login required), Bilibili favlists, collections, series, b23.tv &amp; BV links.</sys:String>
+    <sys:String x:Key="Str_AddCloud_CookieLabel">Cookie (Optional)</sys:String>
+    <sys:String x:Key="Str_AddCloud_CookieHint">Only needed for private/authenticated playlists or higher Bilibili audio quality.</sys:String>
+    <sys:String x:Key="Str_AddCloud_ProxyLabel">HTTP Proxy (Optional — YouTube)</sys:String>
+    <sys:String x:Key="Str_AddCloud_ProxyHint">e.g. 7890, 127.0.0.1:7890, or http://127.0.0.1:7890</sys:String>
+    <sys:String x:Key="Str_AddCloud_Fetching">Fetching playlist tracks...</sys:String>
+
+    <!-- SaveCloudFolderDialog -->
+    <sys:String x:Key="Str_SaveCloud_Title">Save Cloud Playlist to Local Folder</sys:String>
+    <sys:String x:Key="Str_SaveCloud_FolderName">Folder Name</sys:String>
+    <sys:String x:Key="Str_SaveCloud_SaveLocation">Save Location</sys:String>
+    <sys:String x:Key="Str_SaveCloud_AddToLibrary">Add saved folder to Library</sys:String>
+    <sys:String x:Key="Str_SaveCloud_SaveFolder">Save Folder</sys:String>
+    <sys:String x:Key="Str_SaveCloud_OpenFolder">Open Folder</sys:String>
+
+    <!-- TrackRowControl -->
+    <sys:String x:Key="Str_TrackRow_DragToReorder">Drag to reorder</sys:String>
+
+</ResourceDictionary>

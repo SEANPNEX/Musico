@@ -6,6 +6,7 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using MusicoWindows.Controls;
+using MusicoWindows.Localization;
 using MusicoWindows.Stores;
 
 namespace MusicoWindows.Views;
@@ -25,6 +26,7 @@ public partial class ArtistsView : UserControl
         Detach();
         _ctx = ctx;
         _ctx.Services.Library.PropertyChanged += OnLibraryChanged;
+        LocalizationManager.LanguageChanged += OnLanguageChanged;
         Refresh();
     }
 
@@ -32,9 +34,12 @@ public partial class ArtistsView : UserControl
 
     private void Detach()
     {
+        LocalizationManager.LanguageChanged -= OnLanguageChanged;
         if (_ctx is null) return;
         _ctx.Services.Library.PropertyChanged -= OnLibraryChanged;
     }
+
+    private void OnLanguageChanged(ResolvedLanguage _) => Refresh();
 
     private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -47,7 +52,7 @@ public partial class ArtistsView : UserControl
         if (_ctx is null) return;
         var lib = _ctx.Services.Library;
         var artists = lib.Artists;
-        CountText.Text = $"{artists.Count} {(artists.Count == 1 ? "artist" : "artists")}";
+        CountText.Text = L.ArtistsCount(artists.Count);
 
         ArtistsStack.Children.Clear();
         if (artists.Count == 0)
@@ -93,7 +98,7 @@ public partial class ArtistsView : UserControl
 
             var nameTb = new TextBlock
             {
-                Text = artist,
+                Text = L.DisplayArtist(artist),
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 14,
                 FontWeight = FontWeights.SemiBold,
@@ -104,7 +109,7 @@ public partial class ArtistsView : UserControl
 
             var metaTb = new TextBlock
             {
-                Text = $"{albums.Count} {(albums.Count == 1 ? "album" : "albums")} · {tracks.Count} {(tracks.Count == 1 ? "song" : "songs")}",
+                Text = $"{L.AlbumsCount(albums.Count)} · {L.SongsCount(tracks.Count)}",
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 12,
                 VerticalAlignment = VerticalAlignment.Center

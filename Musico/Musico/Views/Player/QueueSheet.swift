@@ -9,7 +9,7 @@ struct QueueSheet: View {
             QueuesView()
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
-                    ToolbarItem(placement: .topBarTrailing) { Button("Done") { dismiss() } }
+                    ToolbarItem(placement: .topBarTrailing) { Button(L10n.tr("Done")) { dismiss() } }
                 }
         }
         .modifier(NewPlaylistAlert())
@@ -29,16 +29,16 @@ struct QueuesView: View {
 
     var body: some View {
         List {
-            Section("Queues") {
+            Section(L10n.tr("Queues")) {
                 ForEach(queues.queues) { queue in
                     queueRow(queue)
                 }
-                Button("New Queue", systemImage: "plus") { queues.addQueue(name: nil) }
+                Button(L10n.tr("New Queue"), systemImage: "plus") { queues.addQueue(name: nil) }
             }
-            Section(queues.active.name) {
+            Section(L10n.displayQueueName(queues.active.name)) {
                 let active = queues.active
                 if active.trackIDs.isEmpty {
-                    Text("This queue is empty. Tap a song in your library to fill it.")
+                    Text(L10n.tr("This queue is empty. Tap a song in your library to fill it."))
                         .foregroundStyle(.secondary)
                 }
                 // A song can be queued more than once, so rows are identified by position.
@@ -59,7 +59,7 @@ struct QueuesView: View {
                             Button {
                                 player.jump(to: index)
                             } label: {
-                                Text("Missing song").foregroundStyle(.secondary)
+                                Text(L10n.tr("Missing song")).foregroundStyle(.secondary)
                             }
                             .buttonStyle(.plain)
                             .listRowBackground(index == active.currentIndex ? Color.accentColor.opacity(0.12) : nil)
@@ -68,7 +68,7 @@ struct QueuesView: View {
                     .contextMenu {
                         TrackMenuItems(ids: [id], favouriteID: id)
                         Divider()
-                        Button("Remove from Queue", systemImage: "minus.circle", role: .destructive) {
+                        Button(L10n.tr("Remove from Queue"), systemImage: "minus.circle", role: .destructive) {
                             player.removeFromQueue(at: index)
                         }
                     }
@@ -79,7 +79,7 @@ struct QueuesView: View {
                 .onMove { player.moveInQueue(from: $0, to: $1) }
             }
         }
-        .navigationTitle("Queues")
+        .navigationTitle(L10n.tr("Queues"))
         .toolbar {
             ToolbarItem(placement: .topBarLeading) { EditButton() }
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -87,17 +87,17 @@ struct QueuesView: View {
                     player.sortActiveQueue(by: order)
                 }
                 .disabled(queues.active.trackIDs.count < 2)
-                Button("Clear This Queue", systemImage: "trash") { confirmClear = true }
+                Button(L10n.tr("Clear This Queue"), systemImage: "trash") { confirmClear = true }
                     .disabled(queues.active.trackIDs.isEmpty)
             }
         }
-        .confirmationDialog("Remove every song from “\(queues.active.name)”?", isPresented: $confirmClear, titleVisibility: .visible) {
-            Button("Clear Queue", role: .destructive) { player.clearQueue() }
+        .confirmationDialog(L10n.tr("Remove every song from “%@”?", L10n.displayQueueName(queues.active.name)), isPresented: $confirmClear, titleVisibility: .visible) {
+            Button(L10n.tr("Clear Queue"), role: .destructive) { player.clearQueue() }
         }
-        .alert("Rename Queue", isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
-            TextField("Name", text: $name)
-            Button("Cancel", role: .cancel) {}
-            Button("Rename") {
+        .alert(L10n.tr("Rename Queue"), isPresented: Binding(get: { renaming != nil }, set: { if !$0 { renaming = nil } })) {
+            TextField(L10n.tr("Name"), text: $name)
+            Button(L10n.tr("Cancel"), role: .cancel) {}
+            Button(L10n.tr("Rename")) {
                 if let renaming { queues.rename(renaming.id, to: name) }
             }
         }
@@ -110,7 +110,7 @@ struct QueuesView: View {
         } label: {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(queue.name).foregroundStyle(.primary)
+                    Text(L10n.displayQueueName(queue.name)).foregroundStyle(.primary)
                     QueueSummary(queue: queue, isActive: isActive)
                 }
                 Spacer()
@@ -121,9 +121,9 @@ struct QueuesView: View {
         .buttonStyle(.plain)
         .swipeActions(edge: .trailing) {
             if queues.queues.count > 1 {
-                Button("Delete", systemImage: "trash", role: .destructive) { player.deleteQueue(queue.id) }
+                Button(L10n.tr("Delete"), systemImage: "trash", role: .destructive) { player.deleteQueue(queue.id) }
             }
-            Button("Rename", systemImage: "pencil") {
+            Button(L10n.tr("Rename"), systemImage: "pencil") {
                 name = queue.name
                 renaming = queue
             }
@@ -144,7 +144,7 @@ private struct QueueSummary: View {
     }
 
     private var text: String {
-        guard let id = queue.currentTrackID, let track = library.track(id) else { return "Empty" }
-        return "\(queue.trackIDs.count) songs · \(track.title) at \(formatTime(isActive ? player.currentTime : queue.position))"
+        guard let id = queue.currentTrackID, let track = library.track(id) else { return L10n.tr("Empty") }
+        return L10n.tr("%@ · %@ at %@", L10n.songCount(queue.trackIDs.count), track.title, formatTime(isActive ? player.currentTime : queue.position))
     }
 }

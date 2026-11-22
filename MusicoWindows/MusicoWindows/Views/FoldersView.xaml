@@ -21,10 +21,10 @@
                 </Grid.ColumnDefinitions>
                 <StackPanel Grid.Column="0" VerticalAlignment="Center">
                     <TextBlock x:Name="TitleText"
-                               Text="Folders"
+                               Text="{DynamicResource Str_Folders_Title}"
                                Style="{StaticResource Win10PageTitleStyle}" />
                     <TextBlock x:Name="SubtitleText"
-                               Text="Your Music folder and added music directories"
+                               Text="{DynamicResource Str_Folders_Subtitle}"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="12"
                                Foreground="{DynamicResource TextSecondaryBrush}"
@@ -38,7 +38,7 @@
                             Click="Rescan_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE72C;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBlock Text="Rescan" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Folders_Rescan}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button x:Name="AddCloudFolderButton"
@@ -47,7 +47,7 @@
                             Click="AddCloudFolder_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE753;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBlock Text="Add Cloud Folder" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Folders_AddCloudFolder}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button x:Name="AddFolderButton"
@@ -55,7 +55,7 @@
                             Click="AddFolder_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE8F4;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBlock Text="Add Folder" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Folders_AddFolder}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                 </StackPanel>
@@ -72,7 +72,7 @@
                 Visibility="Collapsed">
             <StackPanel>
                 <TextBlock x:Name="ScanStatusText"
-                           Text="Looking for music..."
+                           Text="{DynamicResource Str_Folders_ScanningDefault}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="12"
                            Foreground="{DynamicResource TextSecondaryBrush}"
@@ -113,7 +113,7 @@
                             Click="PlayFolder_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
-                            <TextBlock Text="Play All" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Common_PlayAll}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button x:Name="ShuffleFolderButton"
@@ -121,7 +121,7 @@
                             Click="ShuffleFolder_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
-                            <TextBlock Text="Shuffle" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Common_Shuffle}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button x:Name="NewFolderButton"
@@ -131,7 +131,7 @@
                             Click="NewFolder_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE8F4;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
-                            <TextBlock Text="New Folder" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Folders_NewFolder}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button x:Name="SaveCloudFolderButton"
@@ -141,7 +141,7 @@
                             Click="SaveCloudFolder_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE896;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
-                            <TextBlock Text="Save to Local Folder..." VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Folders_SaveToLocal}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button x:Name="UpdateTrackedFolderButton"
@@ -151,7 +151,7 @@
                             Click="UpdateTrackedFolder_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE896;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
-                            <TextBlock Text="Update from Cloud" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Folders_UpdateFromCloud}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                     <Button x:Name="RemoveRootButton"
@@ -161,7 +161,7 @@
                             Click="RemoveRoot_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE74D;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
-                            <TextBlock Text="Remove Folder" VerticalAlignment="Center" />
+                            <TextBlock Text="{DynamicResource Str_Folders_RemoveFolder}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
                 </StackPanel>

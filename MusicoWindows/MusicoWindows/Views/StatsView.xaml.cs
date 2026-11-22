@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using MusicoWindows.Controls;
 using MusicoWindows.Converters;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -24,14 +25,31 @@ public partial class StatsView : UserControl
     private ViewContext? _ctx;
     private StatsSection _section = StatsSection.Recent;
     private IReadOnlyList<Track> _tracks = Array.Empty<Track>();
+    private bool _suppressOrderSelection;
 
     public StatsView()
     {
         InitializeComponent();
-        PlaysOrderCombo.Items.Add("Most Played First");
-        PlaysOrderCombo.Items.Add("Least Played First");
-        PlaysOrderCombo.SelectedIndex = 0;
+        RebuildPlaysOrderCombo(selectedIndex: 0);
         Unloaded += OnUnloaded;
+    }
+
+    private void RebuildPlaysOrderCombo(int? selectedIndex = null)
+    {
+        int prev = selectedIndex ?? Math.Max(0, PlaysOrderCombo.SelectedIndex);
+        _suppressOrderSelection = true;
+        try
+        {
+            PlaysOrderCombo.Items.Clear();
+            PlaysOrderCombo.Items.Add(L.Get("Stats_MostPlayedFirst"));
+            PlaysOrderCombo.Items.Add(L.Get("Stats_LeastPlayedFirst"));
+            if (PlaysOrderCombo.Items.Count > 0)
+                PlaysOrderCombo.SelectedIndex = Math.Clamp(prev, 0, PlaysOrderCombo.Items.Count - 1);
+        }
+        finally
+        {
+            _suppressOrderSelection = false;
+        }
     }
 
     public void Bind(ViewContext ctx)
@@ -41,6 +59,7 @@ public partial class StatsView : UserControl
         _ctx.Services.History.PropertyChanged += OnHistoryChanged;
         _ctx.Services.Library.PropertyChanged += OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged += OnPlayerChanged;
+        LocalizationManager.LanguageChanged += OnLanguageChanged;
         Refresh();
     }
 
@@ -48,10 +67,17 @@ public partial class StatsView : UserControl
 
     private void Detach()
     {
+        LocalizationManager.LanguageChanged -= OnLanguageChanged;
         if (_ctx is null) return;
         _ctx.Services.History.PropertyChanged -= OnHistoryChanged;
         _ctx.Services.Library.PropertyChanged -= OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged -= OnPlayerChanged;
+    }
+
+    private void OnLanguageChanged(ResolvedLanguage _)
+    {
+        RebuildPlaysOrderCombo();
+        Refresh();
     }
 
     private void OnHistoryChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
@@ -70,7 +96,7 @@ public partial class StatsView : UserControl
         var lib = _ctx.Services.Library;
 
         TotalPlaysText.Text = history.TotalPlays.ToString();
-        TotalPlaysLabel.Text = history.TotalPlays == 1 ? "play" : "plays";
+        TotalPlaysLabel.Text = history.TotalPlays == 1 ? L.Get("Stats_PlaysUnitSingular") : L.Get("Stats_PlaysUnitPlural");
         TotalTimeText.Text = TimeFormatter.FormatListeningDuration(history.TotalSeconds);
         NeverPlayedCountText.Text = history.NeverPlayed(lib.Tracks).Count.ToString();
 
@@ -96,10 +122,10 @@ public partial class StatsView : UserControl
             EmptyState.Visibility = Visibility.Visible;
             (EmptyTitleText.Text, EmptyDescText.Text) = _section switch
             {
-                StatsSection.Recent => ("Nothing Played Yet", "Songs appear here a few seconds after they start playing."),
-                StatsSection.Plays => ("No Plays Yet", "A song counts as played once you have listened to half of it."),
-                StatsSection.Stale => ("Nothing Neglected", $"Songs you have not listened to for {PlayHistoryStore.StaleAfterDays} days appear here."),
-                StatsSection.Never => ("Everything Played", "Every song in your library has been played at least once."),
+                StatsSection.Recent => (L.Get("Stats_EmptyRecentTitle"), L.Get("Stats_EmptyRecentDesc")),
+                StatsSection.Plays => (L.Get("Stats_EmptyPlaysTitle"), L.Get("Stats_EmptyPlaysDesc")),
+                StatsSection.Stale => (L.Get("Stats_EmptyStaleTitle"), L.Format("Stats_EmptyStaleDesc", PlayHistoryStore.StaleAfterDays)),
+                StatsSection.Never => (L.Get("Stats_EmptyNeverTitle"), L.Get("Stats_EmptyNeverDesc")),
                 _ => (string.Empty, string.Empty)
             };
             return;
@@ -136,38 +162,17 @@ public partial class StatsView : UserControl
     private string BuildCaption(PlayHistoryStore history, Track track)
     {
         int count = history.GetCount(track.Id);
-        string plays = count == 1 ? "1 play" : $"{count} plays";
+        string plays = L.PlaysCount(count);
         DateTimeOffset? last = history.GetLastPlayed(track.Id);
-        string? when = last is DateTimeOffset dt ? FormatRelative(dt) : null;
+        string? when = last is DateTimeOffset dt ? L.FormatRelativeTime(dt) : null;
+        string artist = L.DisplayArtist(track.Artist);
 
         return _section switch
         {
-            StatsSection.Recent or StatsSection.Stale => when is not null ? $"{when} · {track.Artist}" : track.Artist,
-            StatsSection.Plays => $"{plays} · {track.Artist}",
-            _ => track.Artist
+            StatsSection.Recent or StatsSection.Stale => when is not null ? $"{when} · {artist}" : artist,
+            StatsSection.Plays => $"{plays} · {artist}",
+            _ => artist
         };
-    }
-
-    private static string FormatRelative(DateTimeOffset utcTime)
-    {
-        var elapsed = DateTimeOffset.UtcNow - utcTime;
-        if (elapsed.TotalSeconds < 60) return "just now";
-        if (elapsed.TotalMinutes < 60)
-        {
-            int m = (int)elapsed.TotalMinutes;
-            return m == 1 ? "1 min ago" : $"{m} min ago";
-        }
-        if (elapsed.TotalHours < 24)
-        {
-            int h = (int)elapsed.TotalHours;
-            return h == 1 ? "1 hr ago" : $"{h} hr ago";
-        }
-        if (elapsed.TotalDays < 30)
-        {
-            int d = (int)elapsed.TotalDays;
-            return d == 1 ? "1 day ago" : $"{d} days ago";
-        }
-        return utcTime.ToLocalTime().ToString("MMM d, yyyy");
     }
 
     private void Tab_Checked(object sender, RoutedEventArgs e)
@@ -180,7 +185,11 @@ public partial class StatsView : UserControl
         Refresh();
     }
 
-    private void PlaysOrderCombo_SelectionChanged(object sender, SelectionChangedEventArgs e) => Refresh();
+    private void PlaysOrderCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressOrderSelection) return;
+        Refresh();
+    }
 
     private void PlayAll_Click(object sender, RoutedEventArgs e)
     {

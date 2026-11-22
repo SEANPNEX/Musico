@@ -45,6 +45,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.musico.core.AudioFileInfo
 import com.musico.core.AudioFileInfoReader
+import com.musico.i18n.AppStrings
+import com.musico.i18n.LocalStrings
 import com.musico.model.SearchField
 import com.musico.model.Track
 import com.musico.store.LibraryStore
@@ -66,6 +68,7 @@ fun SongInfoSheet(
     onQuickSearch: (query: String, field: SearchField) -> Unit,
     onDismiss: () -> Unit,
 ) {
+    val strings = LocalStrings.current
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -116,11 +119,11 @@ fun SongInfoSheet(
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
                 Text(
-                    text = "Song Info",
+                    text = strings.songInfo,
                     style = MaterialTheme.typography.titleLarge,
                 )
                 TextButton(onClick = onDismiss) {
-                    Text("Close")
+                    Text(strings.close)
                 }
             }
 
@@ -168,7 +171,7 @@ fun SongInfoSheet(
                                             artworkKey = newKey,
                                         )
                                     } else {
-                                        coverError = "Could not load selected image."
+                                        coverError = strings.couldNotLoadSelectedImage
                                     }
                                 }
                             }
@@ -180,7 +183,7 @@ fun SongInfoSheet(
                             modifier = Modifier.size(18.dp),
                         )
                         Spacer(Modifier.width(6.dp))
-                        Text("Change Cover")
+                        Text(strings.changeCover)
                     }
                     if (coverError != null) {
                         Text(
@@ -195,29 +198,29 @@ fun SongInfoSheet(
             OutlinedTextField(
                 value = title,
                 onValueChange = { title = it },
-                label = { Text("Title") },
+                label = { Text(strings.titleLabel) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
                 value = artist,
                 onValueChange = { artist = it },
-                label = { Text("Artist") },
+                label = { Text(strings.artistLabel) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
                 value = album,
                 onValueChange = { album = it },
-                label = { Text("Album") },
+                label = { Text(strings.albumLabel) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
                 value = genre,
                 onValueChange = { genre = it },
-                label = { Text("Genre") },
-                placeholder = { Text("Add genre") },
+                label = { Text(strings.genreLabel) },
+                placeholder = { Text(strings.addGenrePlaceholder) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
@@ -238,7 +241,7 @@ fun SongInfoSheet(
                         )
                     },
                 ) {
-                    Text("Save Changes")
+                    Text(strings.saveChanges)
                 }
             }
 
@@ -249,7 +252,7 @@ fun SongInfoSheet(
             if (artistValue.isNotEmpty() || albumValue.isNotEmpty() || genreValue.isNotEmpty()) {
                 Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     Text(
-                        text = "Quick Search",
+                        text = strings.quickSearch,
                         style = MaterialTheme.typography.labelMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
@@ -263,7 +266,7 @@ fun SongInfoSheet(
                                     onDismiss()
                                     onQuickSearch(artistValue, SearchField.ARTIST)
                                 },
-                                label = { Text("Artist: $artistValue", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                label = { Text("${strings.searchFieldArtist}: ${strings.displayArtist(artistValue)}", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 leadingIcon = {
                                     Icon(
                                         Icons.Rounded.Search,
@@ -279,7 +282,7 @@ fun SongInfoSheet(
                                     onDismiss()
                                     onQuickSearch(albumValue, SearchField.ALBUM)
                                 },
-                                label = { Text("Album: $albumValue", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                label = { Text("${strings.searchFieldAlbum}: ${strings.displayAlbum(albumValue)}", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 leadingIcon = {
                                     Icon(
                                         Icons.Rounded.Search,
@@ -295,7 +298,7 @@ fun SongInfoSheet(
                                     onDismiss()
                                     onQuickSearch(genreValue, SearchField.GENRE)
                                 },
-                                label = { Text("Genre: $genreValue", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                                label = { Text("${strings.searchFieldGenre}: $genreValue", maxLines = 1, overflow = TextOverflow.Ellipsis) },
                                 leadingIcon = {
                                     Icon(
                                         Icons.Rounded.Search,
@@ -313,22 +316,22 @@ fun SongInfoSheet(
 
             // Bottom Section: File & Playback Info
             Text(
-                text = "File & Playback Info",
+                text = strings.fileAndPlaybackInfo,
                 style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
             )
 
             val info = audioInfo
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                InfoRow("Precision", info?.bitDepth?.let { "$it-bit" } ?: "N/A")
-                InfoRow("Frequency", formatSampleRate(info?.sampleRateHz))
-                InfoRow("Bit Rate", info?.bitRateBps?.let { "${(it + 500L) / 1000L} kbps" } ?: "N/A")
-                InfoRow("File Size", formatFileSize(track.fileSize))
-                InfoRow("Length", formatTime(track.durationSec))
-                InfoRow("Sound Tracks", formatChannels(info?.channelCount))
-                InfoRow("Time Added", formatEpochDateTime(track.dateAddedEpochMs, fallback = "N/A"))
-                InfoRow("Time Edited", formatEpochDateTime(track.modifiedEpochMs, fallback = "N/A"))
-                InfoRow("Last Played", formatEpochDateTime(lastPlayedMs, fallback = "Never"))
-                InfoRow("Played Times", playCount.toString())
+                InfoRow(strings.infoPrecision, info?.bitDepth?.let { strings.bitDepthFormat(it) } ?: strings.notAvailable)
+                InfoRow(strings.infoFrequency, formatSampleRate(info?.sampleRateHz, strings))
+                InfoRow(strings.infoBitRate, info?.bitRateBps?.let { "${(it + 500L) / 1000L} kbps" } ?: strings.notAvailable)
+                InfoRow(strings.infoFileSize, formatFileSize(track.fileSize, strings))
+                InfoRow(strings.infoLength, formatTime(track.durationSec))
+                InfoRow(strings.infoSoundTracks, formatChannels(info?.channelCount, strings))
+                InfoRow(strings.infoTimeAdded, formatEpochDateTime(track.dateAddedEpochMs, fallback = strings.notAvailable, locale = strings.locale))
+                InfoRow(strings.infoTimeEdited, formatEpochDateTime(track.modifiedEpochMs, fallback = strings.notAvailable, locale = strings.locale))
+                InfoRow(strings.infoLastPlayed, formatEpochDateTime(lastPlayedMs, fallback = strings.neverLabel, locale = strings.locale))
+                InfoRow(strings.infoPlayedTimes, playCount.toString())
             }
 
             Spacer(Modifier.height(4.dp))
@@ -358,8 +361,8 @@ private fun InfoRow(label: String, value: String) {
     }
 }
 
-private fun formatSampleRate(hz: Int?): String {
-    if (hz == null || hz <= 0) return "N/A"
+private fun formatSampleRate(hz: Int?, strings: AppStrings): String {
+    if (hz == null || hz <= 0) return strings.notAvailable
     val khz = if (hz % 1000 == 0) {
         "${hz / 1000} kHz"
     } else {
@@ -368,17 +371,17 @@ private fun formatSampleRate(hz: Int?): String {
     return "$khz ($hz Hz)"
 }
 
-private fun formatChannels(channels: Int?): String {
-    if (channels == null || channels <= 0) return "N/A"
+private fun formatChannels(channels: Int?, strings: AppStrings): String {
+    if (channels == null || channels <= 0) return strings.notAvailable
     return when (channels) {
-        1 -> "1 (Mono)"
-        2 -> "2 (Stereo)"
-        else -> "$channels channels"
+        1 -> strings.channelsMono
+        2 -> strings.channelsStereo
+        else -> strings.channelsCount(channels)
     }
 }
 
-private fun formatFileSize(bytes: Long): String {
-    if (bytes <= 0L) return "N/A"
+private fun formatFileSize(bytes: Long, strings: AppStrings): String {
+    if (bytes <= 0L) return strings.notAvailable
     val kb = 1024.0
     val mb = kb * 1024.0
     val gb = mb * 1024.0
@@ -390,7 +393,7 @@ private fun formatFileSize(bytes: Long): String {
     }
 }
 
-private fun formatEpochDateTime(epochMs: Long?, fallback: String): String {
+private fun formatEpochDateTime(epochMs: Long?, fallback: String, locale: Locale): String {
     if (epochMs == null || epochMs <= 0L) return fallback
-    return DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT).format(Date(epochMs))
+    return DateFormat.getDateTimeInstance(DateFormat.MEDIUM, DateFormat.SHORT, locale).format(Date(epochMs))
 }

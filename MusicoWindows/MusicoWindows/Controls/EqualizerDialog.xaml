@@ -18,7 +18,7 @@
             <StackPanel>
                 <!-- Header -->
                 <Grid Margin="0,0,0,18">
-                    <TextBlock Text="Equalizer"
+                    <TextBlock Text="{DynamicResource Str_Equalizer_Title}"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="20"
                                FontWeight="SemiBold"
@@ -27,7 +27,7 @@
                     <Button Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE711;"
                             HorizontalAlignment="Right"
-                            ToolTip="Close"
+                            ToolTip="{DynamicResource Str_Common_Close}"
                             Click="Done_Click" />
                 </Grid>
 
@@ -47,7 +47,7 @@
                               Unchecked="EnabledToggle_Changed" />
 
                     <TextBlock Grid.Column="1"
-                               Text="Preset"
+                               Text="{DynamicResource Str_Equalizer_Preset}"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="13"
                                Foreground="{DynamicResource TextSecondaryBrush}"
@@ -73,7 +73,7 @@
                 <!-- Preamp Slider -->
                 <StackPanel x:Name="PreampPanel" Margin="0,0,0,22">
                     <TextBlock x:Name="PreampLabel"
-                               Text="Preamp 0 dB"
+                               Text="{DynamicResource Str_Equalizer_PreampDefault}"
                                FontFamily="{StaticResource Win10Font}"
                                FontSize="12"
                                Foreground="{DynamicResource TextSecondaryBrush}"
@@ -90,11 +90,11 @@
                 <!-- Footer -->
                 <Grid>
                     <Button Style="{StaticResource Win10ButtonStyle}"
-                            Content="Reset to Flat"
+                            Content="{DynamicResource Str_Equalizer_ResetToFlat}"
                             HorizontalAlignment="Left"
                             Click="Reset_Click" />
                     <Button Style="{StaticResource Win10PrimaryButtonStyle}"
-                            Content="Done"
+                            Content="{DynamicResource Str_Common_Done}"
                             Width="100"
                             HorizontalAlignment="Right"
                             Click="Done_Click" />

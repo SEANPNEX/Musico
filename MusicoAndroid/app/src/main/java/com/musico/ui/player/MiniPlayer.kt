@@ -27,6 +27,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.musico.audio.PlayerUiState
 import com.musico.core.ArtworkCache
+import com.musico.i18n.LocalStrings
 import com.musico.ui.components.ArtworkImage
 
 @Composable
@@ -39,6 +40,7 @@ fun MiniPlayer(
     modifier: Modifier = Modifier,
     applyNavBarPadding: Boolean = false
 ) {
+    val strings = LocalStrings.current
     val track = playerState.currentTrack ?: return
     val duration = playerState.durationSec.coerceAtLeast(0.01)
     val progress = (playerState.currentTimeSec / duration).toFloat().coerceIn(0f, 1f)
@@ -89,7 +91,7 @@ fun MiniPlayer(
                         overflow = TextOverflow.Ellipsis
                     )
                     Text(
-                        text = track.artist,
+                        text = strings.displayArtist(track.artist),
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 1,
@@ -99,13 +101,13 @@ fun MiniPlayer(
                 IconButton(onClick = onTogglePlayPause) {
                     Icon(
                         imageVector = if (playerState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
-                        contentDescription = if (playerState.isPlaying) "Pause" else "Play"
+                        contentDescription = if (playerState.isPlaying) strings.pause else strings.play
                     )
                 }
                 IconButton(onClick = onNext) {
                     Icon(
                         imageVector = Icons.Rounded.SkipNext,
-                        contentDescription = "Next"
+                        contentDescription = strings.next
                     )
                 }
             }

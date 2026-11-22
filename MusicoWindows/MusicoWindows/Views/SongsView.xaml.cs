@@ -9,6 +9,7 @@ using System.Windows.Media;
 using MusicoWindows.Controls;
 using MusicoWindows.Converters;
 using MusicoWindows.Core;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -47,17 +48,34 @@ public partial class SongsView : UserControl
     private SongSort _sort = SongSort.Title;
     private SearchField _searchField = SearchField.Keyword;
     private bool _isProgrammaticSearch;
+    private bool _suppressSortSelection;
     private List<Track> _displayedTracks = new();
 
     public SongsView()
     {
         InitializeComponent();
-        SortCombo.Items.Add("Title");
-        SortCombo.Items.Add("Artist");
-        SortCombo.Items.Add("Album");
-        SortCombo.Items.Add("Recently Added");
-        SortCombo.SelectedIndex = 0;
+        RebuildSortCombo(selectedIndex: 0);
         Unloaded += OnUnloaded;
+    }
+
+    private void RebuildSortCombo(int? selectedIndex = null)
+    {
+        int prev = selectedIndex ?? Math.Max(0, SortCombo.SelectedIndex);
+        _suppressSortSelection = true;
+        try
+        {
+            SortCombo.Items.Clear();
+            SortCombo.Items.Add(L.Get("Songs_SortTitle"));
+            SortCombo.Items.Add(L.Get("Songs_SortArtist"));
+            SortCombo.Items.Add(L.Get("Songs_SortAlbum"));
+            SortCombo.Items.Add(L.Get("Songs_SortRecentlyAdded"));
+            if (SortCombo.Items.Count > 0)
+                SortCombo.SelectedIndex = Math.Clamp(prev, 0, SortCombo.Items.Count - 1);
+        }
+        finally
+        {
+            _suppressSortSelection = false;
+        }
     }
 
     public void Bind(ViewContext ctx)
@@ -66,6 +84,7 @@ public partial class SongsView : UserControl
         _ctx = ctx;
         _ctx.Services.Library.PropertyChanged += OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged += OnPlayerChanged;
+        LocalizationManager.LanguageChanged += OnLanguageChanged;
         Refresh();
     }
 
@@ -95,9 +114,16 @@ public partial class SongsView : UserControl
 
     private void Detach()
     {
+        LocalizationManager.LanguageChanged -= OnLanguageChanged;
         if (_ctx is null) return;
         _ctx.Services.Library.PropertyChanged -= OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged -= OnPlayerChanged;
+    }
+
+    private void OnLanguageChanged(ResolvedLanguage _)
+    {
+        RebuildSortCombo();
+        Refresh();
     }
 
     private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e)
@@ -125,7 +151,7 @@ public partial class SongsView : UserControl
         SearchFieldChip.Visibility = showFieldChip ? Visibility.Visible : Visibility.Collapsed;
         if (showFieldChip)
         {
-            SearchFieldLabel.Text = _searchField.ToString();
+            SearchFieldLabel.Text = L.SearchFieldLabel(_searchField);
         }
 
         IReadOnlyList<Track> list;
@@ -147,7 +173,7 @@ public partial class SongsView : UserControl
         }
 
         _displayedTracks = list.ToList();
-        CountText.Text = $"{_displayedTracks.Count} {(_displayedTracks.Count == 1 ? "song" : "songs")}";
+        CountText.Text = L.SongsCount(_displayedTracks.Count);
         ActionBar.Visibility = string.IsNullOrEmpty(query) && _displayedTracks.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         if (_displayedTracks.Count == 0)
@@ -158,13 +184,13 @@ public partial class SongsView : UserControl
 
             if (lib.Tracks.Count == 0)
             {
-                EmptyTitleText.Text = "No Songs Yet";
-                EmptyDescText.Text = "Add a folder in Folders to build your music library.";
+                EmptyTitleText.Text = L.Get("Songs_EmptyTitle");
+                EmptyDescText.Text = L.Get("Songs_EmptyDesc");
             }
             else
             {
-                EmptyTitleText.Text = $"No Results for \"{query}\"";
-                EmptyDescText.Text = "Try searching for another song, artist, or album.";
+                EmptyTitleText.Text = L.Format("Songs_NoSearchResultsTitle", query);
+                EmptyDescText.Text = L.Get("Songs_NoSearchResultsDesc");
             }
             return;
         }
@@ -187,7 +213,9 @@ public partial class SongsView : UserControl
             {
                 Index = i,
                 Track = t,
-                Subtitle = _sort == SongSort.Album ? $"{t.Artist} — {t.Album}" : t.Artist,
+                Subtitle = _sort == SongSort.Album
+                    ? $"{L.DisplayArtist(t.Artist)} — {L.DisplayAlbum(t.Album)}"
+                    : L.DisplayArtist(t.Artist),
                 DurationText = TimeFormatter.Format(t.DurationSeconds),
                 ArtworkCache = lib.Artwork,
                 IsAvailable = lib.IsAvailable(t),
@@ -225,6 +253,7 @@ public partial class SongsView : UserControl
 
     private void SortCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
+        if (_suppressSortSelection) return;
         _sort = SortCombo.SelectedIndex switch
         {
             1 => SongSort.Artist,

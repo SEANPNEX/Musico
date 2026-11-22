@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Win32;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -27,6 +28,33 @@ public partial class LyricsPanel : UserControl
     public LyricsPanel()
     {
         InitializeComponent();
+        LocalizationManager.LanguageChanged += _ => RefreshLocalizedText();
+    }
+
+    private void RefreshLocalizedText()
+    {
+        var track = _services?.Player.CurrentTrack;
+        HeaderTitleText.Text = track?.Title ?? L.Get("Lyrics_Title");
+        UpdateSourceTagText();
+    }
+
+    private void UpdateSourceTagText()
+    {
+        if (_source is LyricsSource src)
+        {
+            SourceTagText.Text = src switch
+            {
+                LyricsSource.Imported => L.Get("Lyrics_SourceImported"),
+                LyricsSource.Sidecar => L.Get("Lyrics_SourceSidecar"),
+                LyricsSource.Embedded => L.Get("Lyrics_SourceEmbedded"),
+                _ => string.Empty
+            };
+            SourceTagText.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            SourceTagText.Visibility = Visibility.Collapsed;
+        }
     }
 
     public bool Embedded
@@ -75,7 +103,7 @@ public partial class LyricsPanel : UserControl
 
         _loadedTrackId = track?.Id;
         _activeLineIndex = null;
-        HeaderTitleText.Text = track?.Title ?? "Lyrics";
+        HeaderTitleText.Text = track?.Title ?? L.Get("Lyrics_Title");
         ImportButton.IsEnabled = track != null;
         EmptyImportButton.IsEnabled = track != null;
 
@@ -109,21 +137,7 @@ public partial class LyricsPanel : UserControl
         bool hasImported = hasTrack && _services!.Lyrics.HasImported(_services.Player.CurrentTrack!.Id);
         RemoveButton.Visibility = hasImported ? Visibility.Visible : Visibility.Collapsed;
 
-        if (_source is LyricsSource src)
-        {
-            SourceTagText.Text = src switch
-            {
-                LyricsSource.Imported => "From imported file",
-                LyricsSource.Sidecar => "From sidecar file next to song",
-                LyricsSource.Embedded => "From song tags",
-                _ => string.Empty
-            };
-            SourceTagText.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            SourceTagText.Visibility = Visibility.Collapsed;
-        }
+        UpdateSourceTagText();
 
         if (_lyrics is null || _lyrics.Lines.Count == 0)
         {
@@ -210,8 +224,8 @@ public partial class LyricsPanel : UserControl
 
         var dlg = new OpenFileDialog
         {
-            Title = "Import Lyrics",
-            Filter = "Lyrics Files (*.lrc;*.txt)|*.lrc;*.txt|All Files (*.*)|*.*"
+            Title = L.Get("Lyrics_ImportDialogTitle"),
+            Filter = L.Get("Lyrics_ImportDialogFilter")
         };
         if (dlg.ShowDialog() != true) return;
 
@@ -222,7 +236,7 @@ public partial class LyricsPanel : UserControl
         }
         catch (Exception ex)
         {
-            ErrorOccurred?.Invoke("Couldn't Import Lyrics", ex.Message);
+            ErrorOccurred?.Invoke(L.Get("Lyrics_CouldNotImportTitle"), ex.Message);
         }
     }
 

@@ -5,6 +5,9 @@ struct LibraryView: View {
     enum Section: String, CaseIterable, Identifiable {
         case songs = "Songs", albums = "Albums", artists = "Artists", playlists = "Playlists"
         var id: String { rawValue }
+
+        @MainActor
+        var localizedTitle: String { L10n.tr(rawValue) }
     }
 
     @AppStorage("librarySection") private var storedSection: Section = .songs
@@ -27,14 +30,14 @@ struct LibraryView: View {
         }
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Picker("Show", selection: Binding(
+                Picker(L10n.tr("Show"), selection: Binding(
                     get: { navigation.librarySection },
                     set: {
                         navigation.librarySection = $0
                         storedSection = $0
                     }
                 )) {
-                    ForEach(Section.allCases) { Text($0.rawValue).tag($0) }
+                    ForEach(Section.allCases) { Text($0.localizedTitle).tag($0) }
                 }
                 .pickerStyle(.segmented)
             }

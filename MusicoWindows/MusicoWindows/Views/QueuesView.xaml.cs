@@ -7,6 +7,7 @@ using System.Windows.Media;
 using MusicoWindows.Controls;
 using MusicoWindows.Converters;
 using MusicoWindows.Core;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -21,12 +22,28 @@ public partial class QueuesView : UserControl
     public QueuesView()
     {
         InitializeComponent();
-        foreach (var mode in TrackSorter.AllModes)
-        {
-            SortCombo.Items.Add(TrackSorter.Label(mode));
-        }
-        SortCombo.SelectedIndex = 0;
+        RebuildSortCombo(selectedIndex: 0);
         Unloaded += OnUnloaded;
+    }
+
+    private void RebuildSortCombo(int? selectedIndex = null)
+    {
+        int prev = selectedIndex ?? Math.Max(0, SortCombo.SelectedIndex);
+        _suppressSortSelection = true;
+        try
+        {
+            SortCombo.Items.Clear();
+            foreach (var mode in TrackSorter.AllModes)
+            {
+                SortCombo.Items.Add(TrackSorter.Label(mode));
+            }
+            if (SortCombo.Items.Count > 0)
+                SortCombo.SelectedIndex = Math.Clamp(prev, 0, SortCombo.Items.Count - 1);
+        }
+        finally
+        {
+            _suppressSortSelection = false;
+        }
     }
 
     public bool Compact
@@ -49,6 +66,7 @@ public partial class QueuesView : UserControl
         _ctx.Services.Queues.PropertyChanged += OnStoreChanged;
         _ctx.Services.Player.PropertyChanged += OnPlayerChanged;
         _ctx.Services.Library.PropertyChanged += OnStoreChanged;
+        LocalizationManager.LanguageChanged += OnLanguageChanged;
         Refresh();
     }
 
@@ -56,10 +74,17 @@ public partial class QueuesView : UserControl
 
     private void Detach()
     {
+        LocalizationManager.LanguageChanged -= OnLanguageChanged;
         if (_ctx is null) return;
         _ctx.Services.Queues.PropertyChanged -= OnStoreChanged;
         _ctx.Services.Player.PropertyChanged -= OnPlayerChanged;
         _ctx.Services.Library.PropertyChanged -= OnStoreChanged;
+    }
+
+    private void OnLanguageChanged(ResolvedLanguage _)
+    {
+        RebuildSortCombo();
+        Refresh();
     }
 
     private void OnStoreChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
@@ -79,7 +104,7 @@ public partial class QueuesView : UserControl
         var services = _ctx.Services;
         var active = services.Queues.Active;
 
-        SubtitleText.Text = $"{active.Name} · {active.TrackIds.Count} {(active.TrackIds.Count == 1 ? "song" : "songs")}";
+        SubtitleText.Text = $"{active.Name} · {L.SongsCount(active.TrackIds.Count)}";
         ClearButton.IsEnabled = active.TrackIds.Count > 0;
         DeleteButton.IsEnabled = services.Queues.Queues.Count > 1;
         SortCombo.IsEnabled = active.TrackIds.Count > 1;
@@ -109,11 +134,11 @@ public partial class QueuesView : UserControl
             bool isActive = q.Id == services.Queues.ActiveId;
             Guid qid = q.Id;
 
-            string summary = "Empty";
+            string summary = L.Get("Queues_EmptyChip");
             if (q.CurrentTrackId is string tid && services.Library.GetTrack(tid) is { } current)
             {
                 double pos = isActive ? services.Player.CurrentTimeSeconds : q.PositionSeconds;
-                summary = $"{q.TrackIds.Count} songs · {current.Title} ({TimeFormatter.Format(pos)})";
+                summary = $"{L.SongsCount(q.TrackIds.Count)} · {current.Title} ({TimeFormatter.Format(pos)})";
             }
 
             var chip = new Border
@@ -180,10 +205,10 @@ public partial class QueuesView : UserControl
             };
 
             var menu = new ContextMenu();
-            menu.Items.Add(TrackMenuHelper.CreateItem("Rename...", "\uE70F", () => PromptRename(q)));
+            menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Common_RenameEllipsis"), "\uE70F", () => PromptRename(q)));
             if (services.Queues.Queues.Count > 1)
             {
-                menu.Items.Add(TrackMenuHelper.CreateItem("Delete", "\uE74D", () => services.Player.DeleteQueue(qid)));
+                menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Common_Delete"), "\uE74D", () => services.Player.DeleteQueue(qid)));
             }
             chip.ContextMenu = menu;
 
@@ -213,7 +238,7 @@ public partial class QueuesView : UserControl
             {
                 var missing = new TextBlock
                 {
-                    Text = "Missing song",
+                    Text = L.Get("Queues_MissingSong"),
                     Margin = new Thickness(12, 8, 12, 8),
                     FontFamily = (FontFamily)FindResource("Win10Font"),
                     FontSize = 13
@@ -231,7 +256,7 @@ public partial class QueuesView : UserControl
             row.Bind(
                 services,
                 track,
-                track.Artist,
+                L.DisplayArtist(track.Artist),
                 isCurrent,
                 isPlaying,
                 isAvail,
@@ -240,7 +265,7 @@ public partial class QueuesView : UserControl
                 menu =>
                 {
                     menu.Items.Add(new Separator());
-                    menu.Items.Add(TrackMenuHelper.CreateItem("Remove from Queue", "\uE74D",
+                    menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Queues_RemoveFromQueue"), "\uE74D",
                         () => services.Player.RemoveFromQueue(index)));
                 },
                 _ctx.OpenSaveCloudTrack,
@@ -248,9 +273,9 @@ public partial class QueuesView : UserControl
 
             row.EnableDragReorder($"queue:{active.Id:D}", index, active.TrackIds.Count,
                 (from, to) => services.Player.MoveInQueue(from, to));
-            row.AddRowActionButton("\uE74A", "Move Up", () => services.Player.MoveInQueue(index, index - 1), index > 0);
-            row.AddRowActionButton("\uE74B", "Move Down", () => services.Player.MoveInQueue(index, index + 1), index < active.TrackIds.Count - 1);
-            row.AddRowActionButton("\uE711", "Remove from Queue", () => services.Player.RemoveFromQueue(index));
+            row.AddRowActionButton("\uE74A", L.Get("Common_MoveUp"), () => services.Player.MoveInQueue(index, index - 1), index > 0);
+            row.AddRowActionButton("\uE74B", L.Get("Common_MoveDown"), () => services.Player.MoveInQueue(index, index + 1), index < active.TrackIds.Count - 1);
+            row.AddRowActionButton("\uE711", L.Get("Queues_RemoveFromQueue"), () => services.Player.RemoveFromQueue(index));
 
             TracksStack.Children.Add(row);
         }
@@ -280,10 +305,10 @@ public partial class QueuesView : UserControl
         if (_ctx is null) return;
         Guid qid = queue.Id;
         _ctx.OpenTextPrompt(
-            "Rename Queue",
-            "Enter a new name for this queue.",
+            L.Get("Queues_RenameTitle"),
+            L.Get("Queues_RenameMessage"),
             queue.Name,
-            "Rename",
+            L.Get("Common_Rename"),
             name => _ctx.Services.Queues.Rename(qid, name));
     }
 
@@ -299,9 +324,9 @@ public partial class QueuesView : UserControl
         if (_ctx is null) return;
         var active = _ctx.Services.Queues.Active;
         _ctx.OpenConfirm(
-            $"Clear \"{active.Name}\"?",
-            $"Remove every song from \"{active.Name}\"? The queue itself will remain.",
-            "Clear Queue",
+            L.Format("Queues_ClearConfirmTitle", active.Name),
+            L.Format("Queues_ClearConfirmMessage", active.Name),
+            L.Get("Queues_ClearConfirmAction"),
             () => _ctx.Services.Player.ClearQueue(),
             true);
     }

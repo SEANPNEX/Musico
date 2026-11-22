@@ -19,11 +19,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -44,51 +46,60 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.musico.audio.PlayerUiState
+import com.musico.i18n.AppStrings
+import com.musico.i18n.LanguageStore
+import com.musico.i18n.LocalStrings
 import com.musico.model.PlayQueue
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
 import com.musico.store.PlayHistoryStore
 import com.musico.store.PlayHistoryUiState
 import com.musico.ui.components.EmptyState
+import com.musico.ui.components.LanguageDialog
 import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
-import com.musico.ui.components.formatListeningTime
-import com.musico.ui.components.formatRelativeTime
 import kotlin.random.Random
 
-enum class StatsSection(
-    val label: String,
-    val emptyTitle: String,
-    val emptyText: String
-) {
-    RECENT(
-        label = "Recent",
-        emptyTitle = "Nothing Played Yet",
-        emptyText = "Songs appear here a few seconds after they start playing."
-    ),
-    PLAYS(
-        label = "Plays",
-        emptyTitle = "No Plays Yet",
-        emptyText = "A song counts as played once you have listened to half of it."
-    ),
-    NOT_LATELY(
-        label = "Not Lately",
-        emptyTitle = "Nothing Neglected",
-        emptyText = "Songs you have not listened to for ${PlayHistoryStore.STALE_AFTER_DAYS} days appear here."
-    ),
-    NEVER(
-        label = "Never",
-        emptyTitle = "Everything Played",
-        emptyText = "Every song in your library has been played at least once."
-    )
+enum class StatsSection {
+    RECENT,
+    PLAYS,
+    NOT_LATELY,
+    NEVER;
+
+    fun label(strings: AppStrings): String = when (this) {
+        RECENT -> strings.statsSectionRecent
+        PLAYS -> strings.statsSectionPlays
+        NOT_LATELY -> strings.statsSectionNotLately
+        NEVER -> strings.statsSectionNever
+    }
+
+    fun emptyTitle(strings: AppStrings): String = when (this) {
+        RECENT -> strings.statsEmptyRecentTitle
+        PLAYS -> strings.statsEmptyPlaysTitle
+        NOT_LATELY -> strings.statsEmptyNotLatelyTitle
+        NEVER -> strings.statsEmptyEverythingPlayedTitle
+    }
+
+    fun emptyText(strings: AppStrings): String = when (this) {
+        RECENT -> strings.statsEmptyRecentDesc
+        PLAYS -> strings.statsEmptyPlaysDesc
+        NOT_LATELY -> strings.statsEmptyNotLatelyDesc(PlayHistoryStore.STALE_AFTER_DAYS)
+        NEVER -> strings.statsEmptyEverythingPlayedDesc
+    }
 }
 
-enum class CountOrder(val label: String) {
-    MOST("Most Played First"),
-    LEAST("Least Played First")
+enum class CountOrder {
+    MOST,
+    LEAST;
+
+    fun label(strings: AppStrings): String = when (this) {
+        MOST -> strings.countOrderMost
+        LEAST -> strings.countOrderLeast
+    }
 }
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -102,8 +113,11 @@ fun StatsScreen(
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
+    languageStore: LanguageStore? = null,
     modifier: Modifier = Modifier
 ) {
+    val strings = LocalStrings.current
+    var showLanguageDialog by remember { mutableStateOf(false) }
     var section by rememberSaveable { mutableStateOf(StatsSection.RECENT) }
     var countOrder by rememberSaveable { mutableStateOf(CountOrder.MOST) }
     var orderMenuExpanded by remember { mutableStateOf(false) }
@@ -130,7 +144,19 @@ fun StatsScreen(
         modifier = modifier,
         contentWindowInsets = WindowInsets(0),
         topBar = {
-            TopAppBar(title = { Text("Stats") })
+            TopAppBar(
+                title = { Text(strings.statsTitle) },
+                actions = {
+                    if (languageStore != null) {
+                        IconButton(onClick = { showLanguageDialog = true }) {
+                            Icon(
+                                imageVector = Icons.Rounded.Language,
+                                contentDescription = strings.languageTitle,
+                            )
+                        }
+                    }
+                }
+            )
         }
     ) { innerPadding ->
         LazyColumn(
@@ -154,19 +180,19 @@ fun StatsScreen(
                     ) {
                         StatTotalCell(
                             value = historyState.totalPlays.toString(),
-                            label = if (historyState.totalPlays == 1) "play" else "plays",
+                            label = strings.statPlaysLabel(historyState.totalPlays),
                             modifier = Modifier.weight(1f)
                         )
                         VerticalDivider(modifier = Modifier.fillMaxHeight())
                         StatTotalCell(
-                            value = formatListeningTime(historyState.totalSeconds),
-                            label = "listened",
+                            value = strings.formatListeningTime(historyState.totalSeconds),
+                            label = strings.statListenedLabel,
                             modifier = Modifier.weight(1f)
                         )
                         VerticalDivider(modifier = Modifier.fillMaxHeight())
                         StatTotalCell(
                             value = neverPlayedCount.toString(),
-                            label = "never played",
+                            label = strings.statNeverPlayedLabel,
                             modifier = Modifier.weight(1f)
                         )
                     }
@@ -189,7 +215,7 @@ fun StatsScreen(
                             ),
                             label = {
                                 Text(
-                                    text = item.label,
+                                    text = item.label(strings),
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -210,7 +236,7 @@ fun StatsScreen(
                         TextButton(onClick = { orderMenuExpanded = true }) {
                             Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = null)
                             Spacer(Modifier.padding(horizontal = 4.dp))
-                            Text(countOrder.label)
+                            Text(countOrder.label(strings))
                         }
                         DropdownMenu(
                             expanded = orderMenuExpanded,
@@ -218,7 +244,7 @@ fun StatsScreen(
                         ) {
                             CountOrder.entries.forEach { option ->
                                 DropdownMenuItem(
-                                    text = { Text(option.label) },
+                                    text = { Text(option.label(strings)) },
                                     trailingIcon = {
                                         if (countOrder == option) {
                                             Icon(Icons.Rounded.Check, contentDescription = null)
@@ -239,8 +265,8 @@ fun StatsScreen(
                 item(key = "empty_stats") {
                     EmptyState(
                         icon = Icons.Rounded.BarChart,
-                        title = section.emptyTitle,
-                        description = section.emptyText
+                        title = section.emptyTitle(strings),
+                        description = section.emptyText(strings)
                     )
                 }
             } else {
@@ -263,17 +289,18 @@ fun StatsScreen(
 
                 itemsIndexed(tracks, key = { _, t -> t.id }) { index, track ->
                     val count = historyStore.count(track.id)
-                    val plays = if (count == 1) "1 play" else "$count plays"
+                    val plays = strings.songPlaysCount(count)
                     val lastPlayedMs = historyStore.lastPlayed(track.id)
+                    val displayArtist = strings.displayArtist(track.artist)
                     val caption = when (section) {
                         StatsSection.RECENT, StatsSection.NOT_LATELY -> {
                             listOfNotNull(
-                                lastPlayedMs?.let { formatRelativeTime(it) },
-                                track.artist
+                                lastPlayedMs?.let { strings.formatRelativeTime(it) },
+                                displayArtist
                             ).joinToString(" · ")
                         }
-                        StatsSection.PLAYS -> "$plays · ${track.artist}"
-                        StatsSection.NEVER -> track.artist
+                        StatsSection.PLAYS -> "$plays · $displayArtist"
+                        StatsSection.NEVER -> displayArtist
                     }
 
                     TrackRow(
@@ -299,6 +326,15 @@ fun StatsScreen(
                 }
             }
         }
+    }
+
+    if (showLanguageDialog && languageStore != null) {
+        val currentLanguage by languageStore.language.collectAsStateWithLifecycle()
+        LanguageDialog(
+            current = currentLanguage,
+            onSelect = { languageStore.setLanguage(it) },
+            onDismiss = { showLanguageDialog = false },
+        )
     }
 }
 

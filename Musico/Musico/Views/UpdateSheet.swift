@@ -14,11 +14,11 @@ struct UpdateSheet: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .navigationTitle("Software Update")
+            .navigationTitle(L10n.tr("Software Update"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button("Done") { dismiss() }
+                    Button(L10n.tr("Done")) { dismiss() }
                 }
             }
         }
@@ -32,43 +32,43 @@ struct UpdateSheet: View {
             HStack(spacing: 12) {
                 ProgressView()
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Checking for updates…")
+                    Text(L10n.tr("Checking for updates…"))
                         .font(.headline)
-                    Text("Current version: \(updateManager.currentVersion.description)")
+                    Text(L10n.tr("Current version: %@", updateManager.currentVersion.description))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 }
             }
 
         case .upToDate:
-            Label("Musico is Up to Date", systemImage: "checkmark.circle.fill")
+            Label(L10n.tr("Musico is Up to Date"), systemImage: "checkmark.circle.fill")
                 .font(.headline)
                 .foregroundStyle(.green)
-            Text("Version \(updateManager.currentVersion.description) is the latest available release.")
+            Text(L10n.tr("Version %@ is the latest available release.", updateManager.currentVersion.description))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             HStack(spacing: 12) {
-                Button("Check Again") {
+                Button(L10n.tr("Check Again")) {
                     Task { await updateManager.checkForUpdates(manual: true) }
                 }
                 .buttonStyle(.borderedProminent)
-                Button("Open Release Page") {
+                Button(L10n.tr("Open Release Page")) {
                     Task { await updateManager.openReleasePage() }
                 }
                 .buttonStyle(.bordered)
             }
 
         case .available(let release):
-            releaseHeader(release, subtitle: "Update Available")
+            releaseHeader(release, subtitle: L10n.tr("Update Available"))
             releaseNotes(release)
             HStack(spacing: 12) {
-                Button("Download & Install Update") {
+                Button(L10n.tr("Download & Install Update")) {
                     Task { await updateManager.downloadAndOpenUpdate() }
                 }
                 .buttonStyle(.borderedProminent)
                 .disabled(release.dmgAsset == nil)
 
-                Button("Skip Version") {
+                Button(L10n.tr("Skip Version")) {
                     updateManager.skipVersion(release.version)
                     dismiss()
                 }
@@ -76,14 +76,14 @@ struct UpdateSheet: View {
 
                 Spacer()
 
-                Button("Open Release Page") {
+                Button(L10n.tr("Open Release Page")) {
                     Task { await updateManager.openReleasePage() }
                 }
                 .buttonStyle(.bordered)
             }
 
         case .downloading(let release, let progress):
-            releaseHeader(release, subtitle: "Downloading Update…")
+            releaseHeader(release, subtitle: L10n.tr("Downloading Update…"))
             releaseNotes(release)
             VStack(alignment: .leading, spacing: 6) {
                 if progress > 0 {
@@ -92,7 +92,7 @@ struct UpdateSheet: View {
                     ProgressView()
                 }
                 HStack {
-                    Text("Downloading \(release.dmgAsset?.name ?? "installer")…")
+                    Text(L10n.tr("Downloading %@…", release.dmgAsset?.name ?? L10n.tr("installer")))
                     Spacer()
                     if progress > 0 {
                         Text("\(Int((progress * 100).rounded()))%")
@@ -102,53 +102,53 @@ struct UpdateSheet: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-            Button("Open Release Page") {
+            Button(L10n.tr("Open Release Page")) {
                 Task { await updateManager.openReleasePage() }
             }
             .buttonStyle(.bordered)
 
         case .installing(let release):
-            releaseHeader(release, subtitle: "Installing Update…")
+            releaseHeader(release, subtitle: L10n.tr("Installing Update…"))
             HStack(spacing: 12) {
                 ProgressView()
-                Text("Replacing application bundle and relaunching Musico \(release.version.description)…")
+                Text(L10n.tr("Replacing application bundle and relaunching Musico %@…", release.version.description))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
             }
             releaseNotes(release)
 
         case .readyToInstall(let release, _):
-            releaseHeader(release, subtitle: "Ready to Install")
-            Label("Update verified and ready.", systemImage: "checkmark.circle.fill")
+            releaseHeader(release, subtitle: L10n.tr("Ready to Install"))
+            Label(L10n.tr("Update verified and ready."), systemImage: "checkmark.circle.fill")
                 .font(.subheadline)
                 .foregroundStyle(.green)
             releaseNotes(release)
             HStack(spacing: 12) {
-                Button("Install & Relaunch") {
+                Button(L10n.tr("Install & Relaunch")) {
                     Task { await updateManager.downloadAndOpenUpdate() }
                 }
                 .buttonStyle(.borderedProminent)
 
-                Button("Open Release Page") {
+                Button(L10n.tr("Open Release Page")) {
                     Task { await updateManager.openReleasePage() }
                 }
                 .buttonStyle(.bordered)
             }
 
         case .error(let message):
-            Label("Update Error", systemImage: "exclamationmark.triangle.fill")
+            Label(L10n.tr("Update Error"), systemImage: "exclamationmark.triangle.fill")
                 .font(.headline)
                 .foregroundStyle(.orange)
             Text(message)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
             HStack(spacing: 12) {
-                Button("Check Again") {
+                Button(L10n.tr("Check Again")) {
                     Task { await updateManager.checkForUpdates(manual: true) }
                 }
                 .buttonStyle(.borderedProminent)
 
-                Button("Open Release Page") {
+                Button(L10n.tr("Open Release Page")) {
                     Task { await updateManager.openReleasePage() }
                 }
                 .buttonStyle(.bordered)
@@ -172,9 +172,9 @@ struct UpdateSheet: View {
     }
 
     private func releaseNotes(_ release: ReleaseInfo) -> some View {
-        GroupBox("Release Notes") {
+        GroupBox(L10n.tr("Release Notes")) {
             ScrollView {
-                Text(release.body.isEmpty ? "No release notes provided." : release.body)
+                Text(release.body.isEmpty ? L10n.tr("No release notes provided.") : release.body)
                     .font(.callout)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .textSelection(.enabled)

@@ -100,15 +100,15 @@ enum UpdateError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .invalidResponse:
-            return "Received an invalid response from GitHub."
+            return L10n.trNonisolated("Received an invalid response from GitHub.")
         case .httpStatus(let code):
-            return "Update server returned HTTP \(code)."
+            return L10n.trNonisolated("Update server returned HTTP %@.", String(code))
         case .invalidReleaseTag(let tag):
-            return "Could not parse release version tag \"\(tag)\"."
+            return L10n.trNonisolated("Could not parse release version tag “%@”.", tag)
         case .noDmgAsset(let tag):
-            return "No macOS disk image (.dmg) was attached to release \(tag)."
+            return L10n.trNonisolated("No macOS disk image (.dmg) was attached to release %@.", tag)
         case .checksumMismatch(let expected, let actual):
-            return "SHA-256 verification failed (expected \(expected.prefix(12))…, got \(actual.prefix(12))…)."
+            return L10n.trNonisolated("SHA-256 verification failed (expected %@…, got %@…).", String(expected.prefix(12)), String(actual.prefix(12)))
         case .downloadFailed(let detail):
             return detail
         case .installFailed(let detail):
@@ -205,14 +205,14 @@ enum MacSelfUpdater {
     static func launchInstaller(dmgURL: URL, appBundleURL: URL, currentPID: pid_t) throws {
         guard !isSandboxed else {
             throw UpdateError.installFailed(
-                "This build is sandboxed and cannot replace itself automatically. Use \"Open Release Page\" or install the DMG build from GitHub Releases."
+                L10n.trNonisolated("This build is sandboxed and cannot replace itself automatically. Use \"Open Release Page\" or install the DMG build from GitHub Releases.")
             )
         }
         guard dmgURL.isFileURL, appBundleURL.isFileURL else {
-            throw UpdateError.installFailed("Invalid installer file or application bundle path.")
+            throw UpdateError.installFailed(L10n.trNonisolated("Invalid installer file or application bundle path."))
         }
         if appBundleURL.path.hasPrefix("/Volumes/") {
-            throw UpdateError.installFailed("Move Musico to your Applications folder first, then try updating again.")
+            throw UpdateError.installFailed(L10n.trNonisolated("Move Musico to your Applications folder first, then try updating again."))
         }
 
         let scriptURL = FileManager.default.temporaryDirectory
@@ -238,7 +238,7 @@ enum MacSelfUpdater {
         let status = posix_spawn(&childPID, "/bin/sh", nil, &attr, cArgs, cEnv)
         guard status == 0 else {
             try? FileManager.default.removeItem(at: scriptURL)
-            throw UpdateError.installFailed("Failed to launch updater helper (errno \(status)).")
+            throw UpdateError.installFailed(L10n.trNonisolated("Failed to launch updater helper (errno %@).", String(status)))
         }
     }
     #endif
@@ -589,7 +589,7 @@ final class UpdateManager {
                 let sumData = try await fetchData(shaAsset.browserDownloadURL)
                 guard let sumText = String(data: sumData, encoding: .utf8) else {
                     try? FileManager.default.removeItem(at: destinationURL)
-                    throw UpdateError.downloadFailed("Could not decode \(shaAsset.name).")
+                    throw UpdateError.downloadFailed(L10n.trNonisolated("Could not decode %@.", shaAsset.name))
                 }
                 if let expected = SHA256SumsParser.checksum(for: dmgAsset.name, in: sumText) {
                     let actual = try SHA256SumsParser.sha256Hex(ofFile: destinationURL)
@@ -621,7 +621,7 @@ final class UpdateManager {
         state = .readyToInstall(info, fileURL: dmgURL)
         let opened = await openURL(dmgURL)
         if !opened {
-            state = .error("Downloaded \(dmgURL.lastPathComponent), but could not open it automatically. Use \"Open Release Page\" to install manually.")
+            state = .error(L10n.tr("Downloaded %@, but could not open it automatically. Use \"Open Release Page\" to install manually.", dmgURL.lastPathComponent))
         }
     }
 

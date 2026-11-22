@@ -1,6 +1,7 @@
 using MusicoWindows.Audio;
 using MusicoWindows.Cloud;
 using MusicoWindows.Core;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 
 namespace MusicoWindows.Stores;
@@ -268,8 +269,8 @@ public sealed class PlayerController : ObservableStore, IDisposable
                 _engine.Unload();
                 IsPlaying = false;
                 ErrorMessage = failures > 1
-                    ? $"Playback stopped: {failures} songs in a row could not be played."
-                    : $"\"{CurrentTrack?.Title ?? "This song"}\" could not be played.";
+                    ? L.Format("Player_StoppedMultipleError", failures)
+                    : L.Format("Player_CouldNotPlaySong", CurrentTrack?.Title ?? L.Get("Player_ThisSong"));
                 UpdateSmtc(trackChanged: true);
                 return;
             }
@@ -377,8 +378,8 @@ public sealed class PlayerController : ObservableStore, IDisposable
                 IsPlaying = false;
                 IsLoadingCloud = false;
                 ErrorMessage = failures > 1
-                    ? $"Playback stopped: {failures} songs in a row could not be played."
-                    : $"\"{track.Title}\" could not be played.";
+                    ? L.Format("Player_StoppedMultipleError", failures)
+                    : L.Format("Player_CouldNotPlaySong", track.Title);
                 UpdateSmtc(trackChanged: true);
                 return false;
             }).ConfigureAwait(false);

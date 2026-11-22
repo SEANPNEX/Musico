@@ -1,0 +1,1166 @@
+package com.musico.i18n
+
+import androidx.compose.runtime.staticCompositionLocalOf
+import com.musico.model.LyricsSource
+import com.musico.model.SearchField
+import com.musico.model.TrackSortOrder
+import java.text.DateFormat
+import java.util.Date
+import java.util.Locale
+import java.util.concurrent.TimeUnit
+import kotlin.math.max
+
+interface AppStrings {
+    val locale: Locale
+
+    // Language switcher
+    val languageTitle: String
+    val languageFollowSystem: String
+    val languageEnglish: String
+    val languageSimplifiedChinese: String
+
+    // Common actions & labels
+    val ok: String
+    val cancel: String
+    val save: String
+    val done: String
+    val edit: String
+    val close: String
+    val delete: String
+    val rename: String
+    val renameEllipsis: String
+    val create: String
+    val add: String
+    val remove: String
+    val back: String
+    val play: String
+    val pause: String
+    val shuffle: String
+    val previous: String
+    val next: String
+    val repeat: String
+    val playing: String
+    val paused: String
+    val reorder: String
+    val moveUp: String
+    val moveDown: String
+    val unknownArtist: String
+    val unknownAlbum: String
+    val musicoFolderName: String
+    val nameLabel: String
+
+    // Top-level navigation & app errors
+    val tabFolders: String
+    val tabLibrary: String
+    val tabQueues: String
+    val tabStats: String
+    val lyrics: String
+    val queue: String
+    val closePanel: String
+    val playbackProblem: String
+    val thisSong: String
+    val playbackErrorGeneric: String
+
+    // Library sections
+    val libraryTitle: String
+    val sectionSongs: String
+    val sectionAlbums: String
+    val sectionArtists: String
+    val sectionPlaylists: String
+
+    // Folders screen
+    val foldersTitle: String
+    val folderFallbackTitle: String
+    val checkForUpdates: String
+    val addCloudFolder: String
+    val rescan: String
+    val sortFolder: String
+    val folderOptions: String
+    val saveToLocalFolderEllipsis: String
+    val updateFromCloud: String
+    val removeFolder: String
+    val locateAgainEllipsis: String
+    val addFolder: String
+    val couldNotAddFolderTitle: String
+    val couldNotAddFolderFallback: String
+    val couldNotRelocateFolderFallback: String
+    val errorDuplicateRoot: String
+    val errorNotAFolder: String
+    val errorUnsupportedCloudUrl: String
+    val removeLocalFolderConfirmMessage: String
+    val removeCloudFolderConfirmMessage: String
+    val cloudUrlLabel: String
+    val cloudUrlPlaceholder: String
+    val cloudUrlSupportingText: String
+    val cookieOptionalLabel: String
+    val cookiePlaceholder: String
+    val cloudPlaylistLoadErrorFallback: String
+    val addingEllipsis: String
+    val cloudPlaylistDefaultName: String
+    val noFolderSelected: String
+    val savingPlaylistTitle: String
+    val saveCompleteTitle: String
+    val saveToLocalFolderTitle: String
+    val folderNameLabel: String
+    val locationLabel: String
+    val chooseFolder: String
+    val addSavedFolderToLibrary: String
+    val addedSavedFolderWithCloudTracking: String
+    val couldNotAddFolderToLibraryFallback: String
+    val couldNotSavePlaylistFallback: String
+    val savedFolderLocationUnavailable: String
+    val couldNotUpdateFromCloudFallback: String
+    val updateCompleteTitle: String
+    val fetchingLatestCloudPlaylist: String
+    val lookingForMusic: String
+    val addYourMusicFoldersTitle: String
+    val addYourMusicFoldersDesc: String
+    val foldersFooterHint: String
+    val badgeYouTube: String
+    val badgeBilibili: String
+    val badgeYouTubeLocal: String
+    val badgeBilibiliLocal: String
+    val badgeCloudLocal: String
+    val folderUnavailable: String
+    val folderPermissionLost: String
+    val relocate: String
+    val noMusicHereTitle: String
+    val noMusicHereDesc: String
+
+    // Songs screen
+    val searchPlaceholder: String
+    val clearSearch: String
+    val sortSongs: String
+    val resetFieldFilter: String
+    val noSongsYetTitle: String
+    val noSongsYetDesc: String
+    val noSearchResultsDesc: String
+    val sortOptionTitle: String
+    val sortOptionArtist: String
+    val sortOptionAlbum: String
+    val sortOptionRecentlyAdded: String
+    val searchFieldKeyword: String
+    val searchFieldArtist: String
+    val searchFieldAlbum: String
+    val searchFieldGenre: String
+
+    // Albums & Artists
+    val noAlbumsYetTitle: String
+    val noAlbumsYetDesc: String
+    val albumOptions: String
+    val noArtistsYetTitle: String
+    val noArtistsYetDesc: String
+    val artistOptions: String
+
+    // Playlists
+    val newPlaylist: String
+    val favourites: String
+    val playlistOptions: String
+    val renamePlaylistTitle: String
+    val deletePlaylistConfirmMessage: String
+    val playlistFallbackTitle: String
+    val nothingHereYetTitle: String
+    val nothingHereYetDesc: String
+    val removeFromPlaylist: String
+    val removeFromPlaylistCd: String
+
+    // Queues
+    val queuesTitle: String
+    val clearThisQueue: String
+    val clearQueue: String
+    val clearQueueConfirmMessage: String
+    val newQueue: String
+    val emptyLabel: String
+    val sortQueue: String
+    val queueActions: String
+    val renameQueueEllipsis: String
+    val deleteQueue: String
+    val queueIsEmptyTitle: String
+    val queueIsEmptyDesc: String
+    val removeFromQueue: String
+    val removeFromQueueCd: String
+    val missingSong: String
+    val renameQueueTitle: String
+    val deleteQueueConfirmMessage: String
+
+    // Stats
+    val statsTitle: String
+    val statListenedLabel: String
+    val statNeverPlayedLabel: String
+    val statsSectionRecent: String
+    val statsSectionPlays: String
+    val statsSectionNotLately: String
+    val statsSectionNever: String
+    val statsEmptyRecentTitle: String
+    val statsEmptyRecentDesc: String
+    val statsEmptyPlaysTitle: String
+    val statsEmptyPlaysDesc: String
+    val statsEmptyNotLatelyTitle: String
+    val statsEmptyEverythingPlayedTitle: String
+    val statsEmptyEverythingPlayedDesc: String
+    val countOrderMost: String
+    val countOrderLeast: String
+
+    // Player & Sheets
+    val closePlayer: String
+    val songInfo: String
+    val addToFavourites: String
+    val removeFromFavourites: String
+    val equalizer: String
+    val sleepTimer: String
+    val nothingPlayingTitle: String
+    val pickSongFromLibrary: String
+    val notPlaying: String
+    val pickSongHint: String
+    val lyricsPanel: String
+    val queuePanel: String
+
+    // Lyrics
+    val lyricsOptions: String
+    val importFromFileEllipsis: String
+    val removeImportedLyrics: String
+    val noLyricsTitle: String
+    val noLyricsDesc: String
+    val couldNotImportLyricsTitle: String
+    val lyricsImportErrorFallback: String
+    val lyricsSourceImported: String
+    val lyricsSourceSidecar: String
+    val lyricsSourceEmbedded: String
+    val lyricsSourceImportedDesc: String
+    val lyricsSourceSidecarDesc: String
+    val lyricsSourceEmbeddedDesc: String
+
+    // Equalizer
+    val reset: String
+    val presetLabel: String
+    val eqCustom: String
+    val eqPresetFlat: String
+    val eqPresetBassBoost: String
+    val eqPresetTrebleBoost: String
+    val eqPresetRock: String
+    val eqPresetPop: String
+    val eqPresetJazz: String
+    val eqPresetClassical: String
+    val eqPresetVocal: String
+
+    // Sleep timer
+    val stopsAtEndOfSong: String
+    val cancelTimer: String
+    val stopPlayingAfter: String
+    val decreaseMinutes: String
+    val increaseMinutes: String
+    val start: String
+    val endOfCurrentSong: String
+
+    // Song info
+    val changeCover: String
+    val couldNotLoadSelectedImage: String
+    val titleLabel: String
+    val artistLabel: String
+    val albumLabel: String
+    val genreLabel: String
+    val addGenrePlaceholder: String
+    val saveChanges: String
+    val quickSearch: String
+    val fileAndPlaybackInfo: String
+    val infoPrecision: String
+    val infoFrequency: String
+    val infoBitRate: String
+    val infoFileSize: String
+    val infoLength: String
+    val infoSoundTracks: String
+    val infoTimeAdded: String
+    val infoTimeEdited: String
+    val infoLastPlayed: String
+    val infoPlayedTimes: String
+    val notAvailable: String
+    val neverLabel: String
+    val channelsMono: String
+    val channelsStereo: String
+
+    // Sort orders
+    val sortCustom: String
+    val sortNameAsc: String
+    val sortNameDesc: String
+    val sortDateModified: String
+    val sortMostPlayed: String
+    val sortLeastPlayed: String
+
+    // Track actions & export
+    val playNext: String
+    val addToQueue: String
+    val addToAnotherQueueEllipsis: String
+    val playInNewQueue: String
+    val addToPlaylistEllipsis: String
+    val newPlaylistEllipsis: String
+    val enterPlaylistNameHint: String
+    val trackOptions: String
+    val savingSongTitle: String
+    val saveFailedTitle: String
+    val songSavedTitle: String
+    val couldNotSaveSongFallback: String
+    val unknownError: String
+    val libraryUpdated: String
+
+    // Updater
+    val checkingForUpdates: String
+    val youreUpToDate: String
+    val updateAvailable: String
+    val downloadingUpdate: String
+    val readyToInstall: String
+    val updateError: String
+    val checkingGithubReleases: String
+    val openReleasePage: String
+    val packageVerifiedReady: String
+    val downloadAndInstall: String
+    val install: String
+    val checkAgain: String
+    val retry: String
+    val skipVersion: String
+    val later: String
+    val hide: String
+    val noReleaseNotes: String
+
+    // Formatted helpers
+    fun songCount(count: Int): String
+    fun restoreRemovedSubfolders(count: Int): String
+    fun removeFolderConfirmTitle(name: String): String
+    fun savingProgressWithTitle(done: Int, total: Int, title: String): String
+    fun savingProgress(done: Int, total: Int): String
+    fun savePlaylistSummary(saved: Int, total: Int, failed: Int): String
+    fun andMoreErrors(count: Int): String
+    fun updatingFolderTitle(name: String): String
+    fun checkingProgressWithTitle(done: Int, total: Int, title: String): String
+    fun checkingProgress(done: Int, total: Int): String
+    fun updateAddedSongsSummary(added: Int, skipped: Int): String
+    fun alreadyUpToDateSummary(skipped: Int): String
+    fun failedCountLine(failed: Int): String
+    fun readingScanProgress(done: Int, total: Int): String
+    fun noSearchResultsTitle(query: String): String
+    fun discPrefix(discNumber: Int): String
+    fun deleteItemConfirmTitle(name: String): String
+    fun clearQueueConfirmTitle(name: String): String
+    fun queueSummary(songCount: Int, trackTitle: String, timeStr: String): String
+    fun statPlaysLabel(count: Int): String
+    fun songPlaysCount(count: Int): String
+    fun statsEmptyNotLatelyDesc(staleDays: Int): String
+    fun queuePosition(indexOneBased: Int, total: Int): String
+    fun bandAccessibility(bandLabel: String, gainText: String): String
+    fun preampLabel(gainText: String): String
+    fun stopsIn(timeStr: String): String
+    fun minutesCount(minutes: Int): String
+    fun customMinutes(minutes: Int): String
+    fun bitDepthFormat(bits: Int): String
+    fun channelsCount(count: Int): String
+    fun downloadingTrack(title: String): String
+    fun savedAsFile(fileName: String): String
+    fun currentVersionLabel(version: String): String
+    fun musicoIsLatest(version: String): String
+    fun downloadingAssetProgress(name: String, percent: Int): String
+    fun downloadingAsset(name: String): String
+    fun playbackStoppedConsecutive(count: Int): String
+    fun playbackFailedTrack(title: String): String
+    fun formatListeningTime(totalSeconds: Double): String
+    fun formatRelativeTime(epochMs: Long, nowMs: Long = System.currentTimeMillis()): String
+
+    fun displayArtist(artist: String): String =
+        if (artist == "Unknown Artist") unknownArtist else artist
+
+    fun displayAlbum(album: String): String =
+        if (album == "Unknown Album") unknownAlbum else album
+
+    fun displayQueueName(name: String): String = name
+
+    fun searchFieldLabel(field: SearchField): String = when (field) {
+        SearchField.KEYWORD -> searchFieldKeyword
+        SearchField.ARTIST -> searchFieldArtist
+        SearchField.ALBUM -> searchFieldAlbum
+        SearchField.GENRE -> searchFieldGenre
+    }
+
+    fun sortOrderLabel(order: TrackSortOrder): String = when (order) {
+        TrackSortOrder.CUSTOM -> sortCustom
+        TrackSortOrder.NAME_ASC -> sortNameAsc
+        TrackSortOrder.NAME_DESC -> sortNameDesc
+        TrackSortOrder.DATE_MODIFIED -> sortDateModified
+        TrackSortOrder.MOST_PLAYED -> sortMostPlayed
+        TrackSortOrder.LEAST_PLAYED -> sortLeastPlayed
+    }
+
+    fun lyricsSourceBadge(source: LyricsSource): String = when (source) {
+        LyricsSource.IMPORTED -> lyricsSourceImported
+        LyricsSource.SIDECAR -> lyricsSourceSidecar
+        LyricsSource.EMBEDDED -> lyricsSourceEmbedded
+    }
+
+    fun lyricsSourceDescription(source: LyricsSource): String = when (source) {
+        LyricsSource.IMPORTED -> lyricsSourceImportedDesc
+        LyricsSource.SIDECAR -> lyricsSourceSidecarDesc
+        LyricsSource.EMBEDDED -> lyricsSourceEmbeddedDesc
+    }
+
+    fun eqPresetLabel(presetName: String?): String = when (presetName) {
+        null -> eqCustom
+        "Flat" -> eqPresetFlat
+        "Bass Boost" -> eqPresetBassBoost
+        "Treble Boost" -> eqPresetTrebleBoost
+        "Rock" -> eqPresetRock
+        "Pop" -> eqPresetPop
+        "Jazz" -> eqPresetJazz
+        "Classical" -> eqPresetClassical
+        "Vocal" -> eqPresetVocal
+        else -> presetName
+    }
+}
+
+object EnStrings : AppStrings {
+    override val locale: Locale = Locale.ENGLISH
+
+    override val languageTitle = "Language"
+    override val languageFollowSystem = "Follow System"
+    override val languageEnglish = "English"
+    override val languageSimplifiedChinese = "简体中文"
+
+    override val ok = "OK"
+    override val cancel = "Cancel"
+    override val save = "Save"
+    override val done = "Done"
+    override val edit = "Edit"
+    override val close = "Close"
+    override val delete = "Delete"
+    override val rename = "Rename"
+    override val renameEllipsis = "Rename…"
+    override val create = "Create"
+    override val add = "Add"
+    override val remove = "Remove"
+    override val back = "Back"
+    override val play = "Play"
+    override val pause = "Pause"
+    override val shuffle = "Shuffle"
+    override val previous = "Previous"
+    override val next = "Next"
+    override val repeat = "Repeat"
+    override val playing = "Playing"
+    override val paused = "Paused"
+    override val reorder = "Reorder"
+    override val moveUp = "Move up"
+    override val moveDown = "Move down"
+    override val unknownArtist = "Unknown Artist"
+    override val unknownAlbum = "Unknown Album"
+    override val musicoFolderName = "Musico Folder"
+    override val nameLabel = "Name"
+
+    override val tabFolders = "Folders"
+    override val tabLibrary = "Library"
+    override val tabQueues = "Queues"
+    override val tabStats = "Stats"
+    override val lyrics = "Lyrics"
+    override val queue = "Queue"
+    override val closePanel = "Close panel"
+    override val playbackProblem = "Playback Problem"
+    override val thisSong = "This song"
+    override val playbackErrorGeneric = "Playback error"
+
+    override val libraryTitle = "Library"
+    override val sectionSongs = "Songs"
+    override val sectionAlbums = "Albums"
+    override val sectionArtists = "Artists"
+    override val sectionPlaylists = "Playlists"
+
+    override val foldersTitle = "Folders"
+    override val folderFallbackTitle = "Folder"
+    override val checkForUpdates = "Check for Updates"
+    override val addCloudFolder = "Add Cloud Folder"
+    override val rescan = "Rescan"
+    override val sortFolder = "Sort folder"
+    override val folderOptions = "Folder options"
+    override val saveToLocalFolderEllipsis = "Save to Local Folder…"
+    override val updateFromCloud = "Update from Cloud"
+    override val removeFolder = "Remove Folder"
+    override val locateAgainEllipsis = "Locate Again…"
+    override val addFolder = "Add Folder"
+    override val couldNotAddFolderTitle = "Couldn’t Add Folder"
+    override val couldNotAddFolderFallback = "Could not add that folder."
+    override val couldNotRelocateFolderFallback = "Could not relocate that folder."
+    override val errorDuplicateRoot = "That folder is already in your library."
+    override val errorNotAFolder = "That location could not be opened as a folder."
+    override val errorUnsupportedCloudUrl = "Enter a valid YouTube or Bilibili playlist, collection, or video URL."
+    override val removeLocalFolderConfirmMessage = "Its songs leave your library, playlists and queues. The files themselves are not deleted."
+    override val removeCloudFolderConfirmMessage = "Its songs leave your library, playlists and queues."
+    override val cloudUrlLabel = "YouTube or Bilibili URL"
+    override val cloudUrlPlaceholder = "Playlist, collection, or video URL"
+    override val cloudUrlSupportingText = "Supports YouTube / YT Music playlists & videos, Bilibili favlists, collections, series, and BV / b23.tv links."
+    override val cookieOptionalLabel = "Cookie (optional)"
+    override val cookiePlaceholder = "Only needed for private playlists"
+    override val cloudPlaylistLoadErrorFallback = "Could not load that cloud playlist."
+    override val addingEllipsis = "Adding…"
+    override val cloudPlaylistDefaultName = "Cloud Playlist"
+    override val noFolderSelected = "No folder selected"
+    override val savingPlaylistTitle = "Saving Playlist"
+    override val saveCompleteTitle = "Save Complete"
+    override val saveToLocalFolderTitle = "Save to Local Folder"
+    override val folderNameLabel = "Folder Name"
+    override val locationLabel = "Location"
+    override val chooseFolder = "Choose Folder"
+    override val addSavedFolderToLibrary = "Add saved folder to Library"
+    override val addedSavedFolderWithCloudTracking = "Added saved folder to Library with cloud tracking."
+    override val couldNotAddFolderToLibraryFallback = "Could not add folder to Library."
+    override val couldNotSavePlaylistFallback = "Could not save playlist."
+    override val savedFolderLocationUnavailable = "Saved folder location is unavailable."
+    override val couldNotUpdateFromCloudFallback = "Could not update from cloud."
+    override val updateCompleteTitle = "Update Complete"
+    override val fetchingLatestCloudPlaylist = "Fetching latest cloud playlist…"
+    override val lookingForMusic = "Looking for music…"
+    override val addYourMusicFoldersTitle = "Add Your Music Folders"
+    override val addYourMusicFoldersDesc = "Pick folders on your device, add a YouTube or Bilibili playlist, or copy songs into the Musico Folder and pull down to rescan."
+    override val foldersFooterHint = "Add local folders, link YouTube or Bilibili playlists, or copy music into the Musico Folder and pull down to rescan."
+    override val badgeYouTube = "YouTube"
+    override val badgeBilibili = "Bilibili"
+    override val badgeYouTubeLocal = "YouTube · Local"
+    override val badgeBilibiliLocal = "Bilibili · Local"
+    override val badgeCloudLocal = "Cloud · Local"
+    override val folderUnavailable = "Unavailable — folder moved or disconnected"
+    override val folderPermissionLost = "Folder permission lost or moved."
+    override val relocate = "Relocate"
+    override val noMusicHereTitle = "No Music Here"
+    override val noMusicHereDesc = "Songs you add to this folder appear after a rescan."
+
+    override val searchPlaceholder = "Songs, artists, albums, genres"
+    override val clearSearch = "Clear search"
+    override val sortSongs = "Sort songs"
+    override val resetFieldFilter = "Reset field filter"
+    override val noSongsYetTitle = "No Songs Yet"
+    override val noSongsYetDesc = "Add a folder in the Folders tab to build your library."
+    override val noSearchResultsDesc = "Try searching for another song, artist, or album."
+    override val sortOptionTitle = "Title"
+    override val sortOptionArtist = "Artist"
+    override val sortOptionAlbum = "Album"
+    override val sortOptionRecentlyAdded = "Recently Added"
+    override val searchFieldKeyword = "Keyword"
+    override val searchFieldArtist = "Artist"
+    override val searchFieldAlbum = "Album"
+    override val searchFieldGenre = "Genre"
+
+    override val noAlbumsYetTitle = "No Albums Yet"
+    override val noAlbumsYetDesc = "Albums appear once your library has songs."
+    override val albumOptions = "Album options"
+    override val noArtistsYetTitle = "No Artists Yet"
+    override val noArtistsYetDesc = "Artists appear once your library has songs."
+    override val artistOptions = "Artist options"
+
+    override val newPlaylist = "New Playlist"
+    override val favourites = "Favourites"
+    override val playlistOptions = "Playlist options"
+    override val renamePlaylistTitle = "Rename Playlist"
+    override val deletePlaylistConfirmMessage = "This playlist will be removed. Your songs will stay in your library."
+    override val playlistFallbackTitle = "Playlist"
+    override val nothingHereYetTitle = "Nothing Here Yet"
+    override val nothingHereYetDesc = "Open the menu on a song, album or folder to add it."
+    override val removeFromPlaylist = "Remove from Playlist"
+    override val removeFromPlaylistCd = "Remove from playlist"
+
+    override val queuesTitle = "Queues"
+    override val clearThisQueue = "Clear This Queue"
+    override val clearQueue = "Clear Queue"
+    override val clearQueueConfirmMessage = "Your songs remain in your library."
+    override val newQueue = "New Queue"
+    override val emptyLabel = "Empty"
+    override val sortQueue = "Sort queue"
+    override val queueActions = "Queue actions"
+    override val renameQueueEllipsis = "Rename Queue…"
+    override val deleteQueue = "Delete Queue"
+    override val queueIsEmptyTitle = "Queue is Empty"
+    override val queueIsEmptyDesc = "This queue is empty. Tap a song in your library to fill it."
+    override val removeFromQueue = "Remove from Queue"
+    override val removeFromQueueCd = "Remove from queue"
+    override val missingSong = "Missing song"
+    override val renameQueueTitle = "Rename Queue"
+    override val deleteQueueConfirmMessage = "This queue will be deleted. Your songs remain in your library."
+
+    override val statsTitle = "Stats"
+    override val statListenedLabel = "listened"
+    override val statNeverPlayedLabel = "never played"
+    override val statsSectionRecent = "Recent"
+    override val statsSectionPlays = "Plays"
+    override val statsSectionNotLately = "Not Lately"
+    override val statsSectionNever = "Never"
+    override val statsEmptyRecentTitle = "Nothing Played Yet"
+    override val statsEmptyRecentDesc = "Songs appear here a few seconds after they start playing."
+    override val statsEmptyPlaysTitle = "No Plays Yet"
+    override val statsEmptyPlaysDesc = "A song counts as played once you have listened to half of it."
+    override val statsEmptyNotLatelyTitle = "Nothing Neglected"
+    override val statsEmptyEverythingPlayedTitle = "Everything Played"
+    override val statsEmptyEverythingPlayedDesc = "Every song in your library has been played at least once."
+    override val countOrderMost = "Most Played First"
+    override val countOrderLeast = "Least Played First"
+
+    override val closePlayer = "Close player"
+    override val songInfo = "Song Info"
+    override val addToFavourites = "Add to Favourites"
+    override val removeFromFavourites = "Remove from Favourites"
+    override val equalizer = "Equalizer"
+    override val sleepTimer = "Sleep Timer"
+    override val nothingPlayingTitle = "Nothing Playing"
+    override val pickSongFromLibrary = "Pick a song from your library."
+    override val notPlaying = "Not Playing"
+    override val pickSongHint = "Pick a song from your library"
+    override val lyricsPanel = "Lyrics panel"
+    override val queuePanel = "Queue panel"
+
+    override val lyricsOptions = "Lyrics options"
+    override val importFromFileEllipsis = "Import from File…"
+    override val removeImportedLyrics = "Remove Imported Lyrics"
+    override val noLyricsTitle = "No Lyrics"
+    override val noLyricsDesc = "Import a .lrc or .txt file for this song, or put one with the same name next to it."
+    override val couldNotImportLyricsTitle = "Couldn’t Import Lyrics"
+    override val lyricsImportErrorFallback = "That file could not be read as lyrics text."
+    override val lyricsSourceImported = "Imported"
+    override val lyricsSourceSidecar = "Sidecar"
+    override val lyricsSourceEmbedded = "Embedded"
+    override val lyricsSourceImportedDesc = "From the file you imported"
+    override val lyricsSourceSidecarDesc = "From a file next to the song"
+    override val lyricsSourceEmbeddedDesc = "From the song’s tags"
+
+    override val reset = "Reset"
+    override val presetLabel = "Preset"
+    override val eqCustom = "Custom"
+    override val eqPresetFlat = "Flat"
+    override val eqPresetBassBoost = "Bass Boost"
+    override val eqPresetTrebleBoost = "Treble Boost"
+    override val eqPresetRock = "Rock"
+    override val eqPresetPop = "Pop"
+    override val eqPresetJazz = "Jazz"
+    override val eqPresetClassical = "Classical"
+    override val eqPresetVocal = "Vocal"
+
+    override val stopsAtEndOfSong = "Stops at the end of this song"
+    override val cancelTimer = "Cancel Timer"
+    override val stopPlayingAfter = "Stop playing after"
+    override val decreaseMinutes = "Decrease minutes"
+    override val increaseMinutes = "Increase minutes"
+    override val start = "Start"
+    override val endOfCurrentSong = "End of current song"
+
+    override val changeCover = "Change Cover"
+    override val couldNotLoadSelectedImage = "Could not load selected image."
+    override val titleLabel = "Title"
+    override val artistLabel = "Artist"
+    override val albumLabel = "Album"
+    override val genreLabel = "Genre"
+    override val addGenrePlaceholder = "Add genre"
+    override val saveChanges = "Save Changes"
+    override val quickSearch = "Quick Search"
+    override val fileAndPlaybackInfo = "File & Playback Info"
+    override val infoPrecision = "Precision"
+    override val infoFrequency = "Frequency"
+    override val infoBitRate = "Bit Rate"
+    override val infoFileSize = "File Size"
+    override val infoLength = "Length"
+    override val infoSoundTracks = "Sound Tracks"
+    override val infoTimeAdded = "Time Added"
+    override val infoTimeEdited = "Time Edited"
+    override val infoLastPlayed = "Last Played"
+    override val infoPlayedTimes = "Played Times"
+    override val notAvailable = "N/A"
+    override val neverLabel = "Never"
+    override val channelsMono = "1 (Mono)"
+    override val channelsStereo = "2 (Stereo)"
+
+    override val sortCustom = "Custom"
+    override val sortNameAsc = "Name (A–Z)"
+    override val sortNameDesc = "Name (Z–A)"
+    override val sortDateModified = "Date Modified"
+    override val sortMostPlayed = "Most Played"
+    override val sortLeastPlayed = "Least Played"
+
+    override val playNext = "Play Next"
+    override val addToQueue = "Add to Queue"
+    override val addToAnotherQueueEllipsis = "Add to Another Queue…"
+    override val playInNewQueue = "Play in New Queue"
+    override val addToPlaylistEllipsis = "Add to Playlist…"
+    override val newPlaylistEllipsis = "New Playlist…"
+    override val enterPlaylistNameHint = "Enter a name for the playlist."
+    override val trackOptions = "Track options"
+    override val savingSongTitle = "Saving Song"
+    override val saveFailedTitle = "Save Failed"
+    override val songSavedTitle = "Song Saved"
+    override val couldNotSaveSongFallback = "Could not save song."
+    override val unknownError = "Unknown error"
+    override val libraryUpdated = "Library updated."
+
+    override val checkingForUpdates = "Checking for Updates"
+    override val youreUpToDate = "You’re Up to Date"
+    override val updateAvailable = "Update Available"
+    override val downloadingUpdate = "Downloading Update"
+    override val readyToInstall = "Ready to Install"
+    override val updateError = "Update Error"
+    override val checkingGithubReleases = "Checking GitHub Releases…"
+    override val openReleasePage = "Open Release Page"
+    override val packageVerifiedReady = "Package verified and ready to install."
+    override val downloadAndInstall = "Download & Install"
+    override val install = "Install"
+    override val checkAgain = "Check Again"
+    override val retry = "Retry"
+    override val skipVersion = "Skip Version"
+    override val later = "Later"
+    override val hide = "Hide"
+    override val noReleaseNotes = "No release notes provided."
+
+    override fun songCount(count: Int) = if (count == 1) "1 song" else "$count songs"
+    override fun restoreRemovedSubfolders(count: Int) = "Restore Removed Subfolders ($count)"
+    override fun removeFolderConfirmTitle(name: String) = "Remove “$name” from your library?"
+    override fun savingProgressWithTitle(done: Int, total: Int, title: String) =
+        "Saving $done of $total: $title"
+    override fun savingProgress(done: Int, total: Int) = "Saving $done of $total…"
+    override fun savePlaylistSummary(saved: Int, total: Int, failed: Int) = buildString {
+        append("Saved $saved of $total songs.")
+        if (failed > 0) append(" $failed failed.")
+    }
+    override fun andMoreErrors(count: Int) = "…and $count more."
+    override fun updatingFolderTitle(name: String) = "Updating “$name”"
+    override fun checkingProgressWithTitle(done: Int, total: Int, title: String) =
+        "Checking $done of $total: $title"
+    override fun checkingProgress(done: Int, total: Int) = "Checking $done of $total…"
+    override fun updateAddedSongsSummary(added: Int, skipped: Int): String {
+        val word = if (added == 1) "song" else "songs"
+        return "Added $added new $word ($skipped already saved)."
+    }
+    override fun alreadyUpToDateSummary(skipped: Int): String {
+        val word = if (skipped == 1) "song" else "songs"
+        return "Already up to date ($skipped $word)."
+    }
+    override fun failedCountLine(failed: Int) = "$failed failed."
+    override fun readingScanProgress(done: Int, total: Int) = "Reading $done of $total songs…"
+    override fun noSearchResultsTitle(query: String) = "No Results for “$query”"
+    override fun discPrefix(discNumber: Int) = "Disc $discNumber · "
+    override fun deleteItemConfirmTitle(name: String) = "Delete “$name”?"
+    override fun clearQueueConfirmTitle(name: String) = "Remove every song from “$name”?"
+    override fun queueSummary(songCount: Int, trackTitle: String, timeStr: String) =
+        "${songCount(songCount)} · $trackTitle at $timeStr"
+    override fun statPlaysLabel(count: Int) = if (count == 1) "play" else "plays"
+    override fun songPlaysCount(count: Int) = if (count == 1) "1 play" else "$count plays"
+    override fun statsEmptyNotLatelyDesc(staleDays: Int) =
+        "Songs you have not listened to for $staleDays days appear here."
+    override fun queuePosition(indexOneBased: Int, total: Int) = "$indexOneBased of $total"
+    override fun bandAccessibility(bandLabel: String, gainText: String) =
+        "$bandLabel hertz, $gainText decibels"
+    override fun preampLabel(gainText: String) = "Preamp $gainText dB"
+    override fun stopsIn(timeStr: String) = "Stops in $timeStr"
+    override fun minutesCount(minutes: Int) = "$minutes minutes"
+    override fun customMinutes(minutes: Int) = "Custom: $minutes minutes"
+    override fun bitDepthFormat(bits: Int) = "$bits-bit"
+    override fun channelsCount(count: Int) = "$count channels"
+    override fun downloadingTrack(title: String) = "Downloading $title…"
+    override fun savedAsFile(fileName: String) = "Saved as “$fileName”."
+    override fun currentVersionLabel(version: String) = "Current version: $version"
+    override fun musicoIsLatest(version: String) = "Musico $version is the latest version."
+    override fun downloadingAssetProgress(name: String, percent: Int) =
+        "Downloading $name ($percent%)…"
+    override fun downloadingAsset(name: String) = "Downloading $name…"
+    override fun playbackStoppedConsecutive(count: Int) =
+        "Playback stopped: $count songs in a row could not be played."
+    override fun playbackFailedTrack(title: String) = "“$title” could not be played."
+
+    override fun formatListeningTime(totalSeconds: Double): String {
+        if (!totalSeconds.isFinite() || totalSeconds <= 0.0) return "0 min"
+        val minutes = (totalSeconds / 60.0).toLong()
+        return if (minutes >= 60) {
+            "${minutes / 60} h ${minutes % 60} min"
+        } else {
+            "$minutes min"
+        }
+    }
+
+    override fun formatRelativeTime(epochMs: Long, nowMs: Long): String {
+        val diffMs = max(0L, nowMs - epochMs)
+        val minutes = TimeUnit.MILLISECONDS.toMinutes(diffMs)
+        if (minutes < 1L) return "Just now"
+        if (minutes < 60L) return "$minutes min ago"
+        val hours = TimeUnit.MILLISECONDS.toHours(diffMs)
+        if (hours < 24L) return "$hours hr ago"
+        val days = TimeUnit.MILLISECONDS.toDays(diffMs)
+        if (days < 7L) return "$days d ago"
+        return DateFormat.getDateInstance(DateFormat.MEDIUM, locale).format(Date(epochMs))
+    }
+}
+
+object ZhHansStrings : AppStrings {
+    override val locale: Locale = Locale.SIMPLIFIED_CHINESE
+
+    override val languageTitle = "语言"
+    override val languageFollowSystem = "跟随系统"
+    override val languageEnglish = "English"
+    override val languageSimplifiedChinese = "简体中文"
+
+    override val ok = "确定"
+    override val cancel = "取消"
+    override val save = "保存"
+    override val done = "完成"
+    override val edit = "编辑"
+    override val close = "关闭"
+    override val delete = "删除"
+    override val rename = "重命名"
+    override val renameEllipsis = "重命名…"
+    override val create = "创建"
+    override val add = "添加"
+    override val remove = "移除"
+    override val back = "返回"
+    override val play = "播放"
+    override val pause = "暂停"
+    override val shuffle = "随机播放"
+    override val previous = "上一首"
+    override val next = "下一首"
+    override val repeat = "循环模式"
+    override val playing = "正在播放"
+    override val paused = "已暂停"
+    override val reorder = "调整顺序"
+    override val moveUp = "上移"
+    override val moveDown = "下移"
+    override val unknownArtist = "未知艺术家"
+    override val unknownAlbum = "未知专辑"
+    override val musicoFolderName = "Musico 文件夹"
+    override val nameLabel = "名称"
+
+    override val tabFolders = "文件夹"
+    override val tabLibrary = "音乐库"
+    override val tabQueues = "队列"
+    override val tabStats = "统计"
+    override val lyrics = "歌词"
+    override val queue = "队列"
+    override val closePanel = "关闭面板"
+    override val playbackProblem = "播放出错"
+    override val thisSong = "此歌曲"
+    override val playbackErrorGeneric = "播放错误"
+
+    override val libraryTitle = "音乐库"
+    override val sectionSongs = "歌曲"
+    override val sectionAlbums = "专辑"
+    override val sectionArtists = "艺术家"
+    override val sectionPlaylists = "歌单"
+
+    override val foldersTitle = "文件夹"
+    override val folderFallbackTitle = "文件夹"
+    override val checkForUpdates = "检查更新"
+    override val addCloudFolder = "添加云端文件夹"
+    override val rescan = "重新扫描"
+    override val sortFolder = "文件夹排序"
+    override val folderOptions = "文件夹选项"
+    override val saveToLocalFolderEllipsis = "保存到本地文件夹…"
+    override val updateFromCloud = "从云端更新"
+    override val removeFolder = "移除文件夹"
+    override val locateAgainEllipsis = "重新定位…"
+    override val addFolder = "添加文件夹"
+    override val couldNotAddFolderTitle = "无法添加文件夹"
+    override val couldNotAddFolderFallback = "无法添加该文件夹。"
+    override val couldNotRelocateFolderFallback = "无法重新定位该文件夹。"
+    override val errorDuplicateRoot = "该文件夹已在你的音乐库中。"
+    override val errorNotAFolder = "无法将该位置作为文件夹打开。"
+    override val errorUnsupportedCloudUrl = "请输入有效的 YouTube 或 Bilibili 歌单、合集或视频链接。"
+    override val removeLocalFolderConfirmMessage = "其中的歌曲将从音乐库、歌单和队列中移除，但本地文件本身不会被删除。"
+    override val removeCloudFolderConfirmMessage = "其中的歌曲将从音乐库、歌单和队列中移除。"
+    override val cloudUrlLabel = "YouTube 或 Bilibili 链接"
+    override val cloudUrlPlaceholder = "歌单、合集或视频链接"
+    override val cloudUrlSupportingText = "支持 YouTube / YT Music 歌单与视频，以及 Bilibili 收藏夹、合集、系列和 BV / b23.tv 链接。"
+    override val cookieOptionalLabel = "Cookie（可选）"
+    override val cookiePlaceholder = "仅私密歌单需要填写"
+    override val cloudPlaylistLoadErrorFallback = "无法加载该云端歌单。"
+    override val addingEllipsis = "正在添加…"
+    override val cloudPlaylistDefaultName = "云端歌单"
+    override val noFolderSelected = "未选择文件夹"
+    override val savingPlaylistTitle = "正在保存歌单"
+    override val saveCompleteTitle = "保存完成"
+    override val saveToLocalFolderTitle = "保存到本地文件夹"
+    override val folderNameLabel = "文件夹名称"
+    override val locationLabel = "保存位置"
+    override val chooseFolder = "选择文件夹"
+    override val addSavedFolderToLibrary = "将保存的文件夹添加到音乐库"
+    override val addedSavedFolderWithCloudTracking = "已将保存的文件夹添加到音乐库并启用云端同步追踪。"
+    override val couldNotAddFolderToLibraryFallback = "无法将该文件夹添加到音乐库。"
+    override val couldNotSavePlaylistFallback = "无法保存歌单。"
+    override val savedFolderLocationUnavailable = "已保存的文件夹位置不可用。"
+    override val couldNotUpdateFromCloudFallback = "无法从云端更新。"
+    override val updateCompleteTitle = "更新完成"
+    override val fetchingLatestCloudPlaylist = "正在获取最新云端歌单…"
+    override val lookingForMusic = "正在查找音乐…"
+    override val addYourMusicFoldersTitle = "添加你的音乐文件夹"
+    override val addYourMusicFoldersDesc = "选择设备上的本地文件夹、添加 YouTube 或 Bilibili 歌单，或将歌曲复制到 Musico 文件夹后下拉重新扫描。"
+    override val foldersFooterHint = "添加本地文件夹、关联 YouTube 或 Bilibili 歌单，或将音乐复制到 Musico 文件夹后下拉重新扫描。"
+    override val badgeYouTube = "YouTube"
+    override val badgeBilibili = "Bilibili"
+    override val badgeYouTubeLocal = "YouTube · 本地"
+    override val badgeBilibiliLocal = "Bilibili · 本地"
+    override val badgeCloudLocal = "云端 · 本地"
+    override val folderUnavailable = "不可用 — 文件夹已移动或断开连接"
+    override val folderPermissionLost = "文件夹权限已失效或位置已移动。"
+    override val relocate = "重新定位"
+    override val noMusicHereTitle = "暂无音乐"
+    override val noMusicHereDesc = "添加到此文件夹的歌曲将在重新扫描后显示。"
+
+    override val searchPlaceholder = "搜索歌曲、艺术家、专辑、流派"
+    override val clearSearch = "清除搜索"
+    override val sortSongs = "排序方式"
+    override val resetFieldFilter = "重置字段筛选"
+    override val noSongsYetTitle = "暂无歌曲"
+    override val noSongsYetDesc = "在“文件夹”标签页中添加文件夹以建立你的音乐库。"
+    override val noSearchResultsDesc = "请尝试搜索其他歌曲、艺术家或专辑。"
+    override val sortOptionTitle = "歌曲标题"
+    override val sortOptionArtist = "艺术家"
+    override val sortOptionAlbum = "专辑"
+    override val sortOptionRecentlyAdded = "最近添加"
+    override val searchFieldKeyword = "关键词"
+    override val searchFieldArtist = "艺术家"
+    override val searchFieldAlbum = "专辑"
+    override val searchFieldGenre = "流派"
+
+    override val noAlbumsYetTitle = "暂无专辑"
+    override val noAlbumsYetDesc = "音乐库中有歌曲后，专辑将显示在此处。"
+    override val albumOptions = "专辑选项"
+    override val noArtistsYetTitle = "暂无艺术家"
+    override val noArtistsYetDesc = "音乐库中有歌曲后，艺术家将显示在此处。"
+    override val artistOptions = "艺术家选项"
+
+    override val newPlaylist = "新建歌单"
+    override val favourites = "我的收藏"
+    override val playlistOptions = "歌单选项"
+    override val renamePlaylistTitle = "重命名歌单"
+    override val deletePlaylistConfirmMessage = "该歌单将被移除，你的歌曲仍会保留在音乐库中。"
+    override val playlistFallbackTitle = "歌单"
+    override val nothingHereYetTitle = "暂无内容"
+    override val nothingHereYetDesc = "点击歌曲、专辑或文件夹上的菜单即可添加到此处。"
+    override val removeFromPlaylist = "从歌单移除"
+    override val removeFromPlaylistCd = "从歌单移除"
+
+    override val queuesTitle = "队列"
+    override val clearThisQueue = "清空此队列"
+    override val clearQueue = "清空队列"
+    override val clearQueueConfirmMessage = "你的歌曲仍会保留在音乐库中。"
+    override val newQueue = "新建队列"
+    override val emptyLabel = "空"
+    override val sortQueue = "队列排序"
+    override val queueActions = "队列操作"
+    override val renameQueueEllipsis = "重命名队列…"
+    override val deleteQueue = "删除队列"
+    override val queueIsEmptyTitle = "队列为空"
+    override val queueIsEmptyDesc = "当前队列为空，点击音乐库中的歌曲即可开始播放。"
+    override val removeFromQueue = "从队列移除"
+    override val removeFromQueueCd = "从队列移除"
+    override val missingSong = "歌曲缺失"
+    override val renameQueueTitle = "重命名队列"
+    override val deleteQueueConfirmMessage = "该队列将被删除，你的歌曲仍会保留在音乐库中。"
+
+    override val statsTitle = "统计"
+    override val statListenedLabel = "累计收听"
+    override val statNeverPlayedLabel = "从未播放"
+    override val statsSectionRecent = "最近"
+    override val statsSectionPlays = "播放次数"
+    override val statsSectionNotLately = "久未播放"
+    override val statsSectionNever = "从未播放"
+    override val statsEmptyRecentTitle = "暂无播放记录"
+    override val statsEmptyRecentDesc = "歌曲开始播放几秒后会显示在这里。"
+    override val statsEmptyPlaysTitle = "暂无播放统计"
+    override val statsEmptyPlaysDesc = "收听超过歌曲时长的一半即计为一次播放。"
+    override val statsEmptyNotLatelyTitle = "没有久未播放的歌曲"
+    override val statsEmptyEverythingPlayedTitle = "所有歌曲都已听过"
+    override val statsEmptyEverythingPlayedDesc = "音乐库中的每首歌曲都至少播放过一次。"
+    override val countOrderMost = "播放次数从高到低"
+    override val countOrderLeast = "播放次数从低到高"
+
+    override val closePlayer = "关闭播放器"
+    override val songInfo = "歌曲信息"
+    override val addToFavourites = "添加到收藏"
+    override val removeFromFavourites = "取消收藏"
+    override val equalizer = "均衡器"
+    override val sleepTimer = "睡眠定时"
+    override val nothingPlayingTitle = "当前无播放"
+    override val pickSongFromLibrary = "从音乐库中挑选一首歌曲吧。"
+    override val notPlaying = "未在播放"
+    override val pickSongHint = "从音乐库中选择歌曲"
+    override val lyricsPanel = "歌词面板"
+    override val queuePanel = "队列面板"
+
+    override val lyricsOptions = "歌词选项"
+    override val importFromFileEllipsis = "从文件导入…"
+    override val removeImportedLyrics = "移除已导入的歌词"
+    override val noLyricsTitle = "暂无歌词"
+    override val noLyricsDesc = "为这首歌导入 .lrc 或 .txt 文件，或在歌曲旁放置同名的歌词文件。"
+    override val couldNotImportLyricsTitle = "无法导入歌词"
+    override val lyricsImportErrorFallback = "无法将该文件读取为歌词文本。"
+    override val lyricsSourceImported = "已导入"
+    override val lyricsSourceSidecar = "同目录文件"
+    override val lyricsSourceEmbedded = "内嵌标签"
+    override val lyricsSourceImportedDesc = "来自你导入的文件"
+    override val lyricsSourceSidecarDesc = "来自歌曲旁的同目录文件"
+    override val lyricsSourceEmbeddedDesc = "来自歌曲内嵌标签"
+
+    override val reset = "重置"
+    override val presetLabel = "预设"
+    override val eqCustom = "自定义"
+    override val eqPresetFlat = "原声平坦"
+    override val eqPresetBassBoost = "低音增强"
+    override val eqPresetTrebleBoost = "高音增强"
+    override val eqPresetRock = "摇滚"
+    override val eqPresetPop = "流行"
+    override val eqPresetJazz = "爵士"
+    override val eqPresetClassical = "古典"
+    override val eqPresetVocal = "人声"
+
+    override val stopsAtEndOfSong = "将在当前歌曲结束后停止"
+    override val cancelTimer = "取消定时"
+    override val stopPlayingAfter = "定时停止播放"
+    override val decreaseMinutes = "减少分钟数"
+    override val increaseMinutes = "增加分钟数"
+    override val start = "开始"
+    override val endOfCurrentSong = "当前歌曲播放完毕后"
+
+    override val changeCover = "更换封面"
+    override val couldNotLoadSelectedImage = "无法加载所选图片。"
+    override val titleLabel = "标题"
+    override val artistLabel = "艺术家"
+    override val albumLabel = "专辑"
+    override val genreLabel = "流派"
+    override val addGenrePlaceholder = "添加流派"
+    override val saveChanges = "保存更改"
+    override val quickSearch = "快速搜索"
+    override val fileAndPlaybackInfo = "文件与播放信息"
+    override val infoPrecision = "采样精度"
+    override val infoFrequency = "采样率"
+    override val infoBitRate = "比特率"
+    override val infoFileSize = "文件大小"
+    override val infoLength = "时长"
+    override val infoSoundTracks = "声道数"
+    override val infoTimeAdded = "添加时间"
+    override val infoTimeEdited = "修改时间"
+    override val infoLastPlayed = "最近播放"
+    override val infoPlayedTimes = "播放次数"
+    override val notAvailable = "暂无"
+    override val neverLabel = "从未"
+    override val channelsMono = "1（单声道）"
+    override val channelsStereo = "2（立体声）"
+
+    override val sortCustom = "自定义"
+    override val sortNameAsc = "名称 (A–Z)"
+    override val sortNameDesc = "名称 (Z–A)"
+    override val sortDateModified = "修改日期"
+    override val sortMostPlayed = "播放最多"
+    override val sortLeastPlayed = "播放最少"
+
+    override val playNext = "下一首播放"
+    override val addToQueue = "添加到队列"
+    override val addToAnotherQueueEllipsis = "添加到其他队列…"
+    override val playInNewQueue = "在新队列中播放"
+    override val addToPlaylistEllipsis = "添加到歌单…"
+    override val newPlaylistEllipsis = "新建歌单…"
+    override val enterPlaylistNameHint = "请输入歌单名称。"
+    override val trackOptions = "歌曲选项"
+    override val savingSongTitle = "正在保存歌曲"
+    override val saveFailedTitle = "保存失败"
+    override val songSavedTitle = "歌曲已保存"
+    override val couldNotSaveSongFallback = "无法保存歌曲。"
+    override val unknownError = "未知错误"
+    override val libraryUpdated = "音乐库已更新。"
+
+    override val checkingForUpdates = "正在检查更新"
+    override val youreUpToDate = "已是最新版本"
+    override val updateAvailable = "发现新版本"
+    override val downloadingUpdate = "正在下载更新"
+    override val readyToInstall = "准备安装"
+    override val updateError = "更新出错"
+    override val checkingGithubReleases = "正在检查 GitHub Releases…"
+    override val openReleasePage = "打开发布页面"
+    override val packageVerifiedReady = "安装包已校验完成，可以安装。"
+    override val downloadAndInstall = "下载并安装"
+    override val install = "安装"
+    override val checkAgain = "重新检查"
+    override val retry = "重试"
+    override val skipVersion = "跳过此版本"
+    override val later = "稍后"
+    override val hide = "隐藏"
+    override val noReleaseNotes = "未提供更新说明。"
+
+    override fun songCount(count: Int) = "$count 首歌曲"
+    override fun restoreRemovedSubfolders(count: Int) = "恢复已移除的子文件夹 ($count)"
+    override fun removeFolderConfirmTitle(name: String) = "确定从音乐库中移除“$name”吗？"
+    override fun savingProgressWithTitle(done: Int, total: Int, title: String) =
+        "正在保存第 $done/$total 首：$title"
+    override fun savingProgress(done: Int, total: Int) = "正在保存第 $done/$total 首…"
+    override fun savePlaylistSummary(saved: Int, total: Int, failed: Int) = buildString {
+        append("已保存 $saved/$total 首歌曲。")
+        if (failed > 0) append(" $failed 首失败。")
+    }
+    override fun andMoreErrors(count: Int) = "…还有 $count 个错误。"
+    override fun updatingFolderTitle(name: String) = "正在更新“$name”"
+    override fun checkingProgressWithTitle(done: Int, total: Int, title: String) =
+        "正在检查第 $done/$total 首：$title"
+    override fun checkingProgress(done: Int, total: Int) = "正在检查第 $done/$total 首…"
+    override fun updateAddedSongsSummary(added: Int, skipped: Int) =
+        "已新增 $added 首歌曲（$skipped 首已存在）。"
+    override fun alreadyUpToDateSummary(skipped: Int) =
+        "已是最新（共 $skipped 首歌曲）。"
+    override fun failedCountLine(failed: Int) = "$failed 首失败。"
+    override fun readingScanProgress(done: Int, total: Int) = "正在读取第 $done/$total 首歌曲…"
+    override fun noSearchResultsTitle(query: String) = "未找到“$query”的结果"
+    override fun discPrefix(discNumber: Int) = "第 $discNumber 碟 · "
+    override fun deleteItemConfirmTitle(name: String) = "确定删除“$name”吗？"
+    override fun clearQueueConfirmTitle(name: String) = "确定清空“$name”中的所有歌曲吗？"
+    override fun queueSummary(songCount: Int, trackTitle: String, timeStr: String) =
+        "${songCount(songCount)} · $trackTitle（$timeStr）"
+    override fun statPlaysLabel(count: Int) = "次播放"
+    override fun songPlaysCount(count: Int) = "$count 次播放"
+    override fun statsEmptyNotLatelyDesc(staleDays: Int) =
+        "超过 $staleDays 天未收听的歌曲会显示在这里。"
+    override fun queuePosition(indexOneBased: Int, total: Int) = "第 $indexOneBased/$total 首"
+    override fun bandAccessibility(bandLabel: String, gainText: String) =
+        "$bandLabel 赫兹，$gainText 分贝"
+    override fun preampLabel(gainText: String) = "前级增益 $gainText dB"
+    override fun stopsIn(timeStr: String) = "将在 $timeStr 后停止"
+    override fun minutesCount(minutes: Int) = "$minutes 分钟"
+    override fun customMinutes(minutes: Int) = "自定义：$minutes 分钟"
+    override fun bitDepthFormat(bits: Int) = "$bits 位"
+    override fun channelsCount(count: Int) = "$count 声道"
+    override fun downloadingTrack(title: String) = "正在下载 $title…"
+    override fun savedAsFile(fileName: String) = "已保存为“$fileName”。"
+    override fun currentVersionLabel(version: String) = "当前版本：$version"
+    override fun musicoIsLatest(version: String) = "Musico $version 已是最新版本。"
+    override fun downloadingAssetProgress(name: String, percent: Int) =
+        "正在下载 $name ($percent%)…"
+    override fun downloadingAsset(name: String) = "正在下载 $name…"
+    override fun playbackStoppedConsecutive(count: Int) =
+        "播放已停止：连续 $count 首歌曲无法播放。"
+    override fun playbackFailedTrack(title: String) = "无法播放“$title”。"
+
+    private val defaultQueueRegex = Regex("^Queue (\\d+)$")
+
+    override fun displayQueueName(name: String): String {
+        val match = defaultQueueRegex.matchEntire(name) ?: return name
+        return "队列 ${match.groupValues[1]}"
+    }
+
+    override fun formatListeningTime(totalSeconds: Double): String {
+        if (!totalSeconds.isFinite() || totalSeconds <= 0.0) return "0 分钟"
+        val minutes = (totalSeconds / 60.0).toLong()
+        return if (minutes >= 60) {
+            "${minutes / 60} 小时 ${minutes % 60} 分钟"
+        } else {
+            "$minutes 分钟"
+        }
+    }
+
+    override fun formatRelativeTime(epochMs: Long, nowMs: Long): String {
+        val diffMs = max(0L, nowMs - epochMs)
+        val minutes = TimeUnit.MILLISECONDS.toMinutes(diffMs)
+        if (minutes < 1L) return "刚刚"
+        if (minutes < 60L) return "$minutes 分钟前"
+        val hours = TimeUnit.MILLISECONDS.toHours(diffMs)
+        if (hours < 24L) return "$hours 小时前"
+        val days = TimeUnit.MILLISECONDS.toDays(diffMs)
+        if (days < 7L) return "$days 天前"
+        return DateFormat.getDateInstance(DateFormat.MEDIUM, locale).format(Date(epochMs))
+    }
+}
+
+fun stringsFor(resolved: ResolvedLanguage): AppStrings = when (resolved) {
+    ResolvedLanguage.EN -> EnStrings
+    ResolvedLanguage.ZH_HANS -> ZhHansStrings
+}
+
+val LocalStrings = staticCompositionLocalOf<AppStrings> { EnStrings }

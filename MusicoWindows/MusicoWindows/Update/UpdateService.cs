@@ -6,6 +6,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using MusicoWindows.Core;
+using MusicoWindows.Localization;
 
 namespace MusicoWindows.Update;
 
@@ -229,7 +230,7 @@ public sealed class UpdateService : IDisposable
 
         Directory.CreateDirectory(_tempUpdatesDirectory);
 
-        progress?.Report(new UpdateProgress("Fetching SHA-256 checksums..."));
+        progress?.Report(new UpdateProgress(L.Get("Update_StageFetchingChecksums")));
         string checksumsText = await _http.GetStringAsync(checkResult.ChecksumAsset.DownloadUrl, ct).ConfigureAwait(false);
         var checksums = ParseSha256Sums(checksumsText);
 
@@ -244,7 +245,7 @@ public sealed class UpdateService : IDisposable
         await DownloadFileAsync(checkResult.SelectedAsset.DownloadUrl, downloadPath, checkResult.SelectedAsset.Size, progress, ct)
             .ConfigureAwait(false);
 
-        progress?.Report(new UpdateProgress("Verifying SHA-256 checksum..."));
+        progress?.Report(new UpdateProgress(L.Get("Update_StageVerifying")));
         string actualHash = await ComputeSha256HexAsync(downloadPath, ct).ConfigureAwait(false);
         if (!string.Equals(actualHash, expectedHash, StringComparison.OrdinalIgnoreCase))
         {
@@ -255,7 +256,7 @@ public sealed class UpdateService : IDisposable
 
         if (!checkResult.IsPortable)
         {
-            progress?.Report(new UpdateProgress("Starting installer..."));
+            progress?.Report(new UpdateProgress(L.Get("Update_StageStartingInstaller")));
             var psi = new ProcessStartInfo
             {
                 FileName = downloadPath,
@@ -269,7 +270,7 @@ public sealed class UpdateService : IDisposable
             return;
         }
 
-        progress?.Report(new UpdateProgress("Extracting portable update..."));
+        progress?.Report(new UpdateProgress(L.Get("Update_StageExtracting")));
         string stagedDir = Path.Combine(_tempUpdatesDirectory, "staged");
         if (Directory.Exists(stagedDir))
         {
@@ -284,7 +285,7 @@ public sealed class UpdateService : IDisposable
         await File.WriteAllTextAsync(scriptPath, scriptContent, new UTF8Encoding(encoderShouldEmitUTF8Identifier: false), ct)
             .ConfigureAwait(false);
 
-        progress?.Report(new UpdateProgress("Applying update and restarting..."));
+        progress?.Report(new UpdateProgress(L.Get("Update_StageApplying")));
         var psInfo = new ProcessStartInfo
         {
             FileName = "powershell.exe",
@@ -546,7 +547,7 @@ public sealed class UpdateService : IDisposable
 
         long? contentLength = response.Content.Headers.ContentLength ?? (fallbackTotalBytes > 0 ? fallbackTotalBytes : null);
         long totalRead = 0;
-        progress?.Report(new UpdateProgress("Downloading update...", 0, contentLength));
+        progress?.Report(new UpdateProgress(L.Get("Update_StageDownloading"), 0, contentLength));
 
         string tempPart = $"{destinationPath}.{Guid.NewGuid():N}.part";
         try
@@ -560,7 +561,7 @@ public sealed class UpdateService : IDisposable
                 {
                     await local.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
                     totalRead += read;
-                    progress?.Report(new UpdateProgress("Downloading update...", totalRead, contentLength));
+                    progress?.Report(new UpdateProgress(L.Get("Update_StageDownloading"), totalRead, contentLength));
                 }
                 await local.FlushAsync(ct).ConfigureAwait(false);
             }

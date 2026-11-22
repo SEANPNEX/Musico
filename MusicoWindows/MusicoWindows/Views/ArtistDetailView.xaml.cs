@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using MusicoWindows.Controls;
+using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -31,6 +32,7 @@ public partial class ArtistDetailView : UserControl
         _artist = artist;
         _ctx.Services.Library.PropertyChanged += OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged += OnPlayerChanged;
+        LocalizationManager.LanguageChanged += OnLanguageChanged;
         Refresh();
     }
 
@@ -38,10 +40,13 @@ public partial class ArtistDetailView : UserControl
 
     private void Detach()
     {
+        LocalizationManager.LanguageChanged -= OnLanguageChanged;
         if (_ctx is null) return;
         _ctx.Services.Library.PropertyChanged -= OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged -= OnPlayerChanged;
     }
+
+    private void OnLanguageChanged(ResolvedLanguage _) => Refresh();
 
     private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
 
@@ -59,8 +64,8 @@ public partial class ArtistDetailView : UserControl
         _tracks = lib.GetTracksByArtist(_artist);
         var albums = lib.GetAlbumsByArtist(_artist);
 
-        ArtistNameText.Text = _artist;
-        ArtistMetaText.Text = $"{albums.Count} {(albums.Count == 1 ? "album" : "albums")} · {_tracks.Count} {(_tracks.Count == 1 ? "song" : "songs")}";
+        ArtistNameText.Text = L.DisplayArtist(_artist);
+        ArtistMetaText.Text = $"{L.AlbumsCount(albums.Count)} · {L.SongsCount(_tracks.Count)}";
 
         AlbumsWrap.Children.Clear();
         if (albums.Count > 0)
@@ -89,7 +94,7 @@ public partial class ArtistDetailView : UserControl
             row.Bind(
                 _ctx.Services,
                 track,
-                track.Album,
+                L.DisplayAlbum(track.Album),
                 isCurrent,
                 isPlaying,
                 lib.IsAvailable(track),
