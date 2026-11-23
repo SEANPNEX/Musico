@@ -4,9 +4,9 @@
 
 [English](README.md) | **简体中文**
 
-[![CI](https://github.com/SEANPNEX/local_music_player/actions/workflows/ci.yml/badge.svg)](https://github.com/SEANPNEX/local_music_player/actions/workflows/ci.yml)
-[![Release](https://github.com/SEANPNEX/local_music_player/actions/workflows/release.yml/badge.svg)](https://github.com/SEANPNEX/local_music_player/actions/workflows/release.yml)
-[![Latest Release](https://img.shields.io/github/v/release/SEANPNEX/local_music_player)](https://github.com/SEANPNEX/local_music_player/releases/latest)
+[![CI](https://github.com/SEANPNEX/Musico/actions/workflows/ci.yml/badge.svg)](https://github.com/SEANPNEX/Musico/actions/workflows/ci.yml)
+[![Release](https://github.com/SEANPNEX/Musico/actions/workflows/release.yml/badge.svg)](https://github.com/SEANPNEX/Musico/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/SEANPNEX/Musico)](https://github.com/SEANPNEX/Musico/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **一款离线、超爱文件夹、支持多播放队列的本地音乐播放器——全平台 100% 原生开发，拒绝 Web 套壳！(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧**
@@ -51,7 +51,7 @@
 
 ## 📦 下载与安装
 
-前往 [**Releases**](https://github.com/SEANPNEX/local_music_player/releases/latest) 页面即可抱走最新版 `(｡・ω・｡)ﾉ♡`：
+前往 [**Releases**](https://github.com/SEANPNEX/Musico/releases/latest) 页面即可抱走最新版 `(｡・ω・｡)ﾉ♡`：
 
 - **Windows 10 / 11（x64，自带 .NET 8 — 无需额外装运行库）**：
   - **安装版**：运行 `MusicoWindows-<version>-win-x64-Setup.exe`，支持开始菜单/桌面快捷方式和干净卸载。

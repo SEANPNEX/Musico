@@ -300,22 +300,22 @@ class UpdateManagerTest {
               "draft": $draft,
               "prerelease": $prerelease,
               "body": ${jsonString(body)},
-              "html_url": "https://github.com/SEANPNEX/local_music_player/releases/tag/$tagName",
+              "html_url": "https://github.com/SEANPNEX/Musico/releases/tag/$tagName",
               "published_at": "2026-11-22T00:00:00Z",
               "assets": [
                 {
                   "name": "MusicoAndroid-$cleanVersion-unsigned.apk",
-                  "browser_download_url": "https://github.com/SEANPNEX/local_music_player/releases/download/$tagName/MusicoAndroid-$cleanVersion-unsigned.apk",
+                  "browser_download_url": "https://github.com/SEANPNEX/Musico/releases/download/$tagName/MusicoAndroid-$cleanVersion-unsigned.apk",
                   "size": 1000
                 },
                 {
                   "name": "MusicoAndroid-$cleanVersion.apk",
-                  "browser_download_url": "https://github.com/SEANPNEX/local_music_player/releases/download/$tagName/MusicoAndroid-$cleanVersion.apk",
+                  "browser_download_url": "https://github.com/SEANPNEX/Musico/releases/download/$tagName/MusicoAndroid-$cleanVersion.apk",
                   "size": 2000
                 },
                 {
                   "name": "SHA256SUMS.txt",
-                  "browser_download_url": "https://github.com/SEANPNEX/local_music_player/releases/download/$tagName/SHA256SUMS.txt",
+                  "browser_download_url": "https://github.com/SEANPNEX/Musico/releases/download/$tagName/SHA256SUMS.txt",
                   "size": 128
                 }
               ]

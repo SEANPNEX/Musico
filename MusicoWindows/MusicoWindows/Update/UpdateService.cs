@@ -16,8 +16,8 @@ namespace MusicoWindows.Update;
 /// </summary>
 public sealed class UpdateService : IDisposable
 {
-    public const string LatestReleaseUrl = "https://api.github.com/repos/SEANPNEX/local_music_player/releases/latest";
-    public const string ReleasesPageUrl = "https://github.com/SEANPNEX/local_music_player/releases";
+    public const string LatestReleaseUrl = "https://api.github.com/repos/SEANPNEX/Musico/releases/latest";
+    public const string ReleasesPageUrl = "https://github.com/SEANPNEX/Musico/releases";
 
     private readonly HttpClient _http;
     private readonly string _prefsPath;

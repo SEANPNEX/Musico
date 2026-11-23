@@ -400,9 +400,9 @@ class UpdateManager(
 
     companion object {
         const val LATEST_RELEASE_URL =
-            "https://api.github.com/repos/SEANPNEX/local_music_player/releases/latest"
+            "https://api.github.com/repos/SEANPNEX/Musico/releases/latest"
         const val RELEASES_PAGE_URL =
-            "https://github.com/SEANPNEX/local_music_player/releases"
+            "https://github.com/SEANPNEX/Musico/releases"
         private const val UPDATES_DIR_NAME = "updates"
         private const val APK_MIME_TYPE = "application/vnd.android.package-archive"
 

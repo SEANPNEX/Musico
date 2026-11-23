@@ -4,9 +4,9 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-[![CI](https://github.com/SEANPNEX/local_music_player/actions/workflows/ci.yml/badge.svg)](https://github.com/SEANPNEX/local_music_player/actions/workflows/ci.yml)
-[![Release](https://github.com/SEANPNEX/local_music_player/actions/workflows/release.yml/badge.svg)](https://github.com/SEANPNEX/local_music_player/actions/workflows/release.yml)
-[![Latest Release](https://img.shields.io/github/v/release/SEANPNEX/local_music_player)](https://github.com/SEANPNEX/local_music_player/releases/latest)
+[![CI](https://github.com/SEANPNEX/Musico/actions/workflows/ci.yml/badge.svg)](https://github.com/SEANPNEX/Musico/actions/workflows/ci.yml)
+[![Release](https://github.com/SEANPNEX/Musico/actions/workflows/release.yml/badge.svg)](https://github.com/SEANPNEX/Musico/actions/workflows/release.yml)
+[![Latest Release](https://img.shields.io/github/v/release/SEANPNEX/Musico)](https://github.com/SEANPNEX/Musico/releases/latest)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
 **An offline, folder-loving, multi-queue local music player — built 100% natively for every platform, zero web wrappers allowed! (ﾉ◕ヮ◕)ﾉ*:･ﾟ✧**
@@ -51,7 +51,7 @@
 
 ## 📦 Downloads & Installation
 
-Grab the latest builds from the [**Releases**](https://github.com/SEANPNEX/local_music_player/releases/latest) page `(｡・ω・｡)ﾉ♡`:
+Grab the latest builds from the [**Releases**](https://github.com/SEANPNEX/Musico/releases/latest) page `(｡・ω・｡)ﾉ♡`:
 
 - **Windows 10 / 11 (x64, self-contained .NET 8 — zero runtime setup!)**:
   - **Installer**: Run `MusicoWindows-<version>-win-x64-Setup.exe` for per-user install with Start Menu / Desktop shortcuts and clean uninstall.
