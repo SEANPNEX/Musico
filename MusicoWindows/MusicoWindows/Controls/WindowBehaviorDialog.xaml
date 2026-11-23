@@ -1,0 +1,64 @@
+<UserControl x:Class="MusicoWindows.Controls.WindowBehaviorDialog"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Visibility="Collapsed"
+             KeyboardNavigation.TabNavigation="Cycle"
+             KeyboardNavigation.ControlTabNavigation="Cycle"
+             KeyboardNavigation.DirectionalNavigation="Contained">
+    <Grid x:Name="BackdropGrid"
+          Background="{DynamicResource DialogOverlayBrush}"
+          MouseDown="Overlay_MouseDown">
+        <Border x:Name="DialogCard"
+                MaxWidth="440"
+                Margin="24"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Center"
+                Background="{DynamicResource DialogSurfaceBrush}"
+                BorderBrush="{DynamicResource ControlBorderBrush}"
+                BorderThickness="1"
+                Padding="24"
+                MouseDown="Card_MouseDown">
+            <ScrollViewer VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <TextBlock x:Name="TitleText"
+                               FontSize="18" FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               TextWrapping="Wrap" Margin="0,0,0,10" />
+                    <TextBlock x:Name="MessageText"
+                               FontSize="13"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap" Margin="0,0,0,20" />
+                    <RadioButton x:Name="TrayOption"
+                                 GroupName="WindowCloseBehavior"
+                                 Foreground="{DynamicResource TextPrimaryBrush}"
+                                 FontSize="13" Margin="0,0,0,16">
+                        <TextBlock Text="{DynamicResource Str_WindowBehavior_MinimizeToTray}"
+                                   TextWrapping="Wrap" />
+                    </RadioButton>
+                    <RadioButton x:Name="ExitOption"
+                                 GroupName="WindowCloseBehavior"
+                                 Foreground="{DynamicResource TextPrimaryBrush}"
+                                 FontSize="13" Margin="0,0,0,24">
+                        <TextBlock Text="{DynamicResource Str_WindowBehavior_Exit}"
+                                   TextWrapping="Wrap" />
+                    </RadioButton>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="ConfirmButton" Grid.Column="0"
+                                Style="{StaticResource Win10PrimaryButtonStyle}"
+                                Content="{DynamicResource Str_WindowBehavior_OK}"
+                                IsDefault="True" Click="Confirm_Click" />
+                        <Button x:Name="CancelButton" Grid.Column="2"
+                                Style="{StaticResource Win10ButtonStyle}"
+                                Content="{DynamicResource Str_Common_Cancel}"
+                                Click="Cancel_Click" />
+                    </Grid>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</UserControl>
