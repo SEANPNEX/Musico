@@ -9,6 +9,7 @@ using System.Windows.Media;
 using Microsoft.Win32;
 using MusicoWindows.Controls;
 using MusicoWindows.Core;
+using MusicoWindows.Extensions;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
@@ -210,14 +211,11 @@ public partial class FoldersView : UserControl
 
             var icon = new TextBlock
             {
-                Text = root.Kind switch
-                {
-                    RootKind.AppFolder => "\uE8D6",
-                    RootKind.CloudYouTube => "\uE753",
-                    RootKind.CloudBilibili => "\uE753",
-                    RootKind.CloudGoogleDrive => "\uE753",
-                    _ => "\uE8B7"
-                },
+                Text = root.Kind == RootKind.AppFolder
+                    ? "\uE8D6"
+                    : root.IsCloud
+                        ? "\uE753"
+                        : "\uE8B7",
                 FontFamily = (FontFamily)FindResource("Win10GlyphFont"),
                 FontSize = 20,
                 VerticalAlignment = VerticalAlignment.Center
@@ -240,7 +238,7 @@ public partial class FoldersView : UserControl
 
             if (root.IsCloud || root.IsCloudTrackedLocal)
             {
-                titleRow.Children.Add(CreateCloudBadge(root.EffectiveCloudKind ?? root.Kind, isLocal: !root.IsCloud));
+                titleRow.Children.Add(CreateCloudBadge(root.EffectiveProviderId, root.EffectiveCloudKind ?? root.Kind, isLocal: !root.IsCloud));
             }
 
             string locationDisplay = root.IsCloud
@@ -258,7 +256,9 @@ public partial class FoldersView : UserControl
                     ? (syncSuffix is not null
                         ? $"{L.SongsCount(count)} · {syncSuffix} · {locationDisplay}"
                         : $"{L.SongsCount(count)} · {locationDisplay}")
-                    : L.Get("Folders_Unavailable"),
+                    : root.Kind == RootKind.CloudExtension
+                        ? L.Get("Folders_ExtensionUnavailable")
+                        : L.Get("Folders_Unavailable"),
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 12,
                 TextTrimming = TextTrimming.CharacterEllipsis,
@@ -286,6 +286,21 @@ public partial class FoldersView : UserControl
                 };
                 actions.Children.Add(locateBtn);
             }
+            else if (!available && root.Kind == RootKind.CloudExtension)
+            {
+                var extBtn = new Button
+                {
+                    Content = L.Get("Folders_ManageExtensions"),
+                    Style = (Style)FindResource("Win10ButtonStyle"),
+                    Margin = new Thickness(0, 0, 8, 0)
+                };
+                extBtn.Click += (_, e) =>
+                {
+                    e.Handled = true;
+                    _ctx.OpenExtensions?.Invoke();
+                };
+                actions.Children.Add(extBtn);
+            }
 
             if (root.IsCloud)
             {
@@ -294,7 +309,7 @@ public partial class FoldersView : UserControl
                     Style = (Style)FindResource("Win10ButtonStyle"),
                     ToolTip = L.Get("Folders_SaveCloudTooltip"),
                     Margin = new Thickness(0, 0, 8, 0),
-                    IsEnabled = count > 0
+                    IsEnabled = count > 0 && available
                 };
                 var saveContent = new StackPanel { Orientation = Orientation.Horizontal };
                 saveContent.Children.Add(new TextBlock
@@ -543,9 +558,14 @@ public partial class FoldersView : UserControl
         SortCombo.IsEnabled = directTracks.Count > 1;
         PlayFolderButton.IsEnabled = allTracksUnder.Count > 0;
         ShuffleFolderButton.IsEnabled = allTracksUnder.Count > 0;
-        SaveCloudFolderButton.IsEnabled = root.IsCloud && allTracksUnder.Count > 0;
+        SaveCloudFolderButton.IsEnabled = root.IsCloud && lib.IsAvailable(root) && allTracksUnder.Count > 0;
 
         ContentStack.Children.Clear();
+
+        if (root.Kind == RootKind.CloudExtension && !lib.IsAvailable(root))
+        {
+            ContentStack.Children.Add(BuildExtensionUnavailableBanner(root));
+        }
 
         if (allTracksUnder.Count == 0 && subfolders.Count == 0)
         {
@@ -634,7 +654,7 @@ public partial class FoldersView : UserControl
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 subTitlePanel.Children.Add(nameTb);
-                subTitlePanel.Children.Add(CreateCloudBadge(subTracking!.CloudKind, isLocal: true));
+                subTitlePanel.Children.Add(CreateCloudBadge(subTracking!.ResolvedProviderId, subTracking.CloudKind, isLocal: true));
                 titleElement = subTitlePanel;
             }
             else
@@ -993,7 +1013,78 @@ public partial class FoldersView : UserControl
             });
     }
 
-    private Border CreateCloudBadge(RootKind cloudKind, bool isLocal)
+    private Border BuildExtensionUnavailableBanner(LibraryRoot root)
+    {
+        string providerLabel = CloudProviderRegistry.ResolveDisplayLabel(
+            _ctx?.Services.CloudProviders,
+            root.EffectiveProviderId,
+            root.Kind);
+
+        var banner = new Border
+        {
+            Margin = new Thickness(0, 0, 0, 14),
+            Padding = new Thickness(14, 12, 14, 12),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(0)
+        };
+        banner.SetResourceReference(Border.BackgroundProperty, "WarningBannerBrush");
+        banner.SetResourceReference(Border.BorderBrushProperty, "WarningTextBrush");
+
+        var grid = new Grid();
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(28) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var warnGlyph = new TextBlock
+        {
+            Text = "\uE7BA",
+            FontFamily = (FontFamily)FindResource("Win10GlyphFont"),
+            FontSize = 17,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 2, 0, 0)
+        };
+        warnGlyph.SetResourceReference(TextBlock.ForegroundProperty, "WarningTextBrush");
+        Grid.SetColumn(warnGlyph, 0);
+
+        var textPanel = new StackPanel { Margin = new Thickness(6, 0, 12, 0), VerticalAlignment = VerticalAlignment.Center };
+        var titleTb = new TextBlock
+        {
+            Text = L.Format("Folders_ExtensionBannerTitle", providerLabel),
+            FontFamily = (FontFamily)FindResource("Win10Font"),
+            FontSize = 13,
+            FontWeight = FontWeights.SemiBold
+        };
+        titleTb.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
+        var descTb = new TextBlock
+        {
+            Text = L.Get("Folders_ExtensionBannerDesc"),
+            FontFamily = (FontFamily)FindResource("Win10Font"),
+            FontSize = 12,
+            TextWrapping = TextWrapping.Wrap,
+            Margin = new Thickness(0, 2, 0, 0)
+        };
+        descTb.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+        textPanel.Children.Add(titleTb);
+        textPanel.Children.Add(descTb);
+        Grid.SetColumn(textPanel, 1);
+
+        var manageBtn = new Button
+        {
+            Style = (Style)FindResource("Win10ButtonStyle"),
+            Content = L.Get("Folders_ManageExtensions"),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        manageBtn.Click += (_, _) => _ctx?.OpenExtensions?.Invoke();
+        Grid.SetColumn(manageBtn, 2);
+
+        grid.Children.Add(warnGlyph);
+        grid.Children.Add(textPanel);
+        grid.Children.Add(manageBtn);
+        banner.Child = grid;
+        return banner;
+    }
+
+    private Border CreateCloudBadge(string? providerId, RootKind cloudKind, bool isLocal)
     {
         var badge = new Border
         {
@@ -1006,12 +1097,10 @@ public partial class FoldersView : UserControl
         badge.SetResourceReference(Border.BackgroundProperty, "AccentSubtleBrush");
         badge.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
 
-        string cloudName = cloudKind switch
-        {
-            RootKind.CloudBilibili => "Bilibili",
-            RootKind.CloudGoogleDrive => "Google Drive",
-            _ => "YouTube"
-        };
+        string cloudName = CloudProviderRegistry.ResolveDisplayLabel(
+            _ctx?.Services.CloudProviders,
+            providerId,
+            cloudKind);
         var badgeText = new TextBlock
         {
             Text = isLocal ? L.Format("Folders_CloudLocalBadge", cloudName) : cloudName,

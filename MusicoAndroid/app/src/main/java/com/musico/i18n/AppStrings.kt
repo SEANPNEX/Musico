@@ -144,6 +144,49 @@ interface AppStrings {
     val editCloudSourceTitle: String
     val cloudSourceUpdated: String
 
+    // Extensions & custom providers
+    val extensionsTitle: String
+    val importFromFile: String
+    val importFromUrl: String
+    val importExtensionUrlTitle: String
+    val extensionUrlLabel: String
+    val extensionUrlPlaceholder: String
+    val extensionUrlSupportingText: String
+    val noExtensionsTitle: String
+    val noExtensionsDesc: String
+    val extensionImportSuccess: String
+    val extensionImportFailedTitle: String
+    val extensionImportFailedFallback: String
+    val permissionReviewTitle: String
+    val permissionReviewWarning: String
+    val allowedHostsLabel: String
+    val capabilitiesLabel: String
+    val installAndEnable: String
+    val extensionSettingsTitle: String
+    val resetDefaults: String
+    val extensionLogsTitle: String
+    val clearLogs: String
+    val noLogsYet: String
+    val uninstall: String
+    val uninstallExtensionMessage: String
+    val permissionsLabel: String
+    val settingsLabel: String
+    val logsLabel: String
+    val enabledLabel: String
+    val disabledLabel: String
+    val cloudProviderLabel: String
+    val providerAutoDetect: String
+    val badgeExtension: String
+    val extensionDisabledBanner: String
+    val extensionUnavailableStatus: String
+    val manageExtensions: String
+    val errorExtensionUnavailable: String
+    val capabilityPlaylist: String
+    val capabilityTree: String
+    val capabilityStream: String
+    val capabilityCookie: String
+    val capabilityProxy: String
+
     // Songs screen
     val searchPlaceholder: String
     val clearSearch: String
@@ -380,6 +423,12 @@ interface AppStrings {
     fun playbackFailedTrack(title: String): String
     fun cloudSyncProgress(completedFolders: Int, totalFolders: Int, tracksFound: Int): String
     fun queueCountLabel(count: Int): String
+    fun extensionVersionAuthor(version: String, author: String?): String
+    fun extensionMissingBanner(providerId: String): String
+    fun badgeCustomLocal(badge: String): String
+    fun uninstallExtensionConfirmTitle(name: String): String
+    fun detectedProviderHint(name: String): String
+    fun extensionLogsCountLabel(count: Int): String
     fun formatListeningTime(totalSeconds: Double): String
     fun formatRelativeTime(epochMs: Long, nowMs: Long = System.currentTimeMillis()): String
 
@@ -561,6 +610,48 @@ object EnStrings : AppStrings {
     override val editCloudSourceEllipsis = "Edit Cloud Source…"
     override val editCloudSourceTitle = "Edit Cloud Source"
     override val cloudSourceUpdated = "Cloud source updated."
+
+    override val extensionsTitle = "Extensions"
+    override val importFromFile = "Import File"
+    override val importFromUrl = "Import URL"
+    override val importExtensionUrlTitle = "Import Extension from URL"
+    override val extensionUrlLabel = "Extension HTTPS URL"
+    override val extensionUrlPlaceholder = "https://example.com/source.musicoext"
+    override val extensionUrlSupportingText = "Supports .musicoext bundles and .musico.js scripts over HTTPS."
+    override val noExtensionsTitle = "No Extensions Installed"
+    override val noExtensionsDesc = "Import a .musicoext bundle or .musico.js script to add custom cloud music sources."
+    override val extensionImportSuccess = "Extension installed and enabled."
+    override val extensionImportFailedTitle = "Couldn’t Import Extension"
+    override val extensionImportFailedFallback = "The selected extension could not be loaded."
+    override val permissionReviewTitle = "Review Extension Permissions"
+    override val permissionReviewWarning = "Only install extensions from sources you trust. Network requests are restricted to the hosts listed below."
+    override val allowedHostsLabel = "Allowed Hosts"
+    override val capabilitiesLabel = "Capabilities"
+    override val installAndEnable = "Install & Enable"
+    override val extensionSettingsTitle = "Extension Settings"
+    override val resetDefaults = "Reset to Defaults"
+    override val extensionLogsTitle = "Extension Logs"
+    override val clearLogs = "Clear"
+    override val noLogsYet = "No logs recorded yet."
+    override val uninstall = "Uninstall"
+    override val uninstallExtensionMessage = "This extension will be removed. Cloud folders using it will stay in your library as unavailable until reinstalled."
+    override val permissionsLabel = "Permissions"
+    override val settingsLabel = "Settings"
+    override val logsLabel = "Logs"
+    override val enabledLabel = "Enabled"
+    override val disabledLabel = "Disabled"
+    override val cloudProviderLabel = "Source Provider"
+    override val providerAutoDetect = "Auto-Detect"
+    override val badgeExtension = "Extension"
+    override val extensionDisabledBanner = "This extension is disabled. Enable it in Extensions to sync and stream its songs."
+    override val extensionUnavailableStatus = "Extension disabled or missing"
+    override val manageExtensions = "Extensions"
+    override val errorExtensionUnavailable = "This cloud extension is disabled or not installed."
+    override val capabilityPlaylist = "Playlist"
+    override val capabilityTree = "Folder Tree"
+    override val capabilityStream = "Audio Stream"
+    override val capabilityCookie = "Cookie Auth"
+    override val capabilityProxy = "Proxy"
 
     override val searchPlaceholder = "Songs, artists, albums, genres"
     override val clearSearch = "Clear search"
@@ -801,6 +892,14 @@ object EnStrings : AppStrings {
     override fun cloudSyncProgress(completedFolders: Int, totalFolders: Int, tracksFound: Int) =
         "Syncing folders ($completedFolders/$totalFolders · ${songCount(tracksFound)})…"
     override fun queueCountLabel(count: Int) = if (count == 1) "1 queue" else "$count queues"
+    override fun extensionVersionAuthor(version: String, author: String?): String =
+        if (author.isNullOrBlank()) "v$version" else "v$version · $author"
+    override fun extensionMissingBanner(providerId: String): String =
+        "Extension “$providerId” is missing. Reinstall it in Extensions to restore playback."
+    override fun badgeCustomLocal(badge: String): String = "$badge · Local"
+    override fun uninstallExtensionConfirmTitle(name: String): String = "Uninstall “$name”?"
+    override fun detectedProviderHint(name: String): String = "Detected: $name"
+    override fun extensionLogsCountLabel(count: Int): String = "Logs ($count)"
 
     override fun formatListeningTime(totalSeconds: Double): String {
         if (!totalSeconds.isFinite() || totalSeconds <= 0.0) return "0 min"
@@ -953,6 +1052,48 @@ object ZhHansStrings : AppStrings {
     override val editCloudSourceEllipsis = "编辑云端来源…"
     override val editCloudSourceTitle = "编辑云端来源"
     override val cloudSourceUpdated = "云端来源已更新。"
+
+    override val extensionsTitle = "扩展管理"
+    override val importFromFile = "导入文件"
+    override val importFromUrl = "从链接导入"
+    override val importExtensionUrlTitle = "从链接导入扩展"
+    override val extensionUrlLabel = "扩展 HTTPS 链接"
+    override val extensionUrlPlaceholder = "输入 .musicoext 或 .musico.js 下载链接"
+    override val extensionUrlSupportingText = "支持通过 HTTPS 导入 .musicoext 扩展包和 .musico.js 单文件脚本。"
+    override val noExtensionsTitle = "尚未安装扩展"
+    override val noExtensionsDesc = "导入 .musicoext 扩展包或 .musico.js 脚本即可添加自定义云端音乐来源。"
+    override val extensionImportSuccess = "扩展已安装并启用。"
+    override val extensionImportFailedTitle = "无法导入扩展"
+    override val extensionImportFailedFallback = "无法加载所选扩展。"
+    override val permissionReviewTitle = "审查扩展权限"
+    override val permissionReviewWarning = "请仅安装来自可信来源的扩展。扩展的网络请求将被严格限制在下方列出的主机范围内。"
+    override val allowedHostsLabel = "允许访问的主机"
+    override val capabilitiesLabel = "声明的能力"
+    override val installAndEnable = "安装并启用"
+    override val extensionSettingsTitle = "扩展设置"
+    override val resetDefaults = "恢复默认设置"
+    override val extensionLogsTitle = "扩展日志"
+    override val clearLogs = "清空"
+    override val noLogsYet = "暂无日志记录。"
+    override val uninstall = "卸载"
+    override val uninstallExtensionMessage = "该扩展将被移除。使用此扩展的云端文件夹及曲目将保留在音乐库中，但在重新安装前不可播放。"
+    override val permissionsLabel = "权限"
+    override val settingsLabel = "设置"
+    override val logsLabel = "日志"
+    override val enabledLabel = "已启用"
+    override val disabledLabel = "已停用"
+    override val cloudProviderLabel = "云端来源"
+    override val providerAutoDetect = "自动识别"
+    override val badgeExtension = "扩展"
+    override val extensionDisabledBanner = "此扩展已停用。请在扩展管理中启用后再同步和播放其中的歌曲。"
+    override val extensionUnavailableStatus = "扩展已停用或未安装"
+    override val manageExtensions = "管理扩展"
+    override val errorExtensionUnavailable = "该云端扩展已停用或未安装。"
+    override val capabilityPlaylist = "歌单"
+    override val capabilityTree = "目录树"
+    override val capabilityStream = "音频流"
+    override val capabilityCookie = "Cookie 登录态"
+    override val capabilityProxy = "代理"
 
     override val searchPlaceholder = "搜索歌曲、艺术家、专辑、流派"
     override val clearSearch = "清除搜索"
@@ -1189,6 +1330,14 @@ object ZhHansStrings : AppStrings {
     override fun cloudSyncProgress(completedFolders: Int, totalFolders: Int, tracksFound: Int) =
         "正在同步文件夹 ($completedFolders/$totalFolders · ${songCount(tracksFound)})…"
     override fun queueCountLabel(count: Int) = "$count 个队列"
+    override fun extensionVersionAuthor(version: String, author: String?): String =
+        if (author.isNullOrBlank()) "v$version" else "v$version · $author"
+    override fun extensionMissingBanner(providerId: String): String =
+        "未安装扩展“$providerId”。请在扩展管理中重新安装以恢复播放。"
+    override fun badgeCustomLocal(badge: String): String = "$badge · 本地"
+    override fun uninstallExtensionConfirmTitle(name: String): String = "确定卸载“$name”吗？"
+    override fun detectedProviderHint(name: String): String = "已识别来源：$name"
+    override fun extensionLogsCountLabel(count: Int): String = "日志 ($count)"
 
     private val defaultQueueRegex = Regex("^Queue (\\d+)$")
 

@@ -28,15 +28,16 @@
 
 | 目录 | 目标平台 | 技术栈 | 原生 UI 气质 |
 |---|---|---|---|
-| [`Musico/`](Musico/) | iOS 17+、iPadOS、macOS (Catalyst) | Swift、SwiftUI (`@Observable`)、`AVAudioEngine` + `AVAudioUnitEQ`、`MPNowPlayingInfoCenter` | Apple HIG — iOS 上轻巧的标签页与弹窗，macOS/iPadOS 上清爽的侧边栏 + 检查器 |
-| [`MusicoAndroid/`](MusicoAndroid/) | Android 8.0+ (API 26+) | Kotlin、Jetpack Compose、AndroidX Media3 (ExoPlayer + `MediaSessionService`)、SAF `DocumentFile`、`DynamicsProcessing` 均衡器 | Material 3 / Material You — 动态取色、自适应 `NavigationBar` / `NavigationRail`、`ModalBottomSheet` |
-| [`MusicoWindows/`](MusicoWindows/) | Windows 10 (2004+) & Windows 11 | C# / .NET 8 WPF、NAudio (`BiQuadFilter` 10 段均衡器)、TagLibSharp、Windows 10 SMTC | Windows 10 Fluent Design — `Segoe UI`、亚克力 `NavigationView`、锐利 0px 几何、Reveal 悬停、浅色/深色主题同步 |
+| [`Musico/`](Musico/) | iOS 17+、iPadOS、macOS (Catalyst) | Swift、SwiftUI (`@Observable`)、`AVAudioEngine` + `AVAudioUnitEQ`、`MPNowPlayingInfoCenter`、内置 `JavaScriptCore`（`Compression` + `CryptoKit`） | Apple HIG — iOS 上轻巧的标签页与弹窗，macOS/iPadOS 上清爽的侧边栏 + 检查器 |
+| [`MusicoAndroid/`](MusicoAndroid/) | Android 8.0+ (API 26+) | Kotlin、Jetpack Compose、AndroidX Media3 (ExoPlayer + `MediaSessionService`)、SAF `DocumentFile`、`DynamicsProcessing` 均衡器、内置 `QuickJS`（`quickjs-kt`） | Material 3 / Material You — 动态取色、自适应 `NavigationBar` / `NavigationRail`、`ModalBottomSheet` |
+| [`MusicoWindows/`](MusicoWindows/) | Windows 10 (2004+) & Windows 11 | C# / .NET 8 WPF、NAudio (`BiQuadFilter` 10 段均衡器)、TagLibSharp、Windows 10 SMTC、内置 `Jint` | Windows 10 Fluent Design — `Segoe UI`、亚克力 `NavigationView`、锐利 0px 几何、Reveal 悬停、浅色/深色主题同步 |
 
 ---
 
 ## ✨ 它都能做些什么
 
-- 📁 **文件夹优先的曲库与云端小窝**：自由挂载多个本地音乐文件夹（`Documents` / `MyMusic` + 自选文件夹），重启后目录层级原封不动！移动了硬盘或文件夹？点一下 **Relocate（重新定位）** 就乖乖找回来。还能在 **Folders** 里直接挂载 **YouTube / YouTube Music**（歌单、Mix 合集与单曲）、**Bilibili**（单 P / 多 P 视频、收藏夹与合集）以及 **Google Drive**（公开分享文件夹递归扫描与单曲音频链接）！
+- 📁 **文件夹优先的曲库与云端小窝**：自由挂载多个本地音乐文件夹（`Documents` / `MyMusic` + 自选文件夹），重启后目录层级原封不动！移动了硬盘或文件夹？点一下 **Relocate（重新定位）** 就乖乖找回来。还能在 **Folders** 里直接挂载 **YouTube / YouTube Music**（歌单、Mix 合集与单曲）、**Bilibili**（单 P / 多 P 视频、收藏夹与合集）、**Google Drive**（公开分享文件夹递归扫描与单曲音频链接）以及你自己安装的扩展音源！
+- 🧩 **跨平台 JavaScript 扩展**：写一份 CommonJS 脚本（`.musico.js`）或扩展包（`.musicoext`），就能在 Apple（`JavaScriptCore`）、Android（`QuickJS`）和 Windows（`Jint`）上零 WebView 原生运行！启用前强制展示权限审查，内置严格域名白名单（`permissions.hosts`）、扩展专属设置、200 条调试日志视图、多层子文件夹渐进加载，并与 **Save to Local Folder（存到本地）** / **Update from Cloud（云端更新）** 完全互通。详见 [扩展开发指南](docs/extensions/README.zh-CN.md)（[English Guide](docs/extensions/README.md)）。
 - 🌐 **多语言支持（`English` & `简体中文`）**：默认随操作系统语言自动切换（**跟随系统**），也支持在 Apple、Android 和 Windows 应用内随时实时切换语言。
 - 🔍 **花式浏览与秒搜**：支持 **Folders（文件夹）**、**Songs（歌曲）**（支持按标题/艺人/专辑/添加时间排序，以及忽略变音符号的即时搜索）、**Albums（专辑）**（按碟片与音轨号排排坐）、**Artists（艺人）** 和 **Playlists（播放列表）**（自带 **Favourites** 收藏夹 + 随意创建/重命名/删除/排序的自定义歌单）。
 - 🎶 **多独立播放队列**：想开几个队列就开几个！创建、重命名、切换、排序、清空、删除随心所欲，每个队列都会贴心记住自己的当前曲目、播放进度、随机顺序和循环模式（`Off` / `All` / `One`）。
@@ -78,15 +79,22 @@
   - **Android (`MusicoAndroid`)**：`mp3`、`m4a`、`aac`、`flac`、`wav`、`aif`、`aiff`、`caf`、`alac`、`ogg`、`opus`、`webm`
   - **Windows (`MusicoWindows`)**：`mp3`、`m4a`、`aac`、`flac`、`wav`、`aif`、`aiff`、`wma`、`ogg`、`opus`
 
-### 2. 云端文件夹（YouTube、Bilibili 与 Google Drive）
-- **挂载云端音源**：在 **Folders** 里选 **Add Cloud Folder（添加云端文件夹）**，直接粘贴链接、分享文案或 ID（会自动剥离前后附带的分享文字与标点！）：
+### 2. 云端文件夹（YouTube、Bilibili、Google Drive 与自定义扩展）
+- **挂载云端音源**：在 **Folders** 里选 **Add Cloud Folder（添加云端文件夹）**，直接粘贴链接、分享文案或 ID（会自动剥离前后附带的分享文字与标点！）。默认 **Auto-Detect（自动识别）** 会依次匹配内置音源（**YouTube**、**Bilibili**、**Google Drive**）以及已启用的 JS 扩展，也可以手动选择指定来源：
   - **YouTube / YouTube Music**：播放列表、`RD` 混音歌单（Mix）、专辑浏览链接或单曲视频链接（`youtube.com/playlist?list=…`、`music.youtube.com/playlist?list=…`、`youtube.com/watch?v=…`、`youtu.be/…`、Shorts），公开内容免登录直接听！
   - **Bilibili**：`BV`/`av` 视频链接（支持多 P）、收藏夹（`favlist`）、合集/系列以及 `b23.tv` 短链。
   - **Google Drive**：公开分享文件夹链接（支持 `resourcekey` 并自动递归发现所有嵌套子目录中的音频文件）与单曲音频链接（`drive.google.com/drive/folders/…`、`drive.google.com/file/d/…`、`drive.google.com/open?id=…`、`drive.usercontent.google.com/download?id=…`），大文件病毒扫描确认页也会自动处理！
-- **可选 Cookie 与代理**：只有访问私有播放列表、受限 Google Drive 文件或想要更高的 B 站音质时才需要填 **Cookie**。Windows 端还贴心地为 YouTube 与 Google Drive 准备了 **HTTP Proxy** 选项（例如 `7890`、`127.0.0.1:7890` 或 `http://127.0.0.1:7890`）。
+  - **自定义扩展**：在 **扩展（Extensions）** 中启用的扩展会自动出现在此处，展示自定义 `badgeLabel` 标签、可选 Cookie 输入（当声明 `"cookie"` 能力时）以及嵌套子目录渐进/按需加载（当声明 `"tree"` 能力时）。
+- **可选 Cookie 与代理**：只有访问私有播放列表、受限 Google Drive 文件、想要更高的 B 站音质或某些需要登录态的扩展时才需要填 **Cookie**（各云端目录的 Cookie 严格隔离）。Windows 端还支持为 YouTube、Google Drive 及声明代理能力的扩展设置 **HTTP Proxy**（例如 `7890`、`127.0.0.1:7890` 或 `http://127.0.0.1:7890`）。
 - **离线存本地 & 增量同步**：在云端文件夹菜单（或单曲菜单）点 **Save to Local Folder…** 就能把歌下载到本地并顺手加入曲库。已关联云端源的本地文件夹会保存 `.musico-cloud.json` 清单，并出现 **Update from Cloud（从云端更新）**，一键增量拉取新歌！
 
-### 3. 浏览、队列与播放控制
+### 3. 扩展管理（自定义云端音源）
+- **打开扩展管理**：从 macOS/iPadOS 侧边栏（或快捷键 `Cmd+8`）、iOS 与 Android 端 **Folders** 顶栏的扩展图标按钮，或 Windows 侧边栏的 **扩展（Extensions）** 进入。
+- **导入与权限审查**：支持从本地文件或 `https://` 链接导入 `.musicoext` 压缩包或 `.musico.js` 单文件脚本。新导入的扩展默认保持停用状态，只有在你查看并确认其声明的 `permissions.hosts`（网络域名权限）与 `capabilities`（功能权限）后才会启用。
+- **设置、日志与安全停用**：可直接在应用内修改扩展声明的设置项、查看或清空最近 200 条调试日志，随时停用或卸载扩展——曲库中已有歌曲、歌单、统计和已缓存音频都会完好保留，并在目录顶部提示扩展已停用或缺失。
+- **动手写一个扩展**：请参阅 [扩展开发指南](docs/extensions/README.zh-CN.md)（[English Guide](docs/extensions/README.md)）以及 [`docs/extensions/`](docs/extensions/) 下的起步模板与本地调试工具。
+
+### 4. 浏览、队列与播放控制
 - **逛逛曲库**：在 **Folders**、**Songs**、**Albums**、**Artists**、**Playlists**、**Queues** 和 **Stats**（**Recent**、**Plays**、**Not Lately**、**Never**）之间自由穿梭。
 - **单曲小菜单**：点击曲目即可从当前位置开播；打开上下文/更多菜单可以 **Play Next（下一首播放）**、**Add to Queue（添加到队列）**、**Add to Another Queue（添加到其他队列）**、**Play in New Queue（在新队列中播放）**、**Add to Playlist（添加到播放列表）**、**Add/Remove Favourites（收藏/取消收藏）** 和 **Song Info（歌曲信息）**。
 - **多队列与拖拽排序**：在 **Queues**（或桌面端右侧队列面板）管理所有队列，在 **Folders** 和 **Queues** 中拖动曲目右侧手柄（`≡`）即可随心排顺序。
@@ -94,7 +102,7 @@
 - **均衡器 & 睡眠定时器**：打开 **Equalizer** 调音色，或打开 **Sleep Timer** 设定 `5`–`90` 分钟、自定义倒计时或 **当前歌曲结束后停止**。
 - **歌曲信息与标签编辑**：打开 **Song Info** 可以查看位深、采样率、比特率、文件大小、声道数与播放记录，点击 Artist / Album / Genre 还能一键搜索，或者直接修改 `Title`、`Artist`、`Album`、`Genre` 和封面图片。
 
-### 4. 快捷键
+### 5. 快捷键
 - **Windows**：
   - `Space`：播放 / 暂停（非输入框聚焦时）
   - `Ctrl+Left` / `Ctrl+Right`：上一曲 / 下一曲
@@ -103,7 +111,7 @@
 - **macOS / iPadOS**：
   - `Cmd+F`：跳转到 **歌曲（Songs）** 并聚焦搜索框
   - `Cmd+R`：重新扫描曲库
-  - `Cmd+1`–`Cmd+7`：在 **文件夹**、**歌曲**、**专辑**、**艺人**、**播放列表**、**队列** 与 **统计** 之间快速切换
+  - `Cmd+1`–`Cmd+8`：在 **文件夹**、**歌曲**、**专辑**、**艺人**、**播放列表**、**队列**、**统计** 与 **扩展** 之间快速切换
   - `Cmd+P` / `Cmd+Left` / `Cmd+Right`：播放 / 暂停、上一曲 / 下一曲（顶部 **播放 / Playback** 菜单还提供随机播放、循环模式与显示/隐藏正在播放）
   - `Esc`：关闭全屏播放器（同时支持系统媒体键）
 
@@ -141,6 +149,12 @@ cd MusicoWindows
 ./scripts/build-release.sh
 ```
 
+### 扩展一致性测试工具（`docs/extensions/`）
+需要 Node.js 18+：
+```bash
+node docs/extensions/tools/mock-runner.mjs --self-test
+```
+
 ---
 
 ## 📂 仓库结构
@@ -150,6 +164,7 @@ cd MusicoWindows
 ├── .github/workflows/
 │   ├── ci.yml              # 持续集成（Android、Windows、Apple）
 │   └── release.yml         # Tag 触发构建与 GitHub Release 发布
+├── docs/extensions/        # 扩展开发指南、起步模板、一致性测试样例与本地 Node 调试器
 ├── Musico/                 # 原生 SwiftUI 应用（iOS / iPadOS / macOS Catalyst）
 ├── MusicoAndroid/          # 原生 Kotlin + Compose Material 3 + Media3 应用
 ├── MusicoWindows/          # 原生 C# + WPF Windows 10 Fluent Design 应用 + NSIS 安装程序

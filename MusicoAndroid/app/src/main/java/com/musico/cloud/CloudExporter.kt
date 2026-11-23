@@ -3,6 +3,8 @@ package com.musico.cloud
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import com.musico.extensions.CloudProviderIds
+import com.musico.extensions.CloudProviderRegistry
 import com.musico.model.LibraryRoot
 import com.musico.model.RootKind
 import com.musico.model.Track
@@ -27,6 +29,7 @@ data class CloudFolderManifest(
     val sourceURL: String,
     val remoteID: String? = null,
     val cloudKind: String,
+    val providerId: String? = null,
     val lastSyncedEpochMs: Long = 0L,
     val tracks: Map<String, String> = emptyMap(),
 )
@@ -395,6 +398,7 @@ class CloudExporter(
     private val context: Context?,
     private val cloudResolver: CloudStreamResolver,
     private val downloader: CloudStreamDownloader = UrlConnectionCloudStreamDownloader(),
+    private val providerRegistry: CloudProviderRegistry = CloudProviderRegistry(),
 ) {
     private interface ExportSink {
         val existingNames: MutableSet<String>
@@ -599,6 +603,7 @@ class CloudExporter(
                         sourceURL = sourceUrl,
                         remoteID = root.remoteId,
                         cloudKind = cloudKind.name,
+                        providerId = root.effectiveProviderId,
                         lastSyncedEpochMs = System.currentTimeMillis(),
                         tracks = trackedMap,
                     )
@@ -623,6 +628,8 @@ class CloudExporter(
         overrideCookie: String? = null,
         overrideCloudKind: RootKind? = null,
         subfolderPath: String? = null,
+        overrideProviderId: String? = null,
+        fetchPlaylistWithProvider: (suspend (sourceUrl: String, cookie: String?, kindHint: RootKind?, providerIdHint: String?) -> CloudPlaylistResult)? = null,
     ): CloudUpdateSummary = withContext(Dispatchers.IO) {
         val normExplicitSub = subfolderPath?.let { LibraryRoot.normalizeFolderPath(it) }?.takeIf { it.isNotEmpty() }
         val resolvedDir = resolveSubfolderFile(targetDir, normExplicitSub)
@@ -634,11 +641,13 @@ class CloudExporter(
             sink = FileExportSink(resolvedDir),
             effectiveSubPath = normExplicitSub,
             fetchPlaylist = fetchPlaylist,
+            fetchPlaylistWithProvider = fetchPlaylistWithProvider,
             onProgress = onProgress,
             onDetailedProgress = onDetailedProgress,
             overrideSourceUrl = overrideSourceUrl,
             overrideCookie = overrideCookie,
             overrideCloudKind = overrideCloudKind,
+            overrideProviderId = overrideProviderId,
         )
     }
 
@@ -652,6 +661,8 @@ class CloudExporter(
         overrideCookie: String? = null,
         overrideCloudKind: RootKind? = null,
         subfolderPath: String? = null,
+        overrideProviderId: String? = null,
+        fetchPlaylistWithProvider: (suspend (sourceUrl: String, cookie: String?, kindHint: RootKind?, providerIdHint: String?) -> CloudPlaylistResult)? = null,
     ): CloudUpdateSummary {
         val effectiveSubPath = subfolderPath?.let { LibraryRoot.normalizeFolderPath(it) }?.takeIf { it.isNotEmpty() }
             ?: root.trackedSubfolderName?.let { LibraryRoot.normalizeFolderPath(it) }?.takeIf { it.isNotEmpty() }
@@ -668,11 +679,13 @@ class CloudExporter(
                     sink = FileExportSink(resolvedDir),
                     effectiveSubPath = effectiveSubPath,
                     fetchPlaylist = fetchPlaylist,
+                    fetchPlaylistWithProvider = fetchPlaylistWithProvider,
                     onProgress = onProgress,
                     onDetailedProgress = onDetailedProgress,
                     overrideSourceUrl = overrideSourceUrl,
                     overrideCookie = overrideCookie,
                     overrideCloudKind = overrideCloudKind,
+                    overrideProviderId = overrideProviderId,
                 )
             }
         }
@@ -690,11 +703,13 @@ class CloudExporter(
                 sink = DocumentExportSink(ctx, targetDoc),
                 effectiveSubPath = effectiveSubPath,
                 fetchPlaylist = fetchPlaylist,
+                fetchPlaylistWithProvider = fetchPlaylistWithProvider,
                 onProgress = onProgress,
                 onDetailedProgress = onDetailedProgress,
                 overrideSourceUrl = overrideSourceUrl,
                 overrideCookie = overrideCookie,
                 overrideCloudKind = overrideCloudKind,
+                overrideProviderId = overrideProviderId,
             )
         }
     }
@@ -704,11 +719,13 @@ class CloudExporter(
         sink: ExportSink,
         effectiveSubPath: String?,
         fetchPlaylist: suspend (sourceUrl: String, cookie: String?, kindHint: RootKind?) -> CloudPlaylistResult,
+        fetchPlaylistWithProvider: (suspend (sourceUrl: String, cookie: String?, kindHint: RootKind?, providerIdHint: String?) -> CloudPlaylistResult)?,
         onProgress: (done: Int, total: Int, title: String) -> Unit,
         onDetailedProgress: ((CloudExportProgress) -> Unit)?,
         overrideSourceUrl: String?,
         overrideCookie: String?,
         overrideCloudKind: RootKind?,
+        overrideProviderId: String?,
     ): CloudUpdateSummary {
         val existingManifest = sink.loadManifest()
         val trackedSubInfo = effectiveSubPath?.let { root.trackingFor(it) }
@@ -729,23 +746,42 @@ class CloudExporter(
             ?: trackedSubInfo?.cookie?.trim()?.takeIf { it.isNotEmpty() }
             ?: (if (rootMatchesTarget) root.cookie?.trim()?.takeIf { it.isNotEmpty() } else null)
 
-        val urlInferredKind = inferCloudKindFromUrl(rawSource)
-        val kindHint = urlInferredKind
+        val urlClassified = providerRegistry.classifyUrl(rawSource)
+        val kindHint = urlClassified?.provider?.rootKind
+            ?: inferCloudKindFromUrl(rawSource)
             ?: overrideCloudKind
             ?: trackedSubInfo?.cloudKind
             ?: (if (rootMatchesTarget) root.effectiveCloudKind else null)
             ?: existingManifest?.cloudKind?.let { raw -> runCatching { RootKind.valueOf(raw) }.getOrNull() }
+        val providerIdHint = urlClassified?.provider?.providerId
+            ?: overrideProviderId
+            ?: trackedSubInfo?.resolvedProviderId
+            ?: (if (rootMatchesTarget) root.effectiveProviderId else null)
+            ?: existingManifest?.providerId?.trim()?.takeIf { it.isNotEmpty() }
+            ?: kindHint?.builtinProviderId
 
-        val playlist = fetchPlaylist(rawSource, effectiveCookie, kindHint)
+        val playlist = if (fetchPlaylistWithProvider != null) {
+            fetchPlaylistWithProvider(rawSource, effectiveCookie, kindHint, providerIdHint)
+        } else {
+            fetchPlaylist(rawSource, effectiveCookie, kindHint)
+        }
         val cloudKind = cloudKindForSource(playlist.source)
+        val resolvedProviderId = CloudProviderIds.fromLegacySlug(playlist.source)
+            ?: providerIdHint
+            ?: cloudKind.builtinProviderId
         val lookupRoot = root.copy(
             kind = cloudKind,
             sourceUrl = rawSource,
             remoteId = playlist.remoteId,
             cookie = effectiveCookie,
+            providerId = resolvedProviderId,
         )
         val trackedMap = (existingManifest?.tracks ?: emptyMap()).toMutableMap()
-        val sourceSlug = sourceSlugForKind(cloudKind)
+        val sourceSlug = if (playlist.source.startsWith("ext.")) {
+            playlist.source
+        } else {
+            sourceSlugForKind(cloudKind)
+        }
         val nowMs = System.currentTimeMillis()
         val errors = mutableListOf<String>()
         var addedCount = 0
@@ -838,6 +874,7 @@ class CloudExporter(
                 sourceURL = rawSource,
                 remoteID = playlist.remoteId,
                 cloudKind = cloudKind.name,
+                providerId = resolvedProviderId,
                 lastSyncedEpochMs = System.currentTimeMillis(),
                 tracks = trackedMap,
             )
@@ -1087,20 +1124,14 @@ class CloudExporter(
         return current
     }
 
-    private fun inferCloudKindFromUrl(rawUrl: String): RootKind? {
-        val clean = extractCloudSourceInput(rawUrl)
-        if (clean.isEmpty()) return null
-        return when {
-            GoogleDriveClient.canHandle(clean) -> RootKind.CLOUD_GOOGLE_DRIVE
-            BilibiliClient.canHandle(clean) && !YouTubeClient.canHandle(clean) -> RootKind.CLOUD_BILIBILI
-            YouTubeClient.canHandle(clean) && !BilibiliClient.canHandle(clean) -> RootKind.CLOUD_YOUTUBE
-            clean.contains("bilibili", ignoreCase = true) || clean.contains("b23.tv", ignoreCase = true) -> RootKind.CLOUD_BILIBILI
-            YouTubeClient.canHandle(clean) -> RootKind.CLOUD_YOUTUBE
-            else -> null
-        }
-    }
+    private fun inferCloudKindFromUrl(rawUrl: String): RootKind? =
+        providerRegistry.classifyUrl(rawUrl)?.provider?.rootKind
 
     private fun downloadHeadersFor(track: Track, stream: ResolvedStream): Map<String, String> {
+        val provider = providerRegistry.providerForTrack(track, null)
+        if (provider != null) {
+            return provider.downloadHeaders(stream)
+        }
         if (track.cloudSource != CloudSource.YOUTUBE) return stream.headers
         val hasRange = stream.headers.keys.any { it.equals("Range", ignoreCase = true) }
         return if (hasRange) stream.headers else stream.headers + ("Range" to "bytes=0-")
@@ -1222,10 +1253,11 @@ class CloudExporter(
             }
         }
 
-        internal fun cloudKindForSource(source: String): RootKind = when (source) {
-            CloudSource.YOUTUBE -> RootKind.CLOUD_YOUTUBE
-            CloudSource.BILIBILI -> RootKind.CLOUD_BILIBILI
-            CloudSource.GOOGLE_DRIVE -> RootKind.CLOUD_GOOGLE_DRIVE
+        internal fun cloudKindForSource(source: String): RootKind = when {
+            source == CloudSource.YOUTUBE -> RootKind.CLOUD_YOUTUBE
+            source == CloudSource.BILIBILI -> RootKind.CLOUD_BILIBILI
+            source == CloudSource.GOOGLE_DRIVE -> RootKind.CLOUD_GOOGLE_DRIVE
+            source.startsWith("ext.") -> RootKind.CLOUD_EXTENSION
             else -> RootKind.CLOUD_BILIBILI
         }
 
@@ -1248,6 +1280,11 @@ class CloudExporter(
                 rawMime.contains("alac") -> "alac" to "audio/alac"
                 rawMime.contains("caf") -> "caf" to "audio/x-caf"
                 rawMime.contains("mp4") || rawMime.contains("m4a") -> "m4a" to "audio/mp4"
+                !stream.fileExtension.isNullOrBlank() -> {
+                    val ext = stream.fileExtension.trim().trimStart('.').lowercase()
+                    val mime = GoogleDriveClient.mimeTypeForExtension(ext) ?: "audio/$ext"
+                    ext to mime
+                }
                 else -> extensionFromUrl(stream.url)
             }
         }

@@ -1,6 +1,7 @@
 using MusicoWindows.Audio;
 using MusicoWindows.Cloud;
 using MusicoWindows.Core;
+using MusicoWindows.Extensions;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
 
@@ -30,6 +31,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
     private readonly YouTubeClient _youtube;
     private readonly BilibiliClient _bilibili;
     private readonly GoogleDriveClient _googleDrive;
+    private readonly CloudProviderRegistry _providerRegistry;
     private readonly Timer _ticker;
 
     private Track? _currentTrack;
@@ -66,7 +68,8 @@ public sealed class PlayerController : ObservableStore, IDisposable
         CloudAudioCache? cloudCache = null,
         YouTubeClient? youtubeClient = null,
         BilibiliClient? bilibiliClient = null,
-        GoogleDriveClient? googleDriveClient = null)
+        GoogleDriveClient? googleDriveClient = null,
+        CloudProviderRegistry? providerRegistry = null)
     {
         Library = library;
         Queues = queues;
@@ -80,6 +83,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
         _youtube = youtubeClient ?? new YouTubeClient();
         _bilibili = bilibiliClient ?? new BilibiliClient();
         _googleDrive = googleDriveClient ?? new GoogleDriveClient();
+        _providerRegistry = providerRegistry ?? library.CloudProviders;
 
         _eq = Persistence.Load<EqSettings>(_settingsPath) ?? new EqSettings();
         _engine.ApplyEq(_eq);
@@ -395,15 +399,22 @@ public sealed class PlayerController : ObservableStore, IDisposable
     private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct)
     {
         string remoteId = track.RemoteTrackId ?? throw new InvalidOperationException("Missing remote track ID.");
-        if (string.Equals(track.CloudSource, CloudSources.Bilibili, StringComparison.OrdinalIgnoreCase))
+        ICloudSourceProvider? provider = _providerRegistry.GetBySourceOrProviderId(track.CloudSource)
+            ?? (root is not null ? _providerRegistry.GetProvider(root) : null);
+        if (provider is null || !provider.IsAvailable)
         {
-            return _bilibili.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionUnavailable,
+                $"Cloud provider '{track.CloudSource ?? root?.EffectiveProviderId ?? "unknown"}' is disabled or not installed.");
         }
-        if (string.Equals(track.CloudSource, CloudSources.GoogleDrive, StringComparison.OrdinalIgnoreCase))
-        {
-            return _googleDrive.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
-        }
-        return _youtube.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
+
+        return provider.ResolveAudioStreamAsync(
+            remoteId,
+            track.RelativePath,
+            root?.Cookie,
+            root?.ProxyUrl,
+            forceRefresh: false,
+            ct: ct);
     }
 
     private void PrefetchNextCloudTrack()

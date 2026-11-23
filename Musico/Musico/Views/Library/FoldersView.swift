@@ -10,10 +10,12 @@ struct FoldersView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
     @Environment(\.downloadManager) private var downloadManager
+    @Environment(\.extensionStore) private var extensionStore
     @Environment(\.languageManager) private var languageManager
     @State private var showImporter = false
     @State private var showCloudSheet = false
     @State private var showDownloadsSheet = false
+    @State private var showExtensionsSheet = false
     /// When set, the next picked folder replaces this unavailable root instead of adding a new one.
     @State private var relocating: UUID?
     @State private var importError: String?
@@ -25,6 +27,14 @@ struct FoldersView: View {
     @State private var updatingTrackedRoot: LibraryRoot?
     /// Local folder linked to a cloud source queued for address editing.
     @State private var editingTrackingRoot: LibraryRoot?
+
+    private var unavailableExtensionRoots: [(root: LibraryRoot, availability: CloudExtensionAvailability)] {
+        library.roots.compactMap { root in
+            guard root.kind == .cloudExtension else { return nil }
+            let status = library.cloudExtensionAvailability(for: root)
+            return status == .available ? nil : (root, status)
+        }
+    }
 
     var body: some View {
         List {
@@ -39,6 +49,28 @@ struct FoldersView: View {
                 }
             } footer: {
                 Text(Self.hint)
+            }
+            if !unavailableExtensionRoots.isEmpty {
+                Section(L10n.tr("Unavailable Extensions")) {
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(alignment: .top, spacing: 10) {
+                            Image(systemName: "puzzlepiece.extension")
+                                .foregroundStyle(.orange)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(L10n.tr("Some extension folders are currently unavailable."))
+                                    .font(.subheadline.weight(.medium))
+                                Text(L10n.tr("Your tracks, playlists, stats, and cached audio remain intact. Re-enable or reinstall the extension to sync updates."))
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        Button(L10n.tr("Manage Extensions")) {
+                            showExtensionsSheet = true
+                        }
+                        .font(.subheadline.weight(.medium))
+                    }
+                    .padding(.vertical, 2)
+                }
             }
             if !library.cloudSyncErrors.isEmpty {
                 Section(L10n.tr("Cloud Sync Issues")) {
@@ -110,6 +142,10 @@ struct FoldersView: View {
                     relocating = nil
                     showImporter = true
                 }
+                Button(L10n.tr("Extensions"), systemImage: "puzzlepiece.extension") {
+                    showExtensionsSheet = true
+                }
+                .help(L10n.tr("Extensions"))
                 if !downloadManager.jobs.isEmpty {
                     Button(
                         L10n.tr("Downloads"),
@@ -121,6 +157,14 @@ struct FoldersView: View {
                 }
             }
         }
+        .sheet(isPresented: $showExtensionsSheet) {
+            NavigationStack {
+                ExtensionsView(extensionStore: extensionStore, showDoneButton: true)
+            }
+            .environment(\.extensionStore, extensionStore)
+            .environment(\.languageManager, languageManager)
+            .environment(\.locale, languageManager.effectiveLocale)
+        }
         .sheet(isPresented: $showDownloadsSheet) {
             DownloadsListView(downloadManager: downloadManager)
                 .environment(\.downloadManager, downloadManager)
@@ -128,8 +172,10 @@ struct FoldersView: View {
                 .environment(\.locale, languageManager.effectiveLocale)
         }
         .sheet(isPresented: $showCloudSheet) {
-            AddCloudFolderSheet(library: library)
+            AddCloudFolderSheet(library: library, extensionStore: extensionStore)
                 .environment(library)
+                .environment(\.extensionStore, extensionStore)
+                .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
         }
         .sheet(item: $exportingRoot) { root in
@@ -211,23 +257,34 @@ struct FoldersView: View {
         case .cloudYouTube: "play.rectangle.fill"
         case .cloudBilibili: "play.tv.fill"
         case .cloudGoogleDrive: "externaldrive.fill.badge.icloud"
+        case .cloudExtension: "puzzlepiece.extension.fill"
         }
     }
 
-    private static func iconColor(for root: LibraryRoot) -> Color {
+    private static func iconColor(for root: LibraryRoot, availability: CloudExtensionAvailability = .available) -> Color {
         switch root.kind {
         case .cloudYouTube, .cloudBilibili: .red
         case .cloudGoogleDrive: .blue
+        case .cloudExtension: availability == .available ? .indigo : .orange
         case .picked, .appFolder: .accentColor
         }
     }
 
     @MainActor
-    static func localTrackingBadgeLabel(for kind: LibraryRoot.Kind?) -> String {
+    static func localTrackingBadgeLabel(
+        for kind: LibraryRoot.Kind?,
+        providerID: String? = nil,
+        extensionStore: ExtensionStore? = nil
+    ) -> String {
         switch kind {
         case .cloudYouTube: return L10n.tr("YouTube · Local")
         case .cloudBilibili: return L10n.tr("Bilibili · Local")
         case .cloudGoogleDrive: return L10n.tr("Google Drive · Local")
+        case .cloudExtension:
+            if let badge = extensionBadgeLabel(providerID: providerID, extensionStore: extensionStore) {
+                return L10n.tr("%@ · Local", badge)
+            }
+            return L10n.tr("Extension · Local")
         default: return L10n.tr("Cloud · Local")
         }
     }
@@ -236,12 +293,25 @@ struct FoldersView: View {
         switch kind {
         case .cloudYouTube, .cloudBilibili: .red
         case .cloudGoogleDrive: .blue
+        case .cloudExtension: .indigo
         default: .accentColor
         }
     }
 
     @MainActor
-    private static func sourceLabel(for root: LibraryRoot) -> String? {
+    private static func extensionBadgeLabel(providerID: String?, extensionStore: ExtensionStore?) -> String? {
+        guard let providerID, !providerID.isEmpty else { return nil }
+        if let provider = (extensionStore?.registry ?? CloudProviderRegistry.shared).provider(forID: providerID) {
+            return provider.badgeLabel
+        }
+        if let ext = extensionStore?.extension(forProviderID: providerID) {
+            return ext.manifest.effectiveBadgeLabel
+        }
+        return nil
+    }
+
+    @MainActor
+    private static func sourceLabel(for root: LibraryRoot, library: LibraryStore, extensionStore: ExtensionStore) -> String? {
         switch root.kind {
         case .cloudYouTube:
             return "YouTube"
@@ -249,15 +319,37 @@ struct FoldersView: View {
             return "Bilibili"
         case .cloudGoogleDrive:
             return L10n.tr("Google Drive")
+        case .cloudExtension:
+            return library.provider(for: root)?.badgeLabel
+                ?? extensionBadgeLabel(providerID: root.resolvedProviderID, extensionStore: extensionStore)
+                ?? L10n.tr("Extension")
         case .picked, .appFolder:
             guard root.isCloudTrackedLocal else { return nil }
-            return localTrackingBadgeLabel(for: root.linkedCloudKind)
+            return localTrackingBadgeLabel(
+                for: root.linkedCloudKind,
+                providerID: root.effectiveProviderID,
+                extensionStore: extensionStore
+            )
+        }
+    }
+
+    @MainActor
+    private func unavailableSubtitle(for count: Int, root: LibraryRoot, availability: CloudExtensionAvailability) -> String {
+        switch availability {
+        case .available:
+            return L10n.songCount(count)
+        case .disabled(let name):
+            return L10n.tr("%@ · Extension “%@” disabled", L10n.songCount(count), name)
+        case .missing(let providerID):
+            let short = providerID.hasPrefix("ext.") ? String(providerID.dropFirst(4)) : providerID
+            return L10n.tr("%@ · Missing extension (%@)", L10n.songCount(count), short)
         }
     }
 
     @ViewBuilder
     private func rootRow(_ root: LibraryRoot) -> some View {
         let available = library.isAvailable(root)
+        let extAvailability = library.cloudExtensionAvailability(for: root)
         let count = library.tracks.lazy.filter { $0.rootID == root.id }.count
         let removable = library.isRemovable(root)
         let syncError = library.cloudSyncErrors[root.id]
@@ -266,13 +358,13 @@ struct FoldersView: View {
         NavigationLink(value: FolderRef(root: root.id, path: "")) {
             HStack(spacing: 12) {
                 Image(systemName: Self.iconName(for: root))
-                    .foregroundStyle(Self.iconColor(for: root))
+                    .foregroundStyle(Self.iconColor(for: root, availability: extAvailability))
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
                         Text(rootDisplayName)
                             .lineLimit(1)
-                        if let label = Self.sourceLabel(for: root) {
+                        if let label = Self.sourceLabel(for: root, library: library, extensionStore: extensionStore) {
                             Text(label)
                                 .font(.caption2.weight(.semibold))
                                 .padding(.horizontal, 6)
@@ -295,6 +387,11 @@ struct FoldersView: View {
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                         }
+                    } else if extAvailability != .available {
+                        Text(unavailableSubtitle(for: count, root: root, availability: extAvailability))
+                            .font(.subheadline)
+                            .foregroundStyle(.orange)
+                            .lineLimit(1)
                     } else if let syncError {
                         Text(L10n.tr("%@ · Sync issue: %@", L10n.songCount(count), syncError))
                             .font(.subheadline)
@@ -364,29 +461,70 @@ struct FoldersView: View {
 
 struct AddCloudFolderSheet: View {
     private let explicitLibrary: LibraryStore?
+    private let explicitExtensionStore: ExtensionStore?
     @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
+    @Environment(\.extensionStore) private var envExtensionStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var urlText = ""
     @State private var cookieText = ""
+    @State private var selectedProviderID: String? = nil
     @State private var isLoading = false
     @State private var errorMessage: String?
 
-    init(library: LibraryStore? = nil) {
+    init(library: LibraryStore? = nil, extensionStore: ExtensionStore? = nil) {
         self.explicitLibrary = library
+        self.explicitExtensionStore = extensionStore
     }
 
     private var library: LibraryStore? { explicitLibrary ?? envLibrary }
+    private var extensionStore: ExtensionStore { explicitExtensionStore ?? envExtensionStore }
+
+    private var availableProviders: [any CloudSourceProvider] {
+        extensionStore.registry.allProviders()
+    }
+
+    private var selectedProvider: (any CloudSourceProvider)? {
+        guard let selectedProviderID else { return nil }
+        return extensionStore.registry.provider(forID: selectedProviderID)
+    }
 
     private var extractedSource: String {
-        CloudSourceInput.extract(from: urlText)
+        CloudSourceInput.extract(from: urlText, registry: extensionStore.registry)
+    }
+
+    private var detectedProviderName: String? {
+        guard selectedProviderID == nil, !extractedSource.isEmpty else { return nil }
+        guard let match = extensionStore.registry.match(rawText: urlText, extractedURL: extractedSource) else {
+            return nil
+        }
+        return extensionStore.registry.provider(forID: match.providerID)?.displayName
+    }
+
+    private var shouldShowCookieField: Bool {
+        selectedProvider?.supportsCookie ?? true
     }
 
     var body: some View {
         NavigationStack {
             Form {
+                Section(L10n.tr("Source")) {
+                    Picker(L10n.tr("Provider"), selection: $selectedProviderID) {
+                        Text(L10n.tr("Auto-Detect")).tag(nil as String?)
+                        ForEach(availableProviders, id: \.id) { provider in
+                            Text(provider.displayName).tag(Optional(provider.id))
+                        }
+                    }
+                    if let detectedProviderName {
+                        LabeledContent(L10n.tr("Detected")) {
+                            Text(detectedProviderName)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
                 Section {
-                    TextField(L10n.tr("YouTube, Bilibili, or Google Drive URL or ID"), text: $urlText)
+                    TextField(L10n.tr("Cloud URL or ID"), text: $urlText)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
@@ -396,15 +534,17 @@ struct AddCloudFolderSheet: View {
                     Text(L10n.tr("Examples: youtube.com/playlist?list=…, bilibili.com/video/BV…, b23.tv/…, drive.google.com/drive/folders/…, drive.google.com/file/d/…"))
                 }
 
-                Section {
-                    TextField(L10n.tr("Cookie (optional)"), text: $cookieText, axis: .vertical)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .lineLimit(2...4)
-                } header: {
-                    Text(L10n.tr("Authentication"))
-                } footer: {
-                    Text(L10n.tr("Public links work without signing in. Add a Cookie only for private playlists, restricted Google Drive links, or higher Bilibili audio quality."))
+                if shouldShowCookieField {
+                    Section {
+                        TextField(L10n.tr("Cookie (optional)"), text: $cookieText, axis: .vertical)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .lineLimit(2...4)
+                    } header: {
+                        Text(L10n.tr("Authentication"))
+                    } footer: {
+                        Text(L10n.tr("Public links work without signing in. Add a Cookie only for private playlists, restricted Google Drive links, or higher Bilibili audio quality."))
+                    }
                 }
 
                 if let errorMessage {
@@ -437,11 +577,16 @@ struct AddCloudFolderSheet: View {
         guard let library else { return }
         errorMessage = nil
         isLoading = true
-        let source = extractedSource
-        let cookie = cookieText
+        let rawSource = urlText
+        let cookie = shouldShowCookieField ? cookieText : nil
+        let preferredProvider = selectedProviderID
         Task {
             do {
-                try await library.addCloudRoot(sourceURL: source, cookie: cookie)
+                try await library.addCloudRoot(
+                    sourceURL: rawSource,
+                    cookie: cookie,
+                    preferredProviderID: preferredProvider
+                )
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription
@@ -465,16 +610,19 @@ struct FolderDetailView: View {
     @Environment(PlayerController.self) private var player
     @Environment(PlayHistoryStore.self) private var history
     @Environment(\.downloadManager) private var downloadManager
+    @Environment(\.extensionStore) private var extensionStore
     @Environment(\.languageManager) private var languageManager
     @Environment(\.dismiss) private var dismiss
     @State private var confirmRemove = false
     @State private var removingSubfolder: FolderRef?
     @State private var showExportSheet = false
+    @State private var showExtensionsSheet = false
     @State private var updatingTarget: FolderTrackingTarget?
     @State private var editingTarget: FolderTrackingTarget?
 
     var body: some View {
         let root = library.root(ref.root)
+        let extAvailability = root.map { library.cloudExtensionAvailability(for: $0) } ?? .available
         let contents = library.folderContents(root: ref.root, path: ref.path)
         let directTracks = library.orderedFolderTracks(root: ref.root, path: ref.path, history: history)
         let everything = library.orderedTracks(under: ref.root, path: ref.path, history: history)
@@ -490,6 +638,26 @@ struct FolderDetailView: View {
         let currentTracking = library.cloudTracking(rootID: ref.root, path: ref.path)
 
         List {
+            if let root, root.kind == .cloudExtension, extAvailability != .available {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "puzzlepiece.extension")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(extensionBannerTitle(for: extAvailability))
+                                .font(.subheadline.weight(.medium))
+                            Text(L10n.tr("Your tracks, playlists, stats, and cached audio remain intact. Re-enable or reinstall the extension to sync updates."))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Button(L10n.tr("Manage Extensions")) {
+                        showExtensionsSheet = true
+                    }
+                    .font(.subheadline.weight(.medium))
+                }
+                .padding(.vertical, 4)
+            }
             if let syncProgress {
                 HStack(spacing: 10) {
                     ProgressView()
@@ -530,7 +698,11 @@ struct FolderDetailView: View {
                         Text(name)
                             .lineLimit(1)
                         if let childTracking {
-                            Text(FoldersView.localTrackingBadgeLabel(for: childTracking.cloudKind))
+                            Text(FoldersView.localTrackingBadgeLabel(
+                                for: childTracking.cloudKind,
+                                providerID: childTracking.resolvedProviderID,
+                                extensionStore: extensionStore
+                            ))
                                 .font(.caption2.weight(.semibold))
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
@@ -653,6 +825,14 @@ struct FolderDetailView: View {
                 }
             }
         }
+        .sheet(isPresented: $showExtensionsSheet) {
+            NavigationStack {
+                ExtensionsView(extensionStore: extensionStore, showDoneButton: true)
+            }
+            .environment(\.extensionStore, extensionStore)
+            .environment(\.languageManager, languageManager)
+            .environment(\.locale, languageManager.effectiveLocale)
+        }
         .sheet(isPresented: $showExportSheet) {
             if let root {
                 SaveCloudPlaylistSheet(root: root, library: library, downloadManager: downloadManager)
@@ -716,6 +896,18 @@ struct FolderDetailView: View {
             } else {
                 Text(L10n.tr("Its songs leave your library, playlists and queues. The files themselves are not deleted."))
             }
+        }
+    }
+
+    @MainActor
+    private func extensionBannerTitle(for availability: CloudExtensionAvailability) -> String {
+        switch availability {
+        case .available:
+            return ""
+        case .disabled(let name):
+            return L10n.tr("Extension “%@” is disabled.", name)
+        case .missing(let providerID):
+            return L10n.tr("Extension “%@” is not installed.", providerID)
         }
     }
 }
@@ -952,7 +1144,8 @@ struct UpdateTrackedFolderSheet: View {
                 remoteID: root.remoteID,
                 cloudKind: root.effectiveCloudKind ?? .cloudYouTube,
                 cookie: root.cookie,
-                lastSynced: root.lastSynced
+                lastSynced: root.lastSynced,
+                providerID: root.effectiveProviderID
             )
         }
         return root.normalizedTrackedSubfolders[subfolderPath]
@@ -1136,6 +1329,7 @@ struct EditCloudTrackingSheet: View {
     var onSaved: (() -> Void)? = nil
     private let explicitLibrary: LibraryStore?
     @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
+    @Environment(\.extensionStore) private var extensionStore
     @Environment(\.dismiss) private var dismiss
 
     @State private var urlText: String
@@ -1164,7 +1358,8 @@ struct EditCloudTrackingSheet: View {
                         remoteID: root.remoteID,
                         cloudKind: root.effectiveCloudKind ?? .cloudYouTube,
                         cookie: root.cookie,
-                        lastSynced: root.lastSynced
+                        lastSynced: root.lastSynced,
+                        providerID: root.effectiveProviderID
                     )
                 }
                 : root.normalizedTrackedSubfolders[normPath])
@@ -1185,7 +1380,7 @@ struct EditCloudTrackingSheet: View {
     }
 
     private var extractedURL: String {
-        CloudSourceInput.extract(from: urlText)
+        CloudSourceInput.extract(from: urlText, registry: extensionStore.registry)
     }
 
     var body: some View {

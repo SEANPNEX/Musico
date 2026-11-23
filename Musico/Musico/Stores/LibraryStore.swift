@@ -29,6 +29,7 @@ final class LibraryStore {
         var pathSegments: [String]
         var depth: Int
         var isLoaded: Bool = false
+        var extraJSON: String? = nil
 
         var relativePath: String { pathSegments.joined(separator: "/") }
     }
@@ -91,6 +92,8 @@ final class LibraryStore {
     @ObservationIgnored private let reader: MetadataReading
     @ObservationIgnored let artwork: ArtworkCache
     @ObservationIgnored private let cloudFetcher: any CloudPlaylistFetching
+    @ObservationIgnored private let providerRegistry: CloudProviderRegistry
+    @ObservationIgnored private let extensionAvailabilityProvider: @Sendable (String) -> CloudExtensionAvailability
     @ObservationIgnored private let artworkDownloader: @Sendable (URL) async -> Data?
     /// How many newly read songs are published (and saved) at a time during a scan.
     @ObservationIgnored private let scanBatchSize: Int
@@ -124,6 +127,8 @@ final class LibraryStore {
     init(directory: URL, documentsURL: URL, reader: MetadataReading, artwork: ArtworkCache, scanBatchSize: Int = 100,
          appFolderRemovable: Bool = false,
          cloudFetcher: any CloudPlaylistFetching = LiveCloudService.shared,
+         providerRegistry: CloudProviderRegistry? = nil,
+         extensionAvailability: (@Sendable (String) -> CloudExtensionAvailability)? = nil,
          artworkDownloader: (@Sendable (URL) async -> Data?)? = nil) {
         self.appFolderRemovable = appFolderRemovable
         self.scanBatchSize = max(scanBatchSize, 1)
@@ -132,6 +137,17 @@ final class LibraryStore {
         self.reader = reader
         self.artwork = artwork
         self.cloudFetcher = cloudFetcher
+        let resolvedRegistry = providerRegistry ?? (cloudFetcher as? LiveCloudService)?.registry ?? .shared
+        self.providerRegistry = resolvedRegistry
+        self.extensionAvailabilityProvider = extensionAvailability ?? { [resolvedRegistry] pid in
+            if resolvedRegistry.provider(forID: pid) != nil {
+                return .available
+            }
+            if resolvedRegistry === CloudProviderRegistry.shared {
+                return ExtensionStore.shared.availability(forProviderID: pid)
+            }
+            return .missing(providerID: pid)
+        }
         self.artworkDownloader = artworkDownloader ?? Self.defaultArtworkDownload
 
         let file = Persistence.load(LibraryFile.self, from: libraryURL)
@@ -146,7 +162,9 @@ final class LibraryStore {
             appRoot.remoteID = savedAppRoot?.remoteID
             appRoot.cookie = savedAppRoot?.cookie
             appRoot.lastSynced = savedAppRoot?.lastSynced
+            appRoot.providerID = savedAppRoot?.providerID
             appRoot.linkedCloudKind = savedAppRoot?.linkedCloudKind
+            appRoot.linkedProviderID = savedAppRoot?.linkedProviderID
             appRoot.trackedSubfolders = savedAppRoot?.trackedSubfolders
             loadedRoots.insert(appRoot, at: 0)
             rootURLs[LibraryRoot.appFolderID] = documentsURL
@@ -251,7 +269,28 @@ final class LibraryStore {
         rootURLs[roots[index].id] = url
     }
 
-    func isAvailable(_ root: LibraryRoot) -> Bool { root.kind.isCloud || rootURLs[root.id] != nil }
+    func provider(for root: LibraryRoot) -> (any CloudSourceProvider)? {
+        guard let pid = root.effectiveProviderID else { return nil }
+        return providerRegistry.provider(forID: pid)
+    }
+
+    func cloudExtensionAvailability(for root: LibraryRoot) -> CloudExtensionAvailability {
+        guard root.kind == .cloudExtension else { return .available }
+        guard let pid = root.resolvedProviderID, !pid.isEmpty else {
+            return .missing(providerID: "")
+        }
+        if providerRegistry.provider(forID: pid) != nil {
+            return .available
+        }
+        return extensionAvailabilityProvider(pid)
+    }
+
+    func isAvailable(_ root: LibraryRoot) -> Bool {
+        if root.kind == .cloudExtension {
+            return cloudExtensionAvailability(for: root) == .available
+        }
+        return root.kind.isCloud || rootURLs[root.id] != nil
+    }
     func isRemovable(_ root: LibraryRoot) -> Bool { root.kind != .appFolder || appFolderRemovable }
     func rootURL(_ id: UUID) -> URL? { rootURLs[id] }
     func root(_ id: UUID) -> LibraryRoot? { roots.first { $0.id == id } }
@@ -326,7 +365,8 @@ final class LibraryStore {
                     remoteID: existingRoot.remoteID,
                     cloudKind: existingRoot.linkedCloudKind ?? .cloudYouTube,
                     cookie: existingRoot.cookie,
-                    lastSynced: existingRoot.lastSynced
+                    lastSynced: existingRoot.lastSynced,
+                    providerID: existingRoot.effectiveProviderID
                 )
             }
             for (subRel, subInfo) in existingRoot.normalizedTrackedSubfolders {
@@ -386,7 +426,8 @@ final class LibraryStore {
             lastSynced: manifest.map { Date(timeIntervalSince1970: Double($0.lastSyncedEpochMs) / 1000.0) },
             excludedPaths: migratedExcludedPaths.isEmpty ? nil : migratedExcludedPaths.sorted(),
             linkedCloudKind: manifest?.cloudKind,
-            trackedSubfolders: migratedTrackedSubfolders.isEmpty ? nil : migratedTrackedSubfolders
+            trackedSubfolders: migratedTrackedSubfolders.isEmpty ? nil : migratedTrackedSubfolders,
+            linkedProviderID: manifest?.resolvedProviderID
         )
         roots.append(root)
         rootURLs[root.id] = url
@@ -417,6 +458,7 @@ final class LibraryStore {
             roots[index].sourceURL = cloudRoot.sourceURL
             roots[index].remoteID = cloudRoot.remoteID
             roots[index].linkedCloudKind = cloudRoot.effectiveCloudKind
+            roots[index].linkedProviderID = cloudRoot.effectiveProviderID
             roots[index].cookie = cloudRoot.cookie
             roots[index].lastSynced = Date()
         } else if let sourceURL = cloudRoot.sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -428,7 +470,8 @@ final class LibraryStore {
                 remoteID: cloudRoot.remoteID,
                 cloudKind: cloudKind,
                 cookie: cloudRoot.cookie,
-                lastSynced: Date()
+                lastSynced: Date(),
+                providerID: cloudRoot.effectiveProviderID
             )
             roots[index].trackedSubfolders = map
         }
@@ -448,7 +491,8 @@ final class LibraryStore {
                 remoteID: cloudRoot.remoteID,
                 cloudKind: cloudKind,
                 cookie: cloudRoot.cookie,
-                lastSynced: now
+                lastSynced: now,
+                providerID: cloudRoot.effectiveProviderID
             )
         }()
 
@@ -461,6 +505,7 @@ final class LibraryStore {
                     roots[index].sourceURL = info.sourceURL
                     roots[index].remoteID = info.remoteID
                     roots[index].linkedCloudKind = info.cloudKind
+                    roots[index].linkedProviderID = info.resolvedProviderID
                     roots[index].cookie = info.cookie
                     roots[index].lastSynced = info.lastSynced
                 }
@@ -501,7 +546,8 @@ final class LibraryStore {
                     remoteID: root.remoteID,
                     cloudKind: root.kind,
                     cookie: root.cookie,
-                    lastSynced: root.lastSynced
+                    lastSynced: root.lastSynced,
+                    providerID: root.resolvedProviderID
                 )
             }
             guard root.isCloudTrackedLocal, let src = root.sourceURL else { return nil }
@@ -510,19 +556,32 @@ final class LibraryStore {
                 remoteID: root.remoteID,
                 cloudKind: root.linkedCloudKind ?? .cloudYouTube,
                 cookie: root.cookie,
-                lastSynced: root.lastSynced
+                lastSynced: root.lastSynced,
+                providerID: root.effectiveProviderID
             )
         }
         return root.normalizedTrackedSubfolders[normPath]
     }
 
-    func updateCloudTrackingAddress(rootID: UUID, path: String, sourceURL: String, cookie: String?) throws {
+    func updateCloudTrackingAddress(
+        rootID: UUID,
+        path: String,
+        sourceURL: String,
+        cookie: String?,
+        preferredProviderID: String? = nil
+    ) throws {
         guard let index = roots.firstIndex(where: { $0.id == rootID }) else {
             throw LibraryError.notAFolder
         }
         let normPath = LibraryRoot.normalizeFolderPath(path)
-        let fallbackKind = cloudTracking(rootID: rootID, path: normPath)?.cloudKind ?? roots[index].effectiveCloudKind
-        let classified = try LiveCloudService.classifySource(sourceURL, fallbackKind: fallbackKind)
+        let existingTracking = cloudTracking(rootID: rootID, path: normPath)
+        let fallbackKind = existingTracking?.cloudKind ?? roots[index].effectiveCloudKind
+        let classified = try LiveCloudService.classifySource(
+            sourceURL,
+            fallbackKind: fallbackKind,
+            preferredProviderID: preferredProviderID,
+            registry: providerRegistry
+        )
         let trimmedCookie = cookie?.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanCookie = (trimmedCookie?.isEmpty == false) ? trimmedCookie : nil
         let now = Date()
@@ -534,8 +593,10 @@ final class LibraryStore {
             roots[index].lastSynced = now
             if roots[index].kind.isLocal {
                 roots[index].linkedCloudKind = classified.kind
+                roots[index].linkedProviderID = classified.providerID
             } else if roots[index].kind.isCloud {
                 roots[index].kind = classified.kind
+                roots[index].providerID = classified.providerID
             }
         } else {
             var map = roots[index].normalizedTrackedSubfolders
@@ -544,7 +605,8 @@ final class LibraryStore {
                 remoteID: classified.remoteID,
                 cloudKind: classified.kind,
                 cookie: cleanCookie,
-                lastSynced: now
+                lastSynced: now,
+                providerID: classified.providerID
             )
             roots[index].trackedSubfolders = map
         }
@@ -559,7 +621,8 @@ final class LibraryStore {
                     remoteID: classified.remoteID,
                     cloudKind: classified.kind,
                     lastSyncedEpochMs: Int64(now.timeIntervalSince1970 * 1000),
-                    tracks: existingManifest?.tracks ?? [:]
+                    tracks: existingManifest?.tracks ?? [:],
+                    providerID: classified.providerID
                 )
                 try? CloudExporter.saveManifest(updatedManifest, in: folderURL)
             }
@@ -617,6 +680,7 @@ final class LibraryStore {
         lookupRoot.sourceURL = tracking.sourceURL
         lookupRoot.remoteID = tracking.remoteID
         lookupRoot.linkedCloudKind = tracking.cloudKind
+        lookupRoot.linkedProviderID = tracking.resolvedProviderID
         lookupRoot.cookie = tracking.cookie
 
         let summary: CloudExporter.CloudUpdateSummary
@@ -629,6 +693,7 @@ final class LibraryStore {
                 sourceURLOverride: tracking.sourceURL,
                 cookieOverride: tracking.cookie,
                 kindHintOverride: tracking.cloudKind,
+                providerIDOverride: tracking.resolvedProviderID,
                 onDetailedProgress: onDetailedProgress
             )
         } else {
@@ -640,6 +705,7 @@ final class LibraryStore {
                 sourceURLOverride: tracking.sourceURL,
                 cookieOverride: tracking.cookie,
                 kindHintOverride: tracking.cloudKind,
+                providerIDOverride: tracking.resolvedProviderID,
                 onProgress: nil
             )
         }
@@ -679,6 +745,24 @@ final class LibraryStore {
         await rescan()
     }
 
+    private func isDuplicateCloudRoot(kind: LibraryRoot.Kind, providerID: String?, remoteID: String?) -> Bool {
+        guard let remoteID, !remoteID.isEmpty else { return false }
+        return roots.contains { existing in
+            existing.kind == kind
+                && existing.resolvedProviderID == providerID
+                && existing.remoteID == remoteID
+        }
+    }
+
+    private func isProgressiveTreeRoot(_ root: LibraryRoot) -> Bool {
+        if let treeFetcher = cloudFetcher as? any CloudTreeProgressiveFetching,
+           let pid = root.resolvedProviderID,
+           treeFetcher.supportsProgressiveTree(for: pid) {
+            return true
+        }
+        return root.kind == .cloudGoogleDrive && (cloudFetcher as? any GoogleDriveProgressiveFetching) != nil
+    }
+
     func prioritizeCloudFolder(rootID: UUID, path: String) {
         let normPath = LibraryRoot.normalizeFolderPath(path)
         guard !normPath.isEmpty else { return }
@@ -690,24 +774,41 @@ final class LibraryStore {
               let sub = knownDriveSubfolders[rootID]?[normPath],
               !sub.isLoaded,
               let root = self.root(rootID),
-              root.kind == .cloudGoogleDrive,
-              let driveFetcher = cloudFetcher as? any GoogleDriveProgressiveFetching else {
+              isProgressiveTreeRoot(root) else {
             return
         }
         let taskKey = Self.folderKey(rootID: rootID, path: normPath)
         guard onDemandDriveFolderTasks[taskKey] == nil else { return }
+        let treeFetcher = cloudFetcher as? any CloudTreeProgressiveFetching
+        let legacyDriveFetcher = cloudFetcher as? any GoogleDriveProgressiveFetching
         onDemandDriveFolderTasks[taskKey] = Task { @MainActor [weak self] in
             defer { self?.onDemandDriveFolderTasks[taskKey] = nil }
             guard let self else { return }
             do {
-                let batch = try await driveFetcher.fetchGoogleDriveSingleFolder(
-                    folderID: sub.id,
-                    resourceKey: sub.resourceKey,
-                    pathSegments: sub.pathSegments,
-                    depth: sub.depth,
-                    rootTitle: root.name,
-                    cookie: root.cookie
-                )
+                let batch: DriveFolderBatch
+                if let treeFetcher {
+                    batch = try await treeFetcher.fetchSingleTreeFolder(
+                        providerID: root.resolvedProviderID,
+                        folderID: sub.id,
+                        resourceKey: sub.resourceKey,
+                        pathSegments: sub.pathSegments,
+                        depth: sub.depth,
+                        rootTitle: root.name,
+                        cookie: root.cookie,
+                        extraJSON: sub.extraJSON
+                    )
+                } else if let legacyDriveFetcher, root.kind == .cloudGoogleDrive {
+                    batch = try await legacyDriveFetcher.fetchGoogleDriveSingleFolder(
+                        folderID: sub.id,
+                        resourceKey: sub.resourceKey,
+                        pathSegments: sub.pathSegments,
+                        depth: sub.depth,
+                        rootTitle: root.name,
+                        cookie: root.cookie
+                    )
+                } else {
+                    return
+                }
                 guard !Task.isCancelled, let activeRoot = self.root(rootID) else { return }
                 self.recordDriveBatchMetadata(root: activeRoot, batch: batch)
                 if self.mergeIncrementalCloudBatch(rootID: rootID, items: batch.tracks, now: Date()) {
@@ -719,31 +820,72 @@ final class LibraryStore {
         }
     }
 
-    func addCloudRoot(sourceURL: String, cookie: String? = nil) async throws {
-        let trimmedURL = CloudSourceInput.extract(from: sourceURL)
+    func addCloudRoot(sourceURL: String, cookie: String? = nil, preferredProviderID: String? = nil) async throws {
+        let rawInput = sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedURL = CloudSourceInput.extract(from: rawInput, registry: providerRegistry)
         guard !trimmedURL.isEmpty else { throw LibraryError.invalidCloudURL }
         let trimmedCookie = cookie?.trimmingCharacters(in: .whitespacesAndNewlines)
         let cleanCookie = (trimmedCookie?.isEmpty == false) ? trimmedCookie : nil
 
-        if CloudSourceInput.classify(trimmedURL) == .cloudGoogleDrive,
-           let driveFetcher = cloudFetcher as? any GoogleDriveProgressiveFetching {
-            let discovery = try await driveFetcher.discoverGoogleDriveRoot(sourceURL: trimmedURL, cookie: cleanCookie)
-            guard !roots.contains(where: { $0.kind == .cloudGoogleDrive && $0.remoteID == discovery.rootID }) else {
+        let targetProvider: (any CloudSourceProvider)?
+        let fetchSourceURL: String
+        if let preferredProviderID, !preferredProviderID.isEmpty {
+            guard let explicit = providerRegistry.provider(forID: preferredProviderID) else {
+                if preferredProviderID.hasPrefix("ext.") {
+                    throw CloudSourceError.extensionUnavailable(name: preferredProviderID)
+                }
+                throw LibraryError.invalidCloudURL
+            }
+            targetProvider = explicit
+            let matched = explicit.canHandle(rawText: rawInput, extractedURL: trimmedURL)
+            fetchSourceURL = (explicit.rootKind == .cloudExtension ? matched?.normalizedURL : nil) ?? trimmedURL
+        } else if let match = providerRegistry.match(rawText: rawInput, extractedURL: trimmedURL) {
+            targetProvider = providerRegistry.provider(forID: match.providerID)
+            fetchSourceURL = match.kind == .cloudExtension ? match.normalizedURL : trimmedURL
+        } else {
+            targetProvider = nil
+            fetchSourceURL = trimmedURL
+        }
+
+        let treeFetcher = cloudFetcher as? any CloudTreeProgressiveFetching
+        let legacyDriveFetcher = cloudFetcher as? any GoogleDriveProgressiveFetching
+        let targetPID = targetProvider?.id ?? preferredProviderID
+        let shouldUseProgressiveTree: Bool = {
+            if let treeFetcher, let targetPID, treeFetcher.supportsProgressiveTree(for: targetPID) {
+                return true
+            }
+            return targetProvider?.rootKind == .cloudGoogleDrive && legacyDriveFetcher != nil
+        }()
+
+        if shouldUseProgressiveTree {
+            let discovery: DriveFolderDiscovery
+            if let treeFetcher, let targetPID, treeFetcher.supportsProgressiveTree(for: targetPID) {
+                discovery = try await treeFetcher.discoverTreeRoot(sourceURL: fetchSourceURL, cookie: cleanCookie, providerID: targetPID)
+            } else if let legacyDriveFetcher {
+                discovery = try await legacyDriveFetcher.discoverGoogleDriveRoot(sourceURL: fetchSourceURL, cookie: cleanCookie)
+            } else {
+                throw CloudSourceError.unsupportedSource
+            }
+
+            let resolvedPID = discovery.providerID ?? targetPID ?? discovery.kind.builtInProviderID
+            guard !isDuplicateCloudRoot(kind: discovery.kind, providerID: resolvedPID, remoteID: discovery.rootID) else {
                 throw LibraryError.duplicateRoot
             }
 
             if let single = discovery.singleFileResult {
+                let singlePID = single.providerID ?? resolvedPID
                 let now = Date()
                 let root = LibraryRoot(
                     id: UUID(),
                     name: single.title,
-                    kind: .cloudGoogleDrive,
+                    kind: single.kind,
                     bookmark: nil,
                     sourceURL: trimmedURL,
                     remoteID: single.remoteID,
                     cookie: cleanCookie,
                     proxyURL: nil,
-                    lastSynced: now
+                    lastSynced: now,
+                    providerID: singlePID
                 )
                 let (newTracks, _, _) = Self.mergeCloudTracks(root: root, items: single.tracks, existing: [:], now: now)
                 roots.append(root)
@@ -755,20 +897,24 @@ final class LibraryStore {
             }
 
             guard !(discovery.initialBatch.tracks.isEmpty && discovery.initialBatch.discoveredSubfolders.isEmpty) else {
-                throw CloudSourceError.apiError(L10n.trNonisolated("No supported audio files were found in this Google Drive folder."))
+                if discovery.kind == .cloudGoogleDrive {
+                    throw CloudSourceError.apiError(L10n.trNonisolated("No supported audio files were found in this Google Drive folder."))
+                }
+                throw CloudSourceError.emptyPlaylist
             }
 
             let now = Date()
             let root = LibraryRoot(
                 id: UUID(),
                 name: discovery.rootTitle,
-                kind: .cloudGoogleDrive,
+                kind: discovery.kind,
                 bookmark: nil,
                 sourceURL: trimmedURL,
                 remoteID: discovery.rootID,
                 cookie: cleanCookie,
                 proxyURL: nil,
-                lastSynced: now
+                lastSynced: now,
+                providerID: resolvedPID
             )
             roots.append(root)
             cloudSyncErrors[root.id] = nil
@@ -792,9 +938,11 @@ final class LibraryStore {
                     guard let self else { return }
                     await self.runDriveCrawl(
                         rootID: rootID,
+                        providerID: resolvedPID,
                         discovery: discovery,
                         cookie: cleanCookie,
-                        driveFetcher: driveFetcher,
+                        treeFetcher: treeFetcher,
+                        legacyDriveFetcher: legacyDriveFetcher,
                         priorityState: priorityState,
                         pruneDeletedOnSuccess: false,
                         notifyFolderQueueOnComplete: true
@@ -804,8 +952,24 @@ final class LibraryStore {
             return
         }
 
-        let fetched = try await cloudFetcher.fetchPlaylist(sourceURL: trimmedURL, cookie: cleanCookie, kindHint: nil)
-        guard !roots.contains(where: { $0.kind == fetched.kind && $0.remoteID == fetched.remoteID }) else {
+        let fetched: CloudPlaylistResult
+        if let providerAware = cloudFetcher as? any CloudProviderPlaylistFetching {
+            fetched = try await providerAware.fetchPlaylist(
+                sourceURL: fetchSourceURL,
+                cookie: cleanCookie,
+                kindHint: targetProvider?.rootKind,
+                providerIDHint: targetPID
+            )
+        } else {
+            fetched = try await cloudFetcher.fetchPlaylist(
+                sourceURL: trimmedURL,
+                cookie: cleanCookie,
+                kindHint: targetProvider?.rootKind
+            )
+        }
+
+        let resolvedPID = fetched.providerID ?? targetPID ?? fetched.kind.builtInProviderID
+        guard !isDuplicateCloudRoot(kind: fetched.kind, providerID: resolvedPID, remoteID: fetched.remoteID) else {
             throw LibraryError.duplicateRoot
         }
 
@@ -819,7 +983,8 @@ final class LibraryStore {
             remoteID: fetched.remoteID,
             cookie: cleanCookie,
             proxyURL: nil,
-            lastSynced: now
+            lastSynced: now,
+            providerID: resolvedPID
         )
         let (newTracks, _, _) = Self.mergeCloudTracks(root: root, items: fetched.tracks, existing: [:], now: now)
         roots.append(root)
@@ -952,13 +1117,21 @@ final class LibraryStore {
         var cloudChanged = false
         var manifestChanged = false
         var progressiveDriveRoots: [LibraryRoot] = []
+        let treeFetcher = cloudFetcher as? any CloudTreeProgressiveFetching
         let progressiveDriveFetcher = cloudFetcher as? any GoogleDriveProgressiveFetching
+        let providerAwareFetcher = cloudFetcher as? any CloudProviderPlaylistFetching
         let reread = rereadAll
         let syncNow = Date()
 
         for root in roots {
             let existingTracks = tracks.filter { $0.rootID == root.id }
-            if root.kind == .cloudGoogleDrive, progressiveDriveFetcher != nil {
+            if root.kind == .cloudExtension, cloudExtensionAvailability(for: root) != .available {
+                // Non-destructive: keep tracks, playlists, stats, and cached audio intact while disabled or missing.
+                cloudSyncErrors[root.id] = nil
+                kept.append(contentsOf: existingTracks)
+                continue
+            }
+            if isProgressiveTreeRoot(root) {
                 progressiveDriveRoots.append(root)
                 kept.append(contentsOf: existingTracks)
                 continue
@@ -966,7 +1139,17 @@ final class LibraryStore {
             if root.kind.isCloud {
                 do {
                     let source = root.sourceURL ?? root.remoteID ?? ""
-                    let fetched = try await cloudFetcher.fetchPlaylist(sourceURL: source, cookie: root.cookie, kindHint: root.kind)
+                    let fetched: CloudPlaylistResult
+                    if let providerAwareFetcher {
+                        fetched = try await providerAwareFetcher.fetchPlaylist(
+                            sourceURL: source,
+                            cookie: root.cookie,
+                            kindHint: root.kind,
+                            providerIDHint: root.resolvedProviderID
+                        )
+                    } else {
+                        fetched = try await cloudFetcher.fetchPlaylist(sourceURL: source, cookie: root.cookie, kindHint: root.kind)
+                    }
                     // A root removed while fetching must not resurrect.
                     guard let rootIndex = roots.firstIndex(where: { $0.id == root.id }) else { continue }
                     cloudSyncErrors[root.id] = nil
@@ -1077,10 +1260,15 @@ final class LibraryStore {
             }
         }
 
-        if let driveFetcher = progressiveDriveFetcher {
+        if treeFetcher != nil || progressiveDriveFetcher != nil {
             for driveRoot in progressiveDriveRoots {
                 guard roots.contains(where: { $0.id == driveRoot.id }) else { continue }
-                await rescanProgressiveDriveRoot(driveRoot, driveFetcher: driveFetcher, syncNow: syncNow)
+                await rescanProgressiveDriveRoot(
+                    driveRoot,
+                    treeFetcher: treeFetcher,
+                    legacyDriveFetcher: progressiveDriveFetcher,
+                    syncNow: syncNow
+                )
             }
         }
 
@@ -1108,10 +1296,12 @@ final class LibraryStore {
                 if roots[rootIndex].sourceURL != rootManifest.sourceURL
                     || roots[rootIndex].remoteID != rootManifest.remoteID
                     || roots[rootIndex].linkedCloudKind != rootManifest.cloudKind
+                    || roots[rootIndex].linkedProviderID != rootManifest.resolvedProviderID
                     || roots[rootIndex].lastSynced != manifestDate {
                     roots[rootIndex].sourceURL = rootManifest.sourceURL
                     roots[rootIndex].remoteID = rootManifest.remoteID
                     roots[rootIndex].linkedCloudKind = rootManifest.cloudKind
+                    roots[rootIndex].linkedProviderID = rootManifest.resolvedProviderID
                     roots[rootIndex].lastSynced = manifestDate
                     changed = true
                 }
@@ -1136,7 +1326,8 @@ final class LibraryStore {
                         remoteID: manifest.remoteID,
                         cloudKind: manifest.cloudKind,
                         cookie: existingInfo.cookie,
-                        lastSynced: manifestDate
+                        lastSynced: manifestDate,
+                        providerID: manifest.resolvedProviderID
                     )
                 } else {
                     updatedSubfolders[path] = existingInfo
@@ -1156,7 +1347,8 @@ final class LibraryStore {
                 remoteID: manifest.remoteID,
                 cloudKind: manifest.cloudKind,
                 cookie: nil,
-                lastSynced: Date(timeIntervalSince1970: Double(manifest.lastSyncedEpochMs) / 1000.0)
+                lastSynced: Date(timeIntervalSince1970: Double(manifest.lastSyncedEpochMs) / 1000.0),
+                providerID: manifest.resolvedProviderID
             )
         }
 
@@ -1169,7 +1361,8 @@ final class LibraryStore {
 
     private func rescanProgressiveDriveRoot(
         _ rootSnapshot: LibraryRoot,
-        driveFetcher: any GoogleDriveProgressiveFetching,
+        treeFetcher: (any CloudTreeProgressiveFetching)?,
+        legacyDriveFetcher: (any GoogleDriveProgressiveFetching)?,
         syncNow: Date
     ) async {
         driveCrawlTasks[rootSnapshot.id]?.cancel()
@@ -1179,7 +1372,14 @@ final class LibraryStore {
 
         let source = rootSnapshot.sourceURL ?? rootSnapshot.remoteID ?? ""
         do {
-            let discovery = try await driveFetcher.discoverGoogleDriveRoot(sourceURL: source, cookie: rootSnapshot.cookie)
+            let discovery: DriveFolderDiscovery
+            if let treeFetcher, let pid = rootSnapshot.resolvedProviderID, treeFetcher.supportsProgressiveTree(for: pid) {
+                discovery = try await treeFetcher.discoverTreeRoot(sourceURL: source, cookie: rootSnapshot.cookie, providerID: pid)
+            } else if let legacyDriveFetcher, rootSnapshot.kind == .cloudGoogleDrive {
+                discovery = try await legacyDriveFetcher.discoverGoogleDriveRoot(sourceURL: source, cookie: rootSnapshot.cookie)
+            } else {
+                return
+            }
             guard let rootIndex = roots.firstIndex(where: { $0.id == rootSnapshot.id }) else { return }
             cloudSyncErrors[rootSnapshot.id] = nil
             if roots[rootIndex].name.isEmpty, !discovery.rootTitle.isEmpty {
@@ -1227,13 +1427,16 @@ final class LibraryStore {
                 tracksLoaded: tracks.lazy.filter { $0.rootID == rootSnapshot.id }.count
             )
             let rootID = rootSnapshot.id
+            let providerID = discovery.providerID ?? rootSnapshot.resolvedProviderID
             let task = Task { @MainActor [weak self] in
                 guard let self else { return }
                 await self.runDriveCrawl(
                     rootID: rootID,
+                    providerID: providerID,
                     discovery: discovery,
                     cookie: rootSnapshot.cookie,
-                    driveFetcher: driveFetcher,
+                    treeFetcher: treeFetcher,
+                    legacyDriveFetcher: legacyDriveFetcher,
                     priorityState: priorityState,
                     pruneDeletedOnSuccess: true,
                     notifyFolderQueueOnComplete: false
@@ -1251,9 +1454,11 @@ final class LibraryStore {
 
     private func runDriveCrawl(
         rootID: UUID,
+        providerID: String?,
         discovery: DriveFolderDiscovery,
         cookie: String?,
-        driveFetcher: any GoogleDriveProgressiveFetching,
+        treeFetcher: (any CloudTreeProgressiveFetching)?,
+        legacyDriveFetcher: (any GoogleDriveProgressiveFetching)?,
         priorityState: DriveCrawlPriorityState,
         pruneDeletedOnSuccess: Bool,
         notifyFolderQueueOnComplete: Bool
@@ -1278,11 +1483,7 @@ final class LibraryStore {
         let tracker = DriveCrawlTracker(initialPaths: discovery.initialBatch.tracks.map(\.relativePath))
 
         do {
-            let summary = try await driveFetcher.crawlGoogleDriveTree(
-                discovery: discovery,
-                cookie: cookie,
-                priorityState: priorityState
-            ) { @Sendable [weak self] batch in
+            let batchHandler: @Sendable (DriveFolderBatch) async -> Void = { @Sendable [weak self] batch in
                 await MainActor.run {
                     guard let store = self, !Task.isCancelled, let activeRoot = store.root(rootID) else { return }
                     tracker.foldersDone += 1
@@ -1299,6 +1500,26 @@ final class LibraryStore {
                         tracksLoaded: loadedCount
                     )
                 }
+            }
+
+            let summary: DriveCrawlSummary
+            if let treeFetcher {
+                summary = try await treeFetcher.crawlTree(
+                    discovery: discovery,
+                    providerID: providerID,
+                    cookie: cookie,
+                    priorityState: priorityState,
+                    onBatch: batchHandler
+                )
+            } else if let legacyDriveFetcher {
+                summary = try await legacyDriveFetcher.crawlGoogleDriveTree(
+                    discovery: discovery,
+                    cookie: cookie,
+                    priorityState: priorityState,
+                    onBatch: batchHandler
+                )
+            } else {
+                return
             }
 
             guard !Task.isCancelled, let rootIndex = roots.firstIndex(where: { $0.id == rootID }) else { return }
@@ -1345,7 +1566,8 @@ final class LibraryStore {
                     resourceKey: sub.resourceKey,
                     pathSegments: sub.pathSegments,
                     depth: sub.depth,
-                    isLoaded: false
+                    isLoaded: false,
+                    extraJSON: sub.extraJSON
                 )
             }
         }
@@ -1509,7 +1731,7 @@ final class LibraryStore {
         existing: [String: Track],
         now: Date
     ) -> (tracks: [Track], changed: Bool, migratedIDs: [String: String], consumedOldIDs: Set<String>) {
-        let sourceName = root.kind.cloudSourceSlug ?? "bilibili"
+        let sourceName = root.kind.cloudSourceSlug ?? root.resolvedProviderID ?? "cloud"
         let albumArtistName: String? = root.kind == .cloudGoogleDrive ? "Google Drive" : nil
         var legacyByFileID: [String: Track] = [:]
         if root.kind == .cloudGoogleDrive {
@@ -1701,7 +1923,15 @@ final class LibraryStore {
         rootURLs[track.rootID].map { FolderScanner.url(root: $0, relativePath: track.relativePath) }
     }
 
-    func isAvailable(_ track: Track) -> Bool { track.isCloud || rootURLs[track.rootID] != nil }
+    func isAvailable(_ track: Track) -> Bool {
+        if track.isCloud {
+            if let root = self.root(track.rootID), root.kind == .cloudExtension {
+                return isAvailable(root) || CloudAudioCache.shared.hasCachedFileSync(for: track.id)
+            }
+            return true
+        }
+        return rootURLs[track.rootID] != nil
+    }
 
     func embeddedLyrics(for track: Track) async -> String? {
         guard track.hasEmbeddedLyrics, let url = url(for: track) else { return nil }
@@ -1791,17 +2021,34 @@ final class LibraryStore {
         saveLibrary()
     }
 
-    private func usesFlatCloudListing(rootID: UUID, rootKind: LibraryRoot.Kind, rootTracks: [Track]) -> Bool {
-        guard rootKind.isCloud else { return false }
-        if rootKind != .cloudGoogleDrive { return true }
-        if let known = knownDriveSubfolders[rootID], !known.isEmpty { return false }
-        if rootTracks.isEmpty { return false }
-        let hasHierarchicalTrack = rootTracks.contains {
-            $0.relativePath.contains("/") && !$0.relativePath.hasPrefix("gdrive/")
-        }
-        if hasHierarchicalTrack { return false }
-        return rootTracks.allSatisfy {
-            !$0.relativePath.contains("/") || $0.relativePath.hasPrefix("gdrive/")
+    private func usesFlatCloudListing(root: LibraryRoot, rootTracks: [Track]) -> Bool {
+        guard root.kind.isCloud else { return false }
+        switch root.kind {
+        case .cloudYouTube, .cloudBilibili:
+            return true
+        case .cloudExtension:
+            if let provider = provider(for: root), provider.supportsTree {
+                return false
+            }
+            if let known = knownDriveSubfolders[root.id], !known.isEmpty {
+                return false
+            }
+            if rootTracks.contains(where: { $0.relativePath.contains("/") }) {
+                return false
+            }
+            return true
+        case .cloudGoogleDrive:
+            if let known = knownDriveSubfolders[root.id], !known.isEmpty { return false }
+            if rootTracks.isEmpty { return false }
+            let hasHierarchicalTrack = rootTracks.contains {
+                $0.relativePath.contains("/") && !$0.relativePath.hasPrefix("gdrive/")
+            }
+            if hasHierarchicalTrack { return false }
+            return rootTracks.allSatisfy {
+                !$0.relativePath.contains("/") || $0.relativePath.hasPrefix("gdrive/")
+            }
+        case .picked, .appFolder:
+            return false
         }
     }
 
@@ -1810,7 +2057,7 @@ final class LibraryStore {
         let normPath = LibraryRoot.normalizeFolderPath(path)
         let rootObj = self.root(root)
         let rootTracks = tracks.filter { $0.rootID == root }
-        if normPath.isEmpty, let rootObj, usesFlatCloudListing(rootID: root, rootKind: rootObj.kind, rootTracks: rootTracks) {
+        if normPath.isEmpty, let rootObj, usesFlatCloudListing(root: rootObj, rootTracks: rootTracks) {
             let direct = rootTracks
                 .sorted { $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending }
             return ([], direct)

@@ -1,6 +1,7 @@
 using System.Globalization;
 using MusicoWindows.Cloud;
 using MusicoWindows.Core;
+using MusicoWindows.Extensions;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
 
@@ -225,12 +226,13 @@ public sealed class DownloadManager
         RootKind? effectiveKind = trackingOverride?.CloudKind.IsCloud() == true
             ? trackingOverride.CloudKind
             : root.EffectiveCloudKind;
-        string sourceLabel = effectiveKind switch
-        {
-            RootKind.CloudBilibili => "Bilibili",
-            RootKind.CloudGoogleDrive => "Google Drive",
-            _ => "YouTube"
-        };
+        string? effectiveProviderId = !string.IsNullOrWhiteSpace(trackingOverride?.ResolvedProviderId)
+            ? trackingOverride!.ResolvedProviderId
+            : root.EffectiveProviderId;
+        string sourceLabel = CloudProviderRegistry.ResolveDisplayLabel(
+            _library.CloudProviders,
+            effectiveProviderId,
+            effectiveKind);
         string? sourceUrl = !string.IsNullOrWhiteSpace(trackingOverride?.SourceUrl)
             ? trackingOverride!.SourceUrl
             : root.SourceUrl;

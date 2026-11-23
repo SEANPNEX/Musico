@@ -362,7 +362,9 @@ class CloudDownloadManager(
         val coroutineJob = scope.launch {
             try {
                 val fetcher: suspend (String, String?, com.musico.model.RootKind?) -> com.musico.cloud.CloudPlaylistResult =
-                    { url, cookie, kindHint -> libraryStore.fetchCloudPlaylist(url, cookie, kindHint) }
+                    { url, cookie, kindHint -> libraryStore.fetchCloudPlaylist(url, cookie, kindHint, tracking?.resolvedProviderId) }
+                val providerFetcher: suspend (String, String?, com.musico.model.RootKind?, String?) -> com.musico.cloud.CloudPlaylistResult =
+                    { url, cookie, kindHint, providerIdHint -> libraryStore.fetchCloudPlaylist(url, cookie, kindHint, providerIdHint) }
                 val res = if (directDir != null) {
                     cloudExporter.updateLocalFolder(
                         root = root,
@@ -373,6 +375,8 @@ class CloudDownloadManager(
                         overrideCookie = cookieOverride ?: tracking?.cookie,
                         overrideCloudKind = tracking?.cloudKind,
                         subfolderPath = normSub,
+                        overrideProviderId = tracking?.resolvedProviderId,
+                        fetchPlaylistWithProvider = providerFetcher,
                     )
                 } else {
                     cloudExporter.updateLocalFolder(
@@ -384,6 +388,8 @@ class CloudDownloadManager(
                         overrideCookie = cookieOverride ?: tracking?.cookie,
                         overrideCloudKind = tracking?.cloudKind,
                         subfolderPath = normSub,
+                        overrideProviderId = tracking?.resolvedProviderId,
+                        fetchPlaylistWithProvider = providerFetcher,
                     )
                 }
                 libraryStore.markRootCloudSynced(root.id, subfolderPath = normSub)

@@ -1,0 +1,585 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Net.Http;
+using System.Text;
+using System.Text.Json;
+using System.Threading;
+using System.Threading.Tasks;
+using MusicoWindows.Cloud;
+using MusicoWindows.Core;
+
+namespace MusicoWindows.Extensions;
+
+public sealed class ExtensionStore : IExtensionHostServices
+{
+    public const int MaxLogEntriesPerExtension = 200;
+
+    private sealed class ExtensionStateFile
+    {
+        public List<ExtensionStateRecord> Extensions { get; set; } = new();
+    }
+
+    private readonly object _stateLock = new();
+    private readonly object _logsLock = new();
+    private readonly object _kvLock = new();
+
+    private readonly HttpMessageHandler? _httpHandler;
+    private readonly JintExtensionRuntime _runtime;
+    private readonly List<InstalledExtension> _extensions = new();
+    private readonly Dictionary<string, List<ExtensionLogEntry>> _logs = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, Dictionary<string, ExtensionKvEntry>> _kvCache = new(StringComparer.Ordinal);
+    private CloudProviderRegistry? _registry;
+
+    public ExtensionStore(
+        string? stateDirectory = null,
+        HttpMessageHandler? httpHandler = null,
+        JintExtensionRuntime? runtime = null,
+        string? appVersion = null)
+    {
+        string baseStateDir = string.IsNullOrWhiteSpace(stateDirectory)
+            ? Persistence.AppDataDirectory
+            : stateDirectory;
+        ExtensionsDirectory = Path.Combine(baseStateDir, "Extensions");
+        Directory.CreateDirectory(ExtensionsDirectory);
+
+        _httpHandler = httpHandler;
+        _runtime = runtime ?? new JintExtensionRuntime(httpHandler, appVersion);
+
+        LoadFromDisk();
+    }
+
+    public string ExtensionsDirectory { get; }
+    public JintExtensionRuntime Runtime => _runtime;
+    private string StateFilePath => Path.Combine(ExtensionsDirectory, "state.json");
+
+    public event Action? Changed;
+    public event Action<string>? LogsChanged;
+
+    public IReadOnlyList<InstalledExtension> Extensions
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _extensions.ToList();
+            }
+        }
+    }
+
+    public InstalledExtension? GetById(string? extensionId)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId)) return null;
+        string target = extensionId.Trim();
+        lock (_stateLock)
+        {
+            return _extensions.FirstOrDefault(e => string.Equals(e.Id, target, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    public InstalledExtension? GetByProviderId(string? providerId)
+    {
+        if (string.IsNullOrWhiteSpace(providerId)) return null;
+        string target = providerId.Trim();
+        if (target.StartsWith("ext.", StringComparison.OrdinalIgnoreCase))
+        {
+            target = target[4..];
+        }
+        return GetById(target);
+    }
+
+    public void BindRegistry(CloudProviderRegistry registry)
+    {
+        ArgumentNullException.ThrowIfNull(registry);
+        _registry = registry;
+        SyncToRegistry();
+    }
+
+    public void SyncToRegistry()
+    {
+        var registry = _registry;
+        if (registry is null) return;
+
+        List<InstalledExtension> enabled;
+        lock (_stateLock)
+        {
+            enabled = _extensions.Where(e => e.IsEnabled).ToList();
+        }
+
+        var providers = enabled
+            .Select(ext => (ICloudSourceProvider)new JsExtensionCloudProvider(ext, this, _runtime))
+            .ToList();
+        registry.SyncExtensionProviders(providers);
+    }
+
+    public async Task<InstalledExtension> ImportFromFileAsync(string filePath, CancellationToken ct = default)
+    {
+        LoadedExtensionPackage pkg = await Task.Run(() => ExtensionPackageLoader.LoadFromFile(filePath), ct)
+            .ConfigureAwait(false);
+        return StageImportedPackage(pkg, filePath);
+    }
+
+    public async Task<InstalledExtension> ImportFromUrlAsync(
+        string url,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(url) ||
+            !Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri) ||
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new ArgumentException("Extension URL must be a valid https:// URL.", nameof(url));
+        }
+
+        using var http = CloudHttpHelper.CreateClient(proxyUrl, _httpHandler, TimeSpan.FromSeconds(30));
+        using var resp = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
+        resp.EnsureSuccessStatusCode();
+
+        await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var ms = new MemoryStream();
+        byte[] buffer = new byte[16384];
+        long total = 0;
+        while (true)
+        {
+            int read = await stream.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false);
+            if (read <= 0) break;
+            total += read;
+            if (total > ExtensionPackageLoader.MaxUncompressedBytes)
+            {
+                throw new InvalidDataException(
+                    $"Downloaded extension exceeds maximum size of {ExtensionPackageLoader.MaxUncompressedBytes / (1024 * 1024)} MB.");
+            }
+            ms.Write(buffer, 0, read);
+        }
+
+        byte[] bytes = ms.ToArray();
+        string? hint = Path.GetFileName(uri.AbsolutePath);
+        LoadedExtensionPackage pkg = await Task.Run(() => ExtensionPackageLoader.LoadFromBytes(bytes, hint), ct)
+            .ConfigureAwait(false);
+
+        return StageImportedPackage(pkg, uri.AbsoluteUri);
+    }
+
+    public InstalledExtension StageImportedPackage(LoadedExtensionPackage pkg, string? sourceLocation = null)
+    {
+        ArgumentNullException.ThrowIfNull(pkg);
+        string extDir = GetExtensionDirectory(pkg.Manifest.Id);
+        ExtensionPackageLoader.InstallToDirectory(pkg, extDir);
+
+        InstalledExtension installed;
+        lock (_stateLock)
+        {
+            var existing = _extensions.FirstOrDefault(e =>
+                string.Equals(e.Id, pkg.Manifest.Id, StringComparison.OrdinalIgnoreCase));
+
+            var settings = existing is not null
+                ? new Dictionary<string, JsonElement>(existing.State.Settings, StringComparer.Ordinal)
+                : new Dictionary<string, JsonElement>(StringComparer.Ordinal);
+
+            var state = new ExtensionStateRecord
+            {
+                Id = pkg.Manifest.Id,
+                Enabled = false,
+                PendingPermissionReview = true,
+                Format = pkg.Format,
+                SourceLocation = sourceLocation,
+                InstalledUtc = DateTimeOffset.UtcNow,
+                Settings = settings
+            };
+
+            installed = BuildInstalledExtension(pkg.Manifest, state, extDir);
+
+            _extensions.RemoveAll(e => string.Equals(e.Id, pkg.Manifest.Id, StringComparison.OrdinalIgnoreCase));
+            _extensions.Add(installed);
+            SaveStateLocked();
+        }
+
+        SyncToRegistry();
+        Changed?.Invoke();
+        return installed;
+    }
+
+    public void ApproveAndEnable(string extensionId)
+    {
+        lock (_stateLock)
+        {
+            int idx = FindIndexLocked(extensionId);
+            if (idx < 0)
+            {
+                throw new KeyNotFoundException($"Extension '{extensionId}' is not installed.");
+            }
+            var ext = _extensions[idx];
+            ext.State.PendingPermissionReview = false;
+            ext.State.Enabled = true;
+            SaveStateLocked();
+        }
+
+        SyncToRegistry();
+        Changed?.Invoke();
+    }
+
+    public void SetEnabled(string extensionId, bool enabled)
+    {
+        lock (_stateLock)
+        {
+            int idx = FindIndexLocked(extensionId);
+            if (idx < 0) return;
+
+            var ext = _extensions[idx];
+            if (enabled && ext.State.PendingPermissionReview)
+            {
+                throw new InvalidOperationException("Extension permissions must be reviewed and approved before enabling.");
+            }
+            if (ext.State.Enabled == enabled) return;
+
+            ext.State.Enabled = enabled;
+            SaveStateLocked();
+        }
+
+        SyncToRegistry();
+        Changed?.Invoke();
+    }
+
+    public bool Uninstall(string extensionId)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId)) return false;
+
+        string? dirToDelete = null;
+        lock (_stateLock)
+        {
+            int idx = FindIndexLocked(extensionId);
+            if (idx < 0) return false;
+            dirToDelete = _extensions[idx].DirectoryPath;
+            _extensions.RemoveAt(idx);
+            SaveStateLocked();
+        }
+
+        lock (_logsLock)
+        {
+            _logs.Remove(extensionId);
+        }
+        lock (_kvLock)
+        {
+            _kvCache.Remove(extensionId);
+        }
+
+        if (!string.IsNullOrWhiteSpace(dirToDelete) && Directory.Exists(dirToDelete))
+        {
+            try { Directory.Delete(dirToDelete, recursive: true); } catch { /* best effort */ }
+        }
+
+        SyncToRegistry();
+        Changed?.Invoke();
+        return true;
+    }
+
+    public string ReadScriptSource(InstalledExtension ext)
+    {
+        ArgumentNullException.ThrowIfNull(ext);
+        if (!File.Exists(ext.EntryScriptPath))
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionUnavailable,
+                $"Extension entry script is missing for '{ext.Id}'.");
+        }
+        return File.ReadAllText(ext.EntryScriptPath, Encoding.UTF8);
+    }
+
+    // Typed Settings
+
+    public string? GetSettingJson(string extensionId, string key)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId) || string.IsNullOrWhiteSpace(key)) return null;
+        lock (_stateLock)
+        {
+            var ext = _extensions.FirstOrDefault(e => string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase));
+            if (ext is null) return null;
+
+            if (ext.State.Settings.TryGetValue(key, out var val))
+            {
+                return val.GetRawText();
+            }
+
+            var spec = ext.Manifest.Settings?.FirstOrDefault(s => string.Equals(s.Key, key, StringComparison.Ordinal));
+            return spec?.Default is JsonElement defVal ? defVal.GetRawText() : null;
+        }
+    }
+
+    public bool GetSettingBool(string extensionId, string key)
+    {
+        string? raw = GetSettingJson(extensionId, key);
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            return doc.RootElement.ValueKind switch
+            {
+                JsonValueKind.True => true,
+                JsonValueKind.False => false,
+                JsonValueKind.String when bool.TryParse(doc.RootElement.GetString(), out bool b) => b,
+                _ => false
+            };
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public string GetSettingString(string extensionId, string key)
+    {
+        string? raw = GetSettingJson(extensionId, key);
+        if (string.IsNullOrWhiteSpace(raw)) return string.Empty;
+        try
+        {
+            using var doc = JsonDocument.Parse(raw);
+            return doc.RootElement.ValueKind switch
+            {
+                JsonValueKind.String => doc.RootElement.GetString() ?? string.Empty,
+                JsonValueKind.Null or JsonValueKind.Undefined => string.Empty,
+                JsonValueKind.True => "true",
+                JsonValueKind.False => "false",
+                _ => doc.RootElement.ToString()
+            };
+        }
+        catch
+        {
+            return string.Empty;
+        }
+    }
+
+    public void SetSettingValue(string extensionId, string key, bool value) =>
+        SetSettingJsonElement(extensionId, key, JsonSerializer.SerializeToElement(value, ExtensionJson.Options));
+
+    public void SetSettingValue(string extensionId, string key, string? value) =>
+        SetSettingJsonElement(extensionId, key, JsonSerializer.SerializeToElement(value ?? string.Empty, ExtensionJson.Options));
+
+    public void SetSettingJsonElement(string extensionId, string key, JsonElement value)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId) || string.IsNullOrWhiteSpace(key)) return;
+        lock (_stateLock)
+        {
+            int idx = FindIndexLocked(extensionId);
+            if (idx < 0) return;
+
+            _extensions[idx].State.Settings[key] = value.Clone();
+            SaveStateLocked();
+        }
+        Changed?.Invoke();
+    }
+
+    // TTL-capable KV store (kv.json)
+
+    public string? KvGet(string extensionId, string key)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId) || string.IsNullOrWhiteSpace(key)) return null;
+        lock (_kvLock)
+        {
+            var dict = LoadKvDictLocked(extensionId);
+            if (!dict.TryGetValue(key, out var entry)) return null;
+
+            if (entry.ExpiresAtMs is long exp && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() >= exp)
+            {
+                dict.Remove(key);
+                SaveKvDictLocked(extensionId, dict);
+                return null;
+            }
+            return entry.Value;
+        }
+    }
+
+    public void KvSet(string extensionId, string key, string value, double? ttlSeconds = null)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId) || string.IsNullOrWhiteSpace(key)) return;
+        long? expiresAtMs = ttlSeconds is double ttl && !double.IsNaN(ttl) && !double.IsInfinity(ttl) && ttl > 0
+            ? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + (long)Math.Round(ttl * 1000.0)
+            : null;
+
+        lock (_kvLock)
+        {
+            var dict = LoadKvDictLocked(extensionId);
+            dict[key] = new ExtensionKvEntry(value ?? string.Empty, expiresAtMs);
+            SaveKvDictLocked(extensionId, dict);
+        }
+    }
+
+    public void KvRemove(string extensionId, string key)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId) || string.IsNullOrWhiteSpace(key)) return;
+        lock (_kvLock)
+        {
+            var dict = LoadKvDictLocked(extensionId);
+            if (dict.Remove(key))
+            {
+                SaveKvDictLocked(extensionId, dict);
+            }
+        }
+    }
+
+    // 200-entry ring buffer logs
+
+    public void AppendLog(string extensionId, ExtensionLogLevel level, string message)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId)) return;
+        var entry = new ExtensionLogEntry(
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+            level,
+            message ?? string.Empty);
+
+        lock (_logsLock)
+        {
+            if (!_logs.TryGetValue(extensionId, out var list))
+            {
+                list = new List<ExtensionLogEntry>();
+                _logs[extensionId] = list;
+            }
+            list.Add(entry);
+            while (list.Count > MaxLogEntriesPerExtension)
+            {
+                list.RemoveAt(0);
+            }
+        }
+
+        LogsChanged?.Invoke(extensionId);
+    }
+
+    public IReadOnlyList<ExtensionLogEntry> GetLogs(string extensionId)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId)) return Array.Empty<ExtensionLogEntry>();
+        lock (_logsLock)
+        {
+            return _logs.TryGetValue(extensionId, out var list)
+                ? list.ToList()
+                : Array.Empty<ExtensionLogEntry>();
+        }
+    }
+
+    public void ClearLogs(string extensionId)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId)) return;
+        bool changed;
+        lock (_logsLock)
+        {
+            changed = _logs.Remove(extensionId);
+        }
+        if (changed)
+        {
+            LogsChanged?.Invoke(extensionId);
+        }
+    }
+
+    private void LoadFromDisk()
+    {
+        var stateFile = Persistence.Load<ExtensionStateFile>(StateFilePath);
+        if (stateFile?.Extensions is null || stateFile.Extensions.Count == 0) return;
+
+        bool prunedMissing = false;
+        lock (_stateLock)
+        {
+            foreach (var state in stateFile.Extensions)
+            {
+                if (string.IsNullOrWhiteSpace(state.Id)) continue;
+                string extDir = GetExtensionDirectory(state.Id);
+                string manifestPath = Path.Combine(extDir, "manifest.json");
+                if (!File.Exists(manifestPath))
+                {
+                    prunedMissing = true;
+                    continue;
+                }
+
+                try
+                {
+                    byte[] bytes = File.ReadAllBytes(manifestPath);
+                    var manifest = JsonSerializer.Deserialize<ExtensionManifest>(bytes, ExtensionJson.Options);
+                    if (manifest is null)
+                    {
+                        prunedMissing = true;
+                        continue;
+                    }
+                    ExtensionManifestValidator.Validate(manifest);
+                    var installed = BuildInstalledExtension(manifest, state, extDir);
+                    if (!File.Exists(installed.EntryScriptPath))
+                    {
+                        prunedMissing = true;
+                        continue;
+                    }
+                    _extensions.Add(installed);
+                }
+                catch
+                {
+                    prunedMissing = true;
+                }
+            }
+
+            if (prunedMissing)
+            {
+                SaveStateLocked();
+            }
+        }
+    }
+
+    private static InstalledExtension BuildInstalledExtension(
+        ExtensionManifest manifest,
+        ExtensionStateRecord state,
+        string extDir)
+    {
+        string entryPath = Path.Combine(
+            extDir,
+            manifest.EffectiveEntry.Replace('\\', '/').TrimStart('/').Replace('/', Path.DirectorySeparatorChar));
+        string iconCandidate = Path.Combine(extDir, "icon.png");
+        string? iconPath = File.Exists(iconCandidate) ? iconCandidate : null;
+
+        return new InstalledExtension(
+            Manifest: manifest,
+            State: state,
+            DirectoryPath: extDir,
+            EntryScriptPath: entryPath,
+            IconPath: iconPath);
+    }
+
+    private string GetExtensionDirectory(string extensionId) =>
+        Path.Combine(ExtensionsDirectory, extensionId);
+
+    private int FindIndexLocked(string extensionId) =>
+        _extensions.FindIndex(e => string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase));
+
+    private void SaveStateLocked()
+    {
+        var stateFile = new ExtensionStateFile
+        {
+            Extensions = _extensions.Select(e => e.State).ToList()
+        };
+        Persistence.Save(stateFile, StateFilePath);
+    }
+
+    private Dictionary<string, ExtensionKvEntry> LoadKvDictLocked(string extensionId)
+    {
+        if (_kvCache.TryGetValue(extensionId, out var cached))
+        {
+            return cached;
+        }
+
+        string kvPath = Path.Combine(GetExtensionDirectory(extensionId), "kv.json");
+        var loaded = Persistence.Load<Dictionary<string, ExtensionKvEntry>>(kvPath)
+                     ?? new Dictionary<string, ExtensionKvEntry>(StringComparer.Ordinal);
+        var normalized = new Dictionary<string, ExtensionKvEntry>(loaded, StringComparer.Ordinal);
+        _kvCache[extensionId] = normalized;
+        return normalized;
+    }
+
+    private void SaveKvDictLocked(string extensionId, Dictionary<string, ExtensionKvEntry> dict)
+    {
+        string extDir = GetExtensionDirectory(extensionId);
+        if (!Directory.Exists(extDir)) return;
+        string kvPath = Path.Combine(extDir, "kv.json");
+        try
+        {
+            Persistence.Save(dict, kvPath);
+        }
+        catch
+        {
+            // Best-effort KV persistence.
+        }
+    }
+}

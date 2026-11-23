@@ -6,6 +6,7 @@ import UIKit
 /// Owns the long-lived stores for the running app.
 @MainActor
 final class AppModel {
+    let extensions: ExtensionStore
     let library: LibraryStore
     let queues: QueueStore
     let player: PlayerController
@@ -20,6 +21,7 @@ final class AppModel {
 
     init() {
         let support = Persistence.supportDirectory
+        extensions = ExtensionStore.shared
         #if targetEnvironment(macCatalyst)
         // The Mac has no per-app folder in Files; the built-in root is the user's Music folder.
         let documents = FileManager.default.urls(for: .musicDirectory, in: .userDomainMask)[0].resolvingSymlinksInPath()
@@ -62,6 +64,7 @@ struct MusicoApp: App {
                 .environment(\.lyricsStore, model.lyrics)
                 .environment(\.appNavigation, model.navigation)
                 .environment(\.downloadManager, model.downloadManager)
+                .environment(\.extensionStore, model.extensions)
                 .environment(\.languageManager, model.language)
                 .environment(\.locale, model.language.effectiveLocale)
                 #if targetEnvironment(macCatalyst)
@@ -126,6 +129,8 @@ struct MusicoApp: App {
                     .keyboardShortcut("6", modifiers: .command)
                 Button(L10n.tr("Stats")) { model.navigation.selectSidebar(.stats) }
                     .keyboardShortcut("7", modifiers: .command)
+                Button(L10n.tr("Extensions")) { model.navigation.selectSidebar(.extensions) }
+                    .keyboardShortcut("8", modifiers: .command)
             }
 
             CommandMenu(L10n.tr("Playback")) {

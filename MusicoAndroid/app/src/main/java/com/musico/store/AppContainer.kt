@@ -15,6 +15,8 @@ import com.musico.core.AndroidMetadataReader
 import com.musico.core.ArtworkCache
 import com.musico.core.LyricsStore
 import com.musico.core.MetadataReading
+import com.musico.extensions.CloudProviderRegistry
+import com.musico.extensions.ExtensionStore
 import com.musico.i18n.LanguageStore
 import com.musico.update.UpdateManager
 import java.io.File
@@ -38,10 +40,21 @@ class AppContainer(context: Context) {
     val youTubeClient: YouTubeClient = YouTubeClient(cloudHttpClient)
     val bilibiliClient: BilibiliClient = BilibiliClient(cloudHttpClient)
     val googleDriveClient: GoogleDriveClient = GoogleDriveClient(cloudHttpClient)
-    val cloudStreamResolver: CloudStreamResolver = CloudStreamResolver(youTubeClient, bilibiliClient, googleDriveClient)
+    val cloudProviderRegistry: CloudProviderRegistry = CloudProviderRegistry(
+        youTubeClient = youTubeClient,
+        bilibiliClient = bilibiliClient,
+        googleDriveClient = googleDriveClient,
+    )
+    val extensionStore: ExtensionStore = ExtensionStore(
+        stateDir = stateDir,
+        httpClient = cloudHttpClient,
+        providerRegistry = cloudProviderRegistry,
+    )
+    val cloudStreamResolver: CloudStreamResolver = CloudStreamResolver(cloudProviderRegistry)
     val cloudExporter: CloudExporter = CloudExporter(
         context = appContext,
         cloudResolver = cloudStreamResolver,
+        providerRegistry = cloudProviderRegistry,
     )
     val libraryStore: LibraryStore = LibraryStore(
         directory = stateDir,
@@ -53,7 +66,12 @@ class AppContainer(context: Context) {
         youTubeClient = youTubeClient,
         bilibiliClient = bilibiliClient,
         googleDriveClient = googleDriveClient,
-    )
+        providerRegistry = cloudProviderRegistry,
+    ).also { store ->
+        extensionStore.onAvailabilityChanged = {
+            store.refreshAvailability()
+        }
+    }
     val queueStore: QueueStore = QueueStore(stateDir)
     val historyStore: PlayHistoryStore = PlayHistoryStore(stateDir)
     val lyricsStore: LyricsStore = LyricsStore(File(stateDir, "lyrics"))

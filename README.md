@@ -28,15 +28,16 @@
 
 | Folder | Target Platforms | Tech Stack | Native UI Vibe |
 |---|---|---|---|
-| [`Musico/`](Musico/) | iOS 17+, iPadOS, macOS (Catalyst) | Swift, SwiftUI (`@Observable`), `AVAudioEngine` + `AVAudioUnitEQ`, `MPNowPlayingInfoCenter` | Apple HIG — cozy Tabs & Sheets on iOS, crisp Sidebar + Inspector on macOS/iPadOS |
-| [`MusicoAndroid/`](MusicoAndroid/) | Android 8.0+ (API 26+) | Kotlin, Jetpack Compose, AndroidX Media3 (ExoPlayer + `MediaSessionService`), SAF `DocumentFile`, `DynamicsProcessing` EQ | Material 3 / Material You — Dynamic Color, adaptive `NavigationBar` / `NavigationRail`, `ModalBottomSheet` |
-| [`MusicoWindows/`](MusicoWindows/) | Windows 10 (2004+) & Windows 11 | C# / .NET 8 WPF, NAudio (`BiQuadFilter` 10-band EQ), TagLibSharp, Windows 10 SMTC | Windows 10 Fluent Design — `Segoe UI`, Acrylic `NavigationView`, sharp 0px geometry, Reveal hover, Light/Dark sync |
+| [`Musico/`](Musico/) | iOS 17+, iPadOS, macOS (Catalyst) | Swift, SwiftUI (`@Observable`), `AVAudioEngine` + `AVAudioUnitEQ`, `MPNowPlayingInfoCenter`, embedded `JavaScriptCore` (`Compression` + `CryptoKit`) | Apple HIG — cozy Tabs & Sheets on iOS, crisp Sidebar + Inspector on macOS/iPadOS |
+| [`MusicoAndroid/`](MusicoAndroid/) | Android 8.0+ (API 26+) | Kotlin, Jetpack Compose, AndroidX Media3 (ExoPlayer + `MediaSessionService`), SAF `DocumentFile`, `DynamicsProcessing` EQ, embedded `QuickJS` (`quickjs-kt`) | Material 3 / Material You — Dynamic Color, adaptive `NavigationBar` / `NavigationRail`, `ModalBottomSheet` |
+| [`MusicoWindows/`](MusicoWindows/) | Windows 10 (2004+) & Windows 11 | C# / .NET 8 WPF, NAudio (`BiQuadFilter` 10-band EQ), TagLibSharp, Windows 10 SMTC, embedded `Jint` | Windows 10 Fluent Design — `Segoe UI`, Acrylic `NavigationView`, sharp 0px geometry, Reveal hover, Light/Dark sync |
 
 ---
 
 ## ✨ What Can Musico Do?
 
-- 📁 **Folder-First Library & Cloud Hangouts**: Mount your favorite local folders (`Documents` / `MyMusic` + custom folders) while keeping your precious folder hierarchy intact! Unplugged a drive? **Relocate** fixes it without losing a thing. You can even mount **YouTube / YouTube Music** (playlists, mixes & single tracks), **Bilibili** (videos, multi-part, favlists & collections), and **Google Drive** (shared folders with recursive audio discovery & single audio files) right inside **Folders**!
+- 📁 **Folder-First Library & Cloud Hangouts**: Mount your favorite local folders (`Documents` / `MyMusic` + custom folders) while keeping your precious folder hierarchy intact! Unplugged a drive? **Relocate** fixes it without losing a thing. You can even mount **YouTube / YouTube Music** (playlists, mixes & single tracks), **Bilibili** (videos, multi-part, favlists & collections), **Google Drive** (shared folders with recursive audio discovery & single audio files), and your own custom sources right inside **Folders**!
+- 🧩 **Cross-Platform JavaScript Extensions**: Write one CommonJS script (`.musico.js`) or ZIP bundle (`.musicoext`) and run it natively across Apple (`JavaScriptCore`), Android (`QuickJS`), and Windows (`Jint`) with zero WebViews! Includes explicit Permission Review before enabling, strict HTTP/HTTPS domain allowlists (`permissions.hosts`), per-extension settings, a 200-entry log viewer, progressive folder-tree crawling, and full parity with **Save to Local Folder** / **Update from Cloud**. See the [Extension Developer Guide](docs/extensions/README.md) ([中文开发指南](docs/extensions/README.zh-CN.md)).
 - 🌐 **Multilingual (`English` & `简体中文`)**: Defaults to your OS system language (**Follow System**) with instant live runtime switching across Apple, Android, and Windows.
 - 🔍 **Browsing & Instant Search**: Hop around **Folders**, **Songs** (sort by title/artist/album/date added + diacritic-insensitive search), **Albums** (properly ordered by disc & track), **Artists**, and **Playlists** (built-in **Favourites** + your own custom playlists).
 - 🎶 **Multiple Independent Queues**: Spin up as many queues as your mood needs — rename, switch, reorder, clear, or delete them anytime. Every queue remembers its own track, playback position, shuffle order, and repeat mode (`Off` / `All` / `One`).
@@ -78,15 +79,22 @@ Grab the latest builds from the [**Releases**](https://github.com/SEANPNEX/local
   - **Android (`MusicoAndroid`)**: `mp3`, `m4a`, `aac`, `flac`, `wav`, `aif`, `aiff`, `caf`, `alac`, `ogg`, `opus`, `webm`
   - **Windows (`MusicoWindows`)**: `mp3`, `m4a`, `aac`, `flac`, `wav`, `aif`, `aiff`, `wma`, `ogg`, `opus`
 
-### 2. Cloud Folders (YouTube, Bilibili & Google Drive)
-- **Mount a Cloud Source**: In **Folders**, tap **Add Cloud Folder** and paste a URL, share text, or ID (surrounding share-sheet text is stripped automatically!):
+### 2. Cloud Folders (YouTube, Bilibili, Google Drive & Extensions)
+- **Mount a Cloud Source**: In **Folders**, tap **Add Cloud Folder** and paste a URL, share text, or ID (surrounding share-sheet text is stripped automatically!). By default **Auto-Detect** checks built-in sources (**YouTube**, **Bilibili**, **Google Drive**) followed by your enabled JS extensions, or you can pick a specific provider manually:
   - **YouTube / YouTube Music**: Playlists, `RD` radio mixes, album browse links, or single videos (`youtube.com/playlist?list=…`, `music.youtube.com/playlist?list=…`, `youtube.com/watch?v=…`, `youtu.be/…`, Shorts) — public playlists, mixes, and videos work with no login!
   - **Bilibili**: `BV`/`av` videos (including multi-part), `favlist`, collections/series, and `b23.tv` short links.
   - **Google Drive**: Public/shared folder links (recursively discovers all audio files across nested subfolders, including links with `resourcekey`) and single audio file links (`drive.google.com/drive/folders/…`, `drive.google.com/file/d/…`, `drive.google.com/open?id=…`, `drive.usercontent.google.com/download?id=…`), with automatic large-file confirmation handling!
-- **Optional Cookie & Proxy**: Add a **Cookie** only if you need private playlists, restricted Google Drive files, or higher Bilibili audio quality. On Windows, you can also set an **HTTP Proxy** for YouTube & Google Drive (e.g. `7890`, `127.0.0.1:7890`, or `http://127.0.0.1:7890`).
+  - **Custom Extensions**: Any enabled extension installed in **Extensions** appears automatically with its custom `badgeLabel`, optional cookie prompt (when `"cookie"` capability is declared), and lazy/progressive subfolder browsing (when `"tree"` capability is declared).
+- **Optional Cookie & Proxy**: Add a **Cookie** only if you need private playlists, restricted Google Drive files, higher Bilibili audio quality, or an extension that requires session auth (cookies are strictly isolated per cloud folder root). On Windows, you can also set an **HTTP Proxy** for YouTube, Google Drive & proxy-capable extensions (e.g. `7890`, `127.0.0.1:7890`, or `http://127.0.0.1:7890`).
 - **Save Offline & Sync**: Open a cloud folder's menu (or track menu) and pick **Save to Local Folder…** to download tracks locally and optionally add the folder to your library. Tracked local folders keep a `.musico-cloud.json` manifest and show an **Update from Cloud** button to pull newly added songs incrementally!
 
-### 3. Browsing, Queues & Playback
+### 3. Extensions (Custom Cloud Sources)
+- **Open Extension Manager**: Open **Extensions** from the sidebar (`Cmd+8` on macOS/iPadOS, **Extensions** toolbar button in **Folders** on iOS and Android, or the **Extensions** sidebar item on Windows).
+- **Import & Permission Review**: Import a `.musicoext` bundle or `.musico.js` single-file script from local storage or an `https://` URL. Newly imported extensions stay disabled until you inspect their declared `permissions.hosts` and `capabilities` and approve enabling them.
+- **Settings, Logs & Safe Removal**: Configure extension-specific toggles/inputs/selects, inspect or clear the last 200 log entries for debugging, and disable or uninstall anytime without losing existing library tracks, playlists, stats, or cached audio (Musico shows a non-destructive banner if an active folder's extension is disabled or missing).
+- **Build Your Own**: Check out the [Extension Developer Guide](docs/extensions/README.md) ([中文开发指南](docs/extensions/README.zh-CN.md)) and starter templates under [`docs/extensions/`](docs/extensions/).
+
+### 4. Browsing, Queues & Playback
 - **Explore Your Library**: Jump between **Folders**, **Songs**, **Albums**, **Artists**, **Playlists**, **Queues**, and **Stats** (**Recent**, **Plays**, **Not Lately**, **Never**).
 - **Track Menu Goodies**: Tap/click any track to play its list from there, or open its context/ellipsis menu for **Play Next**, **Add to Queue**, **Add to Another Queue**, **Play in New Queue**, **Add to Playlist**, **Add/Remove Favourites**, and **Song Info**.
 - **Queue Juggling & Drag Reorder**: Manage multiple queues in **Queues** (or the desktop side Queue panel). Grab the drag handle (`≡`) in **Folders** and **Queues** to reorder tracks your way.
@@ -94,7 +102,7 @@ Grab the latest builds from the [**Releases**](https://github.com/SEANPNEX/local
 - **Equalizer & Sleep Timer**: Open **Equalizer** for 10-band tuning & presets, or **Sleep Timer** to wind down after `5`–`90` minutes, a custom duration, or **End of current song**.
 - **Song Info & Tag Editor**: Open **Song Info** on any track to check audio specs (precision, frequency, bit rate, file size, channels, play history), quick-search by Artist/Album/Genre, or edit `Title`, `Artist`, `Album`, `Genre`, and cover art.
 
-### 4. Keyboard Shortcuts
+### 5. Keyboard Shortcuts
 - **Windows**:
   - `Space`: Play / Pause (when not typing in a text box)
   - `Ctrl+Left` / `Ctrl+Right`: Previous / Next track
@@ -103,7 +111,7 @@ Grab the latest builds from the [**Releases**](https://github.com/SEANPNEX/local
 - **macOS / iPadOS**:
   - `Cmd+F`: Jump to **Songs** & focus search
   - `Cmd+R`: Rescan library
-  - `Cmd+1`–`Cmd+7`: Switch between **Folders**, **Songs**, **Albums**, **Artists**, **Playlists**, **Queues**, and **Stats**
+  - `Cmd+1`–`Cmd+8`: Switch between **Folders**, **Songs**, **Albums**, **Artists**, **Playlists**, **Queues**, **Stats**, and **Extensions**
   - `Cmd+P` / `Cmd+Left` / `Cmd+Right`: Play / Pause, Previous / Next track (`Playback` menu also includes Shuffle, Repeat, and Show/Hide Now Playing)
   - `Esc`: Close Full Player (plus standard system media keys)
 
@@ -141,6 +149,12 @@ cd MusicoWindows
 ./scripts/build-release.sh
 ```
 
+### Extension Conformance Runner (`docs/extensions/`)
+Requires Node.js 18+:
+```bash
+node docs/extensions/tools/mock-runner.mjs --self-test
+```
+
 ---
 
 ## 📂 Repository Structure
@@ -150,6 +164,7 @@ cd MusicoWindows
 ├── .github/workflows/
 │   ├── ci.yml              # Continuous integration (Android, Windows, Apple)
 │   └── release.yml         # Tag-triggered builds + GitHub Release publishing
+├── docs/extensions/        # Extension developer guides, starter templates, fixtures & mock runner
 ├── Musico/                 # Native SwiftUI app (iOS / iPadOS / macOS Catalyst)
 ├── MusicoAndroid/          # Native Kotlin + Compose Material 3 + Media3 app
 ├── MusicoWindows/          # Native C# + WPF Windows 10 Fluent Design app + NSIS installer

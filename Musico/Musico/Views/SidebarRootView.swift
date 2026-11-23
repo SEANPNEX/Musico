@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SidebarItem: Hashable {
-    case folders, songs, albums, artists, playlists, favourites, playlist(UUID), queues, stats
+    case folders, extensions, songs, albums, artists, playlists, favourites, playlist(UUID), queues, stats
 }
 
 /// The main window on wide screens: sidebar, content, an optional queue or lyrics panel on the
@@ -17,6 +17,7 @@ struct SidebarRootView: View {
     @Environment(SongInfoPrompt.self) private var songInfo
     @Environment(\.appNavigation) private var navigation
     @Environment(\.downloadManager) private var downloadManager
+    @Environment(\.extensionStore) private var extensionStore
     @Environment(\.languageManager) private var languageManager
     #if targetEnvironment(macCatalyst)
     @Environment(\.updateManager) private var updateManager
@@ -116,6 +117,7 @@ struct SidebarRootView: View {
                 .environment(songInfo)
                 .environment(\.appNavigation, navigation)
                 .environment(\.downloadManager, downloadManager)
+                .environment(\.extensionStore, extensionStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
         }
@@ -196,6 +198,7 @@ struct SidebarRootView: View {
 
                     sidebarRow(.queues, L10n.tr("Queues"), "list.bullet")
                     sidebarRow(.stats, L10n.tr("Stats"), "chart.bar")
+                    sidebarRow(.extensions, L10n.tr("Extensions"), "puzzlepiece.extension")
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
@@ -326,6 +329,7 @@ struct SidebarRootView: View {
     private var detail: some View {
         switch activeSelection {
         case .folders: FoldersView()
+        case .extensions: ExtensionsView()
         case .songs: SongsView()
         case .albums: AlbumsView()
         case .artists: ArtistsView()

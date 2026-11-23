@@ -14,14 +14,42 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.longOrNull
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.Base64
 
 object CloudSource {
     const val YOUTUBE = "youtube"
     const val BILIBILI = "bilibili"
     const val GOOGLE_DRIVE = "gdrive"
 }
+
+enum class CloudErrorCode {
+    INVALID_URL,
+    AUTH_REQUIRED,
+    EMPTY_COLLECTION,
+    NO_PLAYABLE_STREAM,
+    RATE_LIMITED,
+    NETWORK_ERROR,
+    PERMISSION_DENIED,
+    EXTENSION_UNAVAILABLE,
+    EXTENSION_RUNTIME_ERROR,
+    ;
+
+    companion object {
+        fun fromCodeString(raw: String?): CloudErrorCode? =
+            raw?.trim()?.uppercase()?.let { upper ->
+                entries.firstOrNull { it.name == upper }
+            }
+    }
+}
+
+class CloudSourceException(
+    val code: CloudErrorCode,
+    override val message: String,
+    cause: Throwable? = null,
+) : IOException(message, cause)
 
 data class CloudTrackMetadata(
     val remoteTrackId: String,
@@ -47,6 +75,8 @@ data class ResolvedStream(
     val mimeType: String? = null,
     val expiresAtEpochMs: Long = 0L,
     val contentLength: Long? = null,
+    val fileExtension: String? = null,
+    val fallbackUrls: List<String> = emptyList(),
 )
 
 data class CloudHttpResponse(
@@ -58,6 +88,24 @@ data class CloudHttpResponse(
     val bodyText: String
         get() = bodyBytes.toString(Charsets.UTF_8)
 }
+
+data class CloudHttpRequest(
+    val method: String = "GET",
+    val url: String,
+    val headers: Map<String, String> = emptyMap(),
+    val body: String? = null,
+    val followRedirects: Boolean = true,
+    val timeoutMs: Int = 15_000,
+    val returnBytes: Boolean = false,
+)
+
+data class CloudHttpGenericResponse(
+    val status: Int,
+    val finalUrl: String,
+    val headers: Map<String, String>,
+    val text: String,
+    val bytesBase64: String? = null,
+)
 
 interface CloudHttpClient {
     suspend fun get(
@@ -76,6 +124,124 @@ interface CloudHttpClient {
         url: String,
         headers: Map<String, String> = emptyMap(),
     ): Int
+
+    /**
+     * Executes a generic HTTP request with manual redirect handling, optional per-hop
+     * [urlValidator] enforcement, cross-host Cookie/Authorization stripping, an 8 MB body cap,
+     * lowercase response header keys, and conditional `bytesBase64`.
+     */
+    suspend fun request(
+        request: CloudHttpRequest,
+        urlValidator: ((String) -> Unit)? = null,
+    ): CloudHttpGenericResponse = executeDefaultGenericRequest(request, urlValidator)
+}
+
+private suspend fun CloudHttpClient.executeDefaultGenericRequest(
+    request: CloudHttpRequest,
+    urlValidator: ((String) -> Unit)?,
+): CloudHttpGenericResponse {
+    var currentUrl = request.url
+    var currentMethod = request.method.trim().uppercase().ifEmpty { "GET" }
+    var currentBody = request.body
+    val currentHeaders = LinkedHashMap<String, String>(request.headers)
+
+    for (hop in 0..CLOUD_HTTP_MAX_EXTENSION_REDIRECTS) {
+        urlValidator?.invoke(currentUrl)
+        val resp = if (currentMethod == "POST" || (currentMethod != "GET" && currentBody != null)) {
+            postJson(currentUrl, currentBody.orEmpty(), currentHeaders.toMap())
+        } else {
+            get(currentUrl, currentHeaders.toMap(), followRedirects = false)
+        }
+        val lowerHeaders = normalizeResponseHeaders(resp.headers)
+        if (request.followRedirects && isRedirectStatus(resp.statusCode)) {
+            val location = lowerHeaders["location"]?.takeIf { it.isNotBlank() }
+            if (location != null) {
+                val nextUrl = URL(URL(currentUrl), location).toString()
+                urlValidator?.invoke(nextUrl)
+                stripSensitiveHeadersIfCrossHost(currentUrl, nextUrl, currentHeaders)
+                if (resp.statusCode == 301 || resp.statusCode == 302 || resp.statusCode == 303) {
+                    currentMethod = "GET"
+                    currentBody = null
+                }
+                currentUrl = nextUrl
+                continue
+            }
+        }
+        val effectiveFinalUrl = resp.finalUrl.takeIf { it.isNotBlank() } ?: currentUrl
+        if (effectiveFinalUrl != currentUrl) {
+            urlValidator?.invoke(effectiveFinalUrl)
+        }
+        return toGenericResponse(
+            status = resp.statusCode,
+            finalUrl = effectiveFinalUrl,
+            headers = lowerHeaders,
+            rawBytes = resp.bodyBytes,
+            returnBytes = request.returnBytes,
+        )
+    }
+    throw CloudSourceException(CloudErrorCode.NETWORK_ERROR, "Too many redirects for ${request.url}")
+}
+
+internal const val CLOUD_HTTP_MAX_EXTENSION_REDIRECTS = 10
+internal const val CLOUD_HTTP_MAX_BODY_BYTES = 8 * 1024 * 1024
+internal const val CLOUD_HTTP_AUTO_BASE64_THRESHOLD_BYTES = 1024 * 1024
+
+internal fun isRedirectStatus(code: Int): Boolean =
+    code == HttpURLConnection.HTTP_MOVED_PERM ||
+        code == HttpURLConnection.HTTP_MOVED_TEMP ||
+        code == HttpURLConnection.HTTP_SEE_OTHER ||
+        code == 307 ||
+        code == 308
+
+internal fun normalizeResponseHeaders(headers: Map<String, List<String>>): Map<String, String> {
+    val normalized = linkedMapOf<String, String>()
+    for ((k, values) in headers) {
+        if (k.isNotEmpty() && values.isNotEmpty()) {
+            normalized[k.lowercase()] = values.joinToString(", ")
+        }
+    }
+    return normalized
+}
+
+internal fun stripSensitiveHeadersIfCrossHost(
+    previousUrl: String,
+    nextUrl: String,
+    headers: MutableMap<String, String>,
+) {
+    val prevHost = runCatching { URL(previousUrl).host.lowercase() }.getOrNull()
+    val nextHost = runCatching { URL(nextUrl).host.lowercase() }.getOrNull()
+    if (prevHost != null && nextHost != null && prevHost != nextHost) {
+        val iterator = headers.keys.iterator()
+        while (iterator.hasNext()) {
+            val key = iterator.next()
+            if (key.equals("Cookie", ignoreCase = true) || key.equals("Authorization", ignoreCase = true)) {
+                iterator.remove()
+            }
+        }
+    }
+}
+
+internal fun toGenericResponse(
+    status: Int,
+    finalUrl: String,
+    headers: Map<String, String>,
+    rawBytes: ByteArray,
+    returnBytes: Boolean,
+): CloudHttpGenericResponse {
+    val capped = if (rawBytes.size > CLOUD_HTTP_MAX_BODY_BYTES) {
+        rawBytes.copyOf(CLOUD_HTTP_MAX_BODY_BYTES)
+    } else {
+        rawBytes
+    }
+    val includeBase64 = returnBytes || capped.size <= CLOUD_HTTP_AUTO_BASE64_THRESHOLD_BYTES
+    val b64 = if (includeBase64) Base64.getEncoder().encodeToString(capped) else null
+    return CloudHttpGenericResponse(
+        status = status,
+        finalUrl = finalUrl,
+        headers = headers,
+        text = capped.toString(Charsets.UTF_8),
+        bytesBase64 = b64,
+    )
 }
 
 class UrlConnectionCloudHttpClient(
@@ -92,7 +258,7 @@ class UrlConnectionCloudHttpClient(
             initialUrl = url,
             method = "GET",
             headers = headers,
-            jsonBody = null,
+            body = null,
             followRedirects = followRedirects,
         )
     }
@@ -106,8 +272,36 @@ class UrlConnectionCloudHttpClient(
             initialUrl = url,
             method = "POST",
             headers = headers,
-            jsonBody = jsonBody,
+            body = jsonBody,
             followRedirects = true,
+        )
+    }
+
+    override suspend fun request(
+        request: CloudHttpRequest,
+        urlValidator: ((String) -> Unit)?,
+    ): CloudHttpGenericResponse = withContext(Dispatchers.IO) {
+        val method = request.method.trim().uppercase().ifEmpty { "GET" }
+        val timeoutOverride = request.timeoutMs.takeIf { it > 0 }?.coerceIn(100, 60_000)
+        val resp = executeWithRedirects(
+            initialUrl = request.url,
+            method = method,
+            headers = request.headers,
+            body = request.body,
+            followRedirects = request.followRedirects,
+            maxRedirects = CLOUD_HTTP_MAX_EXTENSION_REDIRECTS,
+            timeoutOverrideMs = timeoutOverride,
+            maxBodyBytes = CLOUD_HTTP_MAX_BODY_BYTES,
+            urlValidator = urlValidator,
+            stripSensitiveHeadersOnCrossHostRedirect = true,
+            defaultJsonContentType = false,
+        )
+        toGenericResponse(
+            status = resp.statusCode,
+            finalUrl = resp.finalUrl,
+            headers = normalizeResponseHeaders(resp.headers),
+            rawBytes = resp.bodyBytes,
+            returnBytes = request.returnBytes,
         )
     }
 
@@ -125,7 +319,7 @@ class UrlConnectionCloudHttpClient(
             try {
                 conn.instanceFollowRedirects = false
                 val code = conn.responseCode
-                if (isRedirect(code)) {
+                if (isRedirectStatus(code)) {
                     val location = conn.getHeaderField("Location") ?: return@withContext code
                     currentUrl = URL(URL(currentUrl), location).toString()
                     continue
@@ -142,20 +336,30 @@ class UrlConnectionCloudHttpClient(
         initialUrl: String,
         method: String,
         headers: Map<String, String>,
-        jsonBody: String?,
+        body: String?,
         followRedirects: Boolean,
+        maxRedirects: Int = MAX_REDIRECTS - 1,
+        timeoutOverrideMs: Int? = null,
+        maxBodyBytes: Int? = null,
+        urlValidator: ((String) -> Unit)? = null,
+        stripSensitiveHeadersOnCrossHostRedirect: Boolean = false,
+        defaultJsonContentType: Boolean = true,
     ): CloudHttpResponse {
         var currentUrl = initialUrl
         var currentMethod = method
-        var currentBody = jsonBody
+        var currentBody = body
+        val currentHeaders = LinkedHashMap<String, String>(headers)
 
-        for (hop in 0 until MAX_REDIRECTS) {
-            val conn = openConnection(currentUrl, currentMethod, headers)
+        for (hop in 0..maxRedirects) {
+            urlValidator?.invoke(currentUrl)
+            val conn = openConnection(currentUrl, currentMethod, currentHeaders, timeoutOverrideMs)
             try {
                 conn.instanceFollowRedirects = false
-                if (currentBody != null) {
+                if (currentBody != null && currentMethod != "GET" && currentMethod != "HEAD") {
                     conn.doOutput = true
-                    if (headers.keys.none { it.equals("Content-Type", ignoreCase = true) }) {
+                    if (defaultJsonContentType &&
+                        currentHeaders.keys.none { it.equals("Content-Type", ignoreCase = true) }
+                    ) {
                         conn.setRequestProperty("Content-Type", "application/json; charset=utf-8")
                     }
                     val bytes = currentBody.toByteArray(Charsets.UTF_8)
@@ -163,20 +367,25 @@ class UrlConnectionCloudHttpClient(
                 }
 
                 val code = conn.responseCode
-                if (followRedirects && isRedirect(code)) {
+                if (followRedirects && isRedirectStatus(code)) {
                     val location = conn.getHeaderField("Location")
                     if (!location.isNullOrBlank()) {
-                        currentUrl = URL(URL(currentUrl), location).toString()
+                        val nextUrl = URL(URL(currentUrl), location).toString()
+                        urlValidator?.invoke(nextUrl)
+                        if (stripSensitiveHeadersOnCrossHostRedirect) {
+                            stripSensitiveHeadersIfCrossHost(currentUrl, nextUrl, currentHeaders)
+                        }
                         if (code == 301 || code == 302 || code == 303) {
                             currentMethod = "GET"
                             currentBody = null
                         }
+                        currentUrl = nextUrl
                         continue
                     }
                 }
 
                 val stream = if (code in 200..399) conn.inputStream else conn.errorStream
-                val body = stream?.use { readAllBytes(it) } ?: ByteArray(0)
+                val rawBody = stream?.use { readAllBytes(it, maxBodyBytes) } ?: ByteArray(0)
                 val responseHeaders = linkedMapOf<String, List<String>>()
                 for ((k, v) in conn.headerFields) {
                     if (k != null && v != null) {
@@ -187,24 +396,25 @@ class UrlConnectionCloudHttpClient(
                     statusCode = code,
                     finalUrl = conn.url.toString(),
                     headers = responseHeaders,
-                    bodyBytes = body,
+                    bodyBytes = rawBody,
                 )
             } finally {
                 conn.disconnect()
             }
         }
-        throw IOException("Too many redirects for $initialUrl")
+        throw CloudSourceException(CloudErrorCode.NETWORK_ERROR, "Too many redirects for $initialUrl")
     }
 
     private fun openConnection(
         url: String,
         method: String,
         headers: Map<String, String>,
+        timeoutOverrideMs: Int? = null,
     ): HttpURLConnection {
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.requestMethod = method
-        conn.connectTimeout = connectTimeoutMs
-        conn.readTimeout = readTimeoutMs
+        conn.connectTimeout = timeoutOverrideMs ?: connectTimeoutMs
+        conn.readTimeout = timeoutOverrideMs ?: readTimeoutMs
         conn.useCaches = false
         for ((k, v) in headers) {
             conn.setRequestProperty(k, v)
@@ -212,20 +422,18 @@ class UrlConnectionCloudHttpClient(
         return conn
     }
 
-    private fun isRedirect(code: Int): Boolean =
-        code == HttpURLConnection.HTTP_MOVED_PERM ||
-            code == HttpURLConnection.HTTP_MOVED_TEMP ||
-            code == HttpURLConnection.HTTP_SEE_OTHER ||
-            code == 307 ||
-            code == 308
-
-    private fun readAllBytes(input: java.io.InputStream): ByteArray {
+    private fun readAllBytes(input: InputStream, maxBytes: Int? = null): ByteArray {
         val out = ByteArrayOutputStream()
         val buf = ByteArray(8192)
-        while (true) {
-            val n = input.read(buf)
+        var remaining = maxBytes ?: Int.MAX_VALUE
+        while (remaining > 0) {
+            val toRead = minOf(buf.size, remaining)
+            val n = input.read(buf, 0, toRead)
             if (n < 0) break
             out.write(buf, 0, n)
+            if (maxBytes != null) {
+                remaining -= n
+            }
         }
         return out.toByteArray()
     }

@@ -13,8 +13,8 @@ android {
         applicationId = "com.musico"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "1.1.13"
+        versionCode = 16
+        versionName = "1.2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -94,7 +94,17 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.google.material)
+    implementation(libs.quickjs.kt)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)
+}
+
+configurations.configureEach {
+    if (name.endsWith("UnitTestRuntimeClasspath")) {
+        resolutionStrategy.dependencySubstitution {
+            substitute(module("io.github.dokar3:quickjs-kt-android"))
+                .using(module("io.github.dokar3:quickjs-kt-jvm:${libs.versions.quickjsKt.get()}"))
+        }
+    }
 }

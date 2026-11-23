@@ -1,0 +1,317 @@
+<UserControl x:Class="MusicoWindows.Views.ExtensionsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Header & Import Bar -->
+        <Border Grid.Row="0"
+                Padding="24,20,24,14"
+                BorderBrush="{DynamicResource DividerBrush}"
+                BorderThickness="0,0,0,1">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                    <TextBlock Text="{DynamicResource Str_Extensions_Title}"
+                               Style="{StaticResource Win10PageTitleStyle}" />
+                    <TextBlock Text="{DynamicResource Str_Extensions_Subtitle}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap"
+                               Margin="0,3,0,0" />
+                </StackPanel>
+
+                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <TextBox x:Name="UrlImportBox"
+                             Style="{StaticResource Win10TextBoxStyle}"
+                             Width="270"
+                             Height="34"
+                             Margin="0,0,8,0"
+                             ToolTip="{DynamicResource Str_Extensions_UrlPlaceholder}"
+                             KeyDown="UrlImportBox_KeyDown"
+                             TextChanged="UrlImportBox_TextChanged" />
+                    <Button x:Name="ImportUrlButton"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            Height="34"
+                            Margin="0,0,8,0"
+                            IsEnabled="False"
+                            Click="ImportUrl_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE71B;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
+                            <TextBlock Text="{DynamicResource Str_Extensions_ImportUrl}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="ImportFileButton"
+                            Style="{StaticResource Win10PrimaryButtonStyle}"
+                            Height="34"
+                            Click="ImportFile_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE8E5;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
+                            <TextBlock Text="{DynamicResource Str_Extensions_ImportFile}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- Busy / Error Banner -->
+        <StackPanel Grid.Row="1">
+            <Border x:Name="BusyBanner"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource DividerBrush}"
+                    BorderThickness="0,0,0,1"
+                    Padding="24,10"
+                    Visibility="Collapsed">
+                <ProgressBar Style="{StaticResource Win10ProgressBarStyle}" IsIndeterminate="True" />
+            </Border>
+            <Border x:Name="ErrorBanner"
+                    Background="{DynamicResource WarningBannerBrush}"
+                    BorderBrush="{DynamicResource DangerBrush}"
+                    BorderThickness="0,0,0,1"
+                    Padding="24,10"
+                    Visibility="Collapsed">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="ErrorBannerText"
+                               Grid.Column="0"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="12"
+                               Foreground="{DynamicResource DangerBrush}"
+                               TextWrapping="Wrap"
+                               VerticalAlignment="Center" />
+                    <Button Grid.Column="1"
+                            Style="{StaticResource Win10IconButtonStyle}"
+                            Content="&#xE711;"
+                            Width="26"
+                            Height="26"
+                            FontSize="11"
+                            Click="DismissError_Click" />
+                </Grid>
+            </Border>
+        </StackPanel>
+
+        <!-- Main Body + Optional Log Drawer -->
+        <Grid Grid.Row="2">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+
+            <Grid Grid.Row="0">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="24,16">
+                    <StackPanel x:Name="ExtensionsStack" Margin="0,0,0,28" />
+                </ScrollViewer>
+
+                <StackPanel x:Name="EmptyState"
+                            VerticalAlignment="Center"
+                            HorizontalAlignment="Center"
+                            Margin="32"
+                            Visibility="Collapsed">
+                    <TextBlock Text="&#xEA86;"
+                               FontFamily="{StaticResource Win10GlyphFont}"
+                               FontSize="36"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,12" />
+                    <TextBlock Text="{DynamicResource Str_Extensions_EmptyTitle}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="17"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,6" />
+                    <TextBlock Text="{DynamicResource Str_Extensions_EmptyDesc}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="13"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap"
+                               TextAlignment="Center"
+                               MaxWidth="440" />
+                </StackPanel>
+            </Grid>
+
+            <!-- 200-Entry Debug Log Drawer -->
+            <Border x:Name="LogsDrawer"
+                    Grid.Row="1"
+                    Height="210"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource DividerBrush}"
+                    BorderThickness="0,1,0,0"
+                    Visibility="Collapsed">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Border Grid.Row="0"
+                            Padding="20,8"
+                            BorderBrush="{DynamicResource DividerBrush}"
+                            BorderThickness="0,0,0,1">
+                        <Grid>
+                            <TextBlock x:Name="LogsHeaderText"
+                                       Text="{DynamicResource Str_Extensions_LogsTitle}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       VerticalAlignment="Center" />
+                            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                                <Button Style="{StaticResource Win10ButtonStyle}"
+                                        Content="{DynamicResource Str_Extensions_ClearLogs}"
+                                        Padding="10,4"
+                                        MinHeight="26"
+                                        Margin="0,0,8,0"
+                                        Click="ClearLogs_Click" />
+                                <Button Style="{StaticResource Win10IconButtonStyle}"
+                                        Content="&#xE711;"
+                                        Width="28"
+                                        Height="28"
+                                        FontSize="11"
+                                        Click="CloseLogs_Click" />
+                            </StackPanel>
+                        </Grid>
+                    </Border>
+                    <ScrollViewer x:Name="LogsScrollViewer"
+                                  Grid.Row="1"
+                                  VerticalScrollBarVisibility="Auto"
+                                  Padding="20,8">
+                        <StackPanel x:Name="LogsListStack" />
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- Permission Review Modal Overlay -->
+        <Grid x:Name="PermissionReviewOverlay"
+              Grid.RowSpan="3"
+              Background="{DynamicResource DialogOverlayBrush}"
+              Visibility="Collapsed"
+              MouseDown="ReviewOverlay_MouseDown">
+            <Border x:Name="PermissionReviewCard"
+                    Width="490"
+                    MaxHeight="560"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource DialogSurfaceBrush}"
+                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="0"
+                    Padding="24"
+                    MouseDown="ReviewCard_MouseDown">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Margin="0,0,0,14">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="&#xE72E;"
+                                           FontFamily="{StaticResource Win10GlyphFont}"
+                                           FontSize="18"
+                                           Foreground="{DynamicResource AccentBrush}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,10,0" />
+                                <TextBlock Text="{DynamicResource Str_Extensions_ReviewTitle}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="19"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                            <Button Style="{StaticResource Win10IconButtonStyle}"
+                                    Content="&#xE711;"
+                                    HorizontalAlignment="Right"
+                                    Click="KeepDisabledReview_Click" />
+                        </Grid>
+                        <TextBlock Text="{DynamicResource Str_Extensions_ReviewSubtitle}"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,8,0,0" />
+                    </StackPanel>
+
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,0,0,16">
+                        <StackPanel>
+                            <Border Background="{DynamicResource CardBackgroundBrush}"
+                                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                                    BorderThickness="1"
+                                    Padding="12,10"
+                                    Margin="0,0,0,12">
+                                <StackPanel>
+                                    <TextBlock x:Name="ReviewExtNameText"
+                                               FontFamily="{StaticResource Win10Font}"
+                                               FontSize="15"
+                                               FontWeight="SemiBold"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                    <TextBlock x:Name="ReviewExtMetaText"
+                                               FontFamily="{StaticResource Win10Font}"
+                                               FontSize="12"
+                                               Foreground="{DynamicResource TextSecondaryBrush}"
+                                               Margin="0,2,0,0" />
+                                    <TextBlock x:Name="ReviewExtDescText"
+                                               FontFamily="{StaticResource Win10Font}"
+                                               FontSize="12"
+                                               Foreground="{DynamicResource TextSecondaryBrush}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,6,0,0" />
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="{DynamicResource Str_Extensions_CapabilitiesLabel}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       Margin="0,0,0,6" />
+                            <WrapPanel x:Name="ReviewCapabilitiesPanel" Margin="0,0,0,12" />
+
+                            <TextBlock Text="{DynamicResource Str_Extensions_HostsLabel}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="12"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       Margin="0,0,0,6" />
+                            <Border Background="{DynamicResource CardBackgroundBrush}"
+                                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                                    BorderThickness="1"
+                                    Padding="10,8">
+                                <StackPanel x:Name="ReviewHostsPanel" />
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button Grid.Column="0"
+                                Style="{StaticResource Win10PrimaryButtonStyle}"
+                                Content="{DynamicResource Str_Extensions_ApproveEnable}"
+                                Click="ApproveReview_Click" />
+                        <Button Grid.Column="2"
+                                Style="{StaticResource Win10ButtonStyle}"
+                                Content="{DynamicResource Str_Extensions_KeepDisabled}"
+                                Click="KeepDisabledReview_Click" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
+    </Grid>
+</UserControl>

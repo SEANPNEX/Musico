@@ -18,6 +18,7 @@
     <sys:String x:Key="Str_Nav_NewPlaylist">New Playlist</sys:String>
     <sys:String x:Key="Str_Nav_Queues">Queues</sys:String>
     <sys:String x:Key="Str_Nav_Stats">Stats</sys:String>
+    <sys:String x:Key="Str_Nav_Extensions">Extensions</sys:String>
     <sys:String x:Key="Str_Nav_LightTheme">Light Theme</sys:String>
     <sys:String x:Key="Str_Nav_ThemeTooltip">Switch Light / Dark theme</sys:String>
     <sys:String x:Key="Str_Nav_Language">Language</sys:String>
@@ -174,6 +175,8 @@
 
     <!-- AddCloudFolderDialog -->
     <sys:String x:Key="Str_AddCloud_Title">Add Cloud Folder</sys:String>
+    <sys:String x:Key="Str_AddCloud_ProviderLabel">Source Provider</sys:String>
+    <sys:String x:Key="Str_AddCloud_ProviderHint">Auto-Detect identifies built-in sources and enabled extensions automatically.</sys:String>
     <sys:String x:Key="Str_AddCloud_UrlLabel">Playlist, Folder, or File URL</sys:String>
     <sys:String x:Key="Str_AddCloud_UrlHint">Supports YouTube / YouTube Music playlists &amp; videos (no login required), Bilibili favlists/collections/series/b23.tv/BV links, and public Google Drive folders or audio files.</sys:String>
     <sys:String x:Key="Str_AddCloud_CookieLabel">Cookie (Optional)</sys:String>
@@ -205,5 +208,23 @@
 
     <!-- TrackRowControl -->
     <sys:String x:Key="Str_TrackRow_DragToReorder">Drag to reorder</sys:String>
+
+    <!-- ExtensionsView -->
+    <sys:String x:Key="Str_Extensions_Title">Extensions</sys:String>
+    <sys:String x:Key="Str_Extensions_Subtitle">Install JavaScript source extensions (.musicoext or .musico.js) to add custom cloud sources</sys:String>
+    <sys:String x:Key="Str_Extensions_ImportFile">Import File...</sys:String>
+    <sys:String x:Key="Str_Extensions_UrlPlaceholder">https://example.com/extension.musicoext</sys:String>
+    <sys:String x:Key="Str_Extensions_ImportUrl">Import URL</sys:String>
+    <sys:String x:Key="Str_Extensions_EmptyTitle">No Extensions Installed</sys:String>
+    <sys:String x:Key="Str_Extensions_EmptyDesc">Import a .musicoext bundle or .musico.js script from a local file or HTTPS URL to add custom cloud sources.</sys:String>
+    <sys:String x:Key="Str_Extensions_ReviewTitle">Permission Review</sys:String>
+    <sys:String x:Key="Str_Extensions_ReviewSubtitle">Review the capabilities and network hosts requested by this extension before enabling it.</sys:String>
+    <sys:String x:Key="Str_Extensions_CapabilitiesLabel">Capabilities</sys:String>
+    <sys:String x:Key="Str_Extensions_HostsLabel">Allowed Network Hosts</sys:String>
+    <sys:String x:Key="Str_Extensions_ApproveEnable">Approve &amp; Enable</sys:String>
+    <sys:String x:Key="Str_Extensions_KeepDisabled">Keep Disabled</sys:String>
+    <sys:String x:Key="Str_Extensions_LogsTitle">Extension Debug Logs</sys:String>
+    <sys:String x:Key="Str_Extensions_ClearLogs">Clear Logs</sys:String>
+    <sys:String x:Key="Str_Extensions_LogsEmpty">No log entries yet.</sys:String>
 
 </ResourceDictionary>

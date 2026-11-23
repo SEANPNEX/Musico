@@ -18,6 +18,7 @@
     <sys:String x:Key="Str_Nav_NewPlaylist">新建播放列表</sys:String>
     <sys:String x:Key="Str_Nav_Queues">播放队列</sys:String>
     <sys:String x:Key="Str_Nav_Stats">收听统计</sys:String>
+    <sys:String x:Key="Str_Nav_Extensions">扩展</sys:String>
     <sys:String x:Key="Str_Nav_LightTheme">浅色主题</sys:String>
     <sys:String x:Key="Str_Nav_ThemeTooltip">切换浅色/深色主题</sys:String>
     <sys:String x:Key="Str_Nav_Language">语言</sys:String>
@@ -174,6 +175,8 @@
 
     <!-- AddCloudFolderDialog -->
     <sys:String x:Key="Str_AddCloud_Title">添加云端文件夹</sys:String>
+    <sys:String x:Key="Str_AddCloud_ProviderLabel">云端来源</sys:String>
+    <sys:String x:Key="Str_AddCloud_ProviderHint">选择“自动识别”将自动匹配内置云端来源与已启用的扩展。</sys:String>
     <sys:String x:Key="Str_AddCloud_UrlLabel">播放列表、文件夹或文件链接</sys:String>
     <sys:String x:Key="Str_AddCloud_UrlHint">支持 YouTube / YouTube Music 播放列表与视频（无需登录）、Bilibili 收藏夹/合集/系列/b23.tv/BV 链接，以及公开分享的 Google Drive 文件夹或音频文件。</sys:String>
     <sys:String x:Key="Str_AddCloud_CookieLabel">Cookie（可选）</sys:String>
@@ -205,5 +208,23 @@
 
     <!-- TrackRowControl -->
     <sys:String x:Key="Str_TrackRow_DragToReorder">拖动以重新排序</sys:String>
+
+    <!-- ExtensionsView -->
+    <sys:String x:Key="Str_Extensions_Title">扩展</sys:String>
+    <sys:String x:Key="Str_Extensions_Subtitle">安装 JavaScript 来源扩展（.musicoext 或 .musico.js）以添加自定义云端音乐来源</sys:String>
+    <sys:String x:Key="Str_Extensions_ImportFile">导入文件...</sys:String>
+    <sys:String x:Key="Str_Extensions_UrlPlaceholder">https://example.com/extension.musicoext</sys:String>
+    <sys:String x:Key="Str_Extensions_ImportUrl">从链接导入</sys:String>
+    <sys:String x:Key="Str_Extensions_EmptyTitle">尚未安装扩展</sys:String>
+    <sys:String x:Key="Str_Extensions_EmptyDesc">从本地文件或 HTTPS 链接导入 .musicoext 扩展包或 .musico.js 脚本，以添加自定义云端来源。</sys:String>
+    <sys:String x:Key="Str_Extensions_ReviewTitle">权限审查</sys:String>
+    <sys:String x:Key="Str_Extensions_ReviewSubtitle">在启用此扩展前，请审查其请求的权限与允许访问的主机域名。</sys:String>
+    <sys:String x:Key="Str_Extensions_CapabilitiesLabel">声明能力</sys:String>
+    <sys:String x:Key="Str_Extensions_HostsLabel">允许的网络主机</sys:String>
+    <sys:String x:Key="Str_Extensions_ApproveEnable">批准并启用</sys:String>
+    <sys:String x:Key="Str_Extensions_KeepDisabled">暂不启用</sys:String>
+    <sys:String x:Key="Str_Extensions_LogsTitle">扩展调试日志</sys:String>
+    <sys:String x:Key="Str_Extensions_ClearLogs">清空日志</sys:String>
+    <sys:String x:Key="Str_Extensions_LogsEmpty">暂无日志记录。</sys:String>
 
 </ResourceDictionary>

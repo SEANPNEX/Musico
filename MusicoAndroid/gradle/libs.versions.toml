@@ -10,6 +10,7 @@ lifecycle = "2.8.7"
 activityCompose = "1.9.3"
 documentfile = "1.0.1"
 material = "1.12.0"
+quickjsKt = "1.0.0-alpha13"
 junit = "4.13.2"
 
 [libraries]
@@ -37,6 +38,7 @@ kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serializationJson" }
 
 google-material = { group = "com.google.android.material", name = "material", version.ref = "material" }
+quickjs-kt = { group = "io.github.dokar3", name = "quickjs-kt", version.ref = "quickjsKt" }
 
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 

@@ -10,16 +10,25 @@ public enum RootKind
     AppFolder,
     CloudYouTube,
     CloudBilibili,
-    CloudGoogleDrive
+    CloudGoogleDrive,
+    CloudExtension
 }
 
 public static class RootKindExtensions
 {
     public static bool IsCloud(this RootKind kind) =>
-        kind is RootKind.CloudYouTube or RootKind.CloudBilibili or RootKind.CloudGoogleDrive;
+        kind is RootKind.CloudYouTube or RootKind.CloudBilibili or RootKind.CloudGoogleDrive or RootKind.CloudExtension;
 
     public static bool IsLocal(this RootKind kind) =>
         kind is RootKind.Picked or RootKind.AppFolder;
+
+    public static string? BuiltinProviderId(this RootKind kind) => kind switch
+    {
+        RootKind.CloudYouTube => "builtin.youtube",
+        RootKind.CloudBilibili => "builtin.bilibili",
+        RootKind.CloudGoogleDrive => "builtin.gdrive",
+        _ => null
+    };
 }
 
 public sealed class CloudTrackingInfo
@@ -30,6 +39,7 @@ public sealed class CloudTrackingInfo
     public string? Cookie { get; set; }
     public string? ProxyUrl { get; set; }
     public DateTimeOffset? LastSynced { get; set; }
+    public string? ProviderId { get; set; }
 
     public CloudTrackingInfo() { }
 
@@ -39,7 +49,8 @@ public sealed class CloudTrackingInfo
         RootKind cloudKind,
         string? cookie = null,
         string? proxyUrl = null,
-        DateTimeOffset? lastSynced = null)
+        DateTimeOffset? lastSynced = null,
+        string? providerId = null)
     {
         SourceUrl = sourceUrl;
         RemoteId = remoteId;
@@ -47,7 +58,14 @@ public sealed class CloudTrackingInfo
         Cookie = cookie;
         ProxyUrl = proxyUrl;
         LastSynced = lastSynced;
+        ProviderId = providerId;
     }
+
+    [JsonIgnore]
+    public string? ResolvedProviderId =>
+        !string.IsNullOrWhiteSpace(ProviderId)
+            ? ProviderId
+            : CloudKind.BuiltinProviderId();
 }
 
 public sealed record LibraryRoot(
@@ -62,7 +80,9 @@ public sealed record LibraryRoot(
     DateTimeOffset? LastSyncedUtc = null,
     IReadOnlyList<string>? ExcludedPaths = null,
     RootKind? LinkedCloudKind = null,
-    Dictionary<string, CloudTrackingInfo>? TrackedSubfolders = null)
+    Dictionary<string, CloudTrackingInfo>? TrackedSubfolders = null,
+    string? ProviderId = null,
+    string? LinkedProviderId = null)
 {
     public static readonly Guid AppFolderId = Guid.Parse("00000000-0000-0000-0000-00000000A990");
 
@@ -73,10 +93,28 @@ public sealed record LibraryRoot(
     public bool IsLocal => Kind.IsLocal();
 
     [JsonIgnore]
-    public bool IsCloudTrackedLocal => IsLocal && LinkedCloudKind is not null && !string.IsNullOrWhiteSpace(SourceUrl);
+    public bool IsCloudTrackedLocal =>
+        IsLocal &&
+        (LinkedCloudKind is not null || !string.IsNullOrWhiteSpace(LinkedProviderId)) &&
+        !string.IsNullOrWhiteSpace(SourceUrl);
 
     [JsonIgnore]
     public RootKind? EffectiveCloudKind => IsCloud ? Kind : LinkedCloudKind;
+
+    [JsonIgnore]
+    public string? ResolvedProviderId =>
+        !string.IsNullOrWhiteSpace(ProviderId)
+            ? ProviderId
+            : Kind.BuiltinProviderId();
+
+    [JsonIgnore]
+    public string? ResolvedLinkedProviderId =>
+        !string.IsNullOrWhiteSpace(LinkedProviderId)
+            ? LinkedProviderId
+            : LinkedCloudKind?.BuiltinProviderId();
+
+    [JsonIgnore]
+    public string? EffectiveProviderId => IsCloud ? ResolvedProviderId : ResolvedLinkedProviderId;
 
     public static string NormalizeFolderPath(string path) =>
         path.Replace('\\', '/')

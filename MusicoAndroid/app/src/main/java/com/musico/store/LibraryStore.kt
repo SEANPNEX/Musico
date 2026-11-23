@@ -6,11 +6,13 @@ import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import com.musico.cloud.BilibiliClient
+import com.musico.cloud.CloudErrorCode
 import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudFolderManifest
 import com.musico.cloud.CloudHttpClient
 import com.musico.cloud.CloudPlaylistResult
 import com.musico.cloud.CloudSource
+import com.musico.cloud.CloudSourceException
 import com.musico.cloud.CloudTrackMetadata
 import com.musico.cloud.GoogleDriveClient
 import com.musico.cloud.UrlConnectionCloudHttpClient
@@ -23,6 +25,10 @@ import com.musico.core.MetadataReading
 import com.musico.core.Persistence
 import com.musico.core.ScannedFile
 import com.musico.core.TrackMetadata
+import com.musico.extensions.CloudProviderAvailability
+import com.musico.extensions.CloudProviderIds
+import com.musico.extensions.CloudProviderRegistry
+import com.musico.extensions.CloudSourceProvider
 import com.musico.model.Album
 import com.musico.model.CloudTrackingInfo
 import com.musico.model.LibraryRoot
@@ -58,6 +64,7 @@ sealed class LibraryException(message: String) : Exception(message) {
     data object DuplicateRoot : LibraryException("That folder is already in your library.")
     data object NotAFolder : LibraryException("That location could not be opened as a folder.")
     data object UnsupportedCloudUrl : LibraryException("Enter a valid YouTube, Bilibili, or Google Drive URL.")
+    data class ExtensionUnavailable(val providerId: String) : LibraryException("Extension unavailable: $providerId")
 }
 
 data class CloudSyncProgress(
@@ -95,6 +102,11 @@ class LibraryStore(
     private val youTubeClient: YouTubeClient = YouTubeClient(cloudHttpClient),
     private val bilibiliClient: BilibiliClient = BilibiliClient(cloudHttpClient),
     private val googleDriveClient: GoogleDriveClient = GoogleDriveClient(cloudHttpClient),
+    val providerRegistry: CloudProviderRegistry = CloudProviderRegistry(
+        youTubeClient = youTubeClient,
+        bilibiliClient = bilibiliClient,
+        googleDriveClient = googleDriveClient,
+    ),
 ) {
     @Serializable
     private data class LibraryFile(
@@ -161,6 +173,7 @@ class LibraryStore(
                 lastSyncedEpochMs = savedAppRoot?.lastSyncedEpochMs,
                 excludedPaths = savedAppRoot?.excludedPaths.orEmpty(),
                 linkedCloudKind = savedAppRoot?.linkedCloudKind,
+                linkedProviderId = savedAppRoot?.linkedProviderId,
                 trackedSubfolderName = savedAppRoot?.trackedSubfolderName,
                 trackedSubfolders = savedAppRoot?.trackedSubfolders.orEmpty(),
             )
@@ -209,7 +222,8 @@ class LibraryStore(
 
     private fun checkRootAvailable(root: LibraryRoot): Boolean {
         if (root.kind.isCloud) {
-            return true
+            val pid = root.resolvedProviderId ?: return false
+            return providerRegistry.availabilityFor(pid) == CloudProviderAvailability.AVAILABLE
         }
         if (root.kind == RootKind.APP_FOLDER) {
             return appFolderDir.exists() && appFolderDir.isDirectory && appFolderDir.canRead()
@@ -222,6 +236,23 @@ class LibraryStore(
         val ctx = context ?: return false
         val doc = runCatching { DocumentFile.fromTreeUri(ctx, uri) }.getOrNull() ?: return false
         return doc.exists() && doc.isDirectory && doc.canRead()
+    }
+
+    fun refreshAvailability() {
+        synchronized(stateLock) {
+            val cur = _state.value
+            _state.value = cur.copy(availableRootIds = computeAvailableRootIds(cur.roots))
+        }
+    }
+
+    fun cloudProviderAvailability(root: LibraryRoot): CloudProviderAvailability {
+        if (!root.kind.isCloud) return CloudProviderAvailability.AVAILABLE
+        return providerRegistry.availabilityFor(root.resolvedProviderId)
+    }
+
+    fun supportsTreeCrawling(root: LibraryRoot): Boolean {
+        if (!root.kind.isCloud) return false
+        return providerRegistry.providerForRoot(root)?.supportsTree == true
     }
 
     private fun saveLibrary() {
@@ -367,12 +398,14 @@ class LibraryStore(
             ?: return root
         val url = root.sourceUrl?.takeIf { it.isNotBlank() }
         val kind = root.effectiveCloudKind
+        val pid = root.effectiveProviderId
         val nextSubs = if (url != null && kind != null && !root.trackedSubfolders.containsKey(sub)) {
             root.trackedSubfolders + (
                 sub to CloudTrackingInfo(
                     sourceUrl = url,
                     remoteId = root.remoteId,
                     cloudKind = kind,
+                    providerId = if (kind == RootKind.CLOUD_EXTENSION) pid else root.linkedProviderId,
                     cookie = root.cookie,
                     lastSyncedEpochMs = root.lastSyncedEpochMs,
                 )
@@ -386,6 +419,7 @@ class LibraryStore(
             cookie = null,
             lastSyncedEpochMs = null,
             linkedCloudKind = null,
+            linkedProviderId = null,
             trackedSubfolderName = null,
             trackedSubfolders = nextSubs,
         )
@@ -649,12 +683,17 @@ class LibraryStore(
             }
 
             val cloudKind = cloudSourceRoot.effectiveCloudKind
+            val cloudProviderId = cloudSourceRoot.effectiveProviderId ?: cloudKind?.builtinProviderId
+            val explicitTrackingProviderId = cloudSourceRoot.providerId?.trim()?.takeIf { it.isNotEmpty() }
+                ?: cloudSourceRoot.linkedProviderId?.trim()?.takeIf { it.isNotEmpty() }
+                ?: if (cloudKind == RootKind.CLOUD_EXTENSION) cloudProviderId else null
             val trackingInfo = cloudSourceRoot.sourceUrl?.takeIf { it.isNotBlank() }?.let { url ->
                 if (cloudKind != null) {
                     CloudTrackingInfo(
                         sourceUrl = url,
                         remoteId = cloudSourceRoot.remoteId,
                         cloudKind = cloudKind,
+                        providerId = explicitTrackingProviderId,
                         cookie = cloudSourceRoot.cookie,
                         lastSyncedEpochMs = System.currentTimeMillis(),
                     )
@@ -666,6 +705,7 @@ class LibraryStore(
                     sourceUrl = cloudSourceRoot.sourceUrl ?: existing.sourceUrl,
                     remoteId = cloudSourceRoot.remoteId ?: existing.remoteId,
                     linkedCloudKind = cloudKind ?: existing.linkedCloudKind,
+                    linkedProviderId = cloudProviderId ?: existing.linkedProviderId,
                     cookie = cloudSourceRoot.cookie ?: existing.cookie,
                     lastSyncedEpochMs = System.currentTimeMillis(),
                     trackedSubfolderName = null,
@@ -728,6 +768,9 @@ class LibraryStore(
         }
 
         val cloudKind = cloudSourceRoot?.effectiveCloudKind ?: manifestKind
+        val cloudProviderId = cloudSourceRoot?.effectiveProviderId
+            ?: manifest?.providerId?.trim()?.takeIf { it.isNotEmpty() }
+            ?: cloudKind?.builtinProviderId
         val trackingUrl = cloudSourceRoot?.sourceUrl ?: manifest?.sourceURL
         val trackingRemoteId = cloudSourceRoot?.remoteId ?: manifest?.remoteID
         val trackingSyncedMs = if (cloudSourceRoot != null) {
@@ -738,10 +781,15 @@ class LibraryStore(
 
         val root = if (subNorm != null) {
             if (!trackingUrl.isNullOrBlank() && cloudKind != null) {
+                val explicitChildPid = cloudSourceRoot?.providerId?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: cloudSourceRoot?.linkedProviderId?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: manifest?.providerId?.trim()?.takeIf { it.isNotEmpty() }
+                    ?: if (cloudKind == RootKind.CLOUD_EXTENSION) cloudProviderId else null
                 migratedSubfolders[subNorm] = CloudTrackingInfo(
                     sourceUrl = trackingUrl,
                     remoteId = trackingRemoteId,
                     cloudKind = cloudKind,
+                    providerId = explicitChildPid,
                     cookie = cloudSourceRoot?.cookie,
                     lastSyncedEpochMs = trackingSyncedMs,
                 )
@@ -766,6 +814,7 @@ class LibraryStore(
                 lastSyncedEpochMs = trackingSyncedMs,
                 excludedPaths = migratedExcluded.distinct(),
                 linkedCloudKind = cloudKind,
+                linkedProviderId = cloudProviderId,
                 trackedSubfolders = migratedSubfolders,
             )
         }
@@ -809,21 +858,8 @@ class LibraryStore(
     }
 
     fun classifyCloudUrl(rawInput: String): Pair<String, RootKind>? {
-        val trimmedUrl = extractCloudSourceInput(rawInput)
-        if (trimmedUrl.isEmpty()) return null
-        val isGoogleDrive = GoogleDriveClient.canHandle(trimmedUrl)
-        val isBilibili = BilibiliClient.canHandle(trimmedUrl)
-        val isYouTube = YouTubeClient.canHandle(trimmedUrl)
-        if (!isGoogleDrive && !isBilibili && !isYouTube) return null
-        val kind = when {
-            isGoogleDrive -> RootKind.CLOUD_GOOGLE_DRIVE
-            isBilibili && !isYouTube -> RootKind.CLOUD_BILIBILI
-            isYouTube && !isBilibili -> RootKind.CLOUD_YOUTUBE
-            trimmedUrl.contains("bilibili", ignoreCase = true) || trimmedUrl.contains("b23.tv", ignoreCase = true) ->
-                RootKind.CLOUD_BILIBILI
-            else -> RootKind.CLOUD_YOUTUBE
-        }
-        return trimmedUrl to kind
+        val classified = runCatching { providerRegistry.classifyUrl(rawInput) }.getOrNull() ?: return null
+        return classified.normalizedUrl to classified.provider.rootKind
     }
 
     fun cloudTracking(rootId: String, path: String = ""): CloudTrackingInfo? {
@@ -836,9 +872,17 @@ class LibraryStore(
         path: String = "",
         newSourceUrl: String,
         cookie: String? = null,
+        providerIdHint: String? = null,
     ): Result<CloudTrackingInfo> {
-        val (cleanedUrl, newCloudKind) = classifyCloudUrl(newSourceUrl)
-            ?: return Result.failure(LibraryException.UnsupportedCloudUrl)
+        val classified = try {
+            providerRegistry.classifyUrl(newSourceUrl, providerIdHint)
+                ?: return Result.failure(LibraryException.UnsupportedCloudUrl)
+        } catch (err: Exception) {
+            return Result.failure(err)
+        }
+        val cleanedUrl = classified.normalizedUrl
+        val newCloudKind = classified.provider.rootKind
+        val newProviderId = classified.provider.providerId
         val cleanCookie = cookie?.trim()?.takeIf { it.isNotEmpty() }
         val normPath = LibraryRoot.normalizeFolderPath(path)
 
@@ -851,11 +895,12 @@ class LibraryStore(
             if (index < 0) return Result.failure(LibraryException.NotAFolder)
             val root = current.roots[index]
             val prevTracking = root.trackingFor(normPath)
-            val preservedRemoteId = if (prevTracking?.sourceUrl == cleanedUrl) prevTracking.remoteId else null
+            val preservedRemoteId = if (prevTracking?.sourceUrl == cleanedUrl) prevTracking.remoteId else classified.remoteId
             val info = CloudTrackingInfo(
                 sourceUrl = cleanedUrl,
                 remoteId = preservedRemoteId,
                 cloudKind = newCloudKind,
+                providerId = if (newCloudKind == RootKind.CLOUD_EXTENSION) newProviderId else prevTracking?.providerId,
                 cookie = cleanCookie,
                 lastSyncedEpochMs = prevTracking?.lastSyncedEpochMs,
             )
@@ -865,12 +910,14 @@ class LibraryStore(
                     kind = newCloudKind,
                     sourceUrl = cleanedUrl,
                     remoteId = preservedRemoteId,
+                    providerId = newProviderId,
                     cookie = cleanCookie,
                 )
                 normPath.isEmpty() -> root.copy(
                     sourceUrl = cleanedUrl,
                     remoteId = preservedRemoteId,
                     linkedCloudKind = newCloudKind,
+                    linkedProviderId = newProviderId,
                     cookie = cleanCookie,
                     trackedSubfolderName = null,
                 )
@@ -884,6 +931,7 @@ class LibraryStore(
                             sourceUrl = null,
                             remoteId = null,
                             linkedCloudKind = null,
+                            linkedProviderId = null,
                             cookie = null,
                             lastSyncedEpochMs = null,
                             trackedSubfolderName = null,
@@ -938,6 +986,7 @@ class LibraryStore(
                         sourceURL = info.sourceUrl,
                         remoteID = info.remoteId,
                         cloudKind = info.cloudKind.name,
+                        providerId = info.resolvedProviderId,
                         lastSyncedEpochMs = info.lastSyncedEpochMs ?: existing?.lastSyncedEpochMs ?: 0L,
                         tracks = existing?.tracks ?: emptyMap(),
                     ),
@@ -967,6 +1016,7 @@ class LibraryStore(
                     sourceURL = info.sourceUrl,
                     remoteID = info.remoteId,
                     cloudKind = info.cloudKind.name,
+                    providerId = info.resolvedProviderId,
                     lastSyncedEpochMs = info.lastSyncedEpochMs ?: existing?.lastSyncedEpochMs ?: 0L,
                     tracks = existing?.tracks ?: emptyMap(),
                 ),
@@ -978,19 +1028,17 @@ class LibraryStore(
         sourceUrl: String,
         cookie: String? = null,
         kindHint: RootKind? = null,
+        providerIdHint: String? = null,
     ): CloudPlaylistResult = withContext(Dispatchers.IO) {
-        val cleanUrl = extractCloudSourceInput(sourceUrl)
-        when (kindHint) {
-            RootKind.CLOUD_BILIBILI -> bilibiliClient.fetchPlaylist(cleanUrl, cookie)
-            RootKind.CLOUD_YOUTUBE -> youTubeClient.fetchPlaylist(cleanUrl, cookie)
-            RootKind.CLOUD_GOOGLE_DRIVE -> googleDriveClient.fetchPlaylist(cleanUrl, cookie)
-            else -> when {
-                GoogleDriveClient.canHandle(cleanUrl) -> googleDriveClient.fetchPlaylist(cleanUrl, cookie)
-                cleanUrl.contains("bilibili", ignoreCase = true) || cleanUrl.contains("b23.tv", ignoreCase = true) ->
-                    bilibiliClient.fetchPlaylist(cleanUrl, cookie)
-                else -> youTubeClient.fetchPlaylist(cleanUrl, cookie)
-            }
-        }
+        val classified = runCatching { providerRegistry.classifyUrl(sourceUrl, providerIdHint) }.getOrNull()
+        val provider = classified?.provider
+            ?: providerRegistry.providerForKind(kindHint, providerIdHint)
+            ?: throw CloudSourceException(
+                CloudErrorCode.EXTENSION_UNAVAILABLE,
+                "Cloud provider unavailable for $sourceUrl",
+            )
+        val cleanUrl = classified?.normalizedUrl ?: extractCloudSourceInput(sourceUrl)
+        provider.fetchCollection(cleanUrl, cookie)
     }
 
     fun markRootCloudSynced(
@@ -1076,21 +1124,39 @@ class LibraryStore(
         }
     }
 
-    suspend fun addCloudRoot(sourceUrl: String, cookie: String? = null): Result<Unit> {
-        val (trimmedUrl, classifiedKind) = classifyCloudUrl(sourceUrl)
-            ?: return Result.failure(LibraryException.UnsupportedCloudUrl)
-        val cleanCookie = cookie?.trim()?.takeIf { it.isNotEmpty() }
+    suspend fun addCloudRoot(
+        sourceUrl: String,
+        cookie: String? = null,
+        providerIdHint: String? = null,
+    ): Result<Unit> {
+        val classified = try {
+            withContext(Dispatchers.IO) {
+                providerRegistry.classifyUrl(sourceUrl, providerIdHint)
+            } ?: return Result.failure(LibraryException.UnsupportedCloudUrl)
+        } catch (err: Exception) {
+            return Result.failure(err)
+        }
+        val provider = classified.provider
+        val trimmedUrl = classified.normalizedUrl
+        val cleanCookie = if (provider.supportsCookie) {
+            cookie?.trim()?.takeIf { it.isNotEmpty() }
+        } else {
+            null
+        }
 
-        if (classifiedKind == RootKind.CLOUD_GOOGLE_DRIVE) {
+        if (provider.supportsTree) {
             val draftRoot = LibraryRoot(
                 id = UUID.randomUUID().toString(),
-                name = "Google Drive",
-                kind = RootKind.CLOUD_GOOGLE_DRIVE,
+                name = provider.displayName,
+                kind = provider.rootKind,
                 sourceUrl = trimmedUrl,
+                remoteId = classified.remoteId,
                 cookie = cleanCookie,
+                providerId = provider.providerId,
             )
             val firstBatchSignal = CompletableDeferred<Result<Unit>>()
-            launchGoogleDriveSync(
+            launchCloudTreeSync(
+                provider = provider,
                 root = draftRoot,
                 isNewRoot = true,
                 firstBatchSignal = firstBatchSignal,
@@ -1100,24 +1166,16 @@ class LibraryStore(
 
         val playlist = try {
             withContext(Dispatchers.IO) {
-                when (classifiedKind) {
-                    RootKind.CLOUD_BILIBILI -> bilibiliClient.fetchPlaylist(trimmedUrl, cleanCookie)
-                    else -> youTubeClient.fetchPlaylist(trimmedUrl, cleanCookie)
-                }
+                provider.fetchCollection(trimmedUrl, cleanCookie)
             }
         } catch (err: Exception) {
             return Result.failure(err)
         }
 
-        val kind = when (playlist.source) {
-            CloudSource.YOUTUBE -> RootKind.CLOUD_YOUTUBE
-            CloudSource.BILIBILI -> RootKind.CLOUD_BILIBILI
-            CloudSource.GOOGLE_DRIVE -> RootKind.CLOUD_GOOGLE_DRIVE
-            else -> RootKind.CLOUD_YOUTUBE
-        }
-
         val duplicate = _state.value.roots.any {
-            it.kind == kind && it.remoteId == playlist.remoteId
+            it.kind == provider.rootKind &&
+                it.resolvedProviderId == provider.providerId &&
+                it.remoteId == playlist.remoteId
         }
         if (duplicate) {
             return Result.failure(LibraryException.DuplicateRoot)
@@ -1127,16 +1185,18 @@ class LibraryStore(
         val root = LibraryRoot(
             id = UUID.randomUUID().toString(),
             name = playlist.title,
-            kind = kind,
+            kind = provider.rootKind,
             sourceUrl = trimmedUrl,
             remoteId = playlist.remoteId,
             cookie = cleanCookie,
             lastSyncedEpochMs = nowMs,
+            providerId = provider.providerId,
         )
 
         val newTracks = withContext(Dispatchers.IO) {
             buildCloudTracks(
                 root = root,
+                provider = provider,
                 items = playlist.tracks,
                 existingByRel = emptyMap(),
                 nowMs = nowMs,
@@ -1292,7 +1352,8 @@ class LibraryStore(
         }
     }
 
-    private fun launchGoogleDriveSync(
+    private fun launchCloudTreeSync(
+        provider: CloudSourceProvider,
         root: LibraryRoot,
         isNewRoot: Boolean,
         firstBatchSignal: CompletableDeferred<Result<Unit>>? = null,
@@ -1318,7 +1379,7 @@ class LibraryStore(
             val syncNow = System.currentTimeMillis()
 
             try {
-                googleDriveClient.crawlProgressive(
+                provider.crawlProgressive(
                     sourceUrl = sourceUrl,
                     cookie = root.cookie,
                     priorityPathProvider = { cloudPriorityPaths[root.id] },
@@ -1329,7 +1390,9 @@ class LibraryStore(
                         if (isNewRoot) {
                             val duplicate = synchronized(stateLock) {
                                 _state.value.roots.any {
-                                    it.kind == RootKind.CLOUD_GOOGLE_DRIVE && it.remoteId == batch.rootRemoteId
+                                    it.kind == provider.rootKind &&
+                                        it.resolvedProviderId == provider.providerId &&
+                                        it.remoteId == batch.rootRemoteId
                                 }
                             }
                             if (duplicate) {
@@ -1340,7 +1403,8 @@ class LibraryStore(
                         resolvedRoot = root.copy(
                             name = batch.rootTitle.ifBlank { root.name },
                             remoteId = batch.rootRemoteId,
-                            lastSyncedEpochMs = if (batch.progress.isComplete) System.currentTimeMillis() else root.lastSyncedEpochMs,
+                            providerId = provider.providerId,
+                            lastSyncedEpochMs = if (batch.isComplete) System.currentTimeMillis() else root.lastSyncedEpochMs,
                         )
                         synchronized(stateLock) {
                             val cur = _state.value
@@ -1367,6 +1431,7 @@ class LibraryStore(
 
                     val batchTracks = buildCloudTracks(
                         root = resolvedRoot,
+                        provider = provider,
                         items = batch.batchTracks,
                         existingByRel = existingByRel,
                         nowMs = syncNow,
@@ -1386,32 +1451,33 @@ class LibraryStore(
                             throw CancellationException("Root removed")
                         }
 
-                        if (batch.progress.isComplete) {
+                        if (batch.isComplete) {
                             knownCloudSubfolders.remove(resolvedRoot.id)
                         } else {
                             knownCloudSubfolders[resolvedRoot.id] = batch.knownFolderPaths
                         }
 
-                        val nextProgress = if (batch.progress.isComplete) {
+                        val nextProgress = if (batch.isComplete) {
                             cur.cloudSyncProgress - resolvedRoot.id
                         } else {
                             cur.cloudSyncProgress + (
                                 resolvedRoot.id to CloudSyncProgress(
                                     rootId = resolvedRoot.id,
-                                    completedFolders = batch.progress.completedFolders,
-                                    totalFolders = batch.progress.totalDiscoveredFolders,
+                                    completedFolders = batch.completedFolders,
+                                    totalFolders = batch.totalDiscoveredFolders,
                                     tracksFound = crawledAllTracks.size,
                                 )
                             )
                         }
 
-                        val nextRoots = if (batch.progress.isComplete) {
+                        val nextRoots = if (batch.isComplete) {
                             val doneAt = System.currentTimeMillis()
                             cur.roots.map {
                                 if (it.id == resolvedRoot.id) {
                                     it.copy(
                                         name = batch.rootTitle.ifBlank { it.name },
                                         remoteId = batch.rootRemoteId,
+                                        providerId = provider.providerId,
                                         lastSyncedEpochMs = doneAt,
                                     )
                                 } else it
@@ -1421,7 +1487,7 @@ class LibraryStore(
                         }
 
                         val otherTracks = cur.tracks.filter { it.rootId != resolvedRoot.id }
-                        val rootTracksNext = if (!batch.progress.isComplete) {
+                        val rootTracksNext = if (!batch.isComplete) {
                             // Merge without deleting existing tracks until the full crawl finishes.
                             val mergedByRel = LinkedHashMap<String, Track>()
                             for (t in cur.tracks) {
@@ -1458,12 +1524,12 @@ class LibraryStore(
                             artists = artists,
                             cloudSyncProgress = nextProgress,
                         )
-                        if (batch.progress.isComplete) {
+                        if (batch.isComplete) {
                             completeTrackIds = combined.filter { it.rootId == resolvedRoot.id }.map { it.id }
                         }
                     }
 
-                    if (isFirstBatch || batchTracks.isNotEmpty() || batch.progress.isComplete) {
+                    if (isFirstBatch || batchTracks.isNotEmpty() || batch.isComplete) {
                         saveLibrary()
                     }
                     if (removedOnComplete.isNotEmpty()) {
@@ -1476,7 +1542,7 @@ class LibraryStore(
                     if (firstBatchSignal != null && !firstBatchSignal.isCompleted) {
                         firstBatchSignal.complete(Result.success(Unit))
                     }
-                    if (batch.progress.isComplete && isNewRoot) {
+                    if (batch.isComplete && isNewRoot) {
                         onFolderAdded?.invoke(resolvedRoot.name, completeTrackIds.orEmpty())
                     }
                 }
@@ -1528,13 +1594,19 @@ class LibraryStore(
 
             if (root.kind.isCloud) {
                 val url = root.sourceUrl ?: root.remoteId
-                if (url.isNullOrBlank()) {
+                val provider = providerRegistry.providerForRoot(root)
+                if (url.isNullOrBlank() || provider == null) {
                     kept.addAll(existingTracks)
                     continue
                 }
-                if (root.kind == RootKind.CLOUD_GOOGLE_DRIVE) {
+                if (provider.supportsTree) {
                     val signal = CompletableDeferred<Result<Unit>>()
-                    launchGoogleDriveSync(root = root, isNewRoot = false, firstBatchSignal = signal)
+                    launchCloudTreeSync(
+                        provider = provider,
+                        root = root,
+                        isNewRoot = false,
+                        firstBatchSignal = signal,
+                    )
                     val firstRes = signal.await()
                     if (firstRes.isSuccess) {
                         progressiveDriveRootIds.add(root.id)
@@ -1546,11 +1618,7 @@ class LibraryStore(
                 }
                 val syncResult = withContext(Dispatchers.IO) {
                     runCatching {
-                        when (root.kind) {
-                            RootKind.CLOUD_YOUTUBE -> youTubeClient.fetchPlaylist(url, root.cookie)
-                            RootKind.CLOUD_BILIBILI -> bilibiliClient.fetchPlaylist(url, root.cookie)
-                            else -> null
-                        }
+                        provider.fetchCollection(url, root.cookie)
                     }
                 }
                 val playlist = syncResult.getOrNull()
@@ -1568,6 +1636,7 @@ class LibraryStore(
                 val syncedTracks = withContext(Dispatchers.IO) {
                     buildCloudTracks(
                         root = root,
+                        provider = provider,
                         items = playlist.tracks,
                         existingByRel = existingByRel,
                         nowMs = syncNow,
@@ -1585,6 +1654,7 @@ class LibraryStore(
                 kept.addAll(syncedTracks)
                 updatedRoots[rootIndex] = root.copy(
                     name = playlist.title.ifBlank { root.name },
+                    providerId = provider.providerId,
                     lastSyncedEpochMs = syncNow,
                 )
                 rootsChanged = true
@@ -1813,12 +1883,14 @@ class LibraryStore(
             val normPath = LibraryRoot.normalizeFolderPath(rawPath)
             val parsedKind = runCatching { RootKind.valueOf(manifest.cloudKind) }.getOrNull() ?: continue
             val url = manifest.sourceURL.trim().takeIf { it.isNotEmpty() } ?: continue
+            val pid = manifest.providerId?.trim()?.takeIf { it.isNotEmpty() } ?: parsedKind.builtinProviderId
             if (normPath.isEmpty()) {
                 if (nextRoot.sourceUrl.isNullOrBlank() && nextSubs.isEmpty()) {
                     nextRoot = nextRoot.copy(
                         sourceUrl = url,
                         remoteId = manifest.remoteID ?: nextRoot.remoteId,
                         linkedCloudKind = parsedKind,
+                        linkedProviderId = pid,
                         lastSyncedEpochMs = manifest.lastSyncedEpochMs.takeIf { it > 0L } ?: nextRoot.lastSyncedEpochMs,
                     )
                 }
@@ -1827,6 +1899,7 @@ class LibraryStore(
                     sourceUrl = url,
                     remoteId = manifest.remoteID,
                     cloudKind = parsedKind,
+                    providerId = if (parsedKind == RootKind.CLOUD_EXTENSION) pid else manifest.providerId,
                     lastSyncedEpochMs = manifest.lastSyncedEpochMs.takeIf { it > 0L },
                 )
             }
@@ -1841,6 +1914,7 @@ class LibraryStore(
 
     private suspend fun buildCloudTracks(
         root: LibraryRoot,
+        provider: CloudSourceProvider?,
         items: List<CloudTrackMetadata>,
         existingByRel: Map<String, Track>,
         nowMs: Long,
@@ -1848,11 +1922,19 @@ class LibraryStore(
         val artKeysByUrl = HashMap<String, String?>()
         val seenRel = HashSet<String>()
         val result = ArrayList<Track>(items.size)
-        val sourceSlug = when (root.kind) {
+        val sourceSlug = provider?.cloudSourceSlug ?: when (root.kind) {
             RootKind.CLOUD_GOOGLE_DRIVE -> CloudSource.GOOGLE_DRIVE
+            RootKind.CLOUD_EXTENSION -> root.resolvedProviderId ?: root.kind.name.lowercase()
             else -> root.kind.name.lowercase()
         }
-        val artHeaders = buildMap {
+        val cloudSource = provider?.cloudSourceSlug ?: when (root.kind) {
+            RootKind.CLOUD_YOUTUBE -> CloudSource.YOUTUBE
+            RootKind.CLOUD_BILIBILI -> CloudSource.BILIBILI
+            RootKind.CLOUD_GOOGLE_DRIVE -> CloudSource.GOOGLE_DRIVE
+            RootKind.CLOUD_EXTENSION -> root.resolvedProviderId ?: CloudSource.YOUTUBE
+            else -> CloudSource.YOUTUBE
+        }
+        val artHeaders = provider?.artworkHeaders() ?: buildMap {
             if (root.kind == RootKind.CLOUD_BILIBILI) {
                 put("Referer", "https://www.bilibili.com/")
                 put("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
@@ -1885,13 +1967,6 @@ class LibraryStore(
                     }.getOrNull()
                 }
                 else -> old?.artworkKey
-            }
-
-            val cloudSource = when (root.kind) {
-                RootKind.CLOUD_YOUTUBE -> CloudSource.YOUTUBE
-                RootKind.CLOUD_BILIBILI -> CloudSource.BILIBILI
-                RootKind.CLOUD_GOOGLE_DRIVE -> CloudSource.GOOGLE_DRIVE
-                else -> CloudSource.YOUTUBE
             }
 
             result.add(
@@ -2337,11 +2412,34 @@ class LibraryStore(
 
     private fun isFlatCloudRoot(root: LibraryRoot?): Boolean {
         if (root == null || !root.kind.isCloud) return false
-        if (root.kind != RootKind.CLOUD_GOOGLE_DRIVE) return true
-        if (knownCloudSubfolders[root.id]?.isNotEmpty() == true) return false
-        val driveTracks = _state.value.tracks.filter { it.rootId == root.id }
-        if (driveTracks.isEmpty()) return false
-        return driveTracks.all { it.relativePath.startsWith("gdrive/", ignoreCase = true) }
+        val provider = providerRegistry.providerForRoot(root)
+        if (provider != null) {
+            if (provider.usesFlatCloudListing) return true
+            if (root.kind == RootKind.CLOUD_GOOGLE_DRIVE) {
+                if (knownCloudSubfolders[root.id]?.isNotEmpty() == true) return false
+                val driveTracks = _state.value.tracks.filter { it.rootId == root.id }
+                if (driveTracks.isEmpty()) return false
+                return driveTracks.all { it.relativePath.startsWith("gdrive/", ignoreCase = true) }
+            }
+            return false
+        }
+        if (root.kind == RootKind.CLOUD_GOOGLE_DRIVE) {
+            if (knownCloudSubfolders[root.id]?.isNotEmpty() == true) return false
+            val driveTracks = _state.value.tracks.filter { it.rootId == root.id }
+            if (driveTracks.isEmpty()) return false
+            return driveTracks.all { it.relativePath.startsWith("gdrive/", ignoreCase = true) }
+        }
+        if (root.kind == RootKind.CLOUD_EXTENSION) {
+            if (knownCloudSubfolders[root.id]?.isNotEmpty() == true) return false
+            val extTracks = _state.value.tracks.filter { it.rootId == root.id }
+            if (extTracks.isEmpty()) return false
+            val slug = root.resolvedProviderId.orEmpty()
+            return extTracks.all { t ->
+                val prefix = "$slug/"
+                t.relativePath.startsWith(prefix) && !t.relativePath.substring(prefix.length).contains('/')
+            }
+        }
+        return true
     }
 
     private fun canonicalFolderPath(rootId: String, path: String): String {
@@ -2475,7 +2573,7 @@ class LibraryStore(
                 direct.add(track)
             }
         }
-        if (root?.kind == RootKind.CLOUD_GOOGLE_DRIVE) {
+        if (root != null && root.kind.isCloud && !isFlatCloudRoot(root)) {
             for (knownPath in knownCloudSubfolders[rootId].orEmpty()) {
                 if (root.isExcluded(knownPath)) continue
                 if (!knownPath.startsWith(prefix)) continue

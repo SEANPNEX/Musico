@@ -162,5 +162,23 @@ class LocalizationTest {
         assertEquals("3 queues", EnStrings.queueCountLabel(3))
         assertEquals("3 个队列", ZhHansStrings.queueCountLabel(3))
         assertNotEquals(EnStrings.queueCountLabel(3), ZhHansStrings.queueCountLabel(3))
+
+        assertEquals("v1.2.0 · Musico", EnStrings.extensionVersionAuthor("1.2.0", "Musico"))
+        assertEquals("v1.2.0 · Musico", ZhHansStrings.extensionVersionAuthor("1.2.0", "Musico"))
+        assertEquals("v1.2.0", EnStrings.extensionVersionAuthor("1.2.0", null))
+        assertEquals("v1.2.0", ZhHansStrings.extensionVersionAuthor("1.2.0", null))
+
+        val formattedPairs = listOf(
+            EnStrings.extensionMissingBanner("ext.demo") to ZhHansStrings.extensionMissingBanner("ext.demo"),
+            EnStrings.badgeCustomLocal("Fixture") to ZhHansStrings.badgeCustomLocal("Fixture"),
+            EnStrings.uninstallExtensionConfirmTitle("Demo Ext") to ZhHansStrings.uninstallExtensionConfirmTitle("Demo Ext"),
+            EnStrings.detectedProviderHint("Demo Ext") to ZhHansStrings.detectedProviderHint("Demo Ext"),
+            EnStrings.extensionLogsCountLabel(12) to ZhHansStrings.extensionLogsCountLabel(12),
+        )
+        formattedPairs.forEach { (en, zh) ->
+            assertTrue("EN formatted string blank: $en", en.isNotBlank())
+            assertTrue("ZH formatted string blank: $zh", zh.isNotBlank())
+            assertNotEquals("EN and ZH formatted strings should differ: $en", en, zh)
+        }
     }
 }

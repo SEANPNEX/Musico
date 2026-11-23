@@ -40,6 +40,25 @@
                             Click="Cancel_Click" />
                 </Grid>
 
+                <!-- Provider Selection -->
+                <TextBlock Text="{DynamicResource Str_AddCloud_ProviderLabel}"
+                           FontFamily="{StaticResource Win10Font}"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource TextPrimaryBrush}"
+                           Margin="0,0,0,6" />
+                <ComboBox x:Name="ProviderCombo"
+                          Style="{StaticResource Win10ComboBoxStyle}"
+                          DisplayMemberPath="Label"
+                          SelectedValuePath="ProviderId"
+                          SelectionChanged="ProviderCombo_SelectionChanged" />
+                <TextBlock Text="{DynamicResource Str_AddCloud_ProviderHint}"
+                           FontFamily="{StaticResource Win10Font}"
+                           FontSize="11"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           TextWrapping="Wrap"
+                           Margin="0,4,0,14" />
+
                 <!-- URL Field -->
                 <TextBlock Text="{DynamicResource Str_AddCloud_UrlLabel}"
                            FontFamily="{StaticResource Win10Font}"
@@ -52,7 +71,8 @@
                          Height="34"
                          KeyDown="InputBox_KeyDown"
                          TextChanged="UrlBox_TextChanged" />
-                <TextBlock Text="{DynamicResource Str_AddCloud_UrlHint}"
+                <TextBlock x:Name="UrlHintText"
+                           Text="{DynamicResource Str_AddCloud_UrlHint}"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="11"
                            Foreground="{DynamicResource TextSecondaryBrush}"
@@ -60,39 +80,43 @@
                            Margin="0,4,0,14" />
 
                 <!-- Optional Cookie -->
-                <TextBlock Text="{DynamicResource Str_AddCloud_CookieLabel}"
-                           FontFamily="{StaticResource Win10Font}"
-                           FontSize="13"
-                           FontWeight="SemiBold"
-                           Foreground="{DynamicResource TextPrimaryBrush}"
-                           Margin="0,0,0,6" />
-                <TextBox x:Name="CookieBox"
-                         Style="{StaticResource Win10TextBoxStyle}"
-                         Height="34"
-                         KeyDown="InputBox_KeyDown" />
-                <TextBlock Text="{DynamicResource Str_AddCloud_CookieHint}"
-                           FontFamily="{StaticResource Win10Font}"
-                           FontSize="11"
-                           Foreground="{DynamicResource TextSecondaryBrush}"
-                           TextWrapping="Wrap"
-                           Margin="0,4,0,14" />
+                <StackPanel x:Name="CookieSection">
+                    <TextBlock Text="{DynamicResource Str_AddCloud_CookieLabel}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               Margin="0,0,0,6" />
+                    <TextBox x:Name="CookieBox"
+                             Style="{StaticResource Win10TextBoxStyle}"
+                             Height="34"
+                             KeyDown="InputBox_KeyDown" />
+                    <TextBlock Text="{DynamicResource Str_AddCloud_CookieHint}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="11"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap"
+                               Margin="0,4,0,14" />
+                </StackPanel>
 
-                <!-- Optional YouTube HTTP Proxy -->
-                <TextBlock Text="{DynamicResource Str_AddCloud_ProxyLabel}"
-                           FontFamily="{StaticResource Win10Font}"
-                           FontSize="13"
-                           FontWeight="SemiBold"
-                           Foreground="{DynamicResource TextPrimaryBrush}"
-                           Margin="0,0,0,6" />
-                <TextBox x:Name="ProxyBox"
-                         Style="{StaticResource Win10TextBoxStyle}"
-                         Height="34"
-                         KeyDown="InputBox_KeyDown" />
-                <TextBlock Text="{DynamicResource Str_AddCloud_ProxyHint}"
-                           FontFamily="{StaticResource Win10Font}"
-                           FontSize="11"
-                           Foreground="{DynamicResource TextSecondaryBrush}"
-                           Margin="0,4,0,14" />
+                <!-- Optional HTTP Proxy -->
+                <StackPanel x:Name="ProxySection">
+                    <TextBlock Text="{DynamicResource Str_AddCloud_ProxyLabel}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               Margin="0,0,0,6" />
+                    <TextBox x:Name="ProxyBox"
+                             Style="{StaticResource Win10TextBoxStyle}"
+                             Height="34"
+                             KeyDown="InputBox_KeyDown" />
+                    <TextBlock Text="{DynamicResource Str_AddCloud_ProxyHint}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="11"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="0,4,0,14" />
+                </StackPanel>
 
                 <!-- Validation / Network Error Banner -->
                 <Border x:Name="ErrorBanner"

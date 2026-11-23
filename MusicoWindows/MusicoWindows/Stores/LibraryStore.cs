@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Net.Http;
 using MusicoWindows.Cloud;
 using MusicoWindows.Core;
+using MusicoWindows.Extensions;
 using MusicoWindows.Models;
 
 namespace MusicoWindows.Stores;
@@ -49,13 +50,14 @@ public sealed class LibraryStore : ObservableStore
     private readonly YouTubeClient _youtube;
     private readonly BilibiliClient _bilibili;
     private readonly GoogleDriveClient _googleDrive;
+    private readonly CloudProviderRegistry _providerRegistry;
     private readonly HttpMessageHandler? _artworkHandler;
     private readonly CloudAudioCache? _cloudCache;
 
     private sealed class ActiveCloudSync
     {
         public CancellationTokenSource Cts { get; } = new();
-        public GoogleDriveTraversalHandle? Handle { get; set; }
+        public CloudTreeTraversalHandle? Handle { get; set; }
         public Task Task { get; set; } = Task.CompletedTask;
     }
 
@@ -96,7 +98,8 @@ public sealed class LibraryStore : ObservableStore
         BilibiliClient? bilibiliClient = null,
         HttpMessageHandler? artworkHandler = null,
         CloudAudioCache? cloudCache = null,
-        GoogleDriveClient? googleDriveClient = null)
+        GoogleDriveClient? googleDriveClient = null,
+        CloudProviderRegistry? providerRegistry = null)
     {
         _stateDirectory = stateDirectory;
         _musicDirectory = musicDirectory;
@@ -107,6 +110,8 @@ public sealed class LibraryStore : ObservableStore
         _youtube = youtubeClient ?? new YouTubeClient();
         _bilibili = bilibiliClient ?? new BilibiliClient();
         _googleDrive = googleDriveClient ?? new GoogleDriveClient();
+        _providerRegistry = providerRegistry ?? new CloudProviderRegistry(_youtube, _bilibili, _googleDrive);
+        _providerRegistry.Changed += OnCloudProvidersChanged;
         _artworkHandler = artworkHandler;
         _cloudCache = cloudCache;
 
@@ -128,7 +133,8 @@ public sealed class LibraryStore : ObservableStore
                 LastSyncedUtc = savedAppRoot?.LastSyncedUtc,
                 ExcludedPaths = savedAppRoot?.ExcludedPaths,
                 LinkedCloudKind = savedAppRoot?.LinkedCloudKind,
-                TrackedSubfolders = savedAppRoot?.TrackedSubfolders
+                TrackedSubfolders = savedAppRoot?.TrackedSubfolders,
+                LinkedProviderId = savedAppRoot?.LinkedProviderId
             });
             _rootPaths[LibraryRoot.AppFolderId] = _musicDirectory;
         }
@@ -173,6 +179,7 @@ public sealed class LibraryStore : ObservableStore
     public int ScanTotal { get => _scanTotal; private set => SetProperty(ref _scanTotal, value); }
     public bool AppFolderRemoved { get => _appFolderRemoved; private set => SetProperty(ref _appFolderRemoved, value); }
     public ArtworkCache Artwork { get; }
+    public CloudProviderRegistry CloudProviders => _providerRegistry;
     public Action<ISet<string>>? OnTracksRemoved { get; set; }
     public Action<IReadOnlyDictionary<string, string>>? OnTracksMigrated { get; set; }
     public Action<string, IReadOnlyList<string>>? OnFolderAdded { get; set; }
@@ -222,11 +229,36 @@ public sealed class LibraryStore : ObservableStore
         }
     }
 
+    private void OnCloudProvidersChanged()
+    {
+        OnPropertyChanged(nameof(Roots));
+        OnPropertyChanged(nameof(Tracks));
+    }
+
     // MARK: Roots
 
-    public bool IsAvailable(LibraryRoot root) => root.IsCloud || _rootPaths.ContainsKey(root.Id);
+    public bool IsAvailable(LibraryRoot root)
+    {
+        if (root.Kind == RootKind.CloudExtension)
+        {
+            return _providerRegistry.GetProvider(root) is { IsAvailable: true };
+        }
+        return root.IsCloud || _rootPaths.ContainsKey(root.Id);
+    }
 
-    public bool IsAvailable(Track track) => track.IsCloud || _rootPaths.ContainsKey(track.RootId);
+    public bool IsAvailable(Track track)
+    {
+        if (track.IsCloud)
+        {
+            var root = GetRoot(track.RootId);
+            if (root is not null && root.IsCloud)
+            {
+                return IsAvailable(root);
+            }
+            return _providerRegistry.GetBySourceOrProviderId(track.CloudSource) is { IsAvailable: true };
+        }
+        return _rootPaths.ContainsKey(track.RootId);
+    }
 
     public string? GetRootPath(Guid rootId) => _rootPaths.TryGetValue(rootId, out string? p) ? p : null;
 
@@ -325,9 +357,10 @@ public sealed class LibraryStore : ObservableStore
         string? proxyUrl = null;
         DateTimeOffset? lastSyncedUtc = null;
         RootKind? linkedCloudKind = null;
+        string? linkedProviderId = null;
 
         if (cloudSourceRoot is not null &&
-            cloudSourceRoot.EffectiveCloudKind is { } cloudKind &&
+            (cloudSourceRoot.EffectiveCloudKind is not null || !string.IsNullOrWhiteSpace(cloudSourceRoot.EffectiveProviderId)) &&
             !string.IsNullOrWhiteSpace(cloudSourceRoot.SourceUrl))
         {
             sourceUrl = cloudSourceRoot.SourceUrl.Trim();
@@ -335,14 +368,15 @@ public sealed class LibraryStore : ObservableStore
             cookie = cloudSourceRoot.Cookie;
             proxyUrl = cloudSourceRoot.ProxyUrl;
             lastSyncedUtc = DateTimeOffset.UtcNow;
-            linkedCloudKind = cloudKind;
+            linkedCloudKind = cloudSourceRoot.EffectiveCloudKind ?? RootKind.CloudExtension;
+            linkedProviderId = cloudSourceRoot.EffectiveProviderId;
         }
         else if (CloudExporter.LoadManifest(normalized) is { } manifest)
         {
             sourceUrl = manifest.SourceUrl.Trim();
             remoteId = manifest.RemoteId;
             lastSyncedUtc = manifest.LastSyncedUtc;
-            linkedCloudKind = ResolveCloudKindFromManifest(manifest, sourceUrl);
+            (linkedCloudKind, linkedProviderId) = ResolveCloudFromManifest(manifest, sourceUrl);
         }
 
         var migratedTrackedSubfolders = new Dictionary<string, CloudTrackingInfo>(StringComparer.Ordinal);
@@ -369,7 +403,8 @@ public sealed class LibraryStore : ObservableStore
                     childCloudKind,
                     existingRoot.Cookie,
                     existingRoot.ProxyUrl,
-                    existingRoot.LastSyncedUtc);
+                    existingRoot.LastSyncedUtc,
+                    existingRoot.EffectiveProviderId);
             }
 
             if (existingRoot.TrackedSubfolders is { Count: > 0 })
@@ -447,7 +482,8 @@ public sealed class LibraryStore : ObservableStore
             LastSyncedUtc: lastSyncedUtc,
             ExcludedPaths: migratedExcluded.Count > 0 ? migratedExcluded : null,
             LinkedCloudKind: linkedCloudKind,
-            TrackedSubfolders: migratedTrackedSubfolders.Count > 0 ? migratedTrackedSubfolders : null);
+            TrackedSubfolders: migratedTrackedSubfolders.Count > 0 ? migratedTrackedSubfolders : null,
+            LinkedProviderId: linkedProviderId);
         _roots = [.. _roots, root];
         _rootPaths[root.Id] = normalized;
         OnPropertyChanged(nameof(Roots));
@@ -463,15 +499,17 @@ public sealed class LibraryStore : ObservableStore
         string target = NormalizeDirPath(destinationFolder);
 
         CloudTrackingInfo? tracking = null;
-        if (cloudRoot.EffectiveCloudKind is { } cloudKind && !string.IsNullOrWhiteSpace(cloudRoot.SourceUrl))
+        if ((cloudRoot.EffectiveCloudKind is { } || !string.IsNullOrWhiteSpace(cloudRoot.EffectiveProviderId)) &&
+            !string.IsNullOrWhiteSpace(cloudRoot.SourceUrl))
         {
             tracking = new CloudTrackingInfo(
                 cloudRoot.SourceUrl.Trim(),
                 cloudRoot.RemoteId,
-                cloudKind,
+                cloudRoot.EffectiveCloudKind ?? RootKind.CloudExtension,
                 cloudRoot.Cookie,
                 cloudRoot.ProxyUrl,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow,
+                cloudRoot.EffectiveProviderId);
         }
 
         for (int i = 0; i < _roots.Count; i++)
@@ -492,7 +530,8 @@ public sealed class LibraryStore : ObservableStore
                         Cookie = tracking.Cookie ?? root.Cookie,
                         ProxyUrl = tracking.ProxyUrl ?? root.ProxyUrl,
                         LastSyncedUtc = tracking.LastSynced,
-                        LinkedCloudKind = tracking.CloudKind
+                        LinkedCloudKind = tracking.CloudKind,
+                        LinkedProviderId = tracking.ResolvedProviderId
                     };
                     _roots = updated;
                     OnPropertyChanged(nameof(Roots));
@@ -559,7 +598,8 @@ public sealed class LibraryStore : ObservableStore
     public void AttachCloudTracking(string folderPath, LibraryRoot cloudSourceRoot)
     {
         if (string.IsNullOrWhiteSpace(folderPath)) return;
-        if (cloudSourceRoot.EffectiveCloudKind is not { } cloudKind || string.IsNullOrWhiteSpace(cloudSourceRoot.SourceUrl)) return;
+        if ((cloudSourceRoot.EffectiveCloudKind is not { } cloudKind && string.IsNullOrWhiteSpace(cloudSourceRoot.EffectiveProviderId)) ||
+            string.IsNullOrWhiteSpace(cloudSourceRoot.SourceUrl)) return;
 
         string normalized = NormalizeDirPath(folderPath);
         int idx = _roots.FindIndex(r =>
@@ -576,7 +616,8 @@ public sealed class LibraryStore : ObservableStore
             Cookie = cloudSourceRoot.Cookie ?? updated[idx].Cookie,
             ProxyUrl = cloudSourceRoot.ProxyUrl ?? updated[idx].ProxyUrl,
             LastSyncedUtc = DateTimeOffset.UtcNow,
-            LinkedCloudKind = cloudKind
+            LinkedCloudKind = cloudSourceRoot.EffectiveCloudKind ?? RootKind.CloudExtension,
+            LinkedProviderId = cloudSourceRoot.EffectiveProviderId
         };
         _roots = updated;
         OnPropertyChanged(nameof(Roots));
@@ -607,7 +648,8 @@ public sealed class LibraryStore : ObservableStore
                 entry.Value.CloudKind,
                 entry.Value.Cookie,
                 entry.Value.ProxyUrl,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow,
+                entry.Value.ProviderId);
             updated[idx] = current with { TrackedSubfolders = nextTracked };
         }
         else
@@ -628,15 +670,17 @@ public sealed class LibraryStore : ObservableStore
         string norm = LibraryRoot.NormalizeFolderPath(relativePath);
         if (norm.Length == 0)
         {
-            if (root.EffectiveCloudKind is { } kind && !string.IsNullOrWhiteSpace(root.SourceUrl))
+            if ((root.EffectiveCloudKind is { } || !string.IsNullOrWhiteSpace(root.EffectiveProviderId)) &&
+                !string.IsNullOrWhiteSpace(root.SourceUrl))
             {
                 return new CloudTrackingInfo(
                     root.SourceUrl!,
                     root.RemoteId,
-                    kind,
+                    root.EffectiveCloudKind ?? RootKind.CloudExtension,
                     root.Cookie,
                     root.ProxyUrl,
-                    root.LastSyncedUtc);
+                    root.LastSyncedUtc,
+                    root.EffectiveProviderId);
             }
             return null;
         }
@@ -649,13 +693,21 @@ public sealed class LibraryStore : ObservableStore
         string relativePath,
         string newSourceUrl,
         string? cookie,
-        string? proxyUrl)
+        string? proxyUrl,
+        string? preferredProviderId = null)
     {
-        string extractedUrl = CloudUrlClassifier.ExtractCloudUrl(newSourceUrl);
-        RootKind newKind = CloudUrlClassifier.Classify(extractedUrl);
+        var (provider, match) = Task.Run(() =>
+            CloudUrlClassifier.ClassifyAsync(newSourceUrl, _providerRegistry, preferredProviderId, CancellationToken.None))
+            .GetAwaiter()
+            .GetResult();
+
+        string extractedUrl = !string.IsNullOrWhiteSpace(match.NormalizedUrl)
+            ? match.NormalizedUrl!
+            : CloudUrlClassifier.ExtractCloudUrl(newSourceUrl, _providerRegistry);
+        RootKind newKind = provider.RootKind;
         string? normalizedProxy = YouTubeClient.NormalizeProxyUrl(proxyUrl);
         string? trimmedCookie = string.IsNullOrWhiteSpace(cookie) ? null : cookie.Trim();
-        string? resolvedRemoteId = TryExtractRemoteId(extractedUrl, newKind);
+        string? resolvedRemoteId = match.RemoteId ?? provider.TryExtractRemoteId(extractedUrl);
 
         int idx = _roots.FindIndex(r => r.Id == rootId);
         if (idx < 0) return;
@@ -674,7 +726,8 @@ public sealed class LibraryStore : ObservableStore
                     SourceUrl = extractedUrl,
                     RemoteId = resolvedRemoteId ?? current.RemoteId,
                     Cookie = trimmedCookie,
-                    ProxyUrl = normalizedProxy
+                    ProxyUrl = normalizedProxy,
+                    ProviderId = provider.ProviderId
                 }
                 : current with
                 {
@@ -682,12 +735,13 @@ public sealed class LibraryStore : ObservableStore
                     RemoteId = resolvedRemoteId ?? current.RemoteId,
                     LinkedCloudKind = newKind,
                     Cookie = trimmedCookie,
-                    ProxyUrl = normalizedProxy
+                    ProxyUrl = normalizedProxy,
+                    LinkedProviderId = provider.ProviderId
                 };
 
             if (current.IsLocal && _rootPaths.TryGetValue(rootId, out string? rootDiskPath) && Directory.Exists(rootDiskPath))
             {
-                UpdateManifestOnDisk(rootDiskPath, extractedUrl, resolvedRemoteId ?? current.RemoteId, newKind);
+                UpdateManifestOnDisk(rootDiskPath, extractedUrl, resolvedRemoteId ?? current.RemoteId, newKind, provider.ProviderId);
             }
         }
         else
@@ -704,7 +758,8 @@ public sealed class LibraryStore : ObservableStore
                 cloudKind: newKind,
                 cookie: trimmedCookie,
                 proxyUrl: normalizedProxy,
-                lastSynced: existing?.Value.LastSynced);
+                lastSynced: existing?.Value.LastSynced,
+                providerId: provider.ProviderId);
 
             updated[idx] = current with { TrackedSubfolders = nextTracked };
 
@@ -713,7 +768,7 @@ public sealed class LibraryStore : ObservableStore
                 string subDiskPath = FolderScanner.CombinePath(rootDiskPath, norm);
                 if (Directory.Exists(subDiskPath))
                 {
-                    UpdateManifestOnDisk(subDiskPath, extractedUrl, resolvedRemoteId ?? existing?.Value.RemoteId, newKind);
+                    UpdateManifestOnDisk(subDiskPath, extractedUrl, resolvedRemoteId ?? existing?.Value.RemoteId, newKind, provider.ProviderId);
                 }
             }
         }
@@ -723,7 +778,12 @@ public sealed class LibraryStore : ObservableStore
         SaveLibrary();
     }
 
-    private static void UpdateManifestOnDisk(string folderPath, string sourceUrl, string? remoteId, RootKind cloudKind)
+    private static void UpdateManifestOnDisk(
+        string folderPath,
+        string sourceUrl,
+        string? remoteId,
+        RootKind cloudKind,
+        string? providerId)
     {
         var existing = CloudExporter.LoadManifest(folderPath);
         var manifest = new CloudFolderManifest(
@@ -733,41 +793,36 @@ public sealed class LibraryStore : ObservableStore
             LastSyncedUtc: existing?.LastSyncedUtc ?? DateTimeOffset.UtcNow,
             Tracks: existing?.Tracks is not null
                 ? new Dictionary<string, string>(existing.Tracks, StringComparer.Ordinal)
-                : new Dictionary<string, string>(StringComparer.Ordinal));
+                : new Dictionary<string, string>(StringComparer.Ordinal),
+            ProviderId: providerId ?? existing?.ProviderId);
         CloudExporter.SaveManifest(folderPath, manifest);
     }
 
-    private static string? TryExtractRemoteId(string url, RootKind kind)
+    private (RootKind? Kind, string? ProviderId) ResolveCloudFromManifest(CloudFolderManifest manifest, string sourceUrl)
     {
-        try
+        if (!string.IsNullOrWhiteSpace(manifest.ProviderId))
         {
-            return kind switch
-            {
-                RootKind.CloudYouTube => YouTubeClient.ParseInput(url).RemoteId,
-                RootKind.CloudBilibili => BilibiliClient.ParseTarget(url).Id,
-                RootKind.CloudGoogleDrive => GoogleDriveClient.ParseInput(url).Id,
-                _ => null
-            };
+            var provider = _providerRegistry.GetById(manifest.ProviderId);
+            RootKind kind = provider?.RootKind
+                ?? (Enum.TryParse<RootKind>(manifest.CloudKind, ignoreCase: true, out var parsed) && parsed.IsCloud()
+                    ? parsed
+                    : RootKind.CloudExtension);
+            return (kind, manifest.ProviderId);
         }
-        catch
-        {
-            return null;
-        }
-    }
 
-    private static RootKind? ResolveCloudKindFromManifest(CloudFolderManifest manifest, string sourceUrl)
-    {
         if (Enum.TryParse<RootKind>(manifest.CloudKind, ignoreCase: true, out var parsedKind) && parsedKind.IsCloud())
         {
-            return parsedKind;
+            return (parsedKind, parsedKind.BuiltinProviderId());
         }
+
         try
         {
-            return CloudUrlClassifier.Classify(sourceUrl);
+            var classified = CloudUrlClassifier.Classify(sourceUrl, _providerRegistry);
+            return (classified, classified.BuiltinProviderId());
         }
         catch
         {
-            return null;
+            return (null, null);
         }
     }
 
@@ -781,7 +836,7 @@ public sealed class LibraryStore : ObservableStore
 
     public void PrioritizeCloudFolder(Guid rootId, string path)
     {
-        GoogleDriveTraversalHandle? handle;
+        CloudTreeTraversalHandle? handle;
         lock (_cloudSyncLock)
         {
             _activeCloudSyncs.TryGetValue(rootId, out var active);
@@ -814,101 +869,115 @@ public sealed class LibraryStore : ObservableStore
         }
     }
 
+    private bool IsDuplicateCloudRoot(RootKind kind, string? providerId, string? remoteId) =>
+        !string.IsNullOrWhiteSpace(remoteId) &&
+        _roots.Any(r =>
+            r.Kind == kind &&
+            string.Equals(r.ResolvedProviderId, providerId, StringComparison.OrdinalIgnoreCase) &&
+            string.Equals(r.RemoteId, remoteId, StringComparison.OrdinalIgnoreCase));
+
     public async Task<LibraryRoot> AddCloudRootAsync(
         string sourceUrl,
         string? cookie = null,
         string? proxyUrl = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? preferredProviderId = null)
     {
-        string extractedUrl = CloudUrlClassifier.ExtractCloudUrl(sourceUrl);
-        var kind = CloudUrlClassifier.Classify(extractedUrl);
+        var (provider, match) = await CloudUrlClassifier
+            .ClassifyAsync(sourceUrl, _providerRegistry, preferredProviderId, ct)
+            .ConfigureAwait(false);
+        string effectiveUrl = !string.IsNullOrWhiteSpace(match.NormalizedUrl)
+            ? match.NormalizedUrl!
+            : CloudUrlClassifier.ExtractCloudUrl(sourceUrl, _providerRegistry);
         string? normalizedProxy = YouTubeClient.NormalizeProxyUrl(proxyUrl);
         string? trimmedCookie = string.IsNullOrWhiteSpace(cookie) ? null : cookie.Trim();
 
-        if (kind == RootKind.CloudGoogleDrive)
+        if (!provider.UsesFlatCloudListing)
         {
-            var session = await _googleDrive
-                .StartProgressiveFolderFetchAsync(extractedUrl, trimmedCookie, normalizedProxy, ct)
+            var session = await provider
+                .StartProgressiveFetchAsync(effectiveUrl, trimmedCookie, normalizedProxy, ct)
                 .ConfigureAwait(false);
 
-            var rootResult = session.RootResult;
-            if (_roots.Any(r => r.Kind == rootResult.Kind &&
-                                string.Equals(r.RemoteId, rootResult.RemoteId, StringComparison.OrdinalIgnoreCase)))
+            if (session is not null)
             {
-                session.Dispose();
-                throw new InvalidOperationException("That cloud playlist is already in your library.");
-            }
-
-            var root = new LibraryRoot(
-                Id: Guid.NewGuid(),
-                Name: rootResult.Title,
-                Kind: rootResult.Kind,
-                Path: rootResult.SourceUrl,
-                SourceUrl: rootResult.SourceUrl,
-                RemoteId: rootResult.RemoteId,
-                Cookie: trimmedCookie,
-                ProxyUrl: normalizedProxy,
-                LastSyncedUtc: DateTimeOffset.UtcNow);
-
-            var initialTracks = await BuildCloudTracksAsync(root, rootResult, Array.Empty<Track>(), ct).ConfigureAwait(false);
-
-            lock (_cloudSyncLock)
-            {
-                if (session.DiscoveredSubfolderPaths.Count > 0)
+                var rootResult = session.RootResult;
+                string resolvedProviderId = rootResult.ResolvedProviderId ?? provider.ProviderId;
+                if (IsDuplicateCloudRoot(rootResult.Kind, resolvedProviderId, rootResult.RemoteId))
                 {
-                    var known = new HashSet<string>(StringComparer.Ordinal);
-                    foreach (string sub in session.DiscoveredSubfolderPaths)
-                    {
-                        string normSub = LibraryRoot.NormalizeFolderPath(sub);
-                        if (normSub.Length > 0) known.Add(normSub);
-                    }
-                    _knownCloudSubfolders[root.Id] = known;
+                    session.Dispose();
+                    throw new InvalidOperationException("That cloud playlist is already in your library.");
                 }
 
-                _cloudSyncProgress[root.Id] = new CloudSyncProgress(
-                    RootId: root.Id,
-                    FoldersDone: 1,
-                    FoldersTotal: 1 + session.DiscoveredSubfolderPaths.Count,
-                    TracksDiscovered: initialTracks.Count,
-                    IsCompleted: !session.HasMoreSubfolders);
-            }
+                var root = new LibraryRoot(
+                    Id: Guid.NewGuid(),
+                    Name: rootResult.Title,
+                    Kind: rootResult.Kind,
+                    Path: rootResult.SourceUrl,
+                    SourceUrl: rootResult.SourceUrl,
+                    RemoteId: rootResult.RemoteId,
+                    Cookie: trimmedCookie,
+                    ProxyUrl: normalizedProxy,
+                    LastSyncedUtc: DateTimeOffset.UtcNow,
+                    ProviderId: resolvedProviderId);
 
-            _roots = [.. _roots, root];
-            OnPropertyChanged(nameof(Roots));
-            Publish([.. _tracks, .. initialTracks]);
-            OnFolderAdded?.Invoke(root.Name, initialTracks.Select(t => t.Id).ToList());
+                var initialTracks = await BuildCloudTracksAsync(root, rootResult, Array.Empty<Track>(), ct, provider: provider)
+                    .ConfigureAwait(false);
 
-            if (session.HasMoreSubfolders)
-            {
-                var active = new ActiveCloudSync { Handle = session.TraversalHandle };
                 lock (_cloudSyncLock)
                 {
-                    _activeCloudSyncs[root.Id] = active;
-                }
-                active.Task = Task.Run(() => RunDriveBackgroundSyncAsync(root, session, active, initialTracks), CancellationToken.None);
-            }
-            else
-            {
-                session.Dispose();
-            }
+                    if (session.DiscoveredSubfolderPaths.Count > 0)
+                    {
+                        var known = new HashSet<string>(StringComparer.Ordinal);
+                        foreach (string sub in session.DiscoveredSubfolderPaths)
+                        {
+                            string normSub = LibraryRoot.NormalizeFolderPath(sub);
+                            if (normSub.Length > 0) known.Add(normSub);
+                        }
+                        _knownCloudSubfolders[root.Id] = known;
+                    }
 
-            return root;
+                    _cloudSyncProgress[root.Id] = new CloudSyncProgress(
+                        RootId: root.Id,
+                        FoldersDone: 1,
+                        FoldersTotal: 1 + session.DiscoveredSubfolderPaths.Count,
+                        TracksDiscovered: initialTracks.Count,
+                        IsCompleted: !session.HasMoreSubfolders);
+                }
+
+                _roots = [.. _roots, root];
+                OnPropertyChanged(nameof(Roots));
+                Publish([.. _tracks, .. initialTracks]);
+                OnFolderAdded?.Invoke(root.Name, initialTracks.Select(t => t.Id).ToList());
+
+                if (session.HasMoreSubfolders)
+                {
+                    var active = new ActiveCloudSync { Handle = session.TraversalHandle };
+                    lock (_cloudSyncLock)
+                    {
+                        _activeCloudSyncs[root.Id] = active;
+                    }
+                    active.Task = Task.Run(() => RunTreeBackgroundSyncAsync(root, provider, session, active, initialTracks), CancellationToken.None);
+                }
+                else
+                {
+                    session.Dispose();
+                }
+
+                return root;
+            }
         }
 
-        CloudPlaylistResult result = kind switch
-        {
-            RootKind.CloudYouTube => await _youtube.FetchPlaylistAsync(extractedUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false),
-            RootKind.CloudBilibili => await _bilibili.FetchPlaylistAsync(extractedUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false),
-            _ => throw new ArgumentException($"Unsupported cloud source: {kind}")
-        };
+        CloudPlaylistResult result = await provider
+            .FetchPlaylistAsync(effectiveUrl, trimmedCookie, normalizedProxy, ct)
+            .ConfigureAwait(false);
 
-        if (_roots.Any(r => r.Kind == result.Kind &&
-                            string.Equals(r.RemoteId, result.RemoteId, StringComparison.OrdinalIgnoreCase)))
+        string flatProviderId = result.ResolvedProviderId ?? provider.ProviderId;
+        if (IsDuplicateCloudRoot(result.Kind, flatProviderId, result.RemoteId))
         {
             throw new InvalidOperationException("That cloud playlist is already in your library.");
         }
 
-        var nonDriveRoot = new LibraryRoot(
+        var flatRoot = new LibraryRoot(
             Id: Guid.NewGuid(),
             Name: result.Title,
             Kind: result.Kind,
@@ -917,20 +986,23 @@ public sealed class LibraryStore : ObservableStore
             RemoteId: result.RemoteId,
             Cookie: trimmedCookie,
             ProxyUrl: normalizedProxy,
-            LastSyncedUtc: DateTimeOffset.UtcNow);
+            LastSyncedUtc: DateTimeOffset.UtcNow,
+            ProviderId: flatProviderId);
 
-        var newTracks = await BuildCloudTracksAsync(nonDriveRoot, result, Array.Empty<Track>(), ct).ConfigureAwait(false);
+        var newTracks = await BuildCloudTracksAsync(flatRoot, result, Array.Empty<Track>(), ct, provider: provider)
+            .ConfigureAwait(false);
 
-        _roots = [.. _roots, nonDriveRoot];
+        _roots = [.. _roots, flatRoot];
         OnPropertyChanged(nameof(Roots));
         Publish([.. _tracks, .. newTracks]);
-        OnFolderAdded?.Invoke(nonDriveRoot.Name, newTracks.Select(t => t.Id).ToList());
-        return nonDriveRoot;
+        OnFolderAdded?.Invoke(flatRoot.Name, newTracks.Select(t => t.Id).ToList());
+        return flatRoot;
     }
 
-    private async Task RunDriveBackgroundSyncAsync(
+    private async Task RunTreeBackgroundSyncAsync(
         LibraryRoot root,
-        GoogleDriveInitialSession session,
+        ICloudSourceProvider provider,
+        CloudTreeSession session,
         ActiveCloudSync active,
         List<Track> initialTracks)
     {
@@ -975,7 +1047,7 @@ public sealed class LibraryStore : ObservableStore
                 if (ct.IsCancellationRequested) return;
                 if (!_roots.Any(r => r.Id == root.Id)) return;
 
-                var batchTracks = BuildCloudTracksSync(root, batch.Items, root.Name);
+                var batchTracks = BuildCloudTracksSync(root, provider, batch.Items, root.Name);
                 bool shouldNotify = false;
                 lock (_cloudSyncLock)
                 {
@@ -1068,7 +1140,11 @@ public sealed class LibraryStore : ObservableStore
         }
     }
 
-    private List<Track> BuildCloudTracksSync(LibraryRoot root, IReadOnlyList<CloudPlaylistItem> items, string fallbackAlbum)
+    private List<Track> BuildCloudTracksSync(
+        LibraryRoot root,
+        ICloudSourceProvider provider,
+        IReadOnlyList<CloudPlaylistItem> items,
+        string fallbackAlbum)
     {
         var now = DateTimeOffset.UtcNow;
         var list = new List<Track>(items.Count);
@@ -1077,25 +1153,17 @@ public sealed class LibraryStore : ObservableStore
             string relPath = MakeCloudRelativePath(item);
             if (root.IsExcluded(relPath)) continue;
             string trackId = Track.MakeId(root.Id, relPath);
-            list.Add(ApplyMetadataOverride(new Track(
-                Id: trackId,
-                RootId: root.Id,
-                RelativePath: relPath,
-                Title: item.Title,
-                Artist: item.Artist,
-                Album: string.IsNullOrWhiteSpace(item.Album) ? fallbackAlbum : item.Album,
-                AlbumArtist: "Google Drive",
-                TrackNumber: item.TrackNumber,
-                DiscNumber: 1,
-                DurationSeconds: item.DurationSeconds,
-                FileSize: 0,
-                ModifiedUtc: now,
-                HasEmbeddedLyrics: false,
-                DateAddedUtc: now,
-                ArtworkKey: null,
-                CloudSource: CloudSources.GoogleDrive,
-                RemoteTrackId: item.RemoteTrackId,
-                RemoteArtworkUrl: item.ArtworkUrl)));
+            list.Add(MakeCloudTrack(
+                root: root,
+                trackId: trackId,
+                relPath: relPath,
+                item: item,
+                fallbackAlbum: fallbackAlbum,
+                albumArtist: provider.DisplayName,
+                cloudSource: provider.CloudSourceKey,
+                artworkKey: null,
+                dateAddedUtc: now,
+                now: now));
         }
         return list;
     }
@@ -1444,7 +1512,7 @@ public sealed class LibraryStore : ObservableStore
             }
         }
 
-        // Sync cloud roots; preserve existing cloud tracks on transient network failure.
+        // Sync cloud roots; preserve existing cloud tracks on transient network failure or disabled extensions.
         foreach (var root in snapshotRoots.Where(r => r.IsCloud))
         {
             bool activeSyncRunning;
@@ -1459,19 +1527,37 @@ public sealed class LibraryStore : ObservableStore
             }
 
             var existingTracks = snapshotTracks.Where(t => t.RootId == root.Id).ToList();
+            var provider = _providerRegistry.GetProvider(root);
+            if (provider is null || !provider.IsAvailable)
+            {
+                kept.AddRange(existingTracks);
+                continue;
+            }
+
             try
             {
                 string source = root.SourceUrl ?? root.Path ?? string.Empty;
-                CloudPlaylistResult result = root.Kind switch
+                CloudPlaylistResult result = await provider
+                    .FetchPlaylistAsync(source, root.Cookie, root.ProxyUrl)
+                    .ConfigureAwait(false);
+
+                if (result.DiscoveredSubfolderPaths is { Count: > 0 })
                 {
-                    RootKind.CloudYouTube => await _youtube.FetchPlaylistAsync(source, root.Cookie, root.ProxyUrl).ConfigureAwait(false),
-                    RootKind.CloudBilibili => await _bilibili.FetchPlaylistAsync(source, root.Cookie, root.ProxyUrl).ConfigureAwait(false),
-                    RootKind.CloudGoogleDrive => await _googleDrive.FetchPlaylistAsync(source, root.Cookie, root.ProxyUrl).ConfigureAwait(false),
-                    _ => throw new InvalidOperationException($"Unsupported cloud source: {root.Kind}")
-                };
+                    lock (_cloudSyncLock)
+                    {
+                        var known = new HashSet<string>(StringComparer.Ordinal);
+                        foreach (string sub in result.DiscoveredSubfolderPaths)
+                        {
+                            string normSub = LibraryRoot.NormalizeFolderPath(sub);
+                            if (normSub.Length > 0) known.Add(normSub);
+                        }
+                        _knownCloudSubfolders[root.Id] = known;
+                    }
+                }
 
                 var idMigrations = new Dictionary<string, string>(StringComparer.Ordinal);
-                var synced = await BuildCloudTracksAsync(root, result, existingTracks, CancellationToken.None, idMigrations).ConfigureAwait(false);
+                var synced = await BuildCloudTracksAsync(root, result, existingTracks, CancellationToken.None, idMigrations, provider)
+                    .ConfigureAwait(false);
                 kept.AddRange(synced);
 
                 foreach (var kvp in idMigrations)
@@ -1554,7 +1640,7 @@ public sealed class LibraryStore : ObservableStore
             if (manifest is null) continue;
 
             string sourceUrl = manifest.SourceUrl.Trim();
-            RootKind? resolvedKind = ResolveCloudKindFromManifest(manifest, sourceUrl);
+            var (resolvedKind, resolvedProviderId) = ResolveCloudFromManifest(manifest, sourceUrl);
             if (resolvedKind is not { } cloudKind) continue;
 
             var existingEntry = FindTrackedSubfolderEntry(root.TrackedSubfolders, normRel)?.Value;
@@ -1564,7 +1650,8 @@ public sealed class LibraryStore : ObservableStore
                 cloudKind: cloudKind,
                 cookie: existingEntry?.Cookie,
                 proxyUrl: existingEntry?.ProxyUrl,
-                lastSynced: manifest.LastSyncedUtc);
+                lastSynced: manifest.LastSyncedUtc,
+                providerId: resolvedProviderId ?? existingEntry?.ProviderId);
         }
 
         var normalizedNext = nextTracked.Count > 0 ? nextTracked : null;
@@ -1594,6 +1681,7 @@ public sealed class LibraryStore : ObservableStore
             if (!string.Equals(kvp.Value.SourceUrl, other.SourceUrl, StringComparison.Ordinal) ||
                 !string.Equals(kvp.Value.RemoteId, other.RemoteId, StringComparison.Ordinal) ||
                 kvp.Value.CloudKind != other.CloudKind ||
+                !string.Equals(kvp.Value.ResolvedProviderId, other.ResolvedProviderId, StringComparison.OrdinalIgnoreCase) ||
                 kvp.Value.LastSynced != other.LastSynced ||
                 !string.Equals(kvp.Value.Cookie, other.Cookie, StringComparison.Ordinal) ||
                 !string.Equals(kvp.Value.ProxyUrl, other.ProxyUrl, StringComparison.Ordinal))
@@ -1717,8 +1805,10 @@ public sealed class LibraryStore : ObservableStore
         CloudPlaylistResult result,
         IReadOnlyList<Track> existingTracks,
         CancellationToken ct,
-        IDictionary<string, string>? idMigrations = null)
+        IDictionary<string, string>? idMigrations = null,
+        ICloudSourceProvider? provider = null)
     {
+        provider ??= _providerRegistry.GetProvider(root);
         var existingByRemoteId = new Dictionary<string, Track>(StringComparer.Ordinal);
         foreach (var t in existingTracks)
         {
@@ -1729,22 +1819,21 @@ public sealed class LibraryStore : ObservableStore
         }
 
         var urlArtCache = new Dictionary<string, string?>(StringComparer.Ordinal);
-        using var artHttp = CreateArtworkHttpClient(root);
+        using var artHttp = CreateArtworkHttpClient(root, provider);
         var now = DateTimeOffset.UtcNow;
         var built = new List<Track>(result.Items.Count);
         var seenTrackIds = new HashSet<string>(StringComparer.Ordinal);
-        string cloudSource = root.Kind switch
+        string cloudSource = provider?.CloudSourceKey ?? root.Kind switch
         {
             RootKind.CloudBilibili => CloudSources.Bilibili,
             RootKind.CloudGoogleDrive => CloudSources.GoogleDrive,
+            RootKind.CloudExtension => root.EffectiveProviderId ?? "extension",
             _ => CloudSources.YouTube
         };
-        string albumArtist = root.Kind switch
-        {
-            RootKind.CloudBilibili => "Bilibili",
-            RootKind.CloudGoogleDrive => "Google Drive",
-            _ => "YouTube"
-        };
+        string albumArtist = provider?.DisplayName ?? CloudProviderRegistry.ResolveDisplayLabel(
+            _providerRegistry,
+            root.EffectiveProviderId,
+            root.Kind);
 
         foreach (var item in result.Items)
         {
@@ -1777,51 +1866,74 @@ public sealed class LibraryStore : ObservableStore
                 }
                 else
                 {
-                    artKey = await DownloadAndStoreArtworkAsync(artHttp, root.Kind, item.ArtworkUrl, ct).ConfigureAwait(false);
+                    artKey = await DownloadAndStoreArtworkAsync(artHttp, provider, item.ArtworkUrl, ct).ConfigureAwait(false);
                     urlArtCache[item.ArtworkUrl] = artKey;
                 }
             }
 
-            built.Add(ApplyMetadataOverride(new Track(
-                Id: trackId,
-                RootId: root.Id,
-                RelativePath: relPath,
-                Title: item.Title,
-                Artist: item.Artist,
-                Album: string.IsNullOrWhiteSpace(item.Album) ? result.Title : item.Album,
-                AlbumArtist: albumArtist,
-                TrackNumber: item.TrackNumber,
-                DiscNumber: 1,
-                DurationSeconds: item.DurationSeconds,
-                FileSize: 0,
-                ModifiedUtc: now,
-                HasEmbeddedLyrics: false,
-                DateAddedUtc: old?.DateAddedUtc ?? now,
-                ArtworkKey: artKey,
-                CloudSource: cloudSource,
-                RemoteTrackId: item.RemoteTrackId,
-                RemoteArtworkUrl: item.ArtworkUrl)));
+            built.Add(MakeCloudTrack(
+                root: root,
+                trackId: trackId,
+                relPath: relPath,
+                item: item,
+                fallbackAlbum: result.Title,
+                albumArtist: albumArtist,
+                cloudSource: cloudSource,
+                artworkKey: artKey,
+                dateAddedUtc: old?.DateAddedUtc ?? now,
+                now: now));
         }
 
         return built;
     }
 
-    private HttpClient CreateArtworkHttpClient(LibraryRoot root)
+    private Track MakeCloudTrack(
+        LibraryRoot root,
+        string trackId,
+        string relPath,
+        CloudPlaylistItem item,
+        string fallbackAlbum,
+        string albumArtist,
+        string cloudSource,
+        string? artworkKey,
+        DateTimeOffset dateAddedUtc,
+        DateTimeOffset now) =>
+        ApplyMetadataOverride(new Track(
+            Id: trackId,
+            RootId: root.Id,
+            RelativePath: relPath,
+            Title: item.Title,
+            Artist: item.Artist,
+            Album: string.IsNullOrWhiteSpace(item.Album) ? fallbackAlbum : item.Album,
+            AlbumArtist: albumArtist,
+            TrackNumber: item.TrackNumber,
+            DiscNumber: 1,
+            DurationSeconds: item.DurationSeconds,
+            FileSize: 0,
+            ModifiedUtc: now,
+            HasEmbeddedLyrics: false,
+            DateAddedUtc: dateAddedUtc,
+            ArtworkKey: artworkKey,
+            CloudSource: cloudSource,
+            RemoteTrackId: item.RemoteTrackId,
+            RemoteArtworkUrl: item.ArtworkUrl));
+
+    private HttpClient CreateArtworkHttpClient(LibraryRoot root, ICloudSourceProvider? provider)
     {
-        string? proxy = root.Kind is RootKind.CloudYouTube or RootKind.CloudGoogleDrive ? root.ProxyUrl : null;
+        string? proxy = provider is { SupportsProxy: true } ? root.ProxyUrl : null;
         return CloudHttpHelper.CreateClient(proxy, _artworkHandler, TimeSpan.FromSeconds(15));
     }
 
-    private async Task<string?> DownloadAndStoreArtworkAsync(HttpClient http, RootKind kind, string url, CancellationToken ct)
+    private async Task<string?> DownloadAndStoreArtworkAsync(
+        HttpClient http,
+        ICloudSourceProvider? provider,
+        string url,
+        CancellationToken ct)
     {
         try
         {
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            if (kind == RootKind.CloudBilibili)
-            {
-                req.Headers.TryAddWithoutValidation("Referer", BilibiliClient.DefaultReferer);
-                req.Headers.TryAddWithoutValidation("User-Agent", BilibiliClient.DefaultUserAgent);
-            }
+            provider?.ConfigureArtworkRequest(req);
             using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
             if (!resp.IsSuccessStatusCode) return null;
             byte[] bytes = await resp.Content.ReadAsByteArrayAsync(ct).ConfigureAwait(false);

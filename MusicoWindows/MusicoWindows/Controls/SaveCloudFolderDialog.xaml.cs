@@ -9,6 +9,7 @@ using System.Windows.Input;
 using Microsoft.Win32;
 using MusicoWindows.Cloud;
 using MusicoWindows.Core;
+using MusicoWindows.Extensions;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
@@ -356,12 +357,11 @@ public partial class SaveCloudFolderDialog : UserControl
             ? root.Name
             : relativePath.Split('/').Last();
         RootKind? kind = tracking?.CloudKind ?? root.EffectiveCloudKind;
-        string sourceLabel = kind switch
-        {
-            RootKind.CloudBilibili => "Bilibili",
-            RootKind.CloudGoogleDrive => "Google Drive",
-            _ => "YouTube"
-        };
+        string? providerId = tracking?.ResolvedProviderId ?? root.EffectiveProviderId;
+        string sourceLabel = CloudProviderRegistry.ResolveDisplayLabel(
+            _services?.CloudProviders,
+            providerId,
+            kind);
         string? url = tracking?.SourceUrl ?? root.SourceUrl;
         SourceSummaryText.Text = string.IsNullOrWhiteSpace(url)
             ? $"{folderName} · {sourceLabel}"

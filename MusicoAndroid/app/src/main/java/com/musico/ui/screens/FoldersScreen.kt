@@ -30,6 +30,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AddToDrive
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDownload
@@ -38,6 +39,7 @@ import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOff
 import androidx.compose.material.icons.rounded.Language
@@ -100,8 +102,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.documentfile.provider.DocumentFile
 import com.musico.audio.PlayerUiState
+import com.musico.cloud.CloudErrorCode
 import com.musico.cloud.CloudExporter
+import com.musico.cloud.CloudSourceException
 import com.musico.cloud.extractCloudSourceInput
+import com.musico.extensions.CloudProviderAvailability
+import com.musico.extensions.CloudProviderRegistry
+import com.musico.extensions.CloudSourceProvider
+import com.musico.extensions.ExtensionStore
 import com.musico.i18n.AppStrings
 import com.musico.i18n.LanguageStore
 import com.musico.i18n.LocalStrings
@@ -119,6 +127,7 @@ import com.musico.store.LibraryException
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
 import com.musico.store.PlayHistoryUiState
+import com.musico.ui.ExtensionsScreen
 import com.musico.ui.components.CloudTransferProgressSection
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
@@ -176,6 +185,11 @@ private fun localizeLibraryError(err: Throwable, fallback: String, strings: AppS
         is LibraryException.DuplicateRoot -> strings.errorDuplicateRoot
         is LibraryException.NotAFolder -> strings.errorNotAFolder
         is LibraryException.UnsupportedCloudUrl -> strings.errorUnsupportedCloudUrl
+        is LibraryException.ExtensionUnavailable -> strings.errorExtensionUnavailable
+        is CloudSourceException -> when (err.code) {
+            CloudErrorCode.EXTENSION_UNAVAILABLE -> strings.errorExtensionUnavailable
+            else -> err.message
+        }
         else -> err.message ?: fallback
     }
 }
@@ -196,7 +210,10 @@ fun FoldersScreen(
         CloudDownloadManager(libraryStore, cloudExporter)
     },
     languageStore: LanguageStore? = null,
+    extensionStore: ExtensionStore? = null,
+    providerRegistry: CloudProviderRegistry = libraryStore.providerRegistry,
     onPickFolder: ((Uri) -> Unit) -> Unit,
+    onPickExtensionFile: ((Uri) -> Unit) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val strings = LocalStrings.current
@@ -204,6 +221,21 @@ fun FoldersScreen(
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val downloadJobs by cloudDownloadManager.jobs.collectAsStateWithLifecycle()
     val activeDownloadCount = remember(downloadJobs) { downloadJobs.count { it.isActive } }
+    val activeProviders by providerRegistry.providers.collectAsStateWithLifecycle()
+    if (extensionStore != null) {
+        extensionStore.extensions.collectAsStateWithLifecycle().value
+    }
+
+    var showExtensionsScreen by remember { mutableStateOf(false) }
+    if (showExtensionsScreen && extensionStore != null) {
+        ExtensionsScreen(
+            extensionStore = extensionStore,
+            onPickExtensionFile = onPickExtensionFile,
+            onBack = { showExtensionsScreen = false },
+            modifier = modifier,
+        )
+        return
+    }
 
     var currentFolder by remember { mutableStateOf<FolderRef?>(null) }
     var importError by remember { mutableStateOf<String?>(null) }
@@ -231,8 +263,8 @@ fun FoldersScreen(
     val activeRef = currentFolder
     val currentRoot = activeRef?.let { ref -> libraryState.roots.firstOrNull { it.id == ref.rootId } }
 
-    LaunchedEffect(activeRef, currentRoot?.kind) {
-        if (activeRef != null && currentRoot?.kind == RootKind.CLOUD_GOOGLE_DRIVE) {
+    LaunchedEffect(activeRef, currentRoot?.kind, currentRoot?.resolvedProviderId) {
+        if (activeRef != null && currentRoot != null && libraryStore.supportsTreeCrawling(currentRoot)) {
             libraryStore.prioritizeCloudFolder(activeRef.rootId, activeRef.path)
         }
     }
@@ -303,6 +335,11 @@ fun FoldersScreen(
                         }
                         IconButton(onClick = { showAddCloudDialog = true }) {
                             Icon(Icons.Rounded.CloudQueue, contentDescription = strings.addCloudFolder)
+                        }
+                        if (extensionStore != null) {
+                            IconButton(onClick = { showExtensionsScreen = true }) {
+                                Icon(Icons.Rounded.Extension, contentDescription = strings.extensionsTitle)
+                            }
                         }
                         IconButton(
                             onClick = { scope.launch { libraryStore.rescan() } },
@@ -513,6 +550,8 @@ fun FoldersScreen(
                         queues = queues,
                         activeQueue = activeQueue,
                         trackActions = trackActions,
+                        extensionStore = extensionStore,
+                        providerRegistry = providerRegistry,
                         onOpenRoot = { rootId -> currentFolder = FolderRef(rootId, "") },
                         onRelocateRoot = ::launchRelocateFolder,
                         onRequestRemove = { removingRoot = it },
@@ -531,6 +570,9 @@ fun FoldersScreen(
                             )
                         },
                         onRestoreExcluded = { rootId -> scope.launch { libraryStore.restoreExcludedFolders(rootId) } },
+                        onOpenExtensions = if (extensionStore != null) {
+                            { showExtensionsScreen = true }
+                        } else null,
                         onAddFolder = ::launchAddFolder,
                         onAddCloudFolder = { showAddCloudDialog = true }
                     )
@@ -547,6 +589,8 @@ fun FoldersScreen(
                         queues = queues,
                         activeQueue = activeQueue,
                         trackActions = trackActions,
+                        extensionStore = extensionStore,
+                        providerRegistry = providerRegistry,
                         onNavigate = { nextRef -> currentFolder = nextRef },
                         onRequestRemoveSubfolder = { removingSubfolder = it },
                         onUpdateTrackedSubfolder = { r, subPath ->
@@ -559,6 +603,9 @@ fun FoldersScreen(
                                 tracking = tracking,
                             )
                         },
+                        onOpenExtensions = if (extensionStore != null) {
+                            { showExtensionsScreen = true }
+                        } else null,
                     )
                 }
             }
@@ -567,9 +614,11 @@ fun FoldersScreen(
 
     if (showAddCloudDialog) {
         AddCloudFolderDialog(
+            providers = activeProviders,
+            previewMatchedProvider = { raw -> providerRegistry.previewProvider(raw) },
             onDismiss = { showAddCloudDialog = false },
-            onAdd = { url, cookie ->
-                libraryStore.addCloudRoot(url, cookie)
+            onAdd = { url, cookie, providerIdHint ->
+                libraryStore.addCloudRoot(url, cookie, providerIdHint)
             }
         )
     }
@@ -719,15 +768,28 @@ fun FoldersScreen(
 
 @Composable
 private fun AddCloudFolderDialog(
+    providers: List<CloudSourceProvider>,
+    previewMatchedProvider: (String) -> CloudSourceProvider?,
     onDismiss: () -> Unit,
-    onAdd: suspend (url: String, cookie: String?) -> Result<Unit>
+    onAdd: suspend (url: String, cookie: String?, providerIdHint: String?) -> Result<Unit>
 ) {
     val strings = LocalStrings.current
     val scope = rememberCoroutineScope()
     var url by remember { mutableStateOf("") }
     var cookie by remember { mutableStateOf("") }
+    var selectedProviderId by remember { mutableStateOf<String?>(null) }
+    var providerMenuExpanded by remember { mutableStateOf(false) }
     var isAdding by remember { mutableStateOf(false) }
     var errorText by remember { mutableStateOf<String?>(null) }
+
+    val selectedProvider = remember(providers, selectedProviderId) {
+        selectedProviderId?.let { id -> providers.firstOrNull { it.providerId == id } }
+    }
+    val detectedProvider = remember(url, selectedProviderId, providers) {
+        if (selectedProviderId == null) previewMatchedProvider(url) else null
+    }
+    val effectiveProvider = selectedProvider ?: detectedProvider
+    val showCookieField = effectiveProvider?.supportsCookie ?: true
 
     AlertDialog(
         onDismissRequest = { if (!isAdding) onDismiss() },
@@ -740,6 +802,64 @@ private fun AddCloudFolderDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = strings.cloudProviderLabel,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Box {
+                        OutlinedButton(
+                            enabled = !isAdding,
+                            onClick = { providerMenuExpanded = true },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = selectedProvider?.displayName ?: strings.providerAutoDetect,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = providerMenuExpanded,
+                            onDismissRequest = { providerMenuExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(strings.providerAutoDetect) },
+                                leadingIcon = if (selectedProviderId == null) {
+                                    { Icon(Icons.Rounded.Check, contentDescription = null) }
+                                } else null,
+                                onClick = {
+                                    selectedProviderId = null
+                                    providerMenuExpanded = false
+                                    errorText = null
+                                },
+                            )
+                            providers.forEach { provider ->
+                                DropdownMenuItem(
+                                    text = { Text(provider.displayName) },
+                                    leadingIcon = if (selectedProviderId == provider.providerId) {
+                                        { Icon(Icons.Rounded.Check, contentDescription = null) }
+                                    } else null,
+                                    onClick = {
+                                        selectedProviderId = provider.providerId
+                                        providerMenuExpanded = false
+                                        errorText = null
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    if (detectedProvider != null) {
+                        Text(
+                            text = strings.detectedProviderHint(detectedProvider.displayName),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+
                 OutlinedTextField(
                     value = url,
                     onValueChange = {
@@ -755,16 +875,18 @@ private fun AddCloudFolderDialog(
                     enabled = !isAdding,
                     modifier = Modifier.fillMaxWidth()
                 )
-                OutlinedTextField(
-                    value = cookie,
-                    onValueChange = { cookie = it },
-                    label = { Text(strings.cookieOptionalLabel) },
-                    placeholder = { Text(strings.cookiePlaceholder) },
-                    minLines = 2,
-                    maxLines = 3,
-                    enabled = !isAdding,
-                    modifier = Modifier.fillMaxWidth()
-                )
+                if (showCookieField) {
+                    OutlinedTextField(
+                        value = cookie,
+                        onValueChange = { cookie = it },
+                        label = { Text(strings.cookieOptionalLabel) },
+                        placeholder = { Text(strings.cookiePlaceholder) },
+                        minLines = 2,
+                        maxLines = 3,
+                        enabled = !isAdding,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
                 if (isAdding) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
@@ -786,7 +908,8 @@ private fun AddCloudFolderDialog(
                     errorText = null
                     val cleanedUrl = extractCloudSourceInput(url)
                     scope.launch {
-                        val result = onAdd(cleanedUrl, cookie.takeIf { it.isNotBlank() })
+                        val effectiveCookie = if (showCookieField) cookie.takeIf { it.isNotBlank() } else null
+                        val result = onAdd(cleanedUrl, effectiveCookie, selectedProviderId)
                         isAdding = false
                         result.onSuccess {
                             onDismiss()
@@ -841,20 +964,26 @@ private fun DownloadsToolbarButton(
 private fun CloudSourceBadge(
     cloudKind: RootKind?,
     isLocal: Boolean,
+    providerId: String? = null,
+    customBadgeLabel: String? = null,
 ) {
     val strings = LocalStrings.current
+    val customLabel = customBadgeLabel?.trim()?.takeIf { it.isNotEmpty() }
+        ?: providerId?.removePrefix("ext.")?.takeIf { it.isNotEmpty() && providerId.startsWith("ext.") }
     val label = when {
         !isLocal -> when (cloudKind) {
             RootKind.CLOUD_YOUTUBE -> strings.badgeYouTube
             RootKind.CLOUD_BILIBILI -> strings.badgeBilibili
             RootKind.CLOUD_GOOGLE_DRIVE -> strings.badgeGoogleDrive
+            RootKind.CLOUD_EXTENSION -> customLabel ?: strings.badgeExtension
             else -> null
         }
         else -> when (cloudKind) {
             RootKind.CLOUD_YOUTUBE -> strings.badgeYouTubeLocal
             RootKind.CLOUD_BILIBILI -> strings.badgeBilibiliLocal
             RootKind.CLOUD_GOOGLE_DRIVE -> strings.badgeGoogleDriveLocal
-            else -> strings.badgeCloudLocal
+            RootKind.CLOUD_EXTENSION -> strings.badgeCustomLocal(customLabel ?: strings.badgeExtension)
+            else -> customLabel?.let { strings.badgeCustomLocal(it) } ?: strings.badgeCloudLocal
         }
     } ?: return
 
@@ -869,6 +998,54 @@ private fun CloudSourceBadge(
             maxLines = 1,
             modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
         )
+    }
+}
+
+@Composable
+private fun ExtensionUnavailableBanner(
+    availability: CloudProviderAvailability,
+    providerId: String?,
+    onOpenExtensions: (() -> Unit)?,
+    modifier: Modifier = Modifier,
+) {
+    val strings = LocalStrings.current
+    val message = when (availability) {
+        CloudProviderAvailability.DISABLED -> strings.extensionDisabledBanner
+        CloudProviderAvailability.MISSING -> strings.extensionMissingBanner(providerId.orEmpty())
+        CloudProviderAvailability.AVAILABLE -> return
+    }
+    ElevatedCard(
+        modifier = modifier.fillMaxWidth(),
+        colors = CardDefaults.elevatedCardColors(
+            containerColor = MaterialTheme.colorScheme.errorContainer,
+        ),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.WarningAmber,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.size(20.dp),
+            )
+            Spacer(Modifier.width(10.dp))
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                modifier = Modifier.weight(1f),
+            )
+            if (onOpenExtensions != null) {
+                Spacer(Modifier.width(8.dp))
+                FilledTonalButton(onClick = onOpenExtensions) {
+                    Text(strings.manageExtensions)
+                }
+            }
+        }
     }
 }
 
@@ -1561,6 +1738,16 @@ private fun EditCloudSourceDialog(
     )
 }
 
+private fun resolveCustomBadgeLabel(
+    providerId: String?,
+    extensionStore: ExtensionStore?,
+    providerRegistry: CloudProviderRegistry,
+): String? {
+    if (providerId.isNullOrBlank()) return null
+    return extensionStore?.badgeLabelForProvider(providerId)
+        ?: providerRegistry.providerForId(providerId)?.badgeLabel
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun FolderRootList(
@@ -1570,6 +1757,8 @@ private fun FolderRootList(
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
+    extensionStore: ExtensionStore?,
+    providerRegistry: CloudProviderRegistry,
     onOpenRoot: (String) -> Unit,
     onRelocateRoot: (String) -> Unit,
     onRequestRemove: (LibraryRoot) -> Unit,
@@ -1577,6 +1766,7 @@ private fun FolderRootList(
     onUpdateTrackedRoot: (LibraryRoot) -> Unit,
     onEditTrackedRootSource: (LibraryRoot, CloudTrackingInfo) -> Unit,
     onRestoreExcluded: (String) -> Unit,
+    onOpenExtensions: (() -> Unit)?,
     onAddFolder: () -> Unit,
     onAddCloudFolder: () -> Unit
 ) {
@@ -1623,6 +1813,7 @@ private fun FolderRootList(
 
         items(libraryState.roots, key = { it.id }) { root ->
             val available = libraryStore.isAvailable(root)
+            val availability = libraryStore.cloudProviderAvailability(root)
             val count = remember(libraryState.tracks, root.id) {
                 libraryState.tracks.count { it.rootId == root.id }
             }
@@ -1638,6 +1829,11 @@ private fun FolderRootList(
                 }.map { it.id }
             }
             val rootTracking = remember(root) { root.trackingFor("") }
+            val customBadgeLabel = resolveCustomBadgeLabel(
+                providerId = root.resolvedProviderId ?: rootTracking?.resolvedProviderId,
+                extensionStore = extensionStore,
+                providerRegistry = providerRegistry,
+            )
             val syncProgress = libraryState.cloudSyncProgress[root.id]
             val isRemovable = root.kind != RootKind.APP_FOLDER
 
@@ -1672,6 +1868,8 @@ private fun FolderRootList(
                         RootItemRow(
                             root = root,
                             available = available,
+                            cloudAvailability = availability,
+                            customBadgeLabel = customBadgeLabel,
                             songCount = count,
                             rootTrackIds = rootTrackIds,
                             rootTracking = rootTracking,
@@ -1685,6 +1883,7 @@ private fun FolderRootList(
                             onUpdateTrackedRoot = { onUpdateTrackedRoot(root) },
                             onEditTrackedRootSource = { info -> onEditTrackedRootSource(root, info) },
                             onRestoreExcluded = { onRestoreExcluded(root.id) },
+                            onOpenExtensions = onOpenExtensions,
                             onRemove = { onRequestRemove(root) }
                         )
                     }
@@ -1692,6 +1891,8 @@ private fun FolderRootList(
                     RootItemRow(
                         root = root,
                         available = available,
+                        cloudAvailability = availability,
+                        customBadgeLabel = customBadgeLabel,
                         songCount = count,
                         rootTrackIds = rootTrackIds,
                         rootTracking = rootTracking,
@@ -1705,6 +1906,7 @@ private fun FolderRootList(
                         onUpdateTrackedRoot = { onUpdateTrackedRoot(root) },
                         onEditTrackedRootSource = { info -> onEditTrackedRootSource(root, info) },
                         onRestoreExcluded = { onRestoreExcluded(root.id) },
+                        onOpenExtensions = onOpenExtensions,
                         onRemove = {}
                     )
                 }
@@ -1759,6 +1961,8 @@ private fun FolderRootList(
 private fun RootItemRow(
     root: LibraryRoot,
     available: Boolean,
+    cloudAvailability: CloudProviderAvailability,
+    customBadgeLabel: String?,
     songCount: Int,
     rootTrackIds: List<String>,
     rootTracking: CloudTrackingInfo?,
@@ -1772,6 +1976,7 @@ private fun RootItemRow(
     onUpdateTrackedRoot: () -> Unit,
     onEditTrackedRootSource: (CloudTrackingInfo) -> Unit,
     onRestoreExcluded: () -> Unit,
+    onOpenExtensions: (() -> Unit)?,
     onRemove: () -> Unit
 ) {
     val strings = LocalStrings.current
@@ -1788,11 +1993,13 @@ private fun RootItemRow(
             leadingContent = {
                 Icon(
                     imageVector = when {
+                        !available && root.kind == RootKind.CLOUD_EXTENSION -> Icons.Rounded.Extension
                         !available -> Icons.Rounded.FolderOff
                         root.kind == RootKind.APP_FOLDER -> Icons.Rounded.LibraryMusic
                         root.kind == RootKind.CLOUD_YOUTUBE -> Icons.Rounded.PlayCircle
                         root.kind == RootKind.CLOUD_BILIBILI -> Icons.Rounded.LiveTv
                         root.kind == RootKind.CLOUD_GOOGLE_DRIVE -> Icons.Rounded.AddToDrive
+                        root.kind == RootKind.CLOUD_EXTENSION -> Icons.Rounded.Extension
                         else -> Icons.Rounded.Folder
                     },
                     contentDescription = null,
@@ -1811,15 +2018,29 @@ private fun RootItemRow(
                         modifier = Modifier.weight(1f, fill = false)
                     )
                     when {
-                        root.kind.isCloud -> CloudSourceBadge(cloudKind = root.kind, isLocal = false)
-                        rootTracking != null -> CloudSourceBadge(cloudKind = rootTracking.cloudKind, isLocal = true)
+                        root.kind.isCloud -> CloudSourceBadge(
+                            cloudKind = root.kind,
+                            isLocal = false,
+                            providerId = root.resolvedProviderId,
+                            customBadgeLabel = customBadgeLabel,
+                        )
+                        rootTracking != null -> CloudSourceBadge(
+                            cloudKind = rootTracking.cloudKind,
+                            isLocal = true,
+                            providerId = rootTracking.resolvedProviderId,
+                            customBadgeLabel = customBadgeLabel,
+                        )
                     }
                 }
             },
             supportingContent = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text(
-                        text = if (available) strings.songCount(songCount) else strings.folderUnavailable,
+                        text = when {
+                            available -> strings.songCount(songCount)
+                            root.kind == RootKind.CLOUD_EXTENSION -> strings.extensionUnavailableStatus
+                            else -> strings.folderUnavailable
+                        },
                         color = if (available) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
                     )
                     if (syncProgress != null) {
@@ -1940,7 +2161,14 @@ private fun RootItemRow(
             }
         )
 
-        if (!available && root.kind == RootKind.PICKED) {
+        if (!available && root.kind == RootKind.CLOUD_EXTENSION) {
+            ExtensionUnavailableBanner(
+                availability = cloudAvailability,
+                providerId = root.resolvedProviderId,
+                onOpenExtensions = onOpenExtensions,
+                modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
+            )
+        } else if (!available && root.kind == RootKind.PICKED) {
             ElevatedCard(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -1990,14 +2218,23 @@ private fun FolderDetailContent(
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
+    extensionStore: ExtensionStore?,
+    providerRegistry: CloudProviderRegistry,
     onNavigate: (FolderRef) -> Unit,
     onRequestRemoveSubfolder: (FolderRef) -> Unit,
     onUpdateTrackedSubfolder: (LibraryRoot, String) -> Unit,
     onEditTrackedSubfolderSource: (LibraryRoot, String, CloudTrackingInfo) -> Unit,
+    onOpenExtensions: (() -> Unit)?,
 ) {
     val strings = LocalStrings.current
     val playCounts: (String) -> Int = { id -> historyState.entries[id]?.count ?: 0 }
     val syncProgress = libraryState.cloudSyncProgress[ref.rootId]
+    val extAvailability = root?.takeIf { it.kind == RootKind.CLOUD_EXTENSION }
+        ?.let { libraryStore.cloudProviderAvailability(it) }
+    val showExtUnavailableBanner = root != null &&
+        root.kind == RootKind.CLOUD_EXTENSION &&
+        extAvailability != null &&
+        extAvailability != CloudProviderAvailability.AVAILABLE
     val (subfolders, directTracks) = remember(
         libraryState.tracks,
         libraryState.folderSortOrders,
@@ -2025,7 +2262,11 @@ private fun FolderDetailContent(
     }
 
     val listState = rememberLazyListState()
-    val headerCount = 1 + (if (syncProgress != null) 1 else 0) + 1 + subfolders.size
+    val headerCount = 1 +
+        (if (showExtUnavailableBanner) 1 else 0) +
+        (if (syncProgress != null) 1 else 0) +
+        1 +
+        subfolders.size
     val dragState = rememberDragReorderState(
         items = directTracks,
         listState = listState,
@@ -2052,6 +2293,17 @@ private fun FolderDetailContent(
                 ref = ref,
                 onNavigate = onNavigate
             )
+        }
+
+        if (showExtUnavailableBanner && root != null && extAvailability != null) {
+            item(key = "extension_unavailable_banner") {
+                ExtensionUnavailableBanner(
+                    availability = extAvailability,
+                    providerId = root.resolvedProviderId,
+                    onOpenExtensions = onOpenExtensions,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+            }
         }
 
         if (syncProgress != null) {
@@ -2188,7 +2440,16 @@ private fun FolderDetailContent(
                                     modifier = Modifier.weight(1f, fill = false),
                                 )
                                 if (subTracking != null) {
-                                    CloudSourceBadge(cloudKind = subTracking.cloudKind, isLocal = true)
+                                    CloudSourceBadge(
+                                        cloudKind = subTracking.cloudKind,
+                                        isLocal = true,
+                                        providerId = subTracking.resolvedProviderId,
+                                        customBadgeLabel = resolveCustomBadgeLabel(
+                                            providerId = subTracking.resolvedProviderId,
+                                            extensionStore = extensionStore,
+                                            providerRegistry = providerRegistry,
+                                        ),
+                                    )
                                 }
                             }
                         },

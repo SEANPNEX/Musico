@@ -11,10 +11,22 @@ enum class RootKind {
     CLOUD_YOUTUBE,
     CLOUD_BILIBILI,
     CLOUD_GOOGLE_DRIVE,
+    CLOUD_EXTENSION,
     ;
 
     val isCloud: Boolean
-        get() = this == CLOUD_YOUTUBE || this == CLOUD_BILIBILI || this == CLOUD_GOOGLE_DRIVE
+        get() = this == CLOUD_YOUTUBE ||
+            this == CLOUD_BILIBILI ||
+            this == CLOUD_GOOGLE_DRIVE ||
+            this == CLOUD_EXTENSION
+
+    val builtinProviderId: String?
+        get() = when (this) {
+            CLOUD_YOUTUBE -> "builtin.youtube"
+            CLOUD_BILIBILI -> "builtin.bilibili"
+            CLOUD_GOOGLE_DRIVE -> "builtin.gdrive"
+            PICKED, APP_FOLDER, CLOUD_EXTENSION -> null
+        }
 }
 
 @Serializable
@@ -22,9 +34,13 @@ data class CloudTrackingInfo(
     val sourceUrl: String,
     val remoteId: String? = null,
     val cloudKind: RootKind,
+    val providerId: String? = null,
     val cookie: String? = null,
     val lastSyncedEpochMs: Long? = null,
-)
+) {
+    val resolvedProviderId: String?
+        get() = providerId?.trim()?.takeIf { it.isNotEmpty() } ?: cloudKind.builtinProviderId
+}
 
 @Serializable
 data class LibraryRoot(
@@ -39,9 +55,38 @@ data class LibraryRoot(
     val lastSyncedEpochMs: Long? = null,
     val excludedPaths: List<String> = emptyList(),
     val linkedCloudKind: RootKind? = null,
+    val providerId: String? = null,
+    val linkedProviderId: String? = null,
     val trackedSubfolderName: String? = null,
     val trackedSubfolders: Map<String, CloudTrackingInfo> = emptyMap(),
 ) {
+    val isCloud: Boolean
+        get() = kind.isCloud
+
+    val resolvedProviderId: String?
+        get() = if (kind.isCloud) {
+            providerId?.trim()?.takeIf { it.isNotEmpty() } ?: kind.builtinProviderId
+        } else {
+            null
+        }
+
+    val resolvedLinkedProviderId: String?
+        get() = if (!kind.isCloud) {
+            linkedProviderId?.trim()?.takeIf { it.isNotEmpty() } ?: linkedCloudKind?.builtinProviderId
+        } else {
+            null
+        }
+
+    val effectiveProviderId: String?
+        get() = if (kind.isCloud) resolvedProviderId else resolvedLinkedProviderId
+
+    val isCloudLinked: Boolean
+        get() = !kind.isCloud &&
+            (resolvedLinkedProviderId != null || (!sourceUrl.isNullOrBlank() && trackedSubfolderName.isNullOrBlank()))
+
+    val hasCloudMetadata: Boolean
+        get() = isCloud || isCloudLinked || trackedSubfolders.isNotEmpty()
+
     val isCloudTrackedLocal: Boolean
         get() = !kind.isCloud && !sourceUrl.isNullOrBlank() && trackedSubfolderName.isNullOrBlank()
 
@@ -58,6 +103,7 @@ data class LibraryRoot(
                 sourceUrl = url,
                 remoteId = remoteId,
                 cloudKind = cloudKind,
+                providerId = effectiveProviderId,
                 cookie = cookie,
                 lastSyncedEpochMs = lastSyncedEpochMs,
             )
@@ -71,6 +117,7 @@ data class LibraryRoot(
                 sourceUrl = url,
                 remoteId = remoteId,
                 cloudKind = cloudKind,
+                providerId = effectiveProviderId,
                 cookie = cookie,
                 lastSyncedEpochMs = lastSyncedEpochMs,
             )

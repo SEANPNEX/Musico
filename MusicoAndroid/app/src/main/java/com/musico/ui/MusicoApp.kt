@@ -100,6 +100,7 @@ fun MusicoApp(
     onPickFolder: ((Uri) -> Unit) -> Unit,
     onPickLyricsFile: ((Uri) -> Unit) -> Unit,
     onPickImage: ((Uri) -> Unit) -> Unit,
+    onPickExtensionFile: ((Uri) -> Unit) -> Unit = {},
 ) {
     val languageStore = appContainer.languageStore
     val selectedLanguage by languageStore.language.collectAsStateWithLifecycle()
@@ -118,6 +119,7 @@ fun MusicoApp(
             onPickFolder = onPickFolder,
             onPickLyricsFile = onPickLyricsFile,
             onPickImage = onPickImage,
+            onPickExtensionFile = onPickExtensionFile,
         )
     }
 }
@@ -128,6 +130,7 @@ private fun MusicoAppContent(
     onPickFolder: ((Uri) -> Unit) -> Unit,
     onPickLyricsFile: ((Uri) -> Unit) -> Unit,
     onPickImage: ((Uri) -> Unit) -> Unit,
+    onPickExtensionFile: ((Uri) -> Unit) -> Unit,
 ) {
     val strings = LocalStrings.current
     val libraryStore = appContainer.libraryStore
@@ -231,6 +234,7 @@ private fun MusicoAppContent(
                     pendingSearchRequest = pendingSearchRequest,
                     onConsumeSearchRequest = { pendingSearchRequest = null },
                     onPickFolder = onPickFolder,
+                    onPickExtensionFile = onPickExtensionFile,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
@@ -278,6 +282,7 @@ private fun MusicoAppContent(
                         pendingSearchRequest = pendingSearchRequest,
                         onConsumeSearchRequest = { pendingSearchRequest = null },
                         onPickFolder = onPickFolder,
+                        onPickExtensionFile = onPickExtensionFile,
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight()
@@ -444,6 +449,7 @@ private fun DestinationContent(
     pendingSearchRequest: SearchRequest?,
     onConsumeSearchRequest: () -> Unit,
     onPickFolder: ((Uri) -> Unit) -> Unit,
+    onPickExtensionFile: ((Uri) -> Unit) -> Unit,
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier) {
@@ -465,7 +471,10 @@ private fun DestinationContent(
                     cloudExporter = appContainer.cloudExporter,
                     cloudDownloadManager = appContainer.cloudDownloadManager,
                     languageStore = appContainer.languageStore,
+                    extensionStore = appContainer.extensionStore,
+                    providerRegistry = appContainer.cloudProviderRegistry,
                     onPickFolder = onPickFolder,
+                    onPickExtensionFile = onPickExtensionFile,
                     modifier = Modifier.fillMaxSize()
                 )
                 TopDestination.LIBRARY -> LibraryScreen(

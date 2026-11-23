@@ -7,6 +7,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using MusicoWindows.Core;
+using MusicoWindows.Extensions;
 using MusicoWindows.Models;
 
 namespace MusicoWindows.Cloud;
@@ -16,7 +17,8 @@ public sealed record CloudFolderManifest(
     string? RemoteId,
     string CloudKind,
     DateTimeOffset LastSyncedUtc,
-    Dictionary<string, string> Tracks);
+    Dictionary<string, string> Tracks,
+    string? ProviderId = null);
 
 public sealed record CloudUpdateResult(
     int AddedCount,
@@ -81,6 +83,7 @@ public sealed class CloudExporter
     private readonly YouTubeClient _youtube;
     private readonly BilibiliClient _bilibili;
     private readonly GoogleDriveClient _googleDrive;
+    private readonly CloudProviderRegistry _providerRegistry;
     private readonly ArtworkCache? _artworkCache;
 
     public CloudExporter(
@@ -88,13 +91,28 @@ public sealed class CloudExporter
         YouTubeClient youtubeClient,
         BilibiliClient bilibiliClient,
         ArtworkCache? artworkCache = null,
-        GoogleDriveClient? googleDriveClient = null)
+        GoogleDriveClient? googleDriveClient = null,
+        CloudProviderRegistry? providerRegistry = null)
     {
         _cloudCache = cloudCache ?? throw new ArgumentNullException(nameof(cloudCache));
         _youtube = youtubeClient ?? throw new ArgumentNullException(nameof(youtubeClient));
         _bilibili = bilibiliClient ?? throw new ArgumentNullException(nameof(bilibiliClient));
         _artworkCache = artworkCache;
         _googleDrive = googleDriveClient ?? new GoogleDriveClient();
+        _providerRegistry = providerRegistry ?? new CloudProviderRegistry(_youtube, _bilibili, _googleDrive);
+    }
+
+    public CloudExporter(
+        CloudAudioCache cloudCache,
+        CloudProviderRegistry providerRegistry,
+        ArtworkCache? artworkCache = null)
+    {
+        _cloudCache = cloudCache ?? throw new ArgumentNullException(nameof(cloudCache));
+        _providerRegistry = providerRegistry ?? throw new ArgumentNullException(nameof(providerRegistry));
+        _youtube = _providerRegistry.YouTube;
+        _bilibili = _providerRegistry.Bilibili;
+        _googleDrive = _providerRegistry.GoogleDrive;
+        _artworkCache = artworkCache;
     }
 
     public static string SanitizeFileName(string? raw, string fallback = "Untitled")
@@ -244,7 +262,8 @@ public sealed class CloudExporter
 
         string? sourceUrl = string.IsNullOrWhiteSpace(root.SourceUrl) ? null : root.SourceUrl.Trim();
         RootKind? cloudKind = root.EffectiveCloudKind;
-        if (sourceUrl is not null && cloudKind is { } kind)
+        string? providerId = root.EffectiveProviderId;
+        if (sourceUrl is not null && (cloudKind is { } || !string.IsNullOrWhiteSpace(providerId)))
         {
             try
             {
@@ -253,9 +272,10 @@ public sealed class CloudExporter
                     new CloudFolderManifest(
                         SourceUrl: sourceUrl,
                         RemoteId: root.RemoteId,
-                        CloudKind: kind.ToString(),
+                        CloudKind: (cloudKind ?? RootKind.CloudExtension).ToString(),
                         LastSyncedUtc: DateTimeOffset.UtcNow,
-                        Tracks: trackedMap));
+                        Tracks: trackedMap,
+                        ProviderId: providerId));
             }
             catch
             {
@@ -304,6 +324,12 @@ public sealed class CloudExporter
             kindHint = parsedKind;
         }
 
+        string? providerIdHint = !string.IsNullOrWhiteSpace(trackingOverride?.ResolvedProviderId)
+            ? trackingOverride!.ResolvedProviderId
+            : !string.IsNullOrWhiteSpace(existingManifest?.ProviderId)
+                ? existingManifest!.ProviderId
+                : root.EffectiveProviderId ?? kindHint?.BuiltinProviderId();
+
         string? effectiveCookie = trackingOverride is not null
             ? trackingOverride.Cookie ?? root.Cookie
             : root.Cookie;
@@ -312,40 +338,60 @@ public sealed class CloudExporter
             : root.ProxyUrl;
 
         CloudPlaylistResult playlist;
+        ICloudSourceProvider? resolvedProvider = _providerRegistry.GetById(providerIdHint);
         if (fetchPlaylist is not null)
         {
             playlist = await fetchPlaylist(rawSource, effectiveCookie, effectiveProxy, kindHint, ct).ConfigureAwait(false);
+            resolvedProvider ??= _providerRegistry.GetById(playlist.ResolvedProviderId);
         }
         else
         {
-            RootKind resolvedKind = kindHint ?? CloudUrlClassifier.Classify(rawSource);
-            playlist = resolvedKind switch
+            if (resolvedProvider is null)
             {
-                RootKind.CloudBilibili => await _bilibili.FetchPlaylistAsync(rawSource, effectiveCookie, effectiveProxy, ct).ConfigureAwait(false),
-                RootKind.CloudGoogleDrive => await _googleDrive.FetchPlaylistAsync(rawSource, effectiveCookie, effectiveProxy, ct).ConfigureAwait(false),
-                _ => await _youtube.FetchPlaylistAsync(rawSource, effectiveCookie, effectiveProxy, ct).ConfigureAwait(false)
-            };
+                if (!string.IsNullOrWhiteSpace(providerIdHint))
+                {
+                    throw new CloudServiceException(
+                        CloudErrorCode.ExtensionUnavailable,
+                        $"Cloud provider '{providerIdHint}' is disabled or not installed.");
+                }
+                var classified = await CloudUrlClassifier.ClassifyAsync(rawSource, _providerRegistry, ct: ct)
+                    .ConfigureAwait(false);
+                resolvedProvider = classified.Provider;
+                rawSource = classified.Match.NormalizedUrl ?? rawSource;
+            }
+            else if (!resolvedProvider.IsAvailable)
+            {
+                throw new CloudServiceException(
+                    CloudErrorCode.ExtensionUnavailable,
+                    $"Cloud provider '{resolvedProvider.DisplayName}' is disabled or not installed.");
+            }
+
+            playlist = await resolvedProvider.FetchPlaylistAsync(rawSource, effectiveCookie, effectiveProxy, ct)
+                .ConfigureAwait(false);
         }
 
         var trackedMap = existingManifest?.Tracks is not null
             ? new Dictionary<string, string>(existingManifest.Tracks, StringComparer.Ordinal)
             : new Dictionary<string, string>(StringComparer.Ordinal);
 
-        string cloudSource = playlist.Kind switch
+        string cloudSource = resolvedProvider?.CloudSourceKey ?? playlist.Kind switch
         {
             RootKind.CloudBilibili => CloudSources.Bilibili,
             RootKind.CloudGoogleDrive => CloudSources.GoogleDrive,
+            RootKind.CloudExtension => playlist.ResolvedProviderId ?? "extension",
             _ => CloudSources.YouTube
         };
-        string albumArtist = playlist.Kind switch
+        string albumArtist = resolvedProvider?.DisplayName ?? playlist.Kind switch
         {
             RootKind.CloudBilibili => "Bilibili",
             RootKind.CloudGoogleDrive => "Google Drive",
+            RootKind.CloudExtension => CloudProviderRegistry.ResolveDisplayLabel(_providerRegistry, playlist.ResolvedProviderId, playlist.Kind),
             _ => "YouTube"
         };
         string resolvedSourceUrl = !string.IsNullOrWhiteSpace(trackingOverride?.SourceUrl)
             ? trackingOverride!.SourceUrl.Trim()
             : (string.IsNullOrWhiteSpace(playlist.SourceUrl) ? rawSource : playlist.SourceUrl);
+        string? effectiveProviderId = resolvedProvider?.ProviderId ?? playlist.ResolvedProviderId ?? providerIdHint;
 
         var lookupRoot = root with
         {
@@ -353,7 +399,8 @@ public sealed class CloudExporter
             SourceUrl = resolvedSourceUrl,
             RemoteId = playlist.RemoteId,
             Cookie = effectiveCookie,
-            ProxyUrl = effectiveProxy
+            ProxyUrl = effectiveProxy,
+            ProviderId = effectiveProviderId
         };
 
         int addedCount = 0;
@@ -428,7 +475,8 @@ public sealed class CloudExporter
                 RemoteId: playlist.RemoteId,
                 CloudKind: playlist.Kind.ToString(),
                 LastSyncedUtc: DateTimeOffset.UtcNow,
-                Tracks: trackedMap));
+                Tracks: trackedMap,
+                ProviderId: effectiveProviderId));
 
         progress?.Report(new CloudExportProgress(playlist.Items.Count, playlist.Items.Count, string.Empty, failedCount));
         return new CloudUpdateResult(addedCount, skippedCount, failedCount, playlist.Items.Count, errors);
@@ -611,15 +659,22 @@ public sealed class CloudExporter
     private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct)
     {
         string remoteId = track.RemoteTrackId ?? throw new InvalidOperationException("Missing remote track ID.");
-        if (string.Equals(track.CloudSource, CloudSources.Bilibili, StringComparison.OrdinalIgnoreCase))
+        ICloudSourceProvider? provider = _providerRegistry.GetBySourceOrProviderId(track.CloudSource)
+            ?? (root is not null ? _providerRegistry.GetProvider(root) : null);
+        if (provider is null || !provider.IsAvailable)
         {
-            return _bilibili.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionUnavailable,
+                $"Cloud provider '{track.CloudSource ?? root?.EffectiveProviderId ?? "unknown"}' is disabled or not installed.");
         }
-        if (string.Equals(track.CloudSource, CloudSources.GoogleDrive, StringComparison.OrdinalIgnoreCase))
-        {
-            return _googleDrive.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
-        }
-        return _youtube.ResolveAudioStreamAsync(remoteId, root?.Cookie, root?.ProxyUrl, ct);
+
+        return provider.ResolveAudioStreamAsync(
+            remoteId,
+            track.RelativePath,
+            root?.Cookie,
+            root?.ProxyUrl,
+            forceRefresh: false,
+            ct: ct);
     }
 
     private void TryWriteTags(string destPath, Track track)

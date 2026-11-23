@@ -8,8 +8,25 @@ enum CloudSourceError: LocalizedError, Equatable {
     case unsupportedSource
     case emptyPlaylist
     case noPlayableStream
+    case rateLimited
+    case permissionDenied(host: String)
+    case extensionUnavailable(name: String)
+    case extensionRuntimeError(code: String, message: String)
     case apiError(String)
     case networkError(String)
+
+    var extensionErrorCode: String? {
+        switch self {
+        case .invalidURL: "INVALID_URL"
+        case .emptyPlaylist: "EMPTY_COLLECTION"
+        case .noPlayableStream: "NO_PLAYABLE_STREAM"
+        case .rateLimited: "RATE_LIMITED"
+        case .networkError: "NETWORK_ERROR"
+        case .permissionDenied: "PERMISSION_DENIED"
+        case .extensionRuntimeError(let code, _): code
+        case .unsupportedSource, .extensionUnavailable, .apiError: nil
+        }
+    }
 
     var errorDescription: String? {
         switch self {
@@ -21,6 +38,22 @@ enum CloudSourceError: LocalizedError, Equatable {
             L10n.trNonisolated("No playable tracks were found at that link.")
         case .noPlayableStream:
             L10n.trNonisolated("Could not resolve a playable audio stream for this track.")
+        case .rateLimited:
+            L10n.trNonisolated("Rate limited by the cloud source. Please try again later.")
+        case .permissionDenied(let host):
+            if host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                L10n.trNonisolated("Extension was denied access to an unauthorized host.")
+            } else {
+                L10n.trNonisolated("Extension was denied access to host “%@”.", host)
+            }
+        case .extensionUnavailable(let name):
+            L10n.trNonisolated("Extension “%@” is disabled or not installed.", name)
+        case .extensionRuntimeError(let code, let message):
+            if !message.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                message
+            } else {
+                L10n.trNonisolated("Extension error (%@).", code)
+            }
         case .apiError(let message):
             message
         case .networkError(let message):
@@ -45,6 +78,7 @@ struct CloudPlaylistResult: Sendable, Equatable {
     var remoteID: String
     var title: String
     var tracks: [CloudTrackInfo]
+    var providerID: String? = nil
 }
 
 struct CloudStreamResult: Sendable, Equatable {
@@ -72,6 +106,27 @@ protocol CloudHTTPTransport: Sendable {
     func send(_ request: URLRequest) async throws -> HTTPResponseData
 }
 
+extension CloudHTTPTransport {
+    /// Performs `request` without automatically following HTTP redirects when supported by the transport.
+    func rawRequest(_ request: URLRequest) async throws -> HTTPResponseData {
+        try await send(request)
+    }
+}
+
+private final class NoRedirectSessionDelegate: NSObject, URLSessionTaskDelegate, Sendable {
+    static let shared = NoRedirectSessionDelegate()
+
+    func urlSession(
+        _ session: URLSession,
+        task: URLSessionTask,
+        willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest,
+        completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(nil)
+    }
+}
+
 struct URLSessionCloudTransport: CloudHTTPTransport {
     private let session: URLSession
 
@@ -88,8 +143,16 @@ struct URLSessionCloudTransport: CloudHTTPTransport {
     }
 
     func send(_ request: URLRequest) async throws -> HTTPResponseData {
+        try await performRequest(request, delegate: nil)
+    }
+
+    func rawRequest(_ request: URLRequest) async throws -> HTTPResponseData {
+        try await performRequest(request, delegate: NoRedirectSessionDelegate.shared)
+    }
+
+    private func performRequest(_ request: URLRequest, delegate: (any URLSessionTaskDelegate)?) async throws -> HTTPResponseData {
         do {
-            let (data, response) = try await session.data(for: request)
+            let (data, response) = try await session.data(for: request, delegate: delegate)
             guard let http = response as? HTTPURLResponse else {
                 throw CloudSourceError.networkError(L10n.trNonisolated("Invalid server response."))
             }
@@ -120,6 +183,7 @@ struct DriveSubfolderRef: Equatable, Hashable, Sendable {
     var resourceKey: String?
     var pathSegments: [String]
     var depth: Int
+    var extraJSON: String? = nil
 
     var relativePath: String { pathSegments.joined(separator: "/") }
     var name: String { pathSegments.last ?? id }
@@ -141,6 +205,8 @@ struct DriveFolderDiscovery: Equatable, Sendable {
     var rootTitle: String
     var initialBatch: DriveFolderBatch
     var singleFileResult: CloudPlaylistResult?
+    var providerID: String? = nil
+    var kind: LibraryRoot.Kind = .cloudGoogleDrive
 }
 
 struct DriveCrawlSummary: Equatable, Sendable {
@@ -199,7 +265,7 @@ enum CloudSourceInput {
 
     /// Extracts an `http(s)://` URL from pasted share text while stripping surrounding copy and
     /// trailing punctuation, or falls back to a trimmed bare ID / schemeless link.
-    static func extract(from raw: String) -> String {
+    static func extract(from raw: String, registry: CloudProviderRegistry = .shared) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return "" }
 
@@ -214,10 +280,8 @@ enum CloudSourceInput {
                     candidates.append(cleaned)
                 }
             }
-            if let supported = candidates.first(where: {
-                YouTubeClient.parseExtracted($0) != nil
-                    || BilibiliClient.parseExtracted($0) != nil
-                    || GoogleDriveClient.parseExtracted($0) != nil
+            if let supported = candidates.first(where: { candidate in
+                registry.match(rawText: trimmed, extractedURL: candidate) != nil
             }) {
                 return supported
             }
@@ -229,13 +293,10 @@ enum CloudSourceInput {
         return stripTrailingPunctuation(from: trimmed)
     }
 
-    static func classify(_ raw: String) -> LibraryRoot.Kind? {
-        let extracted = extract(from: raw)
+    static func classify(_ raw: String, registry: CloudProviderRegistry = .shared) -> LibraryRoot.Kind? {
+        let extracted = extract(from: raw, registry: registry)
         guard !extracted.isEmpty else { return nil }
-        if YouTubeClient.parseExtracted(extracted) != nil { return .cloudYouTube }
-        if BilibiliClient.parseExtracted(extracted) != nil { return .cloudBilibili }
-        if GoogleDriveClient.parseExtracted(extracted) != nil { return .cloudGoogleDrive }
-        return nil
+        return registry.match(rawText: raw, extractedURL: extracted)?.kind
     }
 
     private static func cleanMatchedURL(_ rawMatch: String) -> String {
@@ -259,76 +320,183 @@ enum CloudSourceInput {
 
 // MARK: - Live Service Facade
 
-final class LiveCloudService: CloudPlaylistFetching, GoogleDriveProgressiveFetching, CloudStreamResolving, @unchecked Sendable {
-    static let shared = LiveCloudService()
+final class LiveCloudService: CloudPlaylistFetching, CloudProviderPlaylistFetching, GoogleDriveProgressiveFetching, CloudTreeProgressiveFetching, CloudStreamResolving, @unchecked Sendable {
+    static let shared = LiveCloudService(registry: .shared)
 
+    let registry: CloudProviderRegistry
     let youtube: YouTubeClient
     let bilibili: BilibiliClient
     let googleDrive: GoogleDriveClient
 
     init(
         transport: any CloudHTTPTransport = URLSessionCloudTransport(),
-        driveRetryDelaysNanoseconds: [UInt64] = [500_000_000, 1_500_000_000]
+        driveRetryDelaysNanoseconds: [UInt64] = [500_000_000, 1_500_000_000],
+        registry: CloudProviderRegistry? = nil
     ) {
-        self.youtube = YouTubeClient(transport: transport)
-        self.bilibili = BilibiliClient(transport: transport)
-        self.googleDrive = GoogleDriveClient(transport: transport, retryDelaysNanoseconds: driveRetryDelaysNanoseconds)
+        let resolvedRegistry = registry ?? CloudProviderRegistry(
+            transport: transport,
+            driveRetryDelaysNanoseconds: driveRetryDelaysNanoseconds
+        )
+        self.registry = resolvedRegistry
+        self.youtube = resolvedRegistry.youtubeClient ?? YouTubeClient(transport: transport)
+        self.bilibili = resolvedRegistry.bilibiliClient ?? BilibiliClient(transport: transport)
+        self.googleDrive = resolvedRegistry.googleDriveClient ?? GoogleDriveClient(
+            transport: transport,
+            retryDelaysNanoseconds: driveRetryDelaysNanoseconds
+        )
     }
 
     nonisolated static func classifySource(
         _ sourceURL: String,
-        fallbackKind: LibraryRoot.Kind? = nil
-    ) throws -> (extracted: String, kind: LibraryRoot.Kind, remoteID: String?) {
-        let extracted = CloudSourceInput.extract(from: sourceURL)
+        fallbackKind: LibraryRoot.Kind? = nil,
+        preferredProviderID: String? = nil,
+        registry: CloudProviderRegistry = .shared
+    ) throws -> (extracted: String, kind: LibraryRoot.Kind, remoteID: String?, providerID: String?) {
+        let extracted = CloudSourceInput.extract(from: sourceURL, registry: registry)
         guard !extracted.isEmpty else { throw LibraryError.invalidCloudURL }
-        if let target = YouTubeClient.parseExtracted(extracted) {
-            let rid: String? = switch target {
-            case .playlist(let id, _): id
-            case .video(let id): id
+
+        if let preferredProviderID, !preferredProviderID.isEmpty {
+            guard let provider = registry.provider(forID: preferredProviderID) else {
+                if preferredProviderID.hasPrefix("ext.") {
+                    throw CloudSourceError.extensionUnavailable(name: preferredProviderID)
+                }
+                throw LibraryError.invalidCloudURL
             }
-            return (extracted, .cloudYouTube, rid)
+            if let match = provider.canHandle(rawText: sourceURL, extractedURL: extracted) {
+                return (extracted, match.kind, match.remoteID, provider.id)
+            }
+            if preferredProviderID == BuiltInProviderID.googleDrive, GoogleDriveClient.isValidDriveID(extracted) {
+                return (extracted, .cloudGoogleDrive, extracted, BuiltInProviderID.googleDrive)
+            }
+            throw LibraryError.invalidCloudURL
         }
-        if let target = BilibiliClient.parseExtracted(extracted) {
-            let rid: String? = switch target {
-            case .video(let bvid, let aid): bvid ?? aid
-            case .favlist(let id): "fid_\(id)"
-            case .season(let id, _): "season_\(id)"
-            case .series(let id, _): "series_\(id)"
-            case .shortLink: nil
-            }
-            return (extracted, .cloudBilibili, rid)
-        }
-        if let target = GoogleDriveClient.parseExtracted(extracted) {
-            let rid: String? = switch target {
-            case .folder(let id, _), .file(let id, _), .open(let id, _): id
-            }
-            return (extracted, .cloudGoogleDrive, rid)
+
+        if let match = registry.match(rawText: sourceURL, extractedURL: extracted) {
+            return (extracted, match.kind, match.remoteID, match.providerID)
         }
         if fallbackKind == .cloudGoogleDrive, GoogleDriveClient.isValidDriveID(extracted) {
-            return (extracted, .cloudGoogleDrive, extracted)
+            return (extracted, .cloudGoogleDrive, extracted, BuiltInProviderID.googleDrive)
         }
         throw LibraryError.invalidCloudURL
     }
 
     func fetchPlaylist(sourceURL: String, cookie: String?, kindHint: LibraryRoot.Kind? = nil) async throws -> CloudPlaylistResult {
-        let extracted = CloudSourceInput.extract(from: sourceURL)
+        try await fetchPlaylist(sourceURL: sourceURL, cookie: cookie, kindHint: kindHint, providerIDHint: nil)
+    }
+
+    func fetchPlaylist(
+        sourceURL: String,
+        cookie: String?,
+        kindHint: LibraryRoot.Kind?,
+        providerIDHint: String?
+    ) async throws -> CloudPlaylistResult {
+        let extracted = CloudSourceInput.extract(from: sourceURL, registry: registry)
         guard !extracted.isEmpty else { throw CloudSourceError.invalidURL }
-        if kindHint == .cloudYouTube || (kindHint == nil && YouTubeClient.parseExtracted(extracted) != nil) {
-            return try await youtube.fetchPlaylist(sourceURL: extracted, cookie: cookie)
+
+        let targetProvider: any CloudSourceProvider
+        if let providerIDHint, !providerIDHint.isEmpty {
+            guard let resolved = registry.provider(forID: providerIDHint) else {
+                if providerIDHint.hasPrefix("ext.") {
+                    throw CloudSourceError.extensionUnavailable(name: providerIDHint)
+                }
+                throw CloudSourceError.unsupportedSource
+            }
+            targetProvider = resolved
+        } else if let kindHint, let builtInID = kindHint.builtInProviderID {
+            guard let resolved = registry.provider(forID: builtInID) else {
+                throw CloudSourceError.unsupportedSource
+            }
+            if builtInID == BuiltInProviderID.googleDrive {
+                return try await googleDrive.fetchPlaylist(sourceURL: extracted, cookie: cookie, allowBareID: true)
+            }
+            targetProvider = resolved
+        } else if let match = registry.match(rawText: sourceURL, extractedURL: extracted),
+                  let resolved = registry.provider(forID: match.providerID) {
+            let fetchURL = match.kind == .cloudExtension ? match.normalizedURL : extracted
+            return try await resolved.fetchCollection(sourceURL: fetchURL, cookie: cookie)
+        } else {
+            throw CloudSourceError.unsupportedSource
         }
-        if kindHint == .cloudBilibili || (kindHint == nil && BilibiliClient.parseExtracted(extracted) != nil) {
-            return try await bilibili.fetchPlaylist(sourceURL: extracted, cookie: cookie)
+
+        if targetProvider.rootKind == .cloudExtension,
+           let matched = targetProvider.canHandle(rawText: sourceURL, extractedURL: extracted) {
+            return try await targetProvider.fetchCollection(sourceURL: matched.normalizedURL, cookie: cookie)
         }
-        if kindHint == .cloudGoogleDrive || (kindHint == nil && GoogleDriveClient.parseExtracted(extracted) != nil) {
-            return try await googleDrive.fetchPlaylist(sourceURL: extracted, cookie: cookie, allowBareID: kindHint == .cloudGoogleDrive)
+        return try await targetProvider.fetchCollection(sourceURL: extracted, cookie: cookie)
+    }
+
+    func supportsProgressiveTree(for providerID: String) -> Bool {
+        registry.provider(forID: providerID) is any CloudProgressiveTreeProvider
+    }
+
+    func discoverTreeRoot(sourceURL: String, cookie: String?, providerID: String?) async throws -> DriveFolderDiscovery {
+        let extracted = CloudSourceInput.extract(from: sourceURL, registry: registry)
+        guard !extracted.isEmpty else { throw CloudSourceError.invalidURL }
+
+        let resolvedProvider: (any CloudProgressiveTreeProvider)?
+        if let providerID, !providerID.isEmpty {
+            resolvedProvider = registry.provider(forID: providerID) as? any CloudProgressiveTreeProvider
+            if resolvedProvider == nil, providerID.hasPrefix("ext.") {
+                throw CloudSourceError.extensionUnavailable(name: providerID)
+            }
+        } else if let match = registry.match(rawText: sourceURL, extractedURL: extracted) {
+            resolvedProvider = registry.provider(forID: match.providerID) as? any CloudProgressiveTreeProvider
+        } else {
+            resolvedProvider = nil
         }
-        throw CloudSourceError.unsupportedSource
+
+        guard let treeProvider = resolvedProvider else {
+            throw CloudSourceError.unsupportedSource
+        }
+        return try await treeProvider.discoverRoot(sourceURL: extracted, cookie: cookie)
+    }
+
+    func crawlTree(
+        discovery: DriveFolderDiscovery,
+        providerID: String?,
+        cookie: String?,
+        priorityState: DriveCrawlPriorityState?,
+        onBatch: @escaping @Sendable (DriveFolderBatch) async -> Void
+    ) async throws -> DriveCrawlSummary {
+        let targetID = providerID ?? discovery.providerID ?? BuiltInProviderID.googleDrive
+        guard let treeProvider = registry.provider(forID: targetID) as? any CloudProgressiveTreeProvider else {
+            throw CloudSourceError.extensionUnavailable(name: targetID)
+        }
+        return try await treeProvider.crawlTree(
+            discovery: discovery,
+            cookie: cookie,
+            priorityState: priorityState,
+            onBatch: onBatch
+        )
+    }
+
+    func fetchSingleTreeFolder(
+        providerID: String?,
+        folderID: String,
+        resourceKey: String?,
+        pathSegments: [String],
+        depth: Int,
+        rootTitle: String?,
+        cookie: String?,
+        extraJSON: String?
+    ) async throws -> DriveFolderBatch {
+        let targetID = providerID ?? BuiltInProviderID.googleDrive
+        guard let treeProvider = registry.provider(forID: targetID) as? any CloudProgressiveTreeProvider else {
+            throw CloudSourceError.extensionUnavailable(name: targetID)
+        }
+        return try await treeProvider.fetchSingleFolder(
+            folderID: folderID,
+            resourceKey: resourceKey,
+            pathSegments: pathSegments,
+            depth: depth,
+            rootTitle: rootTitle,
+            cookie: cookie,
+            extraJSON: extraJSON
+        )
     }
 
     func discoverGoogleDriveRoot(sourceURL: String, cookie: String?) async throws -> DriveFolderDiscovery {
-        let extracted = CloudSourceInput.extract(from: sourceURL)
-        guard !extracted.isEmpty else { throw CloudSourceError.invalidURL }
-        return try await googleDrive.discoverRoot(sourceURL: extracted, cookie: cookie, allowBareID: false)
+        try await discoverTreeRoot(sourceURL: sourceURL, cookie: cookie, providerID: BuiltInProviderID.googleDrive)
     }
 
     func crawlGoogleDriveTree(
@@ -337,11 +505,11 @@ final class LiveCloudService: CloudPlaylistFetching, GoogleDriveProgressiveFetch
         priorityState: DriveCrawlPriorityState?,
         onBatch: @escaping @Sendable (DriveFolderBatch) async -> Void
     ) async throws -> DriveCrawlSummary {
-        try await googleDrive.crawlFolderTree(
+        try await crawlTree(
             discovery: discovery,
+            providerID: BuiltInProviderID.googleDrive,
             cookie: cookie,
             priorityState: priorityState,
-            maxWorkers: 4,
             onBatch: onBatch
         )
     }
@@ -354,37 +522,29 @@ final class LiveCloudService: CloudPlaylistFetching, GoogleDriveProgressiveFetch
         rootTitle: String?,
         cookie: String?
     ) async throws -> DriveFolderBatch {
-        try await googleDrive.fetchSingleFolder(
+        try await fetchSingleTreeFolder(
+            providerID: BuiltInProviderID.googleDrive,
             folderID: folderID,
             resourceKey: resourceKey,
             pathSegments: pathSegments,
             depth: depth,
             rootTitle: rootTitle,
-            cookie: cookie
+            cookie: cookie,
+            extraJSON: nil
         )
     }
 
     func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool = false) async throws -> CloudStreamResult {
-        let cookie = root?.cookie
-        switch track.cloudSource {
-        case "youtube":
-            let videoID = track.remoteTrackID ?? track.relativePath
-            return try await youtube.resolveStream(videoID: videoID, cookie: cookie, forceRefresh: forceRefresh)
-        case "bilibili":
-            let trackID = track.remoteTrackID ?? track.relativePath
-            return try await bilibili.resolveStream(trackID: trackID, cookie: cookie, forceRefresh: forceRefresh)
-        case "gdrive", "googledrive":
-            let trackID = track.remoteTrackID ?? track.relativePath
-            let ext = (track.relativePath as NSString).pathExtension.lowercased()
-            return try await googleDrive.resolveStream(
-                trackID: trackID,
-                cookie: cookie,
-                fallbackExtension: ext.isEmpty ? nil : ext,
-                forceRefresh: forceRefresh
-            )
-        default:
+        guard let providerID = CloudProviderRegistry.providerID(for: track, root: root) else {
             throw CloudSourceError.unsupportedSource
         }
+        guard let provider = registry.provider(forID: providerID) else {
+            if providerID.hasPrefix("ext.") {
+                throw CloudSourceError.extensionUnavailable(name: root?.name ?? providerID)
+            }
+            throw CloudSourceError.unsupportedSource
+        }
+        return try await provider.resolveStream(track: track, root: root, forceRefresh: forceRefresh)
     }
 }
 
@@ -2665,59 +2825,26 @@ actor GoogleDriveClient {
         maxWorkers: Int = 4,
         onBatch: @escaping @Sendable (DriveFolderBatch) async -> Void
     ) async throws -> DriveCrawlSummary {
-        let queue = DriveCrawlQueue(
+        let rootTitle = discovery.rootTitle
+        return try await CloudTreeCrawler.crawl(
             rootID: discovery.rootID,
             initialSubfolders: discovery.initialBatch.discoveredSubfolders,
             maxFolders: Self.maxFolders,
-            priorityState: priorityState
+            maxWorkers: maxWorkers,
+            priorityState: priorityState,
+            fetchNode: { node in
+                try await self.fetchSingleFolder(
+                    folderID: node.id,
+                    resourceKey: node.resourceKey,
+                    pathSegments: node.pathSegments,
+                    depth: node.depth,
+                    rootTitle: rootTitle,
+                    cookie: cookie,
+                    prefetchedHTML: nil
+                )
+            },
+            onBatch: onBatch
         )
-        let workerCount = max(1, min(maxWorkers, 4))
-        let rootTitle = discovery.rootTitle
-
-        try await withTaskCancellationHandler {
-            try await withThrowingTaskGroup(of: Void.self) { group in
-                for _ in 0..<workerCount {
-                    group.addTask {
-                        while let node = await queue.takeNext() {
-                            try Task.checkCancellation()
-                            do {
-                                var batch = try await self.fetchSingleFolder(
-                                    folderID: node.id,
-                                    resourceKey: node.resourceKey,
-                                    pathSegments: node.pathSegments,
-                                    depth: node.depth,
-                                    rootTitle: rootTitle,
-                                    cookie: cookie,
-                                    prefetchedHTML: nil
-                                )
-                                let accepted = await queue.complete(discovered: batch.discoveredSubfolders, hadError: false)
-                                batch.discoveredSubfolders = accepted
-                                await onBatch(batch)
-                            } catch is CancellationError {
-                                throw CancellationError()
-                            } catch {
-                                let failedBatch = DriveFolderBatch(
-                                    folderID: node.id,
-                                    folderPath: node.relativePath,
-                                    depth: node.depth,
-                                    rootTitle: nil,
-                                    tracks: [],
-                                    discoveredSubfolders: [],
-                                    hadError: true
-                                )
-                                await onBatch(failedBatch)
-                                await queue.complete(discovered: [], hadError: true)
-                            }
-                        }
-                    }
-                }
-                try await group.waitForAll()
-            }
-        } onCancel: {
-            Task { await queue.cancelAll() }
-        }
-
-        return await queue.summary()
     }
 
     private func fetchSingleFolderEntries(
@@ -4028,7 +4155,64 @@ private actor DriveTrackCollector {
     }
 }
 
-private actor DriveCrawlQueue {
+enum CloudTreeCrawler {
+    static func crawl(
+        rootID: String,
+        initialSubfolders: [DriveSubfolderRef],
+        maxFolders: Int = 500,
+        maxWorkers: Int = 4,
+        priorityState: DriveCrawlPriorityState?,
+        fetchNode: @escaping @Sendable (DriveSubfolderRef) async throws -> DriveFolderBatch,
+        onBatch: @escaping @Sendable (DriveFolderBatch) async -> Void
+    ) async throws -> DriveCrawlSummary {
+        let queue = DriveCrawlQueue(
+            rootID: rootID,
+            initialSubfolders: initialSubfolders,
+            maxFolders: maxFolders,
+            priorityState: priorityState
+        )
+        let workerCount = max(1, min(maxWorkers, 4))
+
+        try await withTaskCancellationHandler {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for _ in 0..<workerCount {
+                    group.addTask {
+                        while let node = await queue.takeNext() {
+                            try Task.checkCancellation()
+                            do {
+                                var batch = try await fetchNode(node)
+                                let accepted = await queue.complete(discovered: batch.discoveredSubfolders, hadError: false)
+                                batch.discoveredSubfolders = accepted
+                                await onBatch(batch)
+                            } catch is CancellationError {
+                                throw CancellationError()
+                            } catch {
+                                let failedBatch = DriveFolderBatch(
+                                    folderID: node.id,
+                                    folderPath: node.relativePath,
+                                    depth: node.depth,
+                                    rootTitle: nil,
+                                    tracks: [],
+                                    discoveredSubfolders: [],
+                                    hadError: true
+                                )
+                                await onBatch(failedBatch)
+                                await queue.complete(discovered: [], hadError: true)
+                            }
+                        }
+                    }
+                }
+                try await group.waitForAll()
+            }
+        } onCancel: {
+            Task { await queue.cancelAll() }
+        }
+
+        return await queue.summary()
+    }
+}
+
+actor DriveCrawlQueue {
     private let maxFolders: Int
     private let priorityState: DriveCrawlPriorityState?
     private var visitedIDs: Set<String>

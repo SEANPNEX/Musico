@@ -251,6 +251,17 @@
                                             <TextBlock x:Name="LblStats" Text="{DynamicResource Str_Nav_Stats}" Margin="12,0,0,0" VerticalAlignment="Center" />
                                         </StackPanel>
                                     </RadioButton>
+
+                                    <RadioButton x:Name="NavExtensions"
+                                                 Style="{StaticResource Win10NavItemStyle}"
+                                                 GroupName="MainNav"
+                                                 Tag="extensions"
+                                                 Checked="NavItem_Checked">
+                                        <StackPanel Orientation="Horizontal" Margin="14,0">
+                                            <TextBlock Text="&#xEA86;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="15" Width="22" VerticalAlignment="Center" />
+                                            <TextBlock x:Name="LblExtensions" Text="{DynamicResource Str_Nav_Extensions}" Margin="12,0,0,0" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </RadioButton>
                                 </StackPanel>
                             </ScrollViewer>
 

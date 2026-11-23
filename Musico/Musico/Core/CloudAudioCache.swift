@@ -175,6 +175,12 @@ actor CloudAudioCache {
         return nil
     }
 
+    nonisolated func hasCachedFileSync(for trackID: String) -> Bool {
+        Self.supportedExtensions.contains { ext in
+            FileManager.default.fileExists(atPath: fileURL(trackID: trackID, ext: ext).path)
+        }
+    }
+
     func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool = false) async throws -> CloudStreamResult {
         try Task.checkCancellation()
         return try await resolver.resolveStream(track: track, root: root, forceRefresh: forceRefresh)
@@ -401,7 +407,7 @@ actor CloudAudioCache {
         return destination
     }
 
-    private func fileURL(trackID: String, ext: String) -> URL {
+    private nonisolated func fileURL(trackID: String, ext: String) -> URL {
         directory.appendingPathComponent("\(trackID).\(ext)")
     }
 

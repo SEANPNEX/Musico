@@ -31,6 +31,7 @@
   </ItemGroup>
 
   <ItemGroup Condition="!$([MSBuild]::IsOSPlatform('Windows'))">
+    <PackageReference Include="Jint" Version="4.18.0" />
     <PackageReference Include="NAudio.Core" Version="2.2.1" />
     <PackageReference Include="System.Text.Encoding.CodePages" Version="8.0.0" />
     <PackageReference Include="TagLibSharp" Version="2.3.0" />
@@ -40,6 +41,7 @@
     <Compile Include="..\MusicoWindows\Localization\L.cs" LinkBase="Localization" />
     <Compile Include="..\MusicoWindows\Localization\LocalizationManager.cs" LinkBase="Localization" />
     <Compile Include="..\MusicoWindows\Cloud\*.cs" LinkBase="Cloud" />
+    <Compile Include="..\MusicoWindows\Extensions\*.cs" LinkBase="Extensions" />
     <Compile Include="..\MusicoWindows\Update\*.cs" LinkBase="Update" />
     <Compile Include="..\MusicoWindows\Stores\*.cs" Exclude="..\MusicoWindows\Stores\AppServices.cs" LinkBase="Stores" />
     <Compile Include="..\MusicoWindows\Audio\IAudioEngine.cs" LinkBase="Audio" />

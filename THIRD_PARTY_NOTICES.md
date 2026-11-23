@@ -14,12 +14,17 @@ While Musico's own source code is released under the [MIT License](LICENSE), pre
 - **System.Text.Encoding.CodePages** (`8.0.0`) — Licensed under the **MIT License**  
   Project: https://github.com/dotnet/runtime
 
+- **Jint** (`4.18.0`) — Licensed under the **BSD 2-Clause License (BSD-2-Clause)**  
+  Project: https://github.com/sebastienros/jint
+
 ## Android (`MusicoAndroid/`)
 
 - **AndroidX Libraries** (`core-ktx`, `activity-compose`, `lifecycle`, `documentfile`, Jetpack Compose) — Licensed under the **Apache License 2.0**
 - **AndroidX Media3** (`ExoPlayer`, `MediaSession`, `Common`) — Licensed under the **Apache License 2.0**
 - **Material Components for Android** (`com.google.android.material:material`) — Licensed under the **Apache License 2.0**
 - **Kotlinx Libraries** (`kotlinx.coroutines`, `kotlinx.serialization`) — Licensed under the **Apache License 2.0**
+- **quickjs-kt** (`1.0.0-alpha13`) — Licensed under the **Apache License 2.0** *(bundles **QuickJS**, licensed under the **MIT License**)*  
+  Project: https://github.com/dokar3/quickjs-kt
 - **JUnit 4** *(test dependency only)* — Licensed under the **Eclipse Public License 1.0 (EPL-1.0)**
 
 ## Apple (`Musico/`)

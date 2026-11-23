@@ -7,15 +7,23 @@ struct CloudTrackingInfo: Codable, Equatable, Hashable, Sendable {
     var cloudKind: LibraryRoot.Kind
     var cookie: String? = nil
     var lastSynced: Date? = nil
+    var providerID: String? = nil
+
+    var resolvedProviderID: String? {
+        if let providerID, !providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return providerID
+        }
+        return cloudKind.builtInProviderID
+    }
 }
 
 struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
-        case picked, appFolder, cloudYouTube, cloudBilibili, cloudGoogleDrive
+        case picked, appFolder, cloudYouTube, cloudBilibili, cloudGoogleDrive, cloudExtension
 
         var isCloud: Bool {
             switch self {
-            case .cloudYouTube, .cloudBilibili, .cloudGoogleDrive: true
+            case .cloudYouTube, .cloudBilibili, .cloudGoogleDrive, .cloudExtension: true
             case .picked, .appFolder: false
             }
         }
@@ -27,7 +35,16 @@ struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
             case .cloudYouTube: "youtube"
             case .cloudBilibili: "bilibili"
             case .cloudGoogleDrive: "gdrive"
-            case .picked, .appFolder: nil
+            case .picked, .appFolder, .cloudExtension: nil
+            }
+        }
+
+        var builtInProviderID: String? {
+            switch self {
+            case .cloudYouTube: "builtin.youtube"
+            case .cloudBilibili: "builtin.bilibili"
+            case .cloudGoogleDrive: "builtin.gdrive"
+            case .picked, .appFolder, .cloudExtension: nil
             }
         }
     }
@@ -47,6 +64,8 @@ struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
     var excludedPaths: [String]? = nil
     var linkedCloudKind: Kind? = nil
     var trackedSubfolders: [String: CloudTrackingInfo]? = nil
+    var providerID: String? = nil
+    var linkedProviderID: String? = nil
 
     var isCloudTrackedLocal: Bool {
         kind.isLocal && !(sourceURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -54,6 +73,26 @@ struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
 
     var effectiveCloudKind: Kind? {
         kind.isCloud ? kind : linkedCloudKind
+    }
+
+    var resolvedProviderID: String? {
+        switch kind {
+        case .cloudYouTube: "builtin.youtube"
+        case .cloudBilibili: "builtin.bilibili"
+        case .cloudGoogleDrive: "builtin.gdrive"
+        case .cloudExtension: providerID
+        case .picked, .appFolder: nil
+        }
+    }
+
+    var effectiveProviderID: String? {
+        if kind.isCloud {
+            return resolvedProviderID
+        }
+        if let linkedProviderID, !linkedProviderID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return linkedProviderID
+        }
+        return linkedCloudKind?.builtInProviderID
     }
 
     var normalizedExcludedPaths: [String] { excludedPaths ?? [] }

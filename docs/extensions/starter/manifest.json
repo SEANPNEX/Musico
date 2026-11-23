@@ -1,0 +1,36 @@
+{
+  "apiVersion": 1,
+  "id": "com.example.musico.starter",
+  "name": "Example Cloud Source",
+  "version": "1.0.0",
+  "author": "Your Name",
+  "description": "Starter template showing playlist and stream hooks for Musico extensions.",
+  "badgeLabel": "Example",
+  "entry": "index.js",
+  "capabilities": ["playlist", "stream", "cookie"],
+  "urlPatterns": [
+    "^https?://(www\\.)?example\\.com/(playlist|album)/[a-zA-Z0-9_-]+"
+  ],
+  "permissions": {
+    "hosts": ["example.com", "api.example.com", "*.cdn.example.com"]
+  },
+  "settings": [
+    {
+      "key": "preferHighBitrate",
+      "label": "Prefer highest bitrate",
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "key": "region",
+      "label": "Mirror Region",
+      "type": "select",
+      "default": "auto",
+      "options": [
+        { "value": "auto", "label": "Automatic" },
+        { "value": "us", "label": "United States" },
+        { "value": "jp", "label": "Japan" }
+      ]
+    }
+  ]
+}

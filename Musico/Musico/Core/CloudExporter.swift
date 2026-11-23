@@ -13,6 +13,14 @@ struct CloudFolderManifest: Codable, Equatable, Sendable {
     var cloudKind: LibraryRoot.Kind
     var lastSyncedEpochMs: Int64
     var tracks: [String: String]
+    var providerID: String? = nil
+
+    var resolvedProviderID: String? {
+        if let providerID, !providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            return providerID
+        }
+        return cloudKind.builtInProviderID
+    }
 }
 
 /// Exports cached or fetched cloud tracks and playlists into user-selected local folders.
@@ -226,7 +234,8 @@ enum CloudExporter {
                 remoteID: root.remoteID,
                 cloudKind: cloudKind,
                 lastSyncedEpochMs: Int64(Date().timeIntervalSince1970 * 1000),
-                tracks: trackedMap
+                tracks: trackedMap,
+                providerID: root.effectiveProviderID
             )
             try? saveManifest(manifest, in: destinationURL)
         }
@@ -266,6 +275,7 @@ enum CloudExporter {
         sourceURLOverride: String? = nil,
         cookieOverride: String? = nil,
         kindHintOverride: LibraryRoot.Kind? = nil,
+        providerIDOverride: String? = nil,
         onProgress: (@MainActor @Sendable (Int, Int, String) -> Void)? = nil
     ) async throws -> CloudUpdateSummary {
         try await performUpdateLocalFolder(
@@ -276,6 +286,7 @@ enum CloudExporter {
             sourceURLOverride: sourceURLOverride,
             cookieOverride: cookieOverride,
             kindHintOverride: kindHintOverride,
+            providerIDOverride: providerIDOverride,
             onDetailedProgress: onProgress.map { callback in
                 { @MainActor progress in
                     callback(progress.completedTracks, progress.totalTracks, progress.currentTrackTitle)
@@ -292,6 +303,7 @@ enum CloudExporter {
         sourceURLOverride: String? = nil,
         cookieOverride: String? = nil,
         kindHintOverride: LibraryRoot.Kind? = nil,
+        providerIDOverride: String? = nil,
         onDetailedProgress: @escaping @MainActor @Sendable (ExportProgress) -> Void
     ) async throws -> CloudUpdateSummary {
         try await performUpdateLocalFolder(
@@ -302,6 +314,7 @@ enum CloudExporter {
             sourceURLOverride: sourceURLOverride,
             cookieOverride: cookieOverride,
             kindHintOverride: kindHintOverride,
+            providerIDOverride: providerIDOverride,
             onDetailedProgress: onDetailedProgress
         )
     }
@@ -314,6 +327,7 @@ enum CloudExporter {
         sourceURLOverride: String?,
         cookieOverride: String?,
         kindHintOverride: LibraryRoot.Kind?,
+        providerIDOverride: String?,
         onDetailedProgress: (@MainActor @Sendable (ExportProgress) -> Void)?
     ) async throws -> CloudUpdateSummary {
         try Task.checkCancellation()
@@ -332,19 +346,39 @@ enum CloudExporter {
         }
         let effectiveCookie = cookieOverride ?? root.cookie
         let kindHint = kindHintOverride ?? root.effectiveCloudKind ?? existingManifest?.cloudKind
-        let fetched = try await fetcher.fetchPlaylist(sourceURL: rawSource, cookie: effectiveCookie, kindHint: kindHint)
+        let providerHint = providerIDOverride ?? root.effectiveProviderID ?? existingManifest?.resolvedProviderID
+        let fetched: CloudPlaylistResult
+        if let providerFetcher = fetcher as? any CloudProviderPlaylistFetching {
+            fetched = try await providerFetcher.fetchPlaylist(
+                sourceURL: rawSource,
+                cookie: effectiveCookie,
+                kindHint: kindHint,
+                providerIDHint: providerHint
+            )
+        } else {
+            fetched = try await fetcher.fetchPlaylist(sourceURL: rawSource, cookie: effectiveCookie, kindHint: kindHint)
+        }
         try Task.checkCancellation()
+
+        let registry = (fetcher as? LiveCloudService)?.registry ?? CloudProviderRegistry.shared
+        let resolvedProviderID = fetched.providerID ?? providerHint ?? fetched.kind.builtInProviderID
+        let resolvedProvider = registry.provider(forID: resolvedProviderID)
 
         try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
         var trackedMap = existingManifest?.tracks ?? [:]
         var cloudLookupRoot = root
         cloudLookupRoot.kind = fetched.kind
+        cloudLookupRoot.providerID = resolvedProviderID
+        cloudLookupRoot.linkedProviderID = resolvedProviderID
         cloudLookupRoot.sourceURL = rawSource
         cloudLookupRoot.remoteID = fetched.remoteID
         cloudLookupRoot.cookie = effectiveCookie
 
         let now = Date()
-        let sourceSlug = fetched.kind.cloudSourceSlug ?? "bilibili"
+        let sourceSlug = resolvedProvider?.trackCloudSource
+            ?? fetched.kind.cloudSourceSlug
+            ?? resolvedProviderID
+            ?? "cloud"
         let total = fetched.tracks.count
         var addedCount = 0
         var skippedCount = 0
@@ -431,7 +465,8 @@ enum CloudExporter {
             remoteID: fetched.remoteID,
             cloudKind: fetched.kind,
             lastSyncedEpochMs: Int64(Date().timeIntervalSince1970 * 1000),
-            tracks: trackedMap
+            tracks: trackedMap,
+            providerID: resolvedProviderID
         )
         try saveManifest(updatedManifest, in: folderURL)
 

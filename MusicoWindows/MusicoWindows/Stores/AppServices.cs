@@ -1,6 +1,7 @@
 using MusicoWindows.Audio;
 using MusicoWindows.Cloud;
 using MusicoWindows.Core;
+using MusicoWindows.Extensions;
 using MusicoWindows.Update;
 
 namespace MusicoWindows.Stores;
@@ -24,7 +25,13 @@ public sealed class AppServices : IDisposable
         YouTube = new YouTubeClient();
         Bilibili = new BilibiliClient();
         GoogleDrive = new GoogleDriveClient();
-        CloudExporter = new CloudExporter(CloudCache, YouTube, Bilibili, artwork, GoogleDrive);
+        CloudProviders = new CloudProviderRegistry(YouTube, Bilibili, GoogleDrive);
+        Extensions = new ExtensionStore(
+            stateDirectory: StateDirectory,
+            appVersion: UpdateService.GetCurrentAppVersion().ToString());
+        Extensions.BindRegistry(CloudProviders);
+
+        CloudExporter = new CloudExporter(CloudCache, YouTube, Bilibili, artwork, GoogleDrive, CloudProviders);
 
         Library = new LibraryStore(
             stateDirectory: StateDirectory,
@@ -35,7 +42,8 @@ public sealed class AppServices : IDisposable
             youtubeClient: YouTube,
             bilibiliClient: Bilibili,
             cloudCache: CloudCache,
-            googleDriveClient: GoogleDrive);
+            googleDriveClient: GoogleDrive,
+            providerRegistry: CloudProviders);
 
         Downloads = new DownloadManager(CloudExporter, Library);
         Queues = new QueueStore(StateDirectory);
@@ -54,7 +62,8 @@ public sealed class AppServices : IDisposable
             cloudCache: CloudCache,
             youtubeClient: YouTube,
             bilibiliClient: Bilibili,
-            googleDriveClient: GoogleDrive);
+            googleDriveClient: GoogleDrive,
+            providerRegistry: CloudProviders);
     }
 
     public string StateDirectory { get; }
@@ -63,6 +72,8 @@ public sealed class AppServices : IDisposable
     public YouTubeClient YouTube { get; }
     public BilibiliClient Bilibili { get; }
     public GoogleDriveClient GoogleDrive { get; }
+    public CloudProviderRegistry CloudProviders { get; }
+    public ExtensionStore Extensions { get; }
     public CloudExporter CloudExporter { get; }
     public DownloadManager Downloads { get; }
     public LibraryStore Library { get; }

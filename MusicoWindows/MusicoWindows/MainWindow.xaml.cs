@@ -47,7 +47,12 @@ public partial class MainWindow : Window
             OpenUpdateTrackedFolder = root => SaveCloudDialog.ShowTrackedFolderUpdate(_services, root),
             OpenUpdateTrackedSubfolder = (root, relPath) => SaveCloudDialog.ShowTrackedFolderUpdate(_services, root, relPath),
             OpenSongInfo = ShowSongInfo,
-            OpenSearch = OpenSearchWithField
+            OpenSearch = OpenSearchWithField,
+            OpenExtensions = () =>
+            {
+                NavExtensions.IsChecked = true;
+                NavigateTo("extensions");
+            }
         };
 
         BottomPlayerBar.Initialize(_ctx);
@@ -379,6 +384,11 @@ public partial class MainWindow : Window
                 stv.Bind(_ctx);
                 ContentHost.Content = stv;
                 break;
+            case "extensions":
+                var ev = new ExtensionsView();
+                ev.Bind(_ctx);
+                ContentHost.Content = ev;
+                break;
         }
 
         if (slideFromX is double offset)
@@ -539,6 +549,7 @@ public partial class MainWindow : Window
         LblNewPlaylist.Visibility = labelVis;
         LblQueues.Visibility = labelVis;
         LblStats.Visibility = labelVis;
+        LblExtensions.Visibility = labelVis;
         LblTheme.Visibility = labelVis;
         LblLanguage.Visibility = labelVis;
         LblRescan.Visibility = labelVis;
@@ -674,6 +685,7 @@ public partial class MainWindow : Window
             if (EqDialog.IsOpen) { EqDialog.Close(); e.Handled = true; return; }
             if (SleepDialog.IsOpen) { SleepDialog.Close(); e.Handled = true; return; }
             if (FullPlayer.IsOpen) { FullPlayer.Close(); e.Handled = true; return; }
+            if (ContentHost.Content is ExtensionsView ev && ev.HandleEscape()) { e.Handled = true; return; }
         }
 
         if (Keyboard.Modifiers == ModifierKeys.Control)

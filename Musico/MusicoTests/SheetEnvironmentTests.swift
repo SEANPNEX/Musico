@@ -142,6 +142,24 @@ final class SheetEnvironmentTests: XCTestCase {
         try await present(EditCloudTrackingSheet(root: cloudRoot), over: false, attachEmptyHostEnvironment: true)
         try await present(EditCloudTrackingSheet(root: cloudRoot, path: "Sub", folderName: "Sub"), over: false, attachEmptyHostEnvironment: true)
         try await present(DownloadsListView(), over: false, attachEmptyHostEnvironment: true)
+        try await present(ExtensionsView(), over: false, attachEmptyHostEnvironment: true)
+        let sampleExt = InstalledExtension(
+            manifest: ExtensionManifest(
+                apiVersion: 1,
+                id: "com.test.sheet",
+                name: "Sheet Sample",
+                version: "1.0.0",
+                capabilities: [.playlist, .stream],
+                urlPatterns: ["^https://example\\\\.com/.+"],
+                permissions: ExtensionPermissions(hosts: ["example.com"])
+            ),
+            state: ExtensionState(),
+            directoryURL: makeTempDir(),
+            iconData: nil,
+            logs: []
+        )
+        try await present(ExtensionPermissionReviewSheet(extensionItem: sampleExt), over: false, attachEmptyHostEnvironment: true)
+        try await present(ExtensionDetailView(extensionID: sampleExt.id), over: false, attachEmptyHostEnvironment: true)
         try await present(AddSongsToPlaylistSheet(playlistID: UUID()), over: false, attachEmptyHostEnvironment: true)
         try await present(
             NamePromptSheet(
