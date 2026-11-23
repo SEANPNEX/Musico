@@ -373,113 +373,119 @@ class GoogleDriveClient(
         }
 
         val stateMutex = Mutex()
-        val emitMutex = Mutex()
+        val emitChannel = Channel<DriveCrawlBatch>(Channel.UNLIMITED)
         val signal = Channel<Unit>(Channel.UNLIMITED)
         var inFlight = 0
         var completedFolders = 1
 
         coroutineScope {
-            val workerCount = minOf(MAX_CONCURRENT_WORKERS, pendingQueue.size.coerceAtLeast(1))
-            repeat(workerCount) {
-                launch {
-                    while (true) {
-                        val node: DriveFolderNode? = stateMutex.withLock {
-                            if (pendingQueue.isEmpty()) {
-                                if (inFlight == 0) {
+            val emitterJob = launch {
+                for (batch in emitChannel) {
+                    onBatch(batch)
+                }
+            }
+            try {
+                coroutineScope {
+                    val workerCount = minOf(MAX_CONCURRENT_WORKERS, pendingQueue.size.coerceAtLeast(1))
+                    repeat(workerCount) {
+                        launch {
+                            while (true) {
+                                val node: DriveFolderNode? = stateMutex.withLock {
+                                    if (pendingQueue.isEmpty()) {
+                                        if (inFlight == 0) {
+                                            signal.close()
+                                            return@launch
+                                        }
+                                        null
+                                    } else {
+                                        val nextIdx = pickNextFolderIndex(pendingQueue, priorityPathProvider())
+                                        inFlight += 1
+                                        pendingQueue.removeAt(nextIdx)
+                                    }
+                                }
+                                if (node == null) {
+                                    val recv = signal.receiveCatching()
+                                    if (recv.isClosed) return@launch
+                                    continue
+                                }
+
+                                val fetched = try {
+                                    fetchSingleFolder(
+                                        folderId = node.folderId,
+                                        resourceKey = node.resourceKey,
+                                        cookie = cookie,
+                                        folderPath = node.folderPath,
+                                        explicitTitle = node.title,
+                                        depth = node.depth,
+                                        prefetchedResponse = null,
+                                    )
+                                } catch (cancel: CancellationException) {
+                                    throw cancel
+                                } catch (_: Exception) {
+                                    null
+                                }
+
+                                var wakeWorkers = 0
+                                var closeSignal = false
+
+                                stateMutex.withLock {
+                                    inFlight -= 1
+                                    completedFolders += 1
+
+                                    val batchTracks = fetched?.tracks.orEmpty()
+                                    collectedTracks.addAll(batchTracks)
+
+                                    if (fetched != null && node.depth < MAX_FOLDER_DEPTH) {
+                                        for (child in fetched.subfolders) {
+                                            if (visitedFolders.size >= MAX_FOLDERS) break
+                                            if (visitedFolders.add(child.folderId)) {
+                                                pendingQueue.add(child)
+                                                knownFolderPaths.add(child.folderPath)
+                                                wakeWorkers += 1
+                                            }
+                                        }
+                                    }
+
+                                    val doneNow = pendingQueue.isEmpty() && inFlight == 0
+                                    if (doneNow) {
+                                        closeSignal = true
+                                    }
+                                    if (batchTracks.isNotEmpty() || wakeWorkers > 0 || doneNow) {
+                                        emitChannel.trySend(
+                                            DriveCrawlBatch(
+                                                rootRemoteId = rootFolderId,
+                                                rootTitle = rootTitle,
+                                                batchTracks = batchTracks,
+                                                knownFolderPaths = knownFolderPaths.toSet(),
+                                                progress = DriveCrawlProgress(
+                                                    rootTitle = rootTitle,
+                                                    completedFolders = completedFolders,
+                                                    totalDiscoveredFolders = visitedFolders.size,
+                                                    tracksSoFar = collectedTracks.size,
+                                                    isComplete = doneNow,
+                                                ),
+                                            )
+                                        )
+                                    }
+                                }
+
+                                if (wakeWorkers > 0) {
+                                    repeat(minOf(wakeWorkers, MAX_CONCURRENT_WORKERS)) {
+                                        signal.trySend(Unit)
+                                    }
+                                }
+                                if (closeSignal) {
                                     signal.close()
                                     return@launch
                                 }
-                                null
-                            } else {
-                                val nextIdx = pickNextFolderIndex(pendingQueue, priorityPathProvider())
-                                inFlight += 1
-                                pendingQueue.removeAt(nextIdx)
                             }
-                        }
-                        if (node == null) {
-                            val recv = signal.receiveCatching()
-                            if (recv.isClosed) return@launch
-                            continue
-                        }
-
-                        val fetched = try {
-                            fetchSingleFolder(
-                                folderId = node.folderId,
-                                resourceKey = node.resourceKey,
-                                cookie = cookie,
-                                folderPath = node.folderPath,
-                                explicitTitle = node.title,
-                                depth = node.depth,
-                                prefetchedResponse = null,
-                            )
-                        } catch (cancel: CancellationException) {
-                            throw cancel
-                        } catch (_: Exception) {
-                            null
-                        }
-
-                        var batchToEmit: DriveCrawlBatch? = null
-                        var wakeWorkers = 0
-                        var closeSignal = false
-
-                        stateMutex.withLock {
-                            inFlight -= 1
-                            completedFolders += 1
-
-                            val batchTracks = fetched?.tracks.orEmpty()
-                            collectedTracks.addAll(batchTracks)
-
-                            if (fetched != null && node.depth < MAX_FOLDER_DEPTH) {
-                                for (child in fetched.subfolders) {
-                                    if (visitedFolders.size >= MAX_FOLDERS) break
-                                    if (visitedFolders.add(child.folderId)) {
-                                        pendingQueue.add(child)
-                                        knownFolderPaths.add(child.folderPath)
-                                        wakeWorkers += 1
-                                    }
-                                }
-                            }
-
-                            val doneNow = pendingQueue.isEmpty() && inFlight == 0
-                            if (doneNow) {
-                                closeSignal = true
-                            }
-                            if (batchTracks.isNotEmpty() || wakeWorkers > 0 || doneNow) {
-                                batchToEmit = DriveCrawlBatch(
-                                    rootRemoteId = rootFolderId,
-                                    rootTitle = rootTitle,
-                                    batchTracks = batchTracks,
-                                    knownFolderPaths = knownFolderPaths.toSet(),
-                                    progress = DriveCrawlProgress(
-                                        rootTitle = rootTitle,
-                                        completedFolders = completedFolders,
-                                        totalDiscoveredFolders = visitedFolders.size,
-                                        tracksSoFar = collectedTracks.size,
-                                        isComplete = doneNow,
-                                    ),
-                                )
-                            }
-                        }
-
-                        if (wakeWorkers > 0) {
-                            repeat(minOf(wakeWorkers, MAX_CONCURRENT_WORKERS)) {
-                                signal.trySend(Unit)
-                            }
-                        }
-                        if (closeSignal) {
-                            signal.close()
-                        }
-                        batchToEmit?.let { batch ->
-                            emitMutex.withLock {
-                                onBatch(batch)
-                            }
-                        }
-                        if (closeSignal) {
-                            return@launch
                         }
                     }
                 }
+            } finally {
+                emitChannel.close()
             }
+            emitterJob.join()
         }
 
         return CloudPlaylistResult(

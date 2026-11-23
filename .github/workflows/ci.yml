@@ -91,15 +91,19 @@ jobs:
         run: |
           set -o pipefail
           mkdir -p build
+          SIM_UDID="${{ steps.sim.outputs.udid }}"
           for attempt in 1 2 3; do
+            xcrun simctl boot "$SIM_UDID" || true
+            xcrun simctl bootstatus "$SIM_UDID" -b
             if xcodebuild -project Musico.xcodeproj -scheme Musico \
-              -destination "platform=iOS Simulator,id=${{ steps.sim.outputs.udid }}" \
+              -destination "platform=iOS Simulator,id=$SIM_UDID" \
               -derivedDataPath build/DerivedData \
               CODE_SIGNING_ALLOWED=NO \
               test 2>&1 | tee build/ci-test.log; then
               exit 0
             fi
-            grep -q "failed preflight checks" build/ci-test.log || exit 1
+            grep -Eq "failed preflight checks|RPC timeout|Early unexpected exit|XPC connection interrupted" build/ci-test.log || exit 1
+            xcrun simctl shutdown "$SIM_UDID" || true
             sleep 8
           done
           exit 1
