@@ -302,12 +302,17 @@ public static class ExtensionPackageLoader
 
     private static void AssertRequiredHooks(ObjectInstance exports, ExtensionManifest manifest)
     {
-        if (!IsFunction(exports.Get("canHandle")))
+        bool hasSourceCap = manifest.HasCapability(ExtensionCapability.Playlist) ||
+                            manifest.HasCapability(ExtensionCapability.Tree) ||
+                            manifest.HasCapability(ExtensionCapability.Stream);
+
+        if (hasSourceCap && !IsFunction(exports.Get("canHandle")))
         {
             throw new InvalidDataException("Extension must export a 'canHandle' function.");
         }
 
-        if (!IsFunction(exports.Get("fetchCollection")))
+        if ((manifest.HasCapability(ExtensionCapability.Playlist) || manifest.HasCapability(ExtensionCapability.Tree)) &&
+            !IsFunction(exports.Get("fetchCollection")))
         {
             throw new InvalidDataException("Extension must export a 'fetchCollection' function.");
         }
@@ -320,6 +325,11 @@ public static class ExtensionPackageLoader
         if (manifest.HasCapability(ExtensionCapability.Stream) && !IsFunction(exports.Get("resolveStream")))
         {
             throw new InvalidDataException("Extension declares 'stream' capability and must export a 'resolveStream' function.");
+        }
+
+        if (manifest.HasCapability(ExtensionCapability.Lyrics) && !IsFunction(exports.Get("searchLyrics")))
+        {
+            throw new InvalidDataException("Extension declares 'lyrics' capability and must export a 'searchLyrics' function.");
         }
     }
 

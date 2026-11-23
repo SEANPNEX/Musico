@@ -72,8 +72,10 @@ import androidx.compose.ui.unit.dp
 import com.musico.audio.PlayerController
 import com.musico.audio.PlayerUiState
 import com.musico.core.LyricsStore
+import com.musico.extensions.ExtensionStore
 import com.musico.i18n.AppStrings
 import com.musico.i18n.LocalStrings
+import com.musico.lyrics.CloudLyricsService
 import com.musico.model.RepeatMode
 import com.musico.model.SleepMode
 import com.musico.store.LibraryStore
@@ -118,7 +120,9 @@ fun FullPlayerScreen(
     trackActions: TrackActionState,
     onPickLyricsFile: ((Uri) -> Unit) -> Unit,
     onClose: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    cloudLyricsService: CloudLyricsService? = null,
+    extensionStore: ExtensionStore? = null,
 ) {
     val strings = LocalStrings.current
     var activeSheet by remember { mutableStateOf<PlayerModalSheet?>(null) }
@@ -199,6 +203,8 @@ fun FullPlayerScreen(
                                     playerController = playerController,
                                     playerState = playerState,
                                     onPickLyricsFile = onPickLyricsFile,
+                                    cloudLyricsService = cloudLyricsService,
+                                    extensionStore = extensionStore,
                                     embedded = true,
                                     modifier = Modifier.fillMaxSize()
                                 )
@@ -252,6 +258,8 @@ fun FullPlayerScreen(
             playerController = playerController,
             playerState = playerState,
             onPickLyricsFile = onPickLyricsFile,
+            cloudLyricsService = cloudLyricsService,
+            extensionStore = extensionStore,
             onDismiss = { activeSheet = null }
         )
         PlayerModalSheet.EQUALIZER -> EqualizerSheet(

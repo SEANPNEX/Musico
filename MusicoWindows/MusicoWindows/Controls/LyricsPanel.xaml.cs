@@ -1,11 +1,13 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using Microsoft.Win32;
+using MusicoWindows.Cloud;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
@@ -23,7 +25,9 @@ public partial class LyricsPanel : UserControl
     private bool _embedded;
 
     public event Action? CloseRequested;
+    public event Action<Track>? SearchOnlineRequested;
     public event Action<string, string>? ErrorOccurred;
+    public event Action<string, string>? InfoOccurred;
 
     public LyricsPanel()
     {
@@ -46,6 +50,7 @@ public partial class LyricsPanel : UserControl
             {
                 LyricsSource.Imported => L.Get("Lyrics_SourceImported"),
                 LyricsSource.Sidecar => L.Get("Lyrics_SourceSidecar"),
+                LyricsSource.FolderMatch => L.Get("Lyrics_SourceFolderMatch"),
                 LyricsSource.Embedded => L.Get("Lyrics_SourceEmbedded"),
                 _ => string.Empty
             };
@@ -72,10 +77,23 @@ public partial class LyricsPanel : UserControl
         if (_services != null)
         {
             _services.Player.PropertyChanged -= OnPlayerChanged;
+            _services.Lyrics.LyricsChanged -= OnLyricsStoreChanged;
         }
         _services = services;
         _services.Player.PropertyChanged += OnPlayerChanged;
+        _services.Lyrics.LyricsChanged += OnLyricsStoreChanged;
         _ = LoadLyricsAsync(forceReload: true);
+    }
+
+    private void OnLyricsStoreChanged(string trackId)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            if (_services?.Player.CurrentTrack?.Id == trackId)
+            {
+                _ = LoadLyricsAsync(forceReload: true);
+            }
+        });
     }
 
     private void OnPlayerChanged(object? sender, PropertyChangedEventArgs e)
@@ -104,6 +122,8 @@ public partial class LyricsPanel : UserControl
         _loadedTrackId = track?.Id;
         _activeLineIndex = null;
         HeaderTitleText.Text = track?.Title ?? L.Get("Lyrics_Title");
+        SearchOnlineButton.IsEnabled = track != null;
+        EmptySearchOnlineButton.IsEnabled = track != null;
         ImportButton.IsEnabled = track != null;
         EmptyImportButton.IsEnabled = track != null;
 
@@ -121,7 +141,9 @@ public partial class LyricsPanel : UserControl
         var resolved = _services.Lyrics.Resolve(
             track.Id,
             _services.Library.GetFilePath(track),
-            embedded);
+            embedded,
+            track.Title,
+            track.Artist);
 
         _lyrics = resolved?.Lyrics;
         _source = resolved?.Source;
@@ -135,7 +157,10 @@ public partial class LyricsPanel : UserControl
 
         bool hasTrack = _services?.Player.CurrentTrack != null;
         bool hasImported = hasTrack && _services!.Lyrics.HasImported(_services.Player.CurrentTrack!.Id);
+        string? audioPath = hasTrack ? _services!.Library.GetFilePath(_services.Player.CurrentTrack!) : null;
+        bool canExport = hasTrack && _lyrics is { Lines.Count: > 0 } && _services!.Lyrics.CanExportSidecar(audioPath);
         RemoveButton.Visibility = hasImported ? Visibility.Visible : Visibility.Collapsed;
+        ExportSidecarButton.Visibility = canExport ? Visibility.Visible : Visibility.Collapsed;
 
         UpdateSourceTagText();
 
@@ -215,6 +240,39 @@ public partial class LyricsPanel : UserControl
                     // Element not yet measured
                 }
             });
+        }
+    }
+
+    private void SearchOnline_Click(object sender, RoutedEventArgs e)
+    {
+        if (_services?.Player.CurrentTrack is not { } track) return;
+        SearchOnlineRequested?.Invoke(track);
+    }
+
+    private void ExportSidecar_Click(object sender, RoutedEventArgs e)
+    {
+        if (_services?.Player.CurrentTrack is not { } track) return;
+        string? audioPath = _services.Library.GetFilePath(track);
+        if (string.IsNullOrWhiteSpace(audioPath)) return;
+
+        string? lrcText = _services.Lyrics.ReadRawImportedText(track.Id);
+        if (string.IsNullOrWhiteSpace(lrcText) && _lyrics is { Lines.Count: > 0 })
+        {
+            lrcText = string.Join("\n", _lyrics.Lines.Select(line =>
+                line.TimeSeconds is double t
+                    ? $"{CloudLyricsFormatter.FormatLrcTimestamp(t)}{line.Text}"
+                    : line.Text));
+        }
+        if (string.IsNullOrWhiteSpace(lrcText)) return;
+
+        try
+        {
+            _services.Lyrics.ExportSidecarLyrics(lrcText, audioPath);
+            InfoOccurred?.Invoke(L.Get("Lyrics_ExportSuccessTitle"), L.Get("Lyrics_ExportSuccessMsg"));
+        }
+        catch (Exception ex)
+        {
+            ErrorOccurred?.Invoke(L.Get("Lyrics_CouldNotSaveTitle"), ex.Message);
         }
     }
 

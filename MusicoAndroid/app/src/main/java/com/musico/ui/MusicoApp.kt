@@ -140,6 +140,8 @@ private fun MusicoAppContent(
     val playerController = appContainer.playerController
     val updateManager = appContainer.updateManager
     val cloudExporter = appContainer.cloudExporter
+    val extensionStore = appContainer.extensionStore
+    val cloudLyricsService = appContainer.cloudLyricsService
 
     LaunchedEffect(updateManager) {
         updateManager.checkForUpdates(silent = true)
@@ -333,6 +335,8 @@ private fun MusicoAppContent(
                                                 playerController = playerController,
                                                 playerState = playerState,
                                                 onPickLyricsFile = onPickLyricsFile,
+                                                cloudLyricsService = cloudLyricsService,
+                                                extensionStore = extensionStore,
                                                 embedded = true,
                                                 modifier = Modifier.fillMaxSize()
                                             )
@@ -404,6 +408,8 @@ private fun MusicoAppContent(
                 playerState = playerState,
                 trackActions = trackActions,
                 onPickLyricsFile = onPickLyricsFile,
+                cloudLyricsService = cloudLyricsService,
+                extensionStore = extensionStore,
                 onClose = { showFullPlayer = false }
             )
         }

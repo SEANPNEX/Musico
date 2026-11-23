@@ -22,12 +22,16 @@ public partial class FullPlayerView : UserControl
     public event Action? CloseRequested;
     public event Action? OpenEqualizerRequested;
     public event Action? OpenSleepTimerRequested;
+    public event Action<Track>? SearchOnlineLyricsRequested;
     public event Action<string, string>? ErrorOccurred;
+    public event Action<string, string>? InfoOccurred;
 
     public FullPlayerView()
     {
         InitializeComponent();
+        EmbeddedLyrics.SearchOnlineRequested += track => SearchOnlineLyricsRequested?.Invoke(track);
         EmbeddedLyrics.ErrorOccurred += (title, msg) => ErrorOccurred?.Invoke(title, msg);
+        EmbeddedLyrics.InfoOccurred += (title, msg) => InfoOccurred?.Invoke(title, msg);
         LocalizationManager.LanguageChanged += _ => RefreshAll();
     }
 

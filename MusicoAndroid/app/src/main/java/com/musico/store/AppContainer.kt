@@ -75,6 +75,10 @@ class AppContainer(context: Context) {
     val queueStore: QueueStore = QueueStore(stateDir)
     val historyStore: PlayHistoryStore = PlayHistoryStore(stateDir)
     val lyricsStore: LyricsStore = LyricsStore(File(stateDir, "lyrics"))
+    val cloudLyricsService: com.musico.lyrics.CloudLyricsService = com.musico.lyrics.CloudLyricsService(
+        httpClient = cloudHttpClient,
+        extensionSearch = { extId, query -> extensionStore.searchLyrics(extId, query) },
+    )
     val languageStore: LanguageStore = LanguageStore(appContext)
     val updateManager: UpdateManager = UpdateManager(appContext)
     val audioEngine: AudioEngine = AudioEngine(appContext)

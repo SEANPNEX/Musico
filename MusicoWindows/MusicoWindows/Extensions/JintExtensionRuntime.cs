@@ -342,6 +342,90 @@ public sealed class JintExtensionRuntime
         return result;
     }
 
+    public async Task<List<ExtLyricsCandidateSpec>> SearchLyricsAsync(
+        ExtensionManifest manifest,
+        string scriptSource,
+        CloudLyricsQuery query,
+        string? proxyUrl = null,
+        IExtensionHostServices? host = null,
+        CancellationToken ct = default)
+    {
+        var reqObj = new Dictionary<string, object?>
+        {
+            ["title"] = query.TrimmedTitle,
+            ["artist"] = query.TrimmedArtist
+        };
+        if (query.TrimmedAlbum is { } album)
+        {
+            reqObj["album"] = album;
+        }
+        if (query.DurationSec is double dur && !double.IsNaN(dur) && !double.IsInfinity(dur) && dur > 0)
+        {
+            reqObj["durationSec"] = dur;
+        }
+
+        JsonElement payload = await InvokeHookAsync<JsonElement>(
+            manifest,
+            scriptSource,
+            hookName: "searchLyrics",
+            requestPayload: reqObj,
+            includeCtx: true,
+            timeout: _shortHookTimeout,
+            proxyUrl: proxyUrl,
+            host: host,
+            ct: ct,
+            allowNullResult: true).ConfigureAwait(false);
+
+        if (payload.ValueKind == JsonValueKind.Undefined || payload.ValueKind == JsonValueKind.Null)
+        {
+            return [];
+        }
+
+        try
+        {
+            if (payload.ValueKind == JsonValueKind.Array)
+            {
+                return JsonSerializer.Deserialize<List<ExtLyricsCandidateSpec>>(payload.GetRawText(), ExtensionJson.Options) ?? [];
+            }
+
+            if (payload.ValueKind == JsonValueKind.Object)
+            {
+                ExtLyricsSearchEnvelope? env = JsonSerializer.Deserialize<ExtLyricsSearchEnvelope>(payload.GetRawText(), ExtensionJson.Options);
+                return env?.Candidates ?? env?.Results ?? [];
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionRuntimeError,
+                $"Invalid extension lyrics schema: {ex.Message}",
+                ex);
+        }
+
+        throw new CloudServiceException(
+            CloudErrorCode.ExtensionRuntimeError,
+            "Extension searchLyrics must return an array or candidate object.");
+    }
+
+    public sealed class ExtLyricsCandidateSpec
+    {
+        public string? ExternalId { get; set; }
+        public string? Title { get; set; }
+        public string? Artist { get; set; }
+        public string? Album { get; set; }
+        public double? DurationSec { get; set; }
+        public string? SyncedLyrics { get; set; }
+        public string? PlainLyrics { get; set; }
+        public string? TranslatedLyrics { get; set; }
+        public bool? Instrumental { get; set; }
+    }
+
+    private sealed class ExtLyricsSearchEnvelope
+    {
+        public List<ExtLyricsCandidateSpec>? Candidates { get; set; }
+        public List<ExtLyricsCandidateSpec>? Results { get; set; }
+    }
+
     private Task<TResult> InvokeHookAsync<TResult>(
         ExtensionManifest manifest,
         string scriptSource,
@@ -351,7 +435,8 @@ public sealed class JintExtensionRuntime
         TimeSpan timeout,
         string? proxyUrl,
         IExtensionHostServices? host,
-        CancellationToken ct)
+        CancellationToken ct,
+        bool allowNullResult = false)
     {
         ArgumentNullException.ThrowIfNull(manifest);
         if (string.IsNullOrWhiteSpace(scriptSource))
@@ -415,6 +500,10 @@ public sealed class JintExtensionRuntime
 
                 if (settled.IsNull() || settled.IsUndefined())
                 {
+                    if (allowNullResult)
+                    {
+                        return default!;
+                    }
                     throw new CloudServiceException(
                         CloudErrorCode.ExtensionRuntimeError,
                         $"Extension hook '{hookName}' returned null or undefined.");

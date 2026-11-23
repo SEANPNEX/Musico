@@ -541,6 +541,7 @@ public partial class ExtensionsView : UserControl
         ExtensionCapability.Stream => L.Get("Extensions_Capability_Stream"),
         ExtensionCapability.Cookie => L.Get("Extensions_Capability_Cookie"),
         ExtensionCapability.Proxy => L.Get("Extensions_Capability_Proxy"),
+        ExtensionCapability.Lyrics => L.Get("Extensions_Capability_Lyrics"),
         _ => cap.ToString()
     };
 

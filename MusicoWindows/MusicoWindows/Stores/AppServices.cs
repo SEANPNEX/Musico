@@ -49,6 +49,10 @@ public sealed class AppServices : IDisposable
         Queues = new QueueStore(StateDirectory);
         History = new PlayHistoryStore(StateDirectory);
         Lyrics = new LyricsStore(Path.Combine(StateDirectory, "Lyrics"));
+        CloudLyrics = new CloudLyricsService(
+            customHandler: null,
+            appVersion: UpdateService.GetCurrentAppVersion().ToString(),
+            extensionSearch: (extId, query, ct) => Extensions.SearchLyricsAsync(extId, query, proxyUrl: null, ct: ct));
         AudioEngine = new AudioEngine();
         Smtc = new SmtcBridge();
         Update = new UpdateService(stateDirectory: StateDirectory);
@@ -80,6 +84,7 @@ public sealed class AppServices : IDisposable
     public QueueStore Queues { get; }
     public PlayHistoryStore History { get; }
     public LyricsStore Lyrics { get; }
+    public CloudLyricsService CloudLyrics { get; }
     public AudioEngine AudioEngine { get; }
     public SmtcBridge Smtc { get; }
     public UpdateService Update { get; }

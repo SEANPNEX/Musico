@@ -867,4 +867,5 @@ private fun capabilityLabel(cap: ExtensionCapability, strings: AppStrings): Stri
     ExtensionCapability.STREAM -> strings.capabilityStream
     ExtensionCapability.COOKIE -> strings.capabilityCookie
     ExtensionCapability.PROXY -> strings.capabilityProxy
+    ExtensionCapability.LYRICS -> strings.capabilityLyrics
 }

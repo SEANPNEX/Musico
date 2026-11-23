@@ -38,6 +38,9 @@ enum class ExtensionCapability(val wireName: String) {
 
     @SerialName("proxy")
     PROXY("proxy"),
+
+    @SerialName("lyrics")
+    LYRICS("lyrics"),
     ;
 
     companion object {
@@ -253,8 +256,13 @@ object ExtensionManifestValidator {
         require(manifest.capabilities.isNotEmpty()) {
             "Extension manifest.capabilities must not be empty"
         }
-        require(manifest.urlPatterns.isNotEmpty()) {
-            "Extension manifest.urlPatterns must not be empty"
+        val requiresSourcePatterns = manifest.capabilities.any {
+            it == ExtensionCapability.PLAYLIST || it == ExtensionCapability.TREE || it == ExtensionCapability.STREAM
+        }
+        if (requiresSourcePatterns) {
+            require(manifest.urlPatterns.isNotEmpty()) {
+                "Extension manifest.urlPatterns must not be empty"
+            }
         }
         for (pattern in manifest.urlPatterns) {
             runCatching { Regex(pattern) }.getOrElse { err ->

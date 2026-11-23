@@ -7,6 +7,7 @@ enum ExtensionCapability: String, Codable, Hashable, CaseIterable, Sendable {
     case stream
     case cookie
     case proxy
+    case lyrics
 
     @MainActor
     var localizedTitle: String {
@@ -16,6 +17,7 @@ enum ExtensionCapability: String, Codable, Hashable, CaseIterable, Sendable {
         case .stream: L10n.tr("Audio Stream Resolution")
         case .cookie: L10n.tr("Cookie Authentication")
         case .proxy: L10n.tr("Proxy Support")
+        case .lyrics: L10n.tr("Lyrics Search")
         }
     }
 
@@ -27,6 +29,7 @@ enum ExtensionCapability: String, Codable, Hashable, CaseIterable, Sendable {
         case .stream: L10n.tr("Resolve playable audio stream URLs and headers.")
         case .cookie: L10n.tr("Accept an optional per-folder authentication cookie.")
         case .proxy: L10n.tr("Use system proxy configuration for requests.")
+        case .lyrics: L10n.tr("Search online lyrics for playing songs.")
         }
     }
 }
@@ -269,9 +272,13 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
     var badgeLabel: String? = nil
     var entry: String? = nil
     var capabilities: [ExtensionCapability]
-    var urlPatterns: [String]
+    var urlPatterns: [String] = []
     var permissions: ExtensionPermissions
     var settings: [ExtensionSettingSpec]? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case apiVersion, id, name, version, author, description, badgeLabel, entry, capabilities, urlPatterns, permissions, settings
+    }
 
     var providerID: String { "ext.\(id)" }
 
@@ -308,7 +315,8 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
         guard !capabilities.isEmpty else {
             throw ExtensionManifestError.missingRequiredField("capabilities")
         }
-        guard !urlPatterns.isEmpty else {
+        let requiresSourcePatterns = capabilities.contains(where: { $0 == .playlist || $0 == .tree || $0 == .stream })
+        if requiresSourcePatterns && urlPatterns.isEmpty {
             throw ExtensionManifestError.missingRequiredField("urlPatterns")
         }
         for pattern in urlPatterns {
@@ -346,6 +354,24 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return false }
         let range = NSRange(value.startIndex..<value.endIndex, in: value)
         return regex.firstMatch(in: value, range: range) != nil
+    }
+}
+
+extension ExtensionManifest {
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.apiVersion = try c.decode(Int.self, forKey: .apiVersion)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.version = try c.decode(String.self, forKey: .version)
+        self.author = try c.decodeIfPresent(String.self, forKey: .author)
+        self.description = try c.decodeIfPresent(String.self, forKey: .description)
+        self.badgeLabel = try c.decodeIfPresent(String.self, forKey: .badgeLabel)
+        self.entry = try c.decodeIfPresent(String.self, forKey: .entry)
+        self.capabilities = try c.decode([ExtensionCapability].self, forKey: .capabilities)
+        self.urlPatterns = try c.decodeIfPresent([String].self, forKey: .urlPatterns) ?? []
+        self.permissions = try c.decode(ExtensionPermissions.self, forKey: .permissions)
+        self.settings = try c.decodeIfPresent([ExtensionSettingSpec].self, forKey: .settings)
     }
 }
 

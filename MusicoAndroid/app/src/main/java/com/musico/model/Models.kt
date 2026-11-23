@@ -342,6 +342,7 @@ data class Lyrics(
 enum class LyricsSource {
     IMPORTED,
     SIDECAR,
+    FOLDER_MATCH,
     EMBEDDED,
 }
 

@@ -34,11 +34,22 @@
                 </StackPanel>
 
                 <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                    <Button x:Name="SearchOnlineButton"
+                            Style="{StaticResource Win10IconButtonStyle}"
+                            Content="&#xE721;"
+                            ToolTip="{DynamicResource Str_Lyrics_SearchOnlineTooltip}"
+                            Click="SearchOnline_Click" />
                     <Button x:Name="ImportButton"
                             Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE8E5;"
                             ToolTip="{DynamicResource Str_Lyrics_ImportTooltip}"
                             Click="Import_Click" />
+                    <Button x:Name="ExportSidecarButton"
+                            Style="{StaticResource Win10IconButtonStyle}"
+                            Content="&#xE74E;"
+                            ToolTip="{DynamicResource Str_Lyrics_ExportSidecarTooltip}"
+                            Visibility="Collapsed"
+                            Click="ExportSidecar_Click" />
                     <Button x:Name="RemoveButton"
                             Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE74D;"
@@ -89,8 +100,14 @@
                            TextWrapping="Wrap"
                            TextAlignment="Center"
                            Margin="0,0,0,16" />
-                <Button x:Name="EmptyImportButton"
+                <Button x:Name="EmptySearchOnlineButton"
                         Style="{StaticResource Win10PrimaryButtonStyle}"
+                        Content="{DynamicResource Str_Lyrics_SearchOnline}"
+                        HorizontalAlignment="Center"
+                        Margin="0,0,0,8"
+                        Click="SearchOnline_Click" />
+                <Button x:Name="EmptyImportButton"
+                        Style="{StaticResource Win10ButtonStyle}"
                         Content="{DynamicResource Str_Lyrics_ImportFromFile}"
                         HorizontalAlignment="Center"
                         Click="Import_Click" />

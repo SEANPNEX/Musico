@@ -14,7 +14,8 @@ public enum ExtensionCapability
     Tree,
     Stream,
     Cookie,
-    Proxy
+    Proxy,
+    Lyrics
 }
 
 [JsonConverter(typeof(ExtensionSettingTypeJsonConverter))]
@@ -37,6 +38,7 @@ public sealed class ExtensionCapabilityJsonConverter : JsonConverter<ExtensionCa
             "stream" => ExtensionCapability.Stream,
             "cookie" => ExtensionCapability.Cookie,
             "proxy" => ExtensionCapability.Proxy,
+            "lyrics" => ExtensionCapability.Lyrics,
             _ => throw new JsonException($"Unsupported extension capability: '{raw}'.")
         };
     }
@@ -50,6 +52,7 @@ public sealed class ExtensionCapabilityJsonConverter : JsonConverter<ExtensionCa
             ExtensionCapability.Stream => "stream",
             ExtensionCapability.Cookie => "cookie",
             ExtensionCapability.Proxy => "proxy",
+            ExtensionCapability.Lyrics => "lyrics",
             _ => value.ToString().ToLowerInvariant()
         });
     }
@@ -396,18 +399,23 @@ public static class ExtensionManifestValidator
             throw new InvalidDataException("Extension manifest.capabilities must declare at least one capability.");
         }
 
+        bool hasSourceCap = manifest.HasCapability(ExtensionCapability.Playlist) ||
+                            manifest.HasCapability(ExtensionCapability.Tree) ||
+                            manifest.HasCapability(ExtensionCapability.Stream);
+
         if (!manifest.HasCapability(ExtensionCapability.Playlist) &&
-            !manifest.HasCapability(ExtensionCapability.Tree))
+            !manifest.HasCapability(ExtensionCapability.Tree) &&
+            !manifest.HasCapability(ExtensionCapability.Lyrics))
         {
-            throw new InvalidDataException("Extension manifest.capabilities must include 'playlist' or 'tree'.");
+            throw new InvalidDataException("Extension manifest.capabilities must include 'playlist', 'tree', or 'lyrics'.");
         }
 
-        if (manifest.UrlPatterns is null || manifest.UrlPatterns.Count == 0)
+        if (hasSourceCap && (manifest.UrlPatterns is null || manifest.UrlPatterns.Count == 0))
         {
             throw new InvalidDataException("Extension manifest.urlPatterns must include at least one regex pattern.");
         }
 
-        foreach (string pattern in manifest.UrlPatterns)
+        foreach (string pattern in manifest.UrlPatterns ?? [])
         {
             if (string.IsNullOrWhiteSpace(pattern))
             {

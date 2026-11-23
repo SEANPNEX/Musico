@@ -318,6 +318,7 @@ public enum LyricsSource
 {
     Imported,
     Sidecar,
+    FolderMatch,
     Embedded
 }
 

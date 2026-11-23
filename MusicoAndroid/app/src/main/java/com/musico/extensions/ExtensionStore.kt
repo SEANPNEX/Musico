@@ -12,6 +12,10 @@ import com.musico.core.Persistence
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
+import com.musico.lyrics.CloudLyricsCandidate
+import com.musico.lyrics.CloudLyricsException
+import com.musico.lyrics.CloudLyricsExtensionDescriptor
+import com.musico.lyrics.CloudLyricsQuery
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
@@ -125,9 +129,55 @@ class ExtensionStore(
 
     private fun syncProviderRegistry() {
         val active = _extensions.value
-            .filter { it.enabled }
+            .filter { ext ->
+                ext.enabled && ext.manifest.capabilities.any {
+                    it == ExtensionCapability.PLAYLIST || it == ExtensionCapability.TREE || it == ExtensionCapability.STREAM
+                }
+            }
             .map { ext -> JsExtensionCloudProvider(ext, runtime) }
         providerRegistry.setExtensionProviders(active)
+    }
+
+    fun activeLyricsExtensions(): List<CloudLyricsExtensionDescriptor> =
+        _extensions.value
+            .filter { it.enabled && ExtensionCapability.LYRICS in it.manifest.capabilities }
+            .map { CloudLyricsExtensionDescriptor(id = it.id, name = it.manifest.effectiveBadgeLabel) }
+
+    suspend fun searchLyrics(extensionId: String, query: CloudLyricsQuery): List<CloudLyricsCandidate> {
+        val ext = _extensions.value.firstOrNull {
+            it.id == extensionId && it.enabled && ExtensionCapability.LYRICS in it.manifest.capabilities
+        } ?: throw CloudLyricsException.ProviderUnavailable(extensionId)
+
+        val specs = runtime.searchLyrics(
+            extension = ext,
+            title = query.trimmedTitle,
+            artist = query.trimmedArtist,
+            album = query.trimmedAlbum,
+            durationSec = query.durationSec,
+        )
+        return specs.mapIndexedNotNull { index, spec ->
+            val itemTitle = spec.title?.trim().orEmpty()
+            val itemArtist = spec.artist?.trim().orEmpty()
+            val synced = spec.syncedLyrics?.trim()?.takeIf { it.isNotEmpty() }
+            val plain = spec.plainLyrics?.trim()?.takeIf { it.isNotEmpty() }
+            val trans = spec.translatedLyrics?.trim()?.takeIf { it.isNotEmpty() }
+            val isInst = spec.instrumental == true
+            val extItemId = spec.externalId?.trim()?.takeIf { it.isNotEmpty() } ?: "row-$index"
+            val candidate = CloudLyricsCandidate(
+                id = "ext.$extensionId:$extItemId",
+                providerId = "ext.$extensionId",
+                sourceName = ext.manifest.effectiveBadgeLabel,
+                title = itemTitle.ifEmpty { query.trimmedTitle },
+                artist = itemArtist.ifEmpty { query.trimmedArtist },
+                album = spec.album?.trim()?.takeIf { it.isNotEmpty() },
+                durationSec = spec.durationSec,
+                isInstrumental = isInst,
+                syncedLyrics = synced,
+                plainLyrics = plain,
+                translatedLyrics = trans,
+            )
+            candidate.takeIf { it.hasUsableContent }
+        }
     }
 
     fun availabilityForProvider(providerId: String?): CloudProviderAvailability {

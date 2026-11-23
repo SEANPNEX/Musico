@@ -104,13 +104,89 @@ public sealed class ExtensionStore : IExtensionHostServices
         List<InstalledExtension> enabled;
         lock (_stateLock)
         {
-            enabled = _extensions.Where(e => e.IsEnabled).ToList();
+            enabled = _extensions
+                .Where(e => e.IsEnabled && (
+                    e.Manifest.HasCapability(ExtensionCapability.Playlist) ||
+                    e.Manifest.HasCapability(ExtensionCapability.Tree) ||
+                    e.Manifest.HasCapability(ExtensionCapability.Stream)))
+                .ToList();
         }
 
         var providers = enabled
             .Select(ext => (ICloudSourceProvider)new JsExtensionCloudProvider(ext, this, _runtime))
             .ToList();
         registry.SyncExtensionProviders(providers);
+    }
+
+    public List<CloudLyricsExtensionDescriptor> GetActiveLyricsExtensions()
+    {
+        lock (_stateLock)
+        {
+            return _extensions
+                .Where(e => e.IsEnabled && e.Manifest.HasCapability(ExtensionCapability.Lyrics))
+                .Select(e => new CloudLyricsExtensionDescriptor(e.Id, e.Manifest.EffectiveBadgeLabel))
+                .ToList();
+        }
+    }
+
+    public async Task<List<CloudLyricsCandidate>> SearchLyricsAsync(
+        string extensionId,
+        CloudLyricsQuery query,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        InstalledExtension? ext;
+        lock (_stateLock)
+        {
+            ext = _extensions.FirstOrDefault(e =>
+                string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase) &&
+                e.IsEnabled &&
+                e.Manifest.HasCapability(ExtensionCapability.Lyrics));
+        }
+        if (ext is null)
+        {
+            throw CloudLyricsException.ProviderUnavailable(extensionId);
+        }
+
+        string script = File.ReadAllText(ext.EntryScriptPath, Encoding.UTF8);
+        List<JintExtensionRuntime.ExtLyricsCandidateSpec> specs = await _runtime.SearchLyricsAsync(
+            ext.Manifest,
+            script,
+            query,
+            proxyUrl: proxyUrl,
+            host: this,
+            ct: ct).ConfigureAwait(false);
+
+        var candidates = new List<CloudLyricsCandidate>(specs.Count);
+        for (int i = 0; i < specs.Count; i++)
+        {
+            var s = specs[i];
+            string title = (s.Title ?? string.Empty).Trim();
+            string artist = (s.Artist ?? string.Empty).Trim();
+            string? synced = string.IsNullOrWhiteSpace(s.SyncedLyrics) ? null : s.SyncedLyrics.Trim();
+            string? plain = string.IsNullOrWhiteSpace(s.PlainLyrics) ? null : s.PlainLyrics.Trim();
+            string? trans = string.IsNullOrWhiteSpace(s.TranslatedLyrics) ? null : s.TranslatedLyrics.Trim();
+            bool isInst = s.Instrumental == true;
+            string itemId = string.IsNullOrWhiteSpace(s.ExternalId) ? $"row-{i}" : s.ExternalId.Trim();
+
+            var cand = new CloudLyricsCandidate(
+                Id: $"ext.{ext.Id}:{itemId}",
+                ProviderId: $"ext.{ext.Id}",
+                SourceName: ext.Manifest.EffectiveBadgeLabel,
+                Title: title.Length > 0 ? title : query.TrimmedTitle,
+                Artist: artist.Length > 0 ? artist : query.TrimmedArtist,
+                Album: string.IsNullOrWhiteSpace(s.Album) ? null : s.Album.Trim(),
+                DurationSec: s.DurationSec,
+                IsInstrumental: isInst,
+                SyncedLyrics: synced,
+                PlainLyrics: plain,
+                TranslatedLyrics: trans);
+            if (cand.HasUsableContent)
+            {
+                candidates.Add(cand);
+            }
+        }
+        return candidates;
     }
 
     public async Task<InstalledExtension> ImportFromFileAsync(string filePath, CancellationToken ct = default)

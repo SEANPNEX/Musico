@@ -151,6 +151,7 @@ final class ExtensionStore {
     @ObservationIgnored private let longTimeoutMs: Int
     @ObservationIgnored private let lookupLock = NSLock()
     @ObservationIgnored private nonisolated(unsafe) var installedNamesByProviderID: [String: String] = [:]
+    @ObservationIgnored private nonisolated(unsafe) var lyricsRuntimesByID: [String: (badgeLabel: String, runtime: JSExtensionRuntime)] = [:]
 
     nonisolated init(
         baseDirectory: URL = ExtensionStore.defaultBaseDirectory,
@@ -171,7 +172,14 @@ final class ExtensionStore {
         self.installedNamesByProviderID = Dictionary(
             uniqueKeysWithValues: loaded.map { ($0.providerID, $0.manifest.name) }
         )
-        Self.syncRegistry(extensions: loaded, registry: registry, transport: transport, hostStorage: hostStorage, shortTimeoutMs: shortTimeoutMs, longTimeoutMs: longTimeoutMs)
+        self.lyricsRuntimesByID = Self.syncRegistry(
+            extensions: loaded,
+            registry: registry,
+            transport: transport,
+            hostStorage: hostStorage,
+            shortTimeoutMs: shortTimeoutMs,
+            longTimeoutMs: longTimeoutMs
+        )
 
         self.hostStorage.onLogsChanged = { [weak self] extID in
             Task { @MainActor [weak self] in
@@ -408,12 +416,60 @@ final class ExtensionStore {
         try? Persistence.save(ext.state, to: stateURL)
     }
 
+    var activeLyricsExtensions: [CloudLyricsExtensionDescriptor] {
+        extensions
+            .filter { $0.isActive && $0.manifest.capabilities.contains(.lyrics) }
+            .map { CloudLyricsExtensionDescriptor(id: $0.id, name: $0.manifest.effectiveBadgeLabel) }
+    }
+
+    nonisolated func makeCloudLyricsService() -> CloudLyricsService {
+        CloudLyricsService(transport: transport) { [weak self] extID, query in
+            guard let self else { throw CloudLyricsError.providerUnavailable(extID) }
+            return try await self.searchLyrics(extensionID: extID, query: query)
+        }
+    }
+
+    nonisolated func searchLyrics(extensionID: String, query: CloudLyricsQuery) async throws -> [CloudLyricsCandidate] {
+        let entry: (badgeLabel: String, runtime: JSExtensionRuntime)? = lookupLock.withLock {
+            lyricsRuntimesByID[extensionID]
+        }
+        guard let entry else {
+            throw CloudLyricsError.providerUnavailable(extensionID)
+        }
+        let specs = try await entry.runtime.searchLyrics(
+            title: query.trimmedTitle,
+            artist: query.trimmedArtist,
+            album: query.trimmedAlbum,
+            durationSec: query.durationSec
+        )
+        return specs.enumerated().compactMap { index, spec -> CloudLyricsCandidate? in
+            let title = (spec.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let artist = (spec.artist ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let synced = spec.syncedLyrics?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let plain = spec.plainLyrics?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trans = spec.translatedLyrics?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let isInst = spec.instrumental ?? false
+            let extItemID = (spec.externalId?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 } ?? "row-\(index)"
+            let candidate = CloudLyricsCandidate(
+                id: "ext.\(extensionID):\(extItemID)",
+                providerID: "ext.\(extensionID)",
+                sourceName: entry.badgeLabel,
+                title: title.isEmpty ? query.trimmedTitle : title,
+                artist: artist.isEmpty ? query.trimmedArtist : artist,
+                album: spec.album?.trimmingCharacters(in: .whitespacesAndNewlines),
+                durationSec: spec.durationSec,
+                isInstrumental: isInst,
+                syncedLyrics: (synced?.isEmpty == false) ? synced : nil,
+                plainLyrics: (plain?.isEmpty == false) ? plain : nil,
+                translatedLyrics: (trans?.isEmpty == false) ? trans : nil
+            )
+            return candidate.hasUsableContent ? candidate : nil
+        }
+    }
+
     private func syncAll() {
         let map = Dictionary(uniqueKeysWithValues: extensions.map { ($0.providerID, $0.manifest.name) })
-        lookupLock.withLock {
-            installedNamesByProviderID = map
-        }
-        Self.syncRegistry(
+        let lyricsMap = Self.syncRegistry(
             extensions: extensions,
             registry: registry,
             transport: transport,
@@ -421,6 +477,10 @@ final class ExtensionStore {
             shortTimeoutMs: shortTimeoutMs,
             longTimeoutMs: longTimeoutMs
         )
+        lookupLock.withLock {
+            installedNamesByProviderID = map
+            lyricsRuntimesByID = lyricsMap
+        }
     }
 
     private func filterCompatibleSettings(
@@ -432,6 +492,7 @@ final class ExtensionStore {
         return existing.filter { validKeys.contains($0.key) }
     }
 
+    @discardableResult
     private nonisolated static func syncRegistry(
         extensions: [InstalledExtension],
         registry: CloudProviderRegistry,
@@ -439,8 +500,9 @@ final class ExtensionStore {
         hostStorage: ExtensionHostStorage,
         shortTimeoutMs: Int,
         longTimeoutMs: Int
-    ) {
+    ) -> [String: (badgeLabel: String, runtime: JSExtensionRuntime)] {
         var providers: [any CloudSourceProvider] = []
+        var lyricsRuntimes: [String: (badgeLabel: String, runtime: JSExtensionRuntime)] = [:]
         for ext in extensions where ext.isActive {
             let scriptURL = ext.directoryURL.appendingPathComponent(ext.manifest.effectiveEntry)
             let fallbackURL = ext.directoryURL.appendingPathComponent("index.js")
@@ -456,9 +518,18 @@ final class ExtensionStore {
                 shortTimeoutMs: shortTimeoutMs,
                 longTimeoutMs: longTimeoutMs
             )
-            providers.append(JSExtensionCloudProvider(manifest: ext.manifest, runtime: runtime))
+            let hasCloudSourceCap = ext.manifest.capabilities.contains {
+                $0 == .playlist || $0 == .tree || $0 == .stream
+            }
+            if hasCloudSourceCap {
+                providers.append(JSExtensionCloudProvider(manifest: ext.manifest, runtime: runtime))
+            }
+            if ext.manifest.capabilities.contains(.lyrics) {
+                lyricsRuntimes[ext.manifest.id] = (badgeLabel: ext.manifest.effectiveBadgeLabel, runtime: runtime)
+            }
         }
         registry.replaceExtensions(providers)
+        return lyricsRuntimes
     }
 
     private nonisolated static func loadAllFromDisk(

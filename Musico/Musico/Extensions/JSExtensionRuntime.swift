@@ -110,6 +110,23 @@ struct JSStreamResolution: Codable, Equatable, Sendable {
     var contentLength: Int64?
 }
 
+struct JSLyricsCandidateSpec: Codable, Equatable, Sendable {
+    var externalId: String?
+    var title: String?
+    var artist: String?
+    var album: String?
+    var durationSec: Double?
+    var syncedLyrics: String?
+    var plainLyrics: String?
+    var translatedLyrics: String?
+    var instrumental: Bool?
+}
+
+private struct JSLyricsSearchEnvelope: Codable {
+    var candidates: [JSLyricsCandidateSpec]?
+    var results: [JSLyricsCandidateSpec]?
+}
+
 protocol ExtensionRuntimeHostDelegate: AnyObject, Sendable {
     func kvGet(extensionID: String, key: String) -> String?
     func kvSet(extensionID: String, key: String, value: String, ttlSeconds: Double?)
@@ -314,7 +331,8 @@ final class JSExtensionRuntime: @unchecked Sendable {
                 canHandle: typeof exp.canHandle === 'function',
                 fetchCollection: typeof exp.fetchCollection === 'function',
                 fetchFolder: typeof exp.fetchFolder === 'function',
-                resolveStream: typeof exp.resolveStream === 'function'
+                resolveStream: typeof exp.resolveStream === 'function',
+                searchLyrics: typeof exp.searchLyrics === 'function'
               });
             })()
         """
@@ -322,7 +340,8 @@ final class JSExtensionRuntime: @unchecked Sendable {
               let flags = try? JSONDecoder().decode([String: Bool].self, from: Data(jsonStr.utf8)) else {
             throw ExtensionImportError.invalidPackage("Could not inspect exported extension hooks.")
         }
-        guard flags["canHandle"] == true else {
+        let requiresSourceHooks = manifest.capabilities.contains(where: { $0 == .playlist || $0 == .tree || $0 == .stream })
+        if requiresSourceHooks && flags["canHandle"] != true {
             throw ExtensionImportError.invalidPackage("Extension must export canHandle(input).")
         }
         if (manifest.capabilities.contains(.playlist) || manifest.capabilities.contains(.tree)),
@@ -334,6 +353,9 @@ final class JSExtensionRuntime: @unchecked Sendable {
         }
         if manifest.capabilities.contains(.stream), flags["resolveStream"] != true {
             throw ExtensionImportError.invalidPackage("Stream-capable extension must export resolveStream(ctx, req).")
+        }
+        if manifest.capabilities.contains(.lyrics), flags["searchLyrics"] != true {
+            throw ExtensionImportError.invalidPackage("Lyrics-capable extension must export searchLyrics(ctx, req).")
         }
     }
 
@@ -484,6 +506,35 @@ final class JSExtensionRuntime: @unchecked Sendable {
             try assertAllowedURL(fallback)
         }
         return resolution
+    }
+
+    func searchLyrics(
+        title: String,
+        artist: String,
+        album: String?,
+        durationSec: Double?
+    ) async throws -> [JSLyricsCandidateSpec] {
+        var req: [String: Any] = [
+            "title": title,
+            "artist": artist
+        ]
+        if let album, !album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            req["album"] = album
+        }
+        if let durationSec, durationSec.isFinite, durationSec > 0 {
+            req["durationSec"] = durationSec
+        }
+        let json = try await invokeAsyncHook(name: "searchLyrics", requestObject: req, timeoutMs: shortTimeoutMs)
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "null" {
+            return []
+        }
+        let data = Data(trimmed.utf8)
+        if trimmed.hasPrefix("[") {
+            return try JSONDecoder().decode([JSLyricsCandidateSpec].self, from: data)
+        }
+        let envelope = try JSONDecoder().decode(JSLyricsSearchEnvelope.self, from: data)
+        return envelope.candidates ?? envelope.results ?? []
     }
 
     // MARK: - Async Hook Execution Engine

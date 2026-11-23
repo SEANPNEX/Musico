@@ -69,11 +69,15 @@ public partial class MainWindow : Window
         FullPlayer.Initialize(_ctx);
         FullPlayer.OpenEqualizerRequested += () => EqDialog.Show(_services);
         FullPlayer.OpenSleepTimerRequested += () => SleepDialog.Show(_services);
+        FullPlayer.SearchOnlineLyricsRequested += track => CloudLyricsOverlay.Show(_services, track);
         FullPlayer.ErrorOccurred += (title, msg) => ShowConfirmDialog(title, msg, L.Get("Common_OK"), null, false);
+        FullPlayer.InfoOccurred += (title, msg) => ShowConfirmDialog(title, msg, L.Get("Common_OK"), null, false);
 
         SideLyricsPanel.Initialize(_services);
         SideLyricsPanel.CloseRequested += () => ToggleSidePanel(_sidePanel ?? SidePanelKind.Lyrics);
+        SideLyricsPanel.SearchOnlineRequested += track => CloudLyricsOverlay.Show(_services, track);
         SideLyricsPanel.ErrorOccurred += (title, msg) => ShowConfirmDialog(title, msg, L.Get("Common_OK"), null, false);
+        SideLyricsPanel.InfoOccurred += (title, msg) => ShowConfirmDialog(title, msg, L.Get("Common_OK"), null, false);
         SideQueuesView.Bind(_ctx);
 
         _services.Library.PropertyChanged += OnLibraryChanged;
@@ -780,6 +784,7 @@ public partial class MainWindow : Window
             if (DownloadsOverlay.IsOpen) { DownloadsOverlay.Close(); e.Handled = true; return; }
             if (SaveCloudDialog.IsOpen) { SaveCloudDialog.Close(); e.Handled = true; return; }
             if (CloudDialog.IsOpen) { CloudDialog.Close(); e.Handled = true; return; }
+            if (CloudLyricsOverlay.IsOpen) { CloudLyricsOverlay.Close(); e.Handled = true; return; }
             if (EqDialog.IsOpen) { EqDialog.Close(); e.Handled = true; return; }
             if (SleepDialog.IsOpen) { SleepDialog.Close(); e.Handled = true; return; }
             if (FullPlayer.IsOpen) { FullPlayer.Close(); e.Handled = true; return; }
@@ -817,7 +822,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
         {
             if (Keyboard.FocusedElement is TextBoxBase) return;
-            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || SaveCloudDialog.IsOpen || DownloadsOverlay.IsOpen || UpdateDialog.IsOpen || SongInfoDialog.IsOpen) return;
+            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || SaveCloudDialog.IsOpen || CloudLyricsOverlay.IsOpen || DownloadsOverlay.IsOpen || UpdateDialog.IsOpen || SongInfoDialog.IsOpen) return;
             _services.Player.TogglePlayPause();
             e.Handled = true;
         }

@@ -29,6 +29,7 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -84,6 +85,7 @@ class QuickJsExtensionRuntime(
         val hasFetchCollection: Boolean = false,
         val hasFetchFolder: Boolean = false,
         val hasResolveStream: Boolean = false,
+        val hasSearchLyrics: Boolean = false,
         val code: String? = null,
         val message: String? = null,
     )
@@ -95,8 +97,28 @@ class QuickJsExtensionRuntime(
         val hasFetchCollection: Boolean = false,
         val hasFetchFolder: Boolean = false,
         val hasResolveStream: Boolean = false,
+        val hasSearchLyrics: Boolean = false,
         val code: String? = null,
         val message: String? = null,
+    )
+
+    @Serializable
+    data class ExtLyricsCandidateSpec(
+        val externalId: String? = null,
+        val title: String? = null,
+        val artist: String? = null,
+        val album: String? = null,
+        val durationSec: Double? = null,
+        val syncedLyrics: String? = null,
+        val plainLyrics: String? = null,
+        val translatedLyrics: String? = null,
+        val instrumental: Boolean? = null,
+    )
+
+    @Serializable
+    private data class ExtLyricsSearchEnvelope(
+        val candidates: List<ExtLyricsCandidateSpec>? = null,
+        val results: List<ExtLyricsCandidateSpec>? = null,
     )
 
     private val json = Json {
@@ -125,7 +147,8 @@ class QuickJsExtensionRuntime(
                   hasCanHandle: typeof exported.canHandle === 'function',
                   hasFetchCollection: typeof exported.fetchCollection === 'function',
                   hasFetchFolder: typeof exported.fetchFolder === 'function',
-                  hasResolveStream: typeof exported.resolveStream === 'function'
+                  hasResolveStream: typeof exported.resolveStream === 'function',
+                  hasSearchLyrics: typeof exported.searchLyrics === 'function'
                 });
               } catch (err) {
                 return JSON.stringify({
@@ -165,6 +188,7 @@ class QuickJsExtensionRuntime(
             hasFetchCollection = parsed.hasFetchCollection,
             hasFetchFolder = parsed.hasFetchFolder,
             hasResolveStream = parsed.hasResolveStream,
+            hasSearchLyrics = parsed.hasSearchLyrics,
         )
         return validated
     }
@@ -188,7 +212,8 @@ class QuickJsExtensionRuntime(
                   hasCanHandle: typeof exported.canHandle === 'function',
                   hasFetchCollection: typeof exported.fetchCollection === 'function',
                   hasFetchFolder: typeof exported.fetchFolder === 'function',
-                  hasResolveStream: typeof exported.resolveStream === 'function'
+                  hasResolveStream: typeof exported.resolveStream === 'function',
+                  hasSearchLyrics: typeof exported.searchLyrics === 'function'
                 });
               } catch (err) {
                 return JSON.stringify({
@@ -225,6 +250,7 @@ class QuickJsExtensionRuntime(
             hasFetchCollection = parsed.hasFetchCollection,
             hasFetchFolder = parsed.hasFetchFolder,
             hasResolveStream = parsed.hasResolveStream,
+            hasSearchLyrics = parsed.hasSearchLyrics,
         )
     }
 
@@ -330,6 +356,62 @@ class QuickJsExtensionRuntime(
             HostAllowlistMatcher.assertAllowed(fb, allowedHosts)
         }
         return resolved
+    }
+
+    suspend fun searchLyrics(
+        extension: InstalledExtension,
+        title: String,
+        artist: String,
+        album: String? = null,
+        durationSec: Double? = null,
+    ): List<ExtLyricsCandidateSpec> {
+        val reqJson = json.encodeToString(
+            buildJsonObject {
+                put("title", title)
+                put("artist", artist)
+                if (!album.isNullOrBlank()) put("album", album)
+                if (durationSec != null && durationSec.isFinite() && durationSec > 0.0) {
+                    put("durationSec", durationSec)
+                }
+            }
+        )
+        val raw = invokeHook(
+            extension = extension,
+            hookName = "searchLyrics",
+            requestJson = reqJson,
+            isAsync = true,
+            timeoutMs = shortTimeoutMs,
+        )
+        val envelope = runCatching { json.decodeFromString<HookEnvelope>(raw) }.getOrElse { err ->
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "Malformed extension return payload: ${err.message}",
+                err,
+            )
+        }
+        if (!envelope.ok) {
+            val code = CloudErrorCode.fromCodeString(envelope.code) ?: CloudErrorCode.EXTENSION_RUNTIME_ERROR
+            throw CloudSourceException(code, envelope.message ?: "Extension hook failed ($code)")
+        }
+        val payload = envelope.result
+        if (payload == null || payload is JsonNull) {
+            return emptyList()
+        }
+        return runCatching {
+            when (payload) {
+                is JsonArray -> json.decodeFromJsonElement(kotlinx.serialization.serializer<List<ExtLyricsCandidateSpec>>(), payload)
+                else -> {
+                    val obj = json.decodeFromJsonElement(kotlinx.serialization.serializer<ExtLyricsSearchEnvelope>(), payload)
+                    obj.candidates ?: obj.results ?: emptyList()
+                }
+            }
+        }.getOrElse { err ->
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "Invalid extension lyrics schema: ${err.message}",
+                err,
+            )
+        }
     }
 
     private suspend fun invokeHook(
@@ -764,8 +846,14 @@ class QuickJsExtensionRuntime(
         hasFetchCollection: Boolean,
         hasFetchFolder: Boolean,
         hasResolveStream: Boolean,
+        hasSearchLyrics: Boolean,
     ) {
-        require(hasCanHandle) { "Extension must export canHandle(input) function" }
+        val requiresSourceHooks = manifest.capabilities.any {
+            it == ExtensionCapability.PLAYLIST || it == ExtensionCapability.TREE || it == ExtensionCapability.STREAM
+        }
+        if (requiresSourceHooks) {
+            require(hasCanHandle) { "Extension must export canHandle(input) function" }
+        }
         if (ExtensionCapability.PLAYLIST in manifest.capabilities || ExtensionCapability.TREE in manifest.capabilities) {
             require(hasFetchCollection) { "Extension declaring playlist/tree capability must export fetchCollection(ctx, req)" }
         }
@@ -774,6 +862,9 @@ class QuickJsExtensionRuntime(
         }
         if (ExtensionCapability.STREAM in manifest.capabilities) {
             require(hasResolveStream) { "Extension declaring stream capability must export resolveStream(ctx, req)" }
+        }
+        if (ExtensionCapability.LYRICS in manifest.capabilities) {
+            require(hasSearchLyrics) { "Extension declaring lyrics capability must export searchLyrics(ctx, req)" }
         }
     }
 

@@ -127,12 +127,22 @@
 
     <!-- LyricsPanel -->
     <sys:String x:Key="Str_Lyrics_Title">歌词</sys:String>
+    <sys:String x:Key="Str_Lyrics_SearchOnlineTooltip">在线搜索歌词</sys:String>
+    <sys:String x:Key="Str_Lyrics_SearchOnline">在线搜索...</sys:String>
     <sys:String x:Key="Str_Lyrics_ImportTooltip">导入 .lrc 或 .txt 歌词</sys:String>
+    <sys:String x:Key="Str_Lyrics_ExportSidecarTooltip">保存 .lrc 到歌曲文件夹</sys:String>
     <sys:String x:Key="Str_Lyrics_RemoveTooltip">移除已导入的歌词</sys:String>
     <sys:String x:Key="Str_Lyrics_ClosePanelTooltip">关闭面板</sys:String>
     <sys:String x:Key="Str_Lyrics_EmptyTitle">暂无歌词</sys:String>
     <sys:String x:Key="Str_Lyrics_EmptyDesc">为此歌曲导入 .lrc 或 .txt 歌词文件，或将同名歌词文件放在歌曲同级目录下。</sys:String>
     <sys:String x:Key="Str_Lyrics_ImportFromFile">从文件导入...</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_Title">在线搜索歌词</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_TitleField">标题</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_ArtistField">艺术家</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_SearchBtn">搜索</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_IncludeTranslation">包含翻译</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_AlsoExportSidecar">同时保存 .lrc 到歌曲文件夹</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_UseLyrics">使用歌词</sys:String>
 
     <!-- EqualizerDialog -->
     <sys:String x:Key="Str_Equalizer_Title">均衡器</sys:String>

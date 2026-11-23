@@ -30,6 +30,7 @@ struct FullPlayerView: View {
     @Environment(PlayHistoryStore.self) private var history: PlayHistoryStore?
     @Environment(\.appNavigation) private var navigation
     @Environment(\.lyricsStore) private var lyricsStore
+    @Environment(\.extensionStore) private var extensionStore
     @Environment(\.languageManager) private var languageManager
 
     var body: some View {
@@ -68,6 +69,7 @@ struct FullPlayerView: View {
             sheetContent(for: panel)
                 .environment(\.appNavigation, navigation)
                 .environment(\.lyricsStore, lyricsStore)
+                .environment(\.extensionStore, extensionStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
         }

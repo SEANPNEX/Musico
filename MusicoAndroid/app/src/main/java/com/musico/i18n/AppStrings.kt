@@ -187,6 +187,7 @@ interface AppStrings {
     val capabilityStream: String
     val capabilityCookie: String
     val capabilityProxy: String
+    val capabilityLyrics: String
 
     // Songs screen
     val searchPlaceholder: String
@@ -279,6 +280,8 @@ interface AppStrings {
 
     // Lyrics
     val lyricsOptions: String
+    val searchOnlineEllipsis: String
+    val searchCloudLyricsTitle: String
     val importFromFileEllipsis: String
     val removeImportedLyrics: String
     val noLyricsTitle: String
@@ -287,10 +290,33 @@ interface AppStrings {
     val lyricsImportErrorFallback: String
     val lyricsSourceImported: String
     val lyricsSourceSidecar: String
+    val lyricsSourceFolderMatch: String
     val lyricsSourceEmbedded: String
     val lyricsSourceImportedDesc: String
     val lyricsSourceSidecarDesc: String
+    val lyricsSourceFolderMatchDesc: String
     val lyricsSourceEmbeddedDesc: String
+    val saveLrcToFolder: String
+    val savedLrcToFolderNotice: String
+    val alsoSaveLrcToFolder: String
+    val useLyrics: String
+    val includeTranslation: String
+    val lyricsTitleField: String
+    val lyricsArtistField: String
+    val searchAction: String
+    val autoSourceLabel: String
+    val lyricsFormatSynced: String
+    val lyricsFormatPlain: String
+    val lyricsFormatInstrumental: String
+    val lyricsTranslatedBadge: String
+    val noOnlineLyricsTitle: String
+    val noOnlineLyricsDesc: String
+    val searchingOnline: String
+    val retryAction: String
+    val selectResultToPreview: String
+    val partialSourcesFailedHint: String
+    val couldNotSaveLyricsTitle: String
+    val couldNotSearchLyricsTitle: String
 
     // Equalizer
     val reset: String
@@ -460,12 +486,14 @@ interface AppStrings {
     fun lyricsSourceBadge(source: LyricsSource): String = when (source) {
         LyricsSource.IMPORTED -> lyricsSourceImported
         LyricsSource.SIDECAR -> lyricsSourceSidecar
+        LyricsSource.FOLDER_MATCH -> lyricsSourceFolderMatch
         LyricsSource.EMBEDDED -> lyricsSourceEmbedded
     }
 
     fun lyricsSourceDescription(source: LyricsSource): String = when (source) {
         LyricsSource.IMPORTED -> lyricsSourceImportedDesc
         LyricsSource.SIDECAR -> lyricsSourceSidecarDesc
+        LyricsSource.FOLDER_MATCH -> lyricsSourceFolderMatchDesc
         LyricsSource.EMBEDDED -> lyricsSourceEmbeddedDesc
     }
 
@@ -654,6 +682,7 @@ object EnStrings : AppStrings {
     override val capabilityStream = "Audio Stream"
     override val capabilityCookie = "Cookie Auth"
     override val capabilityProxy = "Proxy"
+    override val capabilityLyrics = "Lyrics Search"
 
     override val searchPlaceholder = "Songs, artists, albums, genres"
     override val clearSearch = "Clear search"
@@ -739,6 +768,8 @@ object EnStrings : AppStrings {
     override val queuePanel = "Queue panel"
 
     override val lyricsOptions = "Lyrics options"
+    override val searchOnlineEllipsis = "Search Online…"
+    override val searchCloudLyricsTitle = "Search Cloud Lyrics"
     override val importFromFileEllipsis = "Import from File…"
     override val removeImportedLyrics = "Remove Imported Lyrics"
     override val noLyricsTitle = "No Lyrics"
@@ -747,10 +778,33 @@ object EnStrings : AppStrings {
     override val lyricsImportErrorFallback = "That file could not be read as lyrics text."
     override val lyricsSourceImported = "Imported"
     override val lyricsSourceSidecar = "Sidecar"
+    override val lyricsSourceFolderMatch = "Folder Match"
     override val lyricsSourceEmbedded = "Embedded"
     override val lyricsSourceImportedDesc = "From the file you imported"
     override val lyricsSourceSidecarDesc = "From a file next to the song"
+    override val lyricsSourceFolderMatchDesc = "Matched from song folder"
     override val lyricsSourceEmbeddedDesc = "From the song’s tags"
+    override val saveLrcToFolder = "Save .lrc to Song Folder"
+    override val savedLrcToFolderNotice = "Saved .lrc to song folder."
+    override val alsoSaveLrcToFolder = "Also save .lrc to song folder"
+    override val useLyrics = "Use Lyrics"
+    override val includeTranslation = "Include Translation"
+    override val lyricsTitleField = "Title"
+    override val lyricsArtistField = "Artist"
+    override val searchAction = "Search"
+    override val autoSourceLabel = "Auto"
+    override val lyricsFormatSynced = "Synced"
+    override val lyricsFormatPlain = "Plain"
+    override val lyricsFormatInstrumental = "Instrumental"
+    override val lyricsTranslatedBadge = "Translated"
+    override val noOnlineLyricsTitle = "No Lyrics Found Online"
+    override val noOnlineLyricsDesc = "Try editing the title or artist above, or switch lyrics source."
+    override val searchingOnline = "Searching…"
+    override val retryAction = "Try Again"
+    override val selectResultToPreview = "Select a result to preview"
+    override val partialSourcesFailedHint = "Some sources could not be reached."
+    override val couldNotSaveLyricsTitle = "Couldn’t Save Lyrics"
+    override val couldNotSearchLyricsTitle = "Couldn’t Search Lyrics"
 
     override val reset = "Reset"
     override val presetLabel = "Preset"
@@ -1097,6 +1151,7 @@ object ZhHansStrings : AppStrings {
     override val capabilityStream = "音频流"
     override val capabilityCookie = "Cookie 登录态"
     override val capabilityProxy = "代理"
+    override val capabilityLyrics = "歌词搜索"
 
     override val searchPlaceholder = "搜索歌曲、艺术家、专辑、流派"
     override val clearSearch = "清除搜索"
@@ -1182,6 +1237,8 @@ object ZhHansStrings : AppStrings {
     override val queuePanel = "队列面板"
 
     override val lyricsOptions = "歌词选项"
+    override val searchOnlineEllipsis = "在线搜索…"
+    override val searchCloudLyricsTitle = "在线搜索歌词"
     override val importFromFileEllipsis = "从文件导入…"
     override val removeImportedLyrics = "移除已导入的歌词"
     override val noLyricsTitle = "暂无歌词"
@@ -1190,10 +1247,33 @@ object ZhHansStrings : AppStrings {
     override val lyricsImportErrorFallback = "无法将该文件读取为歌词文本。"
     override val lyricsSourceImported = "已导入"
     override val lyricsSourceSidecar = "同目录文件"
+    override val lyricsSourceFolderMatch = "目录匹配"
     override val lyricsSourceEmbedded = "内嵌标签"
     override val lyricsSourceImportedDesc = "来自你导入的文件"
     override val lyricsSourceSidecarDesc = "来自歌曲旁的同目录文件"
+    override val lyricsSourceFolderMatchDesc = "匹配自歌曲所在文件夹"
     override val lyricsSourceEmbeddedDesc = "来自歌曲内嵌标签"
+    override val saveLrcToFolder = "保存 .lrc 到歌曲文件夹"
+    override val savedLrcToFolderNotice = "已将 .lrc 保存到歌曲文件夹。"
+    override val alsoSaveLrcToFolder = "同时保存 .lrc 到歌曲文件夹"
+    override val useLyrics = "使用歌词"
+    override val includeTranslation = "包含翻译"
+    override val lyricsTitleField = "标题"
+    override val lyricsArtistField = "艺术家"
+    override val searchAction = "搜索"
+    override val autoSourceLabel = "自动"
+    override val lyricsFormatSynced = "逐行同步"
+    override val lyricsFormatPlain = "纯文本"
+    override val lyricsFormatInstrumental = "纯音乐"
+    override val lyricsTranslatedBadge = "含翻译"
+    override val noOnlineLyricsTitle = "未找到在线歌词"
+    override val noOnlineLyricsDesc = "可尝试修改上方标题或艺术家，或切换歌词来源。"
+    override val searchingOnline = "正在搜索…"
+    override val retryAction = "重试"
+    override val selectResultToPreview = "选择一条结果以预览"
+    override val partialSourcesFailedHint = "部分来源暂时无法访问。"
+    override val couldNotSaveLyricsTitle = "无法保存歌词"
+    override val couldNotSearchLyricsTitle = "无法搜索歌词"
 
     override val reset = "重置"
     override val presetLabel = "预设"
