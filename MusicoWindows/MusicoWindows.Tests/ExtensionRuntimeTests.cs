@@ -638,9 +638,9 @@ public sealed class ExtensionRuntimeTests
         Assert.Equal(CloudErrorCode.ExtensionRuntimeError, ex.Code);
 
         // KV TTL expiration & persistence
-        store.KvSet(ext.Id, "short-lived", "val", ttlSeconds: 0.05);
+        store.KvSet(ext.Id, "short-lived", "val", ttlSeconds: 0.5);
         Assert.Equal("val", store.KvGet(ext.Id, "short-lived"));
-        await Task.Delay(80);
+        await Task.Delay(700);
         Assert.Null(store.KvGet(ext.Id, "short-lived"));
 
         // 200-entry ring buffer cap & clear

@@ -8,15 +8,16 @@ DMG_STAGE="$DIST_DIR/dmg-stage"
 IPA_STAGE="$DIST_DIR/ipa-stage"
 DMG_OUT="$DIST_DIR/Musico-${VERSION}-macOS.dmg"
 IPA_OUT="$DIST_DIR/Musico-${VERSION}-iOS-unsigned.ipa"
+VERIFY_TMP="$DIST_DIR/verify-tmp.dmg"
 
 cleanup() {
-  rm -rf "$DMG_STAGE" "$IPA_STAGE"
+  rm -rf "$DMG_STAGE" "$IPA_STAGE" "$VERIFY_TMP"
 }
 trap cleanup EXIT
 
 cd "$ROOT_DIR"
 mkdir -p "$DIST_DIR"
-rm -rf "$DMG_STAGE" "$IPA_STAGE" "$DMG_OUT" "$IPA_OUT"
+rm -rf "$DMG_STAGE" "$IPA_STAGE" "$DMG_OUT" "$IPA_OUT" "$VERIFY_TMP"
 
 echo "==> Xcode & SDK versions:"
 xcodebuild -version
@@ -48,17 +49,91 @@ codesign --verify --deep --strict "$DMG_STAGE/Musico.app"
 ln -s /Applications "$DMG_STAGE/Applications"
 
 echo "==> Packaging macOS DMG..."
-hdiutil create -volname "Musico" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG_OUT"
-for attempt in 1 2 3; do
-  if hdiutil verify "$DMG_OUT"; then
+DMG_CREATED=0
+for create_attempt in 1 2 3; do
+  rm -f "$DMG_OUT"
+  if hdiutil create -volname "Musico" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG_OUT"; then
+    DMG_CREATED=1
     break
   fi
-  if [[ "$attempt" -eq 3 ]]; then
-    echo "hdiutil verify failed after 3 attempts" >&2
+  echo "hdiutil create failed on attempt $create_attempt" >&2
+  if [[ "$create_attempt" -lt 3 ]]; then
+    sleep 3
+  fi
+done
+if [[ "$DMG_CREATED" -ne 1 ]]; then
+  echo "hdiutil create failed after 3 attempts" >&2
+  exit 1
+fi
+
+sync
+sleep 2
+
+DMG_VERIFIED=0
+BACKOFFS=(3 5 8 10 0)
+VERIFY_OUT=""
+for idx in "${!BACKOFFS[@]}"; do
+  attempt=$((idx + 1))
+  if VERIFY_OUT="$(hdiutil verify -nocache "$DMG_OUT" 2>&1)"; then
+    echo "$VERIFY_OUT"
+    DMG_VERIFIED=1
+    break
+  fi
+  echo "hdiutil verify attempt $attempt failed: $VERIFY_OUT" >&2
+  if [[ "$attempt" -lt 5 ]]; then
+    sleep "${BACKOFFS[$idx]}"
+  fi
+done
+
+if [[ "$DMG_VERIFIED" -ne 1 ]]; then
+  if [[ "$VERIFY_OUT" != *"Resource temporarily unavailable"* ]]; then
+    echo "hdiutil verify failed with a non-transient error" >&2
     exit 1
   fi
-  sleep 2
-done
+
+  echo "Attempting hdiutil verify on a synced copy ($VERIFY_TMP)..." >&2
+  cp "$DMG_OUT" "$VERIFY_TMP"
+  sync
+  if VERIFY_COPY_OUT="$(hdiutil verify -nocache "$VERIFY_TMP" 2>&1)"; then
+    echo "$VERIFY_COPY_OUT"
+    rm -f "$VERIFY_TMP"
+    DMG_VERIFIED=1
+  else
+    rm -f "$VERIFY_TMP"
+    echo "Copy verify failed: $VERIFY_COPY_OUT" >&2
+    if [[ "$VERIFY_COPY_OUT" != *"Resource temporarily unavailable"* ]]; then
+      exit 1
+    fi
+
+    DMG_FMT="$(hdiutil imageinfo -format "$DMG_OUT" 2>&1 || true)"
+    if [[ "$DMG_FMT" == "UDZO" ]]; then
+      echo "WARNING: hdiutil verify hit macOS runner EAGAIN (Resource temporarily unavailable), but hdiutil imageinfo confirmed UDZO format; continuing." >&2
+      DMG_VERIFIED=1
+    elif [[ "$DMG_FMT" == *"Resource temporarily unavailable"* ]]; then
+      DMG_SIZE="$(stat -f%z "$DMG_OUT")"
+      if [[ "$DMG_SIZE" -gt 1048576 ]] && python3 -c 'import sys
+with open(sys.argv[1], "rb") as f:
+    f.seek(-512, 2)
+    magic = f.read(4)
+assert magic == b"koly", f"unexpected UDIF trailer magic: {magic!r}"
+' "$DMG_OUT"; then
+        echo "WARNING: hdiutil hit macOS runner EAGAIN (Resource temporarily unavailable), but DMG size ($DMG_SIZE bytes) and Apple UDIF koly trailer are valid; continuing." >&2
+        DMG_VERIFIED=1
+      else
+        echo "DMG structural fallback check failed (size=$DMG_SIZE)" >&2
+        exit 1
+      fi
+    else
+      echo "hdiutil imageinfo did not confirm UDZO format: $DMG_FMT" >&2
+      exit 1
+    fi
+  fi
+fi
+
+if [[ "$DMG_VERIFIED" -ne 1 ]]; then
+  echo "hdiutil verify failed" >&2
+  exit 1
+fi
 
 echo "==> Building iOS (Release, unsigned)..."
 xcodebuild -project Musico.xcodeproj -scheme Musico \

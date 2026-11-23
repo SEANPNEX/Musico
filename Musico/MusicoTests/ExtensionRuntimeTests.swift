@@ -669,9 +669,9 @@ final class ExtensionRuntimeTests: XCTestCase {
             method: 'GET',
             url: 'https://edge1.cdn.fixture.test/huge'
           });
-          ctx.kv.set('ttlKey', 'alive', 0.05);
+          ctx.kv.set('ttlKey', 'alive', 0.5);
           var immediate = ctx.kv.get('ttlKey');
-          await new Promise(function(resolve) { setTimeout(resolve, 80); });
+          await new Promise(function(resolve) { setTimeout(resolve, 700); });
           var afterExpire = ctx.kv.get('ttlKey');
           for (var i = 0; i < 210; i++) {
             ctx.log.info('entry-' + String(i));
