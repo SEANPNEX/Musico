@@ -76,6 +76,7 @@ interface AppStrings {
     val rescan: String
     val sortFolder: String
     val folderOptions: String
+    val moreOptions: String
     val saveToLocalFolderEllipsis: String
     val updateFromCloud: String
     val removeFolder: String
@@ -543,6 +544,7 @@ object EnStrings : AppStrings {
     override val rescan = "Rescan"
     override val sortFolder = "Sort folder"
     override val folderOptions = "Folder options"
+    override val moreOptions = "More options"
     override val saveToLocalFolderEllipsis = "Save to Local Folder…"
     override val updateFromCloud = "Update from Cloud"
     override val removeFolder = "Remove Folder"
@@ -985,6 +987,7 @@ object ZhHansStrings : AppStrings {
     override val rescan = "重新扫描"
     override val sortFolder = "文件夹排序"
     override val folderOptions = "文件夹选项"
+    override val moreOptions = "更多选项"
     override val saveToLocalFolderEllipsis = "保存到本地文件夹…"
     override val updateFromCloud = "从云端更新"
     override val removeFolder = "移除文件夹"

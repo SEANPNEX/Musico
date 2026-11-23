@@ -212,6 +212,7 @@ fun FoldersScreen(
     languageStore: LanguageStore? = null,
     extensionStore: ExtensionStore? = null,
     providerRegistry: CloudProviderRegistry = libraryStore.providerRegistry,
+    isCompact: Boolean = false,
     onPickFolder: ((Uri) -> Unit) -> Unit,
     onPickExtensionFile: ((Uri) -> Unit) -> Unit = {},
     modifier: Modifier = Modifier
@@ -249,6 +250,7 @@ fun FoldersScreen(
     var showLanguageDialog by remember { mutableStateOf(false) }
     var showDownloadsSheet by remember { mutableStateOf(false) }
     var detailMenuExpanded by remember { mutableStateOf(false) }
+    var rootOverflowExpanded by remember { mutableStateOf(false) }
 
     BackHandler(enabled = currentFolder != null) {
         val ref = currentFolder ?: return@BackHandler
@@ -289,63 +291,148 @@ fun FoldersScreen(
         }
     }
 
+    fun openUpdateDialog() {
+        showUpdateDialog = true
+        if (updateState is UpdateUiState.Idle ||
+            updateState is UpdateUiState.UpToDate ||
+            updateState is UpdateUiState.Error
+        ) {
+            scope.launch { updateManager.checkForUpdates(silent = false) }
+        }
+    }
+
     Scaffold(
         modifier = modifier,
         contentWindowInsets = WindowInsets(0),
         topBar = {
             if (activeRef == null) {
                 TopAppBar(
-                    title = { Text(strings.foldersTitle) },
-                    actions = {
-                        DownloadsToolbarButton(
-                            activeCount = activeDownloadCount,
-                            onClick = { showDownloadsSheet = true },
+                    title = {
+                        Text(
+                            text = strings.foldersTitle,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
-                        if (languageStore != null) {
-                            IconButton(onClick = { showLanguageDialog = true }) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Language,
-                                    contentDescription = strings.languageTitle,
+                    },
+                    actions = {
+                        if (isCompact) {
+                            if (activeDownloadCount > 0) {
+                                DownloadsToolbarButton(
+                                    activeCount = activeDownloadCount,
+                                    onClick = { showDownloadsSheet = true },
                                 )
                             }
-                        }
-                        IconButton(
-                            onClick = {
-                                showUpdateDialog = true
-                                if (updateState is UpdateUiState.Idle ||
-                                    updateState is UpdateUiState.UpToDate ||
-                                    updateState is UpdateUiState.Error
-                                ) {
-                                    scope.launch { updateManager.checkForUpdates(silent = false) }
+                            IconButton(onClick = { showAddCloudDialog = true }) {
+                                Icon(Icons.Rounded.CloudQueue, contentDescription = strings.addCloudFolder)
+                            }
+                            if (extensionStore != null) {
+                                IconButton(onClick = { showExtensionsScreen = true }) {
+                                    Icon(Icons.Rounded.Extension, contentDescription = strings.extensionsTitle)
                                 }
                             }
-                        ) {
-                            BadgedBox(
-                                badge = {
-                                    if (updateState.hasAvailableUpdate) {
-                                        Badge()
+                            Box {
+                                IconButton(onClick = { rootOverflowExpanded = true }) {
+                                    BadgedBox(
+                                        badge = {
+                                            if (updateState.hasAvailableUpdate) {
+                                                Badge()
+                                            }
+                                        }
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.MoreVert,
+                                            contentDescription = strings.moreOptions,
+                                        )
                                     }
                                 }
+                                DropdownMenu(
+                                    expanded = rootOverflowExpanded,
+                                    onDismissRequest = { rootOverflowExpanded = false },
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text(strings.downloadsTitle) },
+                                        leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) },
+                                        trailingIcon = if (activeDownloadCount > 0) {
+                                            { Badge { Text("$activeDownloadCount") } }
+                                        } else null,
+                                        onClick = {
+                                            rootOverflowExpanded = false
+                                            showDownloadsSheet = true
+                                        },
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text(strings.rescan) },
+                                        leadingIcon = { Icon(Icons.Rounded.Refresh, contentDescription = null) },
+                                        enabled = !libraryState.isScanning,
+                                        onClick = {
+                                            rootOverflowExpanded = false
+                                            scope.launch { libraryStore.rescan() }
+                                        },
+                                    )
+                                    if (languageStore != null) {
+                                        DropdownMenuItem(
+                                            text = { Text(strings.languageTitle) },
+                                            leadingIcon = { Icon(Icons.Rounded.Language, contentDescription = null) },
+                                            onClick = {
+                                                rootOverflowExpanded = false
+                                                showLanguageDialog = true
+                                            },
+                                        )
+                                    }
+                                    DropdownMenuItem(
+                                        text = { Text(strings.checkForUpdates) },
+                                        leadingIcon = { Icon(Icons.Rounded.SystemUpdate, contentDescription = null) },
+                                        trailingIcon = if (updateState.hasAvailableUpdate) {
+                                            { Badge() }
+                                        } else null,
+                                        onClick = {
+                                            rootOverflowExpanded = false
+                                            openUpdateDialog()
+                                        },
+                                    )
+                                }
+                            }
+                        } else {
+                            DownloadsToolbarButton(
+                                activeCount = activeDownloadCount,
+                                onClick = { showDownloadsSheet = true },
+                            )
+                            if (languageStore != null) {
+                                IconButton(onClick = { showLanguageDialog = true }) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Language,
+                                        contentDescription = strings.languageTitle,
+                                    )
+                                }
+                            }
+                            IconButton(onClick = { openUpdateDialog() }) {
+                                BadgedBox(
+                                    badge = {
+                                        if (updateState.hasAvailableUpdate) {
+                                            Badge()
+                                        }
+                                    }
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.SystemUpdate,
+                                        contentDescription = strings.checkForUpdates
+                                    )
+                                }
+                            }
+                            IconButton(onClick = { showAddCloudDialog = true }) {
+                                Icon(Icons.Rounded.CloudQueue, contentDescription = strings.addCloudFolder)
+                            }
+                            if (extensionStore != null) {
+                                IconButton(onClick = { showExtensionsScreen = true }) {
+                                    Icon(Icons.Rounded.Extension, contentDescription = strings.extensionsTitle)
+                                }
+                            }
+                            IconButton(
+                                onClick = { scope.launch { libraryStore.rescan() } },
+                                enabled = !libraryState.isScanning
                             ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.SystemUpdate,
-                                    contentDescription = strings.checkForUpdates
-                                )
+                                Icon(Icons.Rounded.Refresh, contentDescription = strings.rescan)
                             }
-                        }
-                        IconButton(onClick = { showAddCloudDialog = true }) {
-                            Icon(Icons.Rounded.CloudQueue, contentDescription = strings.addCloudFolder)
-                        }
-                        if (extensionStore != null) {
-                            IconButton(onClick = { showExtensionsScreen = true }) {
-                                Icon(Icons.Rounded.Extension, contentDescription = strings.extensionsTitle)
-                            }
-                        }
-                        IconButton(
-                            onClick = { scope.launch { libraryStore.rescan() } },
-                            enabled = !libraryState.isScanning
-                        ) {
-                            Icon(Icons.Rounded.Refresh, contentDescription = strings.rescan)
                         }
                     }
                 )

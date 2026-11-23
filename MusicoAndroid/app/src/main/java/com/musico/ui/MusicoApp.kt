@@ -235,6 +235,7 @@ private fun MusicoAppContent(
                     onConsumeSearchRequest = { pendingSearchRequest = null },
                     onPickFolder = onPickFolder,
                     onPickExtensionFile = onPickExtensionFile,
+                    isCompact = isCompact,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
@@ -283,6 +284,7 @@ private fun MusicoAppContent(
                         onConsumeSearchRequest = { pendingSearchRequest = null },
                         onPickFolder = onPickFolder,
                         onPickExtensionFile = onPickExtensionFile,
+                        isCompact = isCompact,
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight()
@@ -450,6 +452,7 @@ private fun DestinationContent(
     onConsumeSearchRequest: () -> Unit,
     onPickFolder: ((Uri) -> Unit) -> Unit,
     onPickExtensionFile: ((Uri) -> Unit) -> Unit,
+    isCompact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
     Box(modifier = modifier) {
@@ -473,6 +476,7 @@ private fun DestinationContent(
                     languageStore = appContainer.languageStore,
                     extensionStore = appContainer.extensionStore,
                     providerRegistry = appContainer.cloudProviderRegistry,
+                    isCompact = isCompact,
                     onPickFolder = onPickFolder,
                     onPickExtensionFile = onPickExtensionFile,
                     modifier = Modifier.fillMaxSize()
