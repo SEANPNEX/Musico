@@ -116,6 +116,7 @@ public sealed class GoogleDriveClient
     public const int MaxFolderDepth = 12;
     public const int MaxFolders = 2000;
     public const int MaxPagesPerFolder = 100;
+    public const int IvdTruncationThreshold = 50;
     public const int FolderWorkerConcurrency = 4;
 
     public static readonly HashSet<string> AudioExtensions = new(StringComparer.OrdinalIgnoreCase)
@@ -190,6 +191,7 @@ public sealed class GoogleDriveClient
         RegexOptions.Singleline | RegexOptions.Compiled);
 
     private readonly HttpMessageHandler? _handler;
+    private volatile string? _cachedWorkingApiKey;
 
     public GoogleDriveClient(HttpMessageHandler? handler = null)
     {
@@ -1012,17 +1014,30 @@ public sealed class GoogleDriveClient
                     }
 
                     bool paginationIncomplete = false;
-                    if (!string.IsNullOrWhiteSpace(nextPageToken))
+                    if (!string.IsNullOrWhiteSpace(nextPageToken) || allEntries.Count >= IvdTruncationThreshold)
                     {
-                        string? apiKey = ExtractApiKey(body);
-                        if (!string.IsNullOrWhiteSpace(apiKey))
+                        var candidateKeys = new List<string>();
+                        string? cachedKey = _cachedWorkingApiKey;
+                        if (!string.IsNullOrWhiteSpace(cachedKey))
+                        {
+                            candidateKeys.Add(cachedKey);
+                        }
+                        foreach (string extractedKey in ExtractApiKeys(body))
+                        {
+                            if (!candidateKeys.Contains(extractedKey, StringComparer.Ordinal))
+                            {
+                                candidateKeys.Add(extractedKey);
+                            }
+                        }
+
+                        if (candidateKeys.Count > 0)
                         {
                             paginationIncomplete = !await PaginateDriveFolderApiAsync(
                                 http,
                                 folderId,
                                 resourceKey,
                                 cookie,
-                                apiKey,
+                                candidateKeys,
                                 nextPageToken,
                                 allEntries,
                                 seenIds,
@@ -1091,15 +1106,64 @@ public sealed class GoogleDriveClient
         string folderId,
         string? resourceKey,
         string? cookie,
-        string apiKey,
-        string initialPageToken,
+        IReadOnlyList<string> apiKeys,
+        string? initialPageToken,
         List<GoogleDriveEntry> allEntries,
         HashSet<string> seenIds,
         CancellationToken ct)
     {
-        string? pageToken = initialPageToken;
-        var seenTokens = new HashSet<string>(StringComparer.Ordinal);
+        if (apiKeys.Count == 0)
+        {
+            return false;
+        }
+
+        string? activeKey = null;
         bool preferV3 = false;
+        string? pageToken = string.IsNullOrWhiteSpace(initialPageToken) ? null : initialPageToken.Trim();
+
+        foreach (string candidateKey in apiKeys)
+        {
+            var firstResult = await TryFetchDriveApiPageAsync(
+                http, folderId, resourceKey, cookie, candidateKey, pageToken, useV3: false, ct).ConfigureAwait(false);
+            bool usedV3 = false;
+            if (!firstResult.Success)
+            {
+                var v3Result = await TryFetchDriveApiPageAsync(
+                    http, folderId, resourceKey, cookie, candidateKey, pageToken, useV3: true, ct).ConfigureAwait(false);
+                if (v3Result.Success)
+                {
+                    firstResult = v3Result;
+                    usedV3 = true;
+                }
+            }
+
+            if (firstResult.Success)
+            {
+                activeKey = candidateKey;
+                _cachedWorkingApiKey = candidateKey;
+                preferV3 = usedV3;
+                foreach (var entry in firstResult.Entries)
+                {
+                    if (seenIds.Add(entry.Id))
+                    {
+                        allEntries.Add(entry);
+                    }
+                }
+                pageToken = firstResult.NextToken;
+                break;
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(activeKey))
+        {
+            return false;
+        }
+
+        var seenTokens = new HashSet<string>(StringComparer.Ordinal);
+        if (!string.IsNullOrWhiteSpace(initialPageToken))
+        {
+            seenTokens.Add(initialPageToken.Trim());
+        }
 
         for (int page = 1; page < MaxPagesPerFolder && !string.IsNullOrWhiteSpace(pageToken); page++)
         {
@@ -1112,11 +1176,11 @@ public sealed class GoogleDriveClient
             if (!preferV3)
             {
                 pageResult = await TryFetchDriveApiPageAsync(
-                    http, folderId, resourceKey, cookie, apiKey, pageToken, useV3: false, ct).ConfigureAwait(false);
+                    http, folderId, resourceKey, cookie, activeKey, pageToken, useV3: false, ct).ConfigureAwait(false);
                 if (!pageResult.Success)
                 {
                     var v3Result = await TryFetchDriveApiPageAsync(
-                        http, folderId, resourceKey, cookie, apiKey, pageToken, useV3: true, ct).ConfigureAwait(false);
+                        http, folderId, resourceKey, cookie, activeKey, pageToken, useV3: true, ct).ConfigureAwait(false);
                     if (v3Result.Success)
                     {
                         preferV3 = true;
@@ -1127,7 +1191,7 @@ public sealed class GoogleDriveClient
             else
             {
                 pageResult = await TryFetchDriveApiPageAsync(
-                    http, folderId, resourceKey, cookie, apiKey, pageToken, useV3: true, ct).ConfigureAwait(false);
+                    http, folderId, resourceKey, cookie, activeKey, pageToken, useV3: true, ct).ConfigureAwait(false);
             }
 
             if (!pageResult.Success)
@@ -1155,16 +1219,18 @@ public sealed class GoogleDriveClient
         string? resourceKey,
         string? cookie,
         string apiKey,
-        string pageToken,
+        string? pageToken,
         bool useV3,
         CancellationToken ct)
     {
         string query = Uri.EscapeDataString($"'{folderId}' in parents and trashed = false");
-        string escapedToken = Uri.EscapeDataString(pageToken);
         string escapedKey = Uri.EscapeDataString(apiKey);
+        string pageParam = string.IsNullOrWhiteSpace(pageToken)
+            ? string.Empty
+            : $"&pageToken={Uri.EscapeDataString(pageToken)}";
         string url = useV3
-            ? $"https://www.googleapis.com/drive/v3/files?q={query}&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&fields={Uri.EscapeDataString("nextPageToken,files(id,name,mimeType,resourceKey)")}&pageToken={escapedToken}&key={escapedKey}"
-            : $"https://clients6.google.com/drive/v2beta/files?openDrive=true&reason=102&q={query}&maxResults=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&pageToken={escapedToken}&key={escapedKey}";
+            ? $"https://www.googleapis.com/drive/v3/files?q={query}&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&fields={Uri.EscapeDataString("nextPageToken,files(id,name,mimeType,resourceKey)")}{pageParam}&key={escapedKey}"
+            : $"https://clients6.google.com/drive/v2beta/files?openDrive=true&reason=102&q={query}&maxResults=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&fields={Uri.EscapeDataString("nextPageToken,items(id,title,mimeType,resourceKey,labels(trashed))")}{pageParam}&key={escapedKey}";
 
         try
         {
@@ -1637,11 +1703,25 @@ public sealed class GoogleDriveClient
         return cleaned;
     }
 
+    public static List<string> ExtractApiKeys(string html)
+    {
+        var keys = new List<string>();
+        if (string.IsNullOrWhiteSpace(html)) return keys;
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match match in ApiKeyRegex.Matches(html))
+        {
+            if (match.Success && seen.Add(match.Value))
+            {
+                keys.Add(match.Value);
+            }
+        }
+        return keys;
+    }
+
     public static string? ExtractApiKey(string html)
     {
-        if (string.IsNullOrWhiteSpace(html)) return null;
-        var match = ApiKeyRegex.Match(html);
-        return match.Success ? match.Value : null;
+        var keys = ExtractApiKeys(html);
+        return keys.Count > 0 ? keys[0] : null;
     }
 
     public static List<GoogleDriveEntry> ParseDriveIvdEntries(string html) =>
@@ -2107,8 +2187,10 @@ public sealed class GoogleDriveClient
             return true;
         }
 
-        return !string.IsNullOrWhiteSpace(mimeType) &&
-               mimeType.StartsWith("audio/", StringComparison.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(mimeType)) return false;
+        string lowerMime = mimeType.Split(';')[0].Trim().ToLowerInvariant();
+        return lowerMime.StartsWith("audio/", StringComparison.Ordinal) ||
+               lowerMime is "application/ogg" or "application/x-flac" or "application/flac";
     }
 
     private static bool IsPlausibleFileExtension(string? ext)
@@ -2170,7 +2252,7 @@ public sealed class GoogleDriveClient
             "audio/mpeg" or "audio/mp3" => ".mp3",
             "audio/mp4" or "audio/x-m4a" or "audio/m4a" => ".m4a",
             "audio/aac" or "audio/x-aac" => ".aac",
-            "audio/flac" or "audio/x-flac" => ".flac",
+            "audio/flac" or "audio/x-flac" or "application/flac" or "application/x-flac" => ".flac",
             "audio/wav" or "audio/x-wav" or "audio/wave" or "audio/vnd.wave" => ".wav",
             "audio/aiff" or "audio/x-aiff" => ".aif",
             "audio/x-ms-wma" => ".wma",
@@ -2277,6 +2359,14 @@ public sealed class GoogleDriveClient
 
         if (string.IsNullOrWhiteSpace(html)) return false;
 
+        if (!string.IsNullOrWhiteSpace(ExtractDriveIvdJson(html)) ||
+            html.Contains("flip-entry", StringComparison.OrdinalIgnoreCase) ||
+            html.Contains("uc-download-link", StringComparison.OrdinalIgnoreCase) ||
+            HasDownloadConfirmForm(html))
+        {
+            return false;
+        }
+
         if (html.Contains("ServiceLogin", StringComparison.OrdinalIgnoreCase) &&
             html.Contains("accounts.google.com", StringComparison.OrdinalIgnoreCase))
         {
@@ -2297,6 +2387,28 @@ public sealed class GoogleDriveClient
             }
         }
 
+        return false;
+    }
+
+    private static bool HasDownloadConfirmForm(string html)
+    {
+        foreach (Match match in FormRegex.Matches(html))
+        {
+            foreach (Match attrMatch in AttrRegex.Matches(match.Groups[1].Value))
+            {
+                string key = attrMatch.Groups[1].Value;
+                if (!string.Equals(key, "action", StringComparison.OrdinalIgnoreCase)) continue;
+                string rawVal = attrMatch.Groups[2].Success ? attrMatch.Groups[2].Value
+                    : attrMatch.Groups[3].Success ? attrMatch.Groups[3].Value
+                    : attrMatch.Groups[4].Value;
+                string decoded = WebUtility.HtmlDecode(rawVal);
+                if (decoded.Contains("download", StringComparison.OrdinalIgnoreCase) ||
+                    decoded.Contains("/uc", StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
         return false;
     }
 

@@ -1723,6 +1723,179 @@ final class CloudSourcesTests: XCTestCase {
             XCTAssertFalse(reloadedMig.isFavourite(oldTrackID))
         }
     }
+
+    func testGoogleDrivePublicServiceLoginHeaderAndXFlacMimeAccepted() async throws {
+        let jsEscape: @Sendable (String) -> String = { s in
+            s.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\x22")
+        }
+        let ivdJSON = """
+        [[["f_xflac",["fld_pub"],"Untitled Piece","application/x-flac"]]]
+        """
+        let publicHTML = """
+        <html>
+          <head><title>Shared Music - Google Drive</title></head>
+          <body>
+            <a href="https://accounts.google.com/ServiceLogin?continue=https://drive.google.com/drive/folders/fld_pub">Sign in</a>
+            <script>window['_DRIVE_ivd'] = '\(jsEscape(ivdJSON))';</script>
+          </body>
+        </html>
+        """
+
+        let transport = MockCloudTransport { req in
+            let url = req.url!.absoluteString
+            if url.contains("/drive/folders/fld_pub") {
+                return HTTPResponseData(
+                    statusCode: 200,
+                    headers: ["Content-Type": "text/html"],
+                    data: Data(publicHTML.utf8),
+                    finalURL: req.url
+                )
+            }
+            if url.contains("/drive/folders/fld_priv") {
+                return HTTPResponseData(
+                    statusCode: 200,
+                    headers: ["Content-Type": "text/html"],
+                    data: Data("<html><head><title>Sign in - Google Accounts</title></head><body><a href=\"https://accounts.google.com/ServiceLogin?continue=1\">Sign in</a></body></html>".utf8),
+                    finalURL: req.url
+                )
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: req.url)
+        }
+
+        let client = GoogleDriveClient(transport: transport, retryDelaysNanoseconds: [1_000_000])
+        let res = try await client.fetchPlaylist(sourceURL: "https://drive.google.com/drive/folders/fld_pub", cookie: nil)
+        XCTAssertEqual(res.title, "Shared Music")
+        XCTAssertEqual(res.tracks.count, 1)
+        XCTAssertEqual(res.tracks[0].relativePath, "Untitled Piece.flac")
+
+        do {
+            _ = try await client.fetchPlaylist(sourceURL: "https://drive.google.com/drive/folders/fld_priv", cookie: nil)
+            XCTFail("Expected private sign-in HTML without _DRIVE_ivd to fail")
+        } catch {
+            // Expected
+        }
+    }
+
+    func testGoogleDriveMultiKeyFallbackCachingAndFiftyItemTruncationPagination() async throws {
+        let keyBad400 = "AIzaSyBadFirstPartyKey00000000000000001"
+        let keyBad403 = "AIzaSyDeniedSecondKey000000000000000002"
+        let keyGood   = "AIzaSyWorkingThirdKey000000000000000003"
+        let sampleHTML = """
+        <script>var a="\(keyBad400)", b="\(keyBad403)", c="\(keyGood)", dup="\(keyBad400)";</script>
+        """
+        XCTAssertEqual(
+            GoogleDriveClient.extractDriveApiKeys(from: sampleHTML),
+            [keyBad400, keyBad403, keyGood]
+        )
+
+        let jsEscape: @Sendable (String) -> String = { s in
+            s.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\x22")
+        }
+        let fiftyRows = (1...50).map { i in
+            "[\"f_r_\(i)\",[\"fld_50\"],\"Song \(i).mp3\",\"audio/mpeg\"]"
+        }.joined(separator: ",")
+        let rootHTML = """
+        <html><head><title>Large Root - Google Drive</title></head><body>
+        \(sampleHTML)
+        <script>window['_DRIVE_ivd'] = '\(jsEscape("[[\(fiftyRows)],null]"))';</script>
+        </body></html>
+        """
+        let subRows = (1...50).map { i in
+            "[\"f_s_\(i)\",[\"fld_sub50\"],\"Sub \(i).flac\",\"application/x-flac\"]"
+        }.joined(separator: ",")
+        let subHTML = """
+        <html><head><title>Sub - Google Drive</title></head><body>
+        <script>var a="\(keyBad400)", c="\(keyGood)"; window['_DRIVE_ivd'] = '\(jsEscape("[[\(subRows)],null]"))';</script>
+        </body></html>
+        """
+
+        let requestedApiKeys = SendableValueBox<[String]>([])
+        let transport = MockCloudTransport { req in
+            let url = req.url!.absoluteString
+            if url.contains("/drive/folders/fld_50") {
+                return HTTPResponseData(statusCode: 200, headers: ["Content-Type": "text/html"], data: Data(rootHTML.utf8), finalURL: req.url)
+            }
+            if url.contains("/drive/folders/fld_sub50") {
+                return HTTPResponseData(statusCode: 200, headers: ["Content-Type": "text/html"], data: Data(subHTML.utf8), finalURL: req.url)
+            }
+            if url.contains("clients6.google.com/drive/v2beta/files") {
+                let key = req.value(forHTTPHeaderField: "X-Goog-Api-Key") ?? ""
+                requestedApiKeys.withLock { $0.append(key) }
+                if key == keyBad400 {
+                    return HTTPResponseData(statusCode: 400, headers: [:], data: Data(), finalURL: req.url)
+                }
+                if key == keyBad403 {
+                    return HTTPResponseData(statusCode: 403, headers: [:], data: Data(), finalURL: req.url)
+                }
+                if url.contains("fld_50") {
+                    if !url.contains("pageToken=") {
+                        let page1Items = (1...50).map { i in
+                            ["id": "f_r_\(i)", "title": "Song \(i).mp3", "mimeType": "audio/mpeg"]
+                        } + [["id": "f_r_51", "title": "Song 51.mp3", "mimeType": "audio/mpeg"]]
+                        let body: [String: Any] = ["nextPageToken": "tok_p2", "items": page1Items]
+                        return HTTPResponseData(statusCode: 200, headers: [:], data: try JSONSerialization.data(withJSONObject: body), finalURL: req.url)
+                    }
+                    XCTAssertTrue(url.contains("pageToken=tok_p2"))
+                    let body: [String: Any] = [
+                        "items": [
+                            ["id": "f_r_52", "title": "Song 52.mp3", "mimeType": "audio/mpeg"]
+                        ]
+                    ]
+                    return HTTPResponseData(statusCode: 200, headers: [:], data: try JSONSerialization.data(withJSONObject: body), finalURL: req.url)
+                }
+                if url.contains("fld_sub50") {
+                    XCTAssertFalse(url.contains("pageToken="))
+                    let subItems: [[String: Any]] = (1...51).map { i in
+                        ["id": "f_s_\(i)", "title": "Sub \(i).flac", "mimeType": "application/x-flac"]
+                    }
+                    let body: [String: Any] = ["items": subItems]
+                    return HTTPResponseData(statusCode: 200, headers: [:], data: try JSONSerialization.data(withJSONObject: body), finalURL: req.url)
+                }
+            }
+            if url.contains("googleapis.com/drive/v3/files") {
+                return HTTPResponseData(statusCode: 403, headers: [:], data: Data(), finalURL: req.url)
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: req.url)
+        }
+
+        let client = GoogleDriveClient(transport: transport, retryDelaysNanoseconds: [1_000_000])
+        let rootRes = try await client.fetchPlaylist(sourceURL: "https://drive.google.com/drive/folders/fld_50", cookie: nil)
+        XCTAssertEqual(rootRes.tracks.count, 52)
+        XCTAssertTrue(rootRes.tracks.contains { $0.remoteTrackID == "f_r_52" })
+
+        let countBeforeSub = requestedApiKeys.value.count
+        let subRes = try await client.fetchPlaylist(sourceURL: "https://drive.google.com/drive/folders/fld_sub50", cookie: nil)
+        XCTAssertEqual(subRes.tracks.count, 51)
+        XCTAssertEqual(requestedApiKeys.value.dropFirst(countBeforeSub).first, keyGood)
+
+        // Fallback to embeddedfolderview when 50-item IVD folder has no working API key.
+        let fallbackTransport = MockCloudTransport { req in
+            let url = req.url!.absoluteString
+            if url.contains("/drive/folders/fld_emb50") {
+                let html = "<html><title>Emb50 - Google Drive</title><script>var k='\(keyBad403)'; window['_DRIVE_ivd']='\(jsEscape("[[\(fiftyRows)],null]"))';</script></html>"
+                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(html.utf8), finalURL: req.url)
+            }
+            if url.contains("v2beta/files") || url.contains("v3/files") {
+                return HTTPResponseData(statusCode: 403, headers: [:], data: Data(), finalURL: req.url)
+            }
+            if url.contains("/embeddedfolderview") {
+                let emb = """
+                <html><body>
+                  <div class="flip-entry"><a href="https://drive.google.com/file/d/f_r_1/view"><div class="flip-entry-title">Song 1.mp3</div></a></div>
+                  <div class="flip-entry"><a href="https://drive.google.com/file/d/f_r_53/view"><div class="flip-entry-title">Song 53.mp3</div></a></div>
+                </body></html>
+                """
+                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(emb.utf8), finalURL: req.url)
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: req.url)
+        }
+        let fbClient = GoogleDriveClient(transport: fallbackTransport, retryDelaysNanoseconds: [1_000_000])
+        let fbRes = try await fbClient.fetchPlaylist(sourceURL: "https://drive.google.com/drive/folders/fld_emb50", cookie: nil)
+        XCTAssertEqual(fbRes.tracks.count, 51)
+        XCTAssertTrue(fbRes.tracks.contains { $0.remoteTrackID == "f_r_53" })
+    }
 }
 
 private final class SendableValueBox<Value>: @unchecked Sendable {

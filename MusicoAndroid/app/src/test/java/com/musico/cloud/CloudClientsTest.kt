@@ -1441,4 +1441,102 @@ class CloudClientsTest {
         assertEquals(6, batches.last().progress.tracksSoFar)
         assertEquals(6, result.tracks.size)
     }
+
+    @Test
+    fun googleDriveMultiKeyFallbackCachingFiftyItemTruncationPaginationAndXFlac() = runBlocking {
+        val keyBad400 = "AIzaSyBadFirstPartyKey00000000000000001"
+        val keyBad403 = "AIzaSyDeniedSecondKey000000000000000002"
+        val keyGood = "AIzaSyWorkingThirdKey000000000000000003"
+        val htmlKeys = """<script>var a="$keyBad400", b="$keyBad403", c="$keyGood", dup="$keyBad400";</script>"""
+        assertEquals(listOf(keyBad400, keyBad403, keyGood), GoogleDriveClient.extractApiKeys(htmlKeys))
+
+        val fiftyEntries = (1..50).joinToString(",") { i ->
+            """["f_r_$i",["fld_50"],"Song $i.mp3","audio/mpeg"]"""
+        }
+        val rootEscaped = """[[$fiftyEntries],null]""".replace("\"", "\\x22").replace("[", "\\x5b").replace("]", "\\x5d")
+        val subEntries = (1..50).joinToString(",") { i ->
+            """["f_s_$i",["fld_sub50"],"Sub $i","application/x-flac"]"""
+        }
+        val subEscaped = """[[$subEntries],null]""".replace("\"", "\\x22").replace("[", "\\x5b").replace("]", "\\x5d")
+
+        val requestedKeys = mutableListOf<String>()
+        val http = FakeCloudHttpClient()
+        http.getHandlers.add { url, headers ->
+            when {
+                url.startsWith("https://drive.google.com/drive/folders/fld_50") -> http.jsonResponse(
+                    """<html><head><title>Root 50 - Google Drive</title></head><body>$htmlKeys<script>window['_DRIVE_ivd']='$rootEscaped';</script></body></html>"""
+                )
+                url.startsWith("https://drive.google.com/drive/folders/fld_sub50") -> http.jsonResponse(
+                    """<html><head><title>Sub 50 - Google Drive</title></head><body><script>var a="$keyBad400", c="$keyGood"; window['_DRIVE_ivd']='$subEscaped';</script></body></html>"""
+                )
+                url.startsWith("https://clients6.google.com/drive/v2beta/files") -> {
+                    val key = headers["X-Goog-Api-Key"].orEmpty()
+                    requestedKeys.add(key)
+                    when (key) {
+                        keyBad400 -> http.jsonResponse("""{"error":{"code":400}}""", statusCode = 400)
+                        keyBad403 -> http.jsonResponse("""{"error":{"code":403}}""", statusCode = 403)
+                        keyGood -> when {
+                            url.contains("fld_50") && !url.contains("pageToken=") -> {
+                                val items = (1..51).joinToString(",") { i ->
+                                    """{"id":"f_r_$i","title":"Song $i.mp3","mimeType":"audio/mpeg"}"""
+                                }
+                                http.jsonResponse("""{"nextPageToken":"tok_2","items":[$items]}""")
+                            }
+                            url.contains("fld_50") && url.contains("pageToken=tok_2") -> http.jsonResponse(
+                                """{"items":[{"id":"f_r_52","title":"Song 52.mp3","mimeType":"audio/mpeg"}]}"""
+                            )
+                            url.contains("fld_sub50") -> {
+                                assertFalse(url.contains("pageToken="))
+                                val items = (1..51).joinToString(",") { i ->
+                                    """{"id":"f_s_$i","title":"Sub $i","mimeType":"application/x-flac"}"""
+                                }
+                                http.jsonResponse("""{"items":[$items]}""")
+                            }
+                            else -> null
+                        }
+                        else -> null
+                    }
+                }
+                url.startsWith("https://www.googleapis.com/drive/v3/files") ->
+                    http.jsonResponse("""{"error":{"code":403}}""", statusCode = 403)
+                else -> null
+            }
+        }
+
+        val client = GoogleDriveClient(http)
+        val rootRes = client.fetchPlaylist("https://drive.google.com/drive/folders/fld_50")
+        assertEquals(52, rootRes.tracks.size)
+        assertTrue(rootRes.tracks.any { it.remoteTrackId == "f_r_52.mp3" })
+
+        val keysBeforeSub = requestedKeys.size
+        val subRes = client.fetchPlaylist("https://drive.google.com/drive/folders/fld_sub50")
+        assertEquals(51, subRes.tracks.size)
+        assertEquals("f_s_51.flac", subRes.tracks.last().remoteTrackId)
+        assertEquals("Sub 51.flac", subRes.tracks.last().relativePath)
+        assertEquals(keyGood, requestedKeys.drop(keysBeforeSub).first())
+
+        // Fallback to embeddedfolderview when 50-item IVD folder has no working API key.
+        val embHttp = FakeCloudHttpClient()
+        embHttp.getHandlers.add { url, _ ->
+            when {
+                url.startsWith("https://drive.google.com/drive/folders/fld_emb50") -> embHttp.jsonResponse(
+                    """<html><head><title>Emb 50 - Google Drive</title></head><body><script>var k="$keyBad403"; window['_DRIVE_ivd']='$rootEscaped';</script></body></html>"""
+                )
+                url.contains("v2beta/files") || url.contains("v3/files") ->
+                    embHttp.jsonResponse("""{"error":{"code":403}}""", statusCode = 403)
+                url.contains("/embeddedfolderview") -> embHttp.jsonResponse(
+                    """
+                    <html><body>
+                      <div class="flip-entry"><a href="https://drive.google.com/file/d/f_r_1/view"><div class="flip-entry-title">Song 1.mp3</div></a></div>
+                      <div class="flip-entry"><a href="https://drive.google.com/file/d/f_r_53/view"><div class="flip-entry-title">Song 53.mp3</div></a></div>
+                    </body></html>
+                    """.trimIndent()
+                )
+                else -> null
+            }
+        }
+        val embRes = GoogleDriveClient(embHttp).fetchPlaylist("https://drive.google.com/drive/folders/fld_emb50")
+        assertEquals(51, embRes.tracks.size)
+        assertTrue(embRes.tracks.any { it.remoteTrackId == "f_r_53.mp3" })
+    }
 }

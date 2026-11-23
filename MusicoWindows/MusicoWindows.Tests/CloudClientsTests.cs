@@ -2321,4 +2321,171 @@ public sealed class CloudClientsTests
         Assert.Contains(full.Items, i => i.RelativePath == "SubA/TrackA.mp3");
         Assert.Contains(full.Items, i => i.RelativePath == "SubB/TrackB.mp3");
     }
+
+    [Fact]
+    public async Task GoogleDriveClientAcceptsPublicServiceLoginHeaderAndXFlacMime()
+    {
+        var handler = new StubHttpHandler(req =>
+        {
+            string url = req.RequestUri!.AbsoluteUri;
+            if (url.Contains("/drive/folders/gdPubHeader", StringComparison.Ordinal))
+            {
+                string ivd = """[[["gd_xf_1",["gdPubHeader"],"Untitled Movement","application/x-flac"]]]""";
+                string html = $$"""
+                <html>
+                  <head><title>Shared Classical - Google Drive</title></head>
+                  <body>
+                    <a href="https://accounts.google.com/ServiceLogin?continue=https://drive.google.com/drive/folders/gdPubHeader">Sign in</a>
+                    <script>window['_DRIVE_ivd'] = '{{ivd}}';</script>
+                  </body>
+                </html>
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(html, Encoding.UTF8, "text/html")
+                };
+            }
+
+            if (url.Contains("/drive/folders/gdPrivLogin", StringComparison.Ordinal))
+            {
+                string privHtml = """
+                <html>
+                  <head><title>Sign in - Google Accounts</title></head>
+                  <body><a href="https://accounts.google.com/ServiceLogin?continue=1">Sign in</a></body>
+                </html>
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(privHtml, Encoding.UTF8, "text/html")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var client = new GoogleDriveClient(handler);
+        var pubResult = await client.FetchPlaylistAsync("https://drive.google.com/drive/folders/gdPubHeader");
+        Assert.Equal("Shared Classical", pubResult.Title);
+        Assert.Single(pubResult.Items);
+        Assert.Equal(".flac", pubResult.Items[0].FileExtension);
+        Assert.True(GoogleDriveClient.IsAudioEntry("NoExt", "application/x-flac"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            client.FetchPlaylistAsync("https://drive.google.com/drive/folders/gdPrivLogin"));
+    }
+
+    [Fact]
+    public async Task GoogleDriveClientMultiKeyFallbackCachingAndFiftyItemTruncationPagination()
+    {
+        const string keyBad400 = "AIzaSyBadFirstPartyKey00000000000000001";
+        const string keyBad403 = "AIzaSyDeniedSecondKey000000000000000002";
+        const string keyGood = "AIzaSyWorkingThirdKey000000000000000003";
+
+        string sampleHtml = $"<script>var a=\"{keyBad400}\", b=\"{keyBad403}\", c=\"{keyGood}\", dup=\"{keyBad400}\";</script>";
+        Assert.Equal([keyBad400, keyBad403, keyGood], GoogleDriveClient.ExtractApiKeys(sampleHtml));
+
+        string fiftyIvdRows = string.Join(",", Enumerable.Range(1, 50).Select(i => $"[\"gd_r_{i}\",[\"gd50Root\"],\"Song {i}.mp3\",\"audio/mpeg\"]"));
+        string subIvdRows = string.Join(",", Enumerable.Range(1, 50).Select(i => $"[\"gd_s_{i}\",[\"gd50Sub\"],\"Sub {i}\",\"application/x-flac\"]"));
+
+        var requestedKeys = new List<string>();
+        var handler = new StubHttpHandler(req =>
+        {
+            string url = req.RequestUri!.AbsoluteUri;
+            if (url.Contains("/drive/folders/gd50Root", StringComparison.Ordinal))
+            {
+                string html = $"<html><head><title>Large 50 - Google Drive</title></head><body>{sampleHtml}<script>window['_DRIVE_ivd'] = '[[{fiftyIvdRows}],null]';</script></body></html>";
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(html, Encoding.UTF8, "text/html") };
+            }
+
+            if (url.Contains("/drive/folders/gd50Sub", StringComparison.Ordinal))
+            {
+                string html = $"<html><head><title>Sub 50 - Google Drive</title></head><body><script>var a=\"{keyBad400}\", c=\"{keyGood}\"; window['_DRIVE_ivd'] = '[[{subIvdRows}],null]';</script></body></html>";
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(html, Encoding.UTF8, "text/html") };
+            }
+
+            if (url.Contains("clients6.google.com/drive/v2beta/files", StringComparison.Ordinal))
+            {
+                string key = req.Headers.TryGetValues("X-Goog-Api-Key", out var vals) ? vals.First() : string.Empty;
+                lock (requestedKeys) requestedKeys.Add(key);
+
+                if (key == keyBad400) return new HttpResponseMessage(HttpStatusCode.BadRequest);
+                if (key == keyBad403) return new HttpResponseMessage(HttpStatusCode.Forbidden);
+
+                if (url.Contains("gd50Root", StringComparison.Ordinal))
+                {
+                    if (!url.Contains("pageToken=", StringComparison.Ordinal))
+                    {
+                        string pageItems = string.Join(",", Enumerable.Range(1, 51).Select(i => $"{{\"id\":\"gd_r_{i}\",\"title\":\"Song {i}.mp3\",\"mimeType\":\"audio/mpeg\"}}"));
+                        return new HttpResponseMessage(HttpStatusCode.OK)
+                        {
+                            Content = new StringContent($"{{\"nextPageToken\":\"tok_2\",\"items\":[{pageItems}]}}", Encoding.UTF8, "application/json")
+                        };
+                    }
+                    Assert.Contains("pageToken=tok_2", url);
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent("""{"items":[{"id":"gd_r_52","title":"Song 52.mp3","mimeType":"audio/mpeg"}]}""", Encoding.UTF8, "application/json")
+                    };
+                }
+
+                if (url.Contains("gd50Sub", StringComparison.Ordinal))
+                {
+                    Assert.DoesNotContain("pageToken=", url);
+                    string pageItems = string.Join(",", Enumerable.Range(1, 51).Select(i => $"{{\"id\":\"gd_s_{i}\",\"title\":\"Sub {i}\",\"mimeType\":\"application/x-flac\"}}"));
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent($"{{\"items\":[{pageItems}]}}", Encoding.UTF8, "application/json")
+                    };
+                }
+            }
+
+            if (url.Contains("googleapis.com/drive/v3/files", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.Forbidden);
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var client = new GoogleDriveClient(handler);
+        var rootRes = await client.FetchPlaylistAsync("https://drive.google.com/drive/folders/gd50Root");
+        Assert.Equal(52, rootRes.Items.Count);
+        Assert.Contains(rootRes.Items, i => i.RemoteTrackId == "gd_r_52");
+
+        int countBeforeSub = requestedKeys.Count;
+        var subRes = await client.FetchPlaylistAsync("https://drive.google.com/drive/folders/gd50Sub");
+        Assert.Equal(51, subRes.Items.Count);
+        Assert.Equal(".flac", subRes.Items[^1].FileExtension);
+        Assert.Equal(keyGood, requestedKeys[countBeforeSub]);
+
+        // Fallback to embeddedfolderview when all keys fail on a 50-item IVD folder.
+        var fallbackHandler = new StubHttpHandler(req =>
+        {
+            string url = req.RequestUri!.AbsoluteUri;
+            if (url.Contains("/drive/folders/gd50Emb", StringComparison.Ordinal))
+            {
+                string html = $"<html><head><title>Emb 50 - Google Drive</title></head><body><script>var k=\"{keyBad403}\"; window['_DRIVE_ivd'] = '[[{fiftyIvdRows}],null]';</script></body></html>";
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(html, Encoding.UTF8, "text/html") };
+            }
+            if (url.Contains("v2beta/files", StringComparison.Ordinal) || url.Contains("v3/files", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.Forbidden);
+            }
+            if (url.Contains("/embeddedfolderview", StringComparison.Ordinal))
+            {
+                string emb = """
+                <html><body>
+                  <div class="flip-entry"><a href="https://drive.google.com/file/d/gd_r_1/view"><div class="flip-entry-title">Song 1.mp3</div></a></div>
+                  <div class="flip-entry"><a href="https://drive.google.com/file/d/gd_r_53/view"><div class="flip-entry-title">Song 53.mp3</div></a></div>
+                </body></html>
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(emb, Encoding.UTF8, "text/html") };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var embRes = await new GoogleDriveClient(fallbackHandler).FetchPlaylistAsync("https://drive.google.com/drive/folders/gd50Emb");
+        Assert.Equal(51, embRes.Items.Count);
+        Assert.Contains(embRes.Items, i => i.RemoteTrackId == "gd_r_53");
+    }
 }

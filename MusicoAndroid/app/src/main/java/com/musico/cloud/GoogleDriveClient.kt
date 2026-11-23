@@ -516,7 +516,6 @@ class GoogleDriveClient(
         val headers = baseHeaders(cookie)
         var title: String? = null
         var primaryAuthFailure: IOException? = null
-        var apiKey: String? = cachedApiKey
 
         val primaryUrl = buildFolderUrl(folderId, resourceKey)
         val primaryResp = prefetchedResponse ?: runCatching {
@@ -529,18 +528,22 @@ class GoogleDriveClient(
             } else if (primaryResp.statusCode in 200..299) {
                 val html = primaryResp.bodyText
                 title = extractPageTitle(html)
-                extractApiKey(html)?.let { extracted ->
-                    apiKey = extracted
-                    cachedApiKey = extracted
-                }
                 val ivdRaw = extractDriveIvdJson(html)
                 if (ivdRaw != null) {
                     val ivdPage = parseDriveIvdPage(ivdRaw)
                     if (ivdPage != null) {
                         val resolvedTitle = title ?: fallbackTitle ?: "Google Drive ($folderId)"
                         val nextToken = ivdPage.nextPageToken
-                        if (nextToken == null) {
+                        val shouldPaginate = nextToken != null || ivdPage.entries.size >= IVD_TRUNCATION_THRESHOLD
+                        if (!shouldPaginate) {
                             return resolvedTitle to ivdPage.entries
+                        }
+
+                        val candidateKeys = buildList {
+                            cachedApiKey?.takeIf { it.isNotBlank() }?.let { add(it) }
+                            for (extracted in extractApiKeys(html)) {
+                                if (extracted !in this) add(extracted)
+                            }
                         }
 
                         val merged = LinkedHashMap<String, DriveEntry>()
@@ -552,7 +555,7 @@ class GoogleDriveClient(
                             folderId = folderId,
                             resourceKey = resourceKey,
                             cookie = cookie,
-                            apiKey = apiKey,
+                            apiKeys = candidateKeys,
                             initialNextPageToken = nextToken,
                             merged = merged,
                         )
@@ -609,23 +612,67 @@ class GoogleDriveClient(
         folderId: String,
         resourceKey: String?,
         cookie: String?,
-        apiKey: String?,
-        initialNextPageToken: String,
+        apiKeys: List<String>,
+        initialNextPageToken: String?,
         merged: LinkedHashMap<String, DriveEntry>,
     ): Boolean {
-        val apiHeaders = buildDriveApiHeaders(folderId, resourceKey, cookie, apiKey)
-        var pageToken: String? = initialNextPageToken
-        var pageCount = 0
+        if (apiKeys.isEmpty()) return false
+
+        var activeHeaders: Map<String, String>? = null
         var useV3Only = false
-        val seenTokens = HashSet<String>().apply { add(initialNextPageToken) }
+        var pageToken: String? = initialNextPageToken
+
+        for (key in apiKeys) {
+            val headersForKey = buildDriveApiHeaders(folderId, resourceKey, cookie, key)
+            var firstParsed: DriveIvdPage? = null
+            var usedV3 = false
+
+            val c6Resp = runCatching {
+                getWithRetry(buildClients6FilesUrl(folderId, key, pageToken), headers = headersForKey)
+            }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+            if (c6Resp != null && c6Resp.statusCode in 200..299) {
+                firstParsed = parseDriveApiPage(c6Resp.bodyText)
+            }
+
+            if (firstParsed == null) {
+                val v3Resp = runCatching {
+                    getWithRetry(buildDriveV3FilesUrl(folderId, key, pageToken), headers = headersForKey)
+                }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+                if (v3Resp != null && v3Resp.statusCode in 200..299) {
+                    firstParsed = parseDriveApiPage(v3Resp.bodyText)
+                    if (firstParsed != null) usedV3 = true
+                }
+            }
+
+            if (firstParsed != null) {
+                cachedApiKey = key
+                activeHeaders = headersForKey
+                useV3Only = usedV3
+                for (entry in firstParsed.entries) {
+                    merged.putIfAbsent(entry.id, entry)
+                }
+                pageToken = firstParsed.nextPageToken
+                break
+            }
+        }
+
+        val resolvedHeaders = activeHeaders ?: return false
+        var pageCount = 1
+        val seenTokens = HashSet<String>().apply {
+            if (!initialNextPageToken.isNullOrBlank()) add(initialNextPageToken)
+        }
 
         while (pageCount < MAX_API_PAGES) {
+            val tok = pageToken?.takeIf { it.isNotBlank() } ?: return true
+            if (!seenTokens.add(tok)) {
+                return true
+            }
             pageCount += 1
             var parsed: DriveIvdPage? = null
 
             if (!useV3Only) {
                 val c6Resp = runCatching {
-                    getWithRetry(buildClients6FilesUrl(folderId, apiKey, pageToken), headers = apiHeaders)
+                    getWithRetry(buildClients6FilesUrl(folderId, resolvedHeaders["X-Goog-Api-Key"], tok), headers = resolvedHeaders)
                 }.onFailure { if (it is CancellationException) throw it }.getOrNull()
                 if (c6Resp != null && c6Resp.statusCode in 200..299) {
                     parsed = parseDriveApiPage(c6Resp.bodyText)
@@ -637,7 +684,7 @@ class GoogleDriveClient(
 
             if (parsed == null) {
                 val v3Resp = runCatching {
-                    getWithRetry(buildDriveV3FilesUrl(folderId, apiKey, pageToken), headers = apiHeaders)
+                    getWithRetry(buildDriveV3FilesUrl(folderId, resolvedHeaders["X-Goog-Api-Key"], tok), headers = resolvedHeaders)
                 }.onFailure { if (it is CancellationException) throw it }.getOrNull()
                 if (v3Resp != null && v3Resp.statusCode in 200..299) {
                     parsed = parseDriveApiPage(v3Resp.bodyText)
@@ -651,14 +698,7 @@ class GoogleDriveClient(
             for (entry in parsed.entries) {
                 merged.putIfAbsent(entry.id, entry)
             }
-            val next = parsed.nextPageToken
-            if (next.isNullOrBlank()) {
-                return true
-            }
-            if (!seenTokens.add(next)) {
-                return true
-            }
-            pageToken = next
+            pageToken = parsed.nextPageToken
         }
         return true
     }
@@ -724,6 +764,7 @@ class GoogleDriveClient(
         append("https://clients6.google.com/drive/v2beta/files?openDrive=true&reason=102")
         append("&supportsAllDrives=true&includeItemsFromAllDrives=true")
         append("&maxResults=1000")
+        append("&fields=").append(encodeQuery("nextPageToken,items(id,title,mimeType,resourceKey,labels(trashed))"))
         append("&q=").append(encodeQuery(query))
         if (!pageToken.isNullOrBlank()) {
             append("&pageToken=").append(encodeQuery(pageToken))
@@ -1193,6 +1234,7 @@ class GoogleDriveClient(
         private const val MAX_FOLDER_DEPTH = 12
         private const val MAX_FOLDERS = 2000
         private const val MAX_API_PAGES = 100
+        private const val IVD_TRUNCATION_THRESHOLD = 50
         private const val MAX_CONCURRENT_WORKERS = 4
         private const val MAX_HTTP_RETRIES = 3
         private const val DEFAULT_ARTIST = "Google Drive"
@@ -1551,7 +1593,10 @@ class GoogleDriveClient(
 
         private fun isAudioMimeType(mimeType: String?): Boolean {
             val clean = mimeType?.substringBefore(';')?.trim()?.lowercase() ?: return false
-            return clean.startsWith("audio/")
+            return clean.startsWith("audio/") ||
+                clean == "application/ogg" ||
+                clean == "application/x-flac" ||
+                clean == "application/flac"
         }
 
         private fun normalizeAudioContentType(mimeType: String?): String? {
@@ -1559,8 +1604,14 @@ class GoogleDriveClient(
             return clean.takeIf { it.startsWith("audio/", ignoreCase = true) }
         }
 
+        internal fun extractApiKeys(html: String): List<String> =
+            GOOGLE_API_KEY_REGEX.findAll(html)
+                .map { it.value }
+                .distinct()
+                .toList()
+
         internal fun extractApiKey(html: String): String? =
-            GOOGLE_API_KEY_REGEX.find(html)?.value
+            extractApiKeys(html).firstOrNull()
 
         internal fun normalizeFolderPath(path: String): String =
             path.replace('\\', '/').trim { it == '/' || it.isWhitespace() }

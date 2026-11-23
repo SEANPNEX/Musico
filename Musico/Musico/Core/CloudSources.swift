@@ -2290,10 +2290,12 @@ actor GoogleDriveClient {
     private let transport: any CloudHTTPTransport
     private let retryDelaysNanoseconds: [UInt64]
     private var streamCache: [String: CachedStream] = [:]
+    private var cachedWorkingApiKey: String?
 
     static let userAgent = YouTubeClient.webUserAgent
     static let maxDepth = 12
     static let maxFolders = 2000
+    static let ivdTruncationThreshold = 50
     static let supportedAudioExtensions: Set<String> = FolderScanner.audioExtensions.union(["mp4", "ogg", "opus", "webm", "wma"])
 
     struct IVDParseResult: Equatable, Sendable {
@@ -2311,6 +2313,8 @@ actor GoogleDriveClient {
         "audio/x-aac": "aac",
         "audio/flac": "flac",
         "audio/x-flac": "flac",
+        "application/x-flac": "flac",
+        "application/flac": "flac",
         "audio/wav": "wav",
         "audio/x-wav": "wav",
         "audio/wave": "wav",
@@ -2748,64 +2752,79 @@ actor GoogleDriveClient {
         var items = ivdResult.items
         var seenIDs = Set(items.map(\.id))
 
-        guard var pageToken = ivdResult.nextPageToken, !pageToken.isEmpty else {
-            // _DRIVE_ivd was validly present (including [[], null]) with no nextPageToken.
+        let initialToken = ivdResult.nextPageToken.flatMap { $0.isEmpty ? nil : $0 }
+        let shouldPaginate = (initialToken != nil) || (items.count >= Self.ivdTruncationThreshold)
+        guard shouldPaginate else {
             return (title, items)
         }
 
-        let apiKey = Self.extractDriveApiKey(from: html)
-        var needsEmbeddedFallback = (apiKey == nil)
+        var candidateKeys: [String] = []
+        if let cached = cachedWorkingApiKey, !cached.isEmpty {
+            candidateKeys.append(cached)
+        }
+        for key in Self.extractDriveApiKeys(from: html) where !candidateKeys.contains(key) {
+            candidateKeys.append(key)
+        }
 
-        if let apiKey {
-            var seenTokens = Set<String>()
-            var pageCount = 0
-            let maxPages = 100
+        var needsEmbeddedFallback = candidateKeys.isEmpty
+        if !candidateKeys.isEmpty {
+            var activeKey: String?
+            var preferV3 = false
+            var pageToken: String? = initialToken
 
-            while pageCount < maxPages, seenTokens.insert(pageToken).inserted {
+            for key in candidateKeys {
                 try Task.checkCancellation()
-                pageCount += 1
+                if let first = try await fetchDriveApiPageWithFallback(
+                    folderID: folderID,
+                    resourceKey: resourceKey,
+                    pageToken: pageToken,
+                    apiKey: key,
+                    cookie: cookie,
+                    preferV3: false
+                ) {
+                    activeKey = key
+                    cachedWorkingApiKey = key
+                    preferV3 = first.usedV3
+                    for item in first.items where seenIDs.insert(item.id).inserted {
+                        items.append(item)
+                    }
+                    pageToken = first.nextPageToken
+                    break
+                }
+            }
 
-                let pageResult: (items: [DriveItem], nextPageToken: String?)?
-                do {
-                    pageResult = try await fetchDriveV2BetaPage(
+            if let activeKey {
+                var seenTokens = Set<String>()
+                if let initialToken { seenTokens.insert(initialToken) }
+                var pageCount = 1
+                let maxPages = 100
+
+                while let tok = pageToken, !tok.isEmpty,
+                      pageCount < maxPages,
+                      seenTokens.insert(tok).inserted {
+                    try Task.checkCancellation()
+                    pageCount += 1
+
+                    guard let pageResult = try await fetchDriveApiPageWithFallback(
                         folderID: folderID,
                         resourceKey: resourceKey,
-                        pageToken: pageToken,
-                        apiKey: apiKey,
-                        cookie: cookie
-                    )
-                } catch is CancellationError {
-                    throw CancellationError()
-                } catch {
-                    do {
-                        pageResult = try await fetchDriveV3Page(
-                            folderID: folderID,
-                            resourceKey: resourceKey,
-                            pageToken: pageToken,
-                            apiKey: apiKey,
-                            cookie: cookie
-                        )
-                    } catch is CancellationError {
-                        throw CancellationError()
-                    } catch {
-                        pageResult = nil
+                        pageToken: tok,
+                        apiKey: activeKey,
+                        cookie: cookie,
+                        preferV3: preferV3
+                    ) else {
+                        needsEmbeddedFallback = true
+                        break
                     }
-                }
 
-                guard let pageResult else {
-                    needsEmbeddedFallback = true
-                    break
+                    preferV3 = preferV3 || pageResult.usedV3
+                    for item in pageResult.items where seenIDs.insert(item.id).inserted {
+                        items.append(item)
+                    }
+                    pageToken = pageResult.nextPageToken
                 }
-
-                for item in pageResult.items where seenIDs.insert(item.id).inserted {
-                    items.append(item)
-                }
-
-                if let next = pageResult.nextPageToken, !next.isEmpty {
-                    pageToken = next
-                } else {
-                    break
-                }
+            } else {
+                needsEmbeddedFallback = true
             }
         }
 
@@ -2849,28 +2868,68 @@ actor GoogleDriveClient {
         return (resolvedTitle, embeddedItems)
     }
 
+    private func fetchDriveApiPageWithFallback(
+        folderID: String,
+        resourceKey: String?,
+        pageToken: String?,
+        apiKey: String,
+        cookie: String?,
+        preferV3: Bool
+    ) async throws -> (items: [DriveItem], nextPageToken: String?, usedV3: Bool)? {
+        if !preferV3 {
+            do {
+                let res = try await fetchDriveV2BetaPage(
+                    folderID: folderID,
+                    resourceKey: resourceKey,
+                    pageToken: pageToken,
+                    apiKey: apiKey,
+                    cookie: cookie
+                )
+                return (res.items, res.nextPageToken, false)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Fall back to Drive v3 below.
+            }
+        }
+        do {
+            let res = try await fetchDriveV3Page(
+                folderID: folderID,
+                resourceKey: resourceKey,
+                pageToken: pageToken,
+                apiKey: apiKey,
+                cookie: cookie
+            )
+            return (res.items, res.nextPageToken, true)
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch {
+            return nil
+        }
+    }
+
     private func fetchDriveV2BetaPage(
         folderID: String,
         resourceKey: String?,
-        pageToken: String,
+        pageToken: String?,
         apiKey: String,
         cookie: String?
     ) async throws -> (items: [DriveItem], nextPageToken: String?) {
         var components = URLComponents(string: "https://clients6.google.com/drive/v2beta/files")!
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "openDrive", value: "true"),
             URLQueryItem(name: "reason", value: "102"),
-            URLQueryItem(name: "syncType", value: "0"),
-            URLQueryItem(name: "errorRecovery", value: "false"),
             URLQueryItem(name: "q", value: "'\(folderID)' in parents and trashed = false"),
-            URLQueryItem(name: "fields", value: "kind,nextPageToken,items(id,title,mimeType,resourceKey,fileSize,labels(trashed))"),
-            URLQueryItem(name: "orderBy", value: "folder,title_natural asc"),
-            URLQueryItem(name: "maxResults", value: "100"),
-            URLQueryItem(name: "supportsTeamDrives", value: "true"),
+            URLQueryItem(name: "fields", value: "nextPageToken,items(id,title,mimeType,resourceKey,labels(trashed))"),
+            URLQueryItem(name: "maxResults", value: "1000"),
+            URLQueryItem(name: "supportsAllDrives", value: "true"),
             URLQueryItem(name: "includeItemsFromAllDrives", value: "true"),
-            URLQueryItem(name: "pageToken", value: pageToken),
             URLQueryItem(name: "key", value: apiKey)
         ]
+        if let pageToken, !pageToken.isEmpty {
+            queryItems.append(URLQueryItem(name: "pageToken", value: pageToken))
+        }
+        components.queryItems = queryItems
         let req = Self.driveAPIRequest(
             url: components.url!,
             folderID: folderID,
@@ -2889,20 +2948,23 @@ actor GoogleDriveClient {
     private func fetchDriveV3Page(
         folderID: String,
         resourceKey: String?,
-        pageToken: String,
+        pageToken: String?,
         apiKey: String,
         cookie: String?
     ) async throws -> (items: [DriveItem], nextPageToken: String?) {
         var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
-        components.queryItems = [
+        var queryItems = [
             URLQueryItem(name: "q", value: "'\(folderID)' in parents and trashed = false"),
             URLQueryItem(name: "pageSize", value: "1000"),
             URLQueryItem(name: "fields", value: "nextPageToken,files(id,name,mimeType,resourceKey,size)"),
             URLQueryItem(name: "supportsAllDrives", value: "true"),
             URLQueryItem(name: "includeItemsFromAllDrives", value: "true"),
-            URLQueryItem(name: "pageToken", value: pageToken),
             URLQueryItem(name: "key", value: apiKey)
         ]
+        if let pageToken, !pageToken.isEmpty {
+            queryItems.append(URLQueryItem(name: "pageToken", value: pageToken))
+        }
+        components.queryItems = queryItems
         let req = Self.driveAPIRequest(
             url: components.url!,
             folderID: folderID,
@@ -3200,10 +3262,19 @@ actor GoogleDriveClient {
     }
 
     nonisolated private static func isSignInHTML(_ html: String) -> Bool {
+        if extractDriveIVDJSONString(from: html) != nil { return false }
+        if html.range(of: "flip-entry", options: .caseInsensitive) != nil { return false }
+        if html.range(of: "uc-download-link", options: .caseInsensitive) != nil { return false }
+        if let base = URL(string: "https://drive.google.com"),
+           parseDownloadConfirmForm(html: html, baseURL: base) != nil {
+            return false
+        }
         let lower = html.lowercased()
         return lower.contains("accounts.google.com/servicelogin")
             || lower.contains("sign in - google accounts")
             || lower.contains("servicelogin?")
+            || lower.contains("google drive: sign-in")
+            || lower.contains("you need access")
     }
 
     nonisolated private static func normalizedCookie(_ cookie: String?) -> String? {
@@ -3314,15 +3385,24 @@ actor GoogleDriveClient {
     }
 
     nonisolated static func extractDriveApiKey(from html: String) -> String? {
+        extractDriveApiKeys(from: html).first
+    }
+
+    nonisolated static func extractDriveApiKeys(from html: String) -> [String] {
         guard let regex = try? NSRegularExpression(pattern: #"AIzaSy[0-9A-Za-z_-]{33}"#, options: []) else {
-            return nil
+            return []
         }
         let range = NSRange(html.startIndex..<html.endIndex, in: html)
-        guard let match = regex.firstMatch(in: html, range: range),
-              let r = Range(match.range, in: html) else {
-            return nil
+        var result: [String] = []
+        var seen = Set<String>()
+        for match in regex.matches(in: html, range: range) {
+            guard let r = Range(match.range, in: html) else { continue }
+            let key = String(html[r])
+            if seen.insert(key).inserted {
+                result.append(key)
+            }
         }
-        return String(html[r])
+        return result
     }
 
     nonisolated static func parseDriveIVD(from html: String) -> [DriveItem] {
@@ -3739,7 +3819,10 @@ actor GoogleDriveClient {
         let lowerMime = mimeType.lowercased().split(separator: ";").first.map {
             String($0).trimmingCharacters(in: .whitespacesAndNewlines)
         } ?? ""
-        if lowerMime.hasPrefix("audio/") || lowerMime == "application/ogg" {
+        if lowerMime.hasPrefix("audio/") ||
+            lowerMime == "application/ogg" ||
+            lowerMime == "application/x-flac" ||
+            lowerMime == "application/flac" {
             return true
         }
         return false
