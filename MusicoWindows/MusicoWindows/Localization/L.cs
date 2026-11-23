@@ -125,6 +125,18 @@ public static class L
 
     private static readonly Dictionary<string, string> En = new(StringComparer.Ordinal)
     {
+        ["App_AlreadyRunning"] = "Musico is already running.",
+        ["App_InstanceCheckFailed"] = "Musico could not check whether another instance is running. Please close other copies of Musico and try again.",
+        ["WindowBehavior_SettingsTitle"] = "Exit settings",
+        ["WindowBehavior_SaveFailed"] = "Could not save the close behavior. Check that the application data folder is writable and try again.",
+        ["Tray_Pause"] = "Pause",
+        ["Tray_PlayPause"] = "Play / Pause",
+        ["Tray_Previous"] = "Previous track",
+        ["Tray_Next"] = "Next track",
+        ["Tray_Restore"] = "Show main window",
+        ["Tray_Exit"] = "Exit",
+        ["Tray_Unavailable"] = "The system tray icon could not be created. Musico will stay open so you can still access the player.",
+
         // Language switcher
         ["Lang_FollowSystem"] = "Follow System",
         ["Lang_English"] = "English",
@@ -557,6 +569,18 @@ public static class L
 
     private static readonly Dictionary<string, string> ZhHans = new(StringComparer.Ordinal)
     {
+        ["App_AlreadyRunning"] = "Musico 已在运行。",
+        ["App_InstanceCheckFailed"] = "无法检查 Musico 是否已在运行。请关闭其他 Musico 程序后重试。",
+        ["WindowBehavior_SettingsTitle"] = "退出设置",
+        ["WindowBehavior_SaveFailed"] = "无法保存关闭行为。请检查应用数据文件夹是否可写，然后重试。",
+        ["Tray_Pause"] = "暂停",
+        ["Tray_PlayPause"] = "播放 / 暂停",
+        ["Tray_Previous"] = "上一首",
+        ["Tray_Next"] = "下一首",
+        ["Tray_Restore"] = "展开主页面",
+        ["Tray_Exit"] = "退出",
+        ["Tray_Unavailable"] = "无法创建系统托盘图标。Musico 将保持窗口打开，以便您继续操作播放器。",
+
         // Language switcher
         ["Lang_FollowSystem"] = "跟随系统",
         ["Lang_English"] = "English",
