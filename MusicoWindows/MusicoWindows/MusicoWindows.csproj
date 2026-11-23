@@ -29,4 +29,8 @@
     <Resource Include="Assets\AppIcon.ico" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="MusicoWindows.Tests" />
+  </ItemGroup>
+
 </Project>
