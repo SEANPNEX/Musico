@@ -374,11 +374,3 @@ private fun ReleaseNotesBox(notes: String) {
         }
     }
 }
-
-private fun formatBytes(bytes: Long): String {
-    if (bytes < 1024L) return "$bytes B"
-    val kb = bytes / 1024.0
-    if (kb < 1024.0) return String.format(Locale.US, "%.1f KB", kb)
-    val mb = kb / 1024.0
-    return String.format(Locale.US, "%.1f MB", mb)
-}

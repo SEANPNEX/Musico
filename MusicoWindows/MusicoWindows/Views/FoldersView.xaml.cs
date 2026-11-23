@@ -120,6 +120,27 @@ public partial class FoldersView : UserControl
                 ScanProgressBar.IsIndeterminate = true;
             }
         }
+        else if (_currentRootId is Guid activeSyncRootId &&
+                 lib.GetCloudSyncProgress(activeSyncRootId) is { IsCompleted: false } activeSync)
+        {
+            ScanBanner.Visibility = Visibility.Visible;
+            if (activeSync.FoldersTotal > 0)
+            {
+                ScanStatusText.Text = L.Format(
+                    "Folders_CloudSyncProgress",
+                    activeSync.FoldersDone,
+                    activeSync.FoldersTotal,
+                    L.SongsCount(activeSync.TracksDiscovered));
+                ScanProgressBar.IsIndeterminate = false;
+                ScanProgressBar.Maximum = activeSync.FoldersTotal;
+                ScanProgressBar.Value = activeSync.FoldersDone;
+            }
+            else
+            {
+                ScanStatusText.Text = L.Get("Folders_CloudSyncLoadingTitle");
+                ScanProgressBar.IsIndeterminate = true;
+            }
+        }
         else
         {
             ScanBanner.Visibility = Visibility.Collapsed;
@@ -219,33 +240,7 @@ public partial class FoldersView : UserControl
 
             if (root.IsCloud || root.IsCloudTrackedLocal)
             {
-                var badge = new Border
-                {
-                    Margin = new Thickness(8, 0, 0, 0),
-                    Padding = new Thickness(6, 2, 6, 2),
-                    BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(0),
-                    VerticalAlignment = VerticalAlignment.Center
-                };
-                badge.SetResourceReference(Border.BackgroundProperty, "AccentSubtleBrush");
-                badge.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
-
-                string cloudName = root.EffectiveCloudKind switch
-                {
-                    RootKind.CloudBilibili => "Bilibili",
-                    RootKind.CloudGoogleDrive => "Google Drive",
-                    _ => "YouTube"
-                };
-                var badgeText = new TextBlock
-                {
-                    Text = root.IsCloud ? cloudName : L.Format("Folders_CloudLocalBadge", cloudName),
-                    FontFamily = (FontFamily)FindResource("Win10Font"),
-                    FontSize = 10,
-                    FontWeight = FontWeights.SemiBold
-                };
-                badgeText.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
-                badge.Child = badgeText;
-                titleRow.Children.Add(badge);
+                titleRow.Children.Add(CreateCloudBadge(root.EffectiveCloudKind ?? root.Kind, isLocal: !root.IsCloud));
             }
 
             string locationDisplay = root.IsCloud
@@ -253,10 +248,16 @@ public partial class FoldersView : UserControl
                 : root.IsCloudTrackedLocal && !string.IsNullOrWhiteSpace(root.SourceUrl)
                     ? $"{root.Path ?? string.Empty} · {root.SourceUrl}"
                     : (root.Path ?? string.Empty);
+            var sync = root.IsCloud ? lib.GetCloudSyncProgress(root.Id) : null;
+            string? syncSuffix = sync is { IsCompleted: false }
+                ? L.Format("Folders_CloudSyncCompact", sync.FoldersDone, sync.FoldersTotal, L.SongsCount(sync.TracksDiscovered))
+                : null;
             var detailTb = new TextBlock
             {
                 Text = available
-                    ? $"{L.SongsCount(count)} · {locationDisplay}"
+                    ? (syncSuffix is not null
+                        ? $"{L.SongsCount(count)} · {syncSuffix} · {locationDisplay}"
+                        : $"{L.SongsCount(count)} · {locationDisplay}")
                     : L.Get("Folders_Unavailable"),
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 12,
@@ -432,8 +433,12 @@ public partial class FoldersView : UserControl
                         menu.Items.Add(TrackMenuHelper.CreateItem(
                             L.Get("Folders_UpdateFromCloud"),
                             "\uE896",
-                            () => _ctx.OpenUpdateTrackedFolder?.Invoke(root),
+                            () => OpenTrackedUpdate(root, string.Empty),
                             available));
+                        menu.Items.Add(TrackMenuHelper.CreateItem(
+                            L.Get("Folders_EditCloudSource"),
+                            "\uE70F",
+                            () => PromptEditCloudSource(root, string.Empty)));
                     }
                     if (root.Kind == RootKind.Picked)
                     {
@@ -484,19 +489,33 @@ public partial class FoldersView : UserControl
         var root = lib.GetRoot(rootId);
         if (root is null) return;
 
+        bool isSyncing = root.IsCloud && lib.GetCloudSyncProgress(rootId) is { IsCompleted: false };
+        if (isSyncing)
+        {
+            lib.PrioritizeCloudFolder(rootId, _currentPath);
+        }
+
+        var currentTracking = root.IsLocal ? lib.GetCloudTracking(rootId, _currentPath) : null;
+        string displayFolderPath = string.IsNullOrEmpty(_currentPath)
+            ? (root.Path ?? string.Empty)
+            : FolderScanner.CombinePath(root.Path ?? string.Empty, _currentPath);
+
         string leafName = string.IsNullOrEmpty(_currentPath)
             ? L.DisplayRootName(root)
             : _currentPath.Split('/').Last();
         TitleText.Text = leafName;
         SubtitleText.Text = root.IsCloud
             ? (root.SourceUrl ?? root.Path ?? string.Empty)
-            : root.IsCloudTrackedLocal && !string.IsNullOrWhiteSpace(root.SourceUrl)
-                ? $"{root.Path ?? string.Empty} · {root.SourceUrl}"
-                : (root.Path ?? string.Empty);
+            : currentTracking is not null && !string.IsNullOrWhiteSpace(currentTracking.SourceUrl)
+                ? $"{displayFolderPath} · {currentTracking.SourceUrl}"
+                : displayFolderPath;
         DrillBar.Visibility = Visibility.Visible;
         NewFolderButton.Visibility = root.IsLocal && lib.IsAvailable(root) ? Visibility.Visible : Visibility.Collapsed;
         SaveCloudFolderButton.Visibility = root.IsCloud ? Visibility.Visible : Visibility.Collapsed;
-        UpdateTrackedFolderButton.Visibility = root.IsCloudTrackedLocal && string.IsNullOrEmpty(_currentPath)
+        UpdateTrackedFolderButton.Visibility = root.IsLocal && currentTracking is not null && lib.IsAvailable(root)
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        EditCloudSourceButton.Visibility = root.IsLocal && currentTracking is not null
             ? Visibility.Visible
             : Visibility.Collapsed;
         RemoveRootButton.Visibility = Visibility.Visible;
@@ -541,7 +560,7 @@ public partial class FoldersView : UserControl
             });
             var t1 = new TextBlock
             {
-                Text = L.Get("Folders_EmptyTitle"),
+                Text = isSyncing ? L.Get("Folders_CloudSyncLoadingTitle") : L.Get("Folders_EmptyTitle"),
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 17,
                 FontWeight = FontWeights.SemiBold,
@@ -550,7 +569,7 @@ public partial class FoldersView : UserControl
             t1.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
             var t2 = new TextBlock
             {
-                Text = L.Get("Folders_EmptyDesc"),
+                Text = isSyncing ? L.Get("Folders_CloudSyncLoadingDesc") : L.Get("Folders_EmptyDesc"),
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 13,
                 HorizontalAlignment = HorizontalAlignment.Center,
@@ -569,6 +588,8 @@ public partial class FoldersView : UserControl
             string childPath = string.IsNullOrEmpty(_currentPath) ? folderName : $"{_currentPath}/{folderName}";
             string capturedFolderName = folderName;
             var folderTracks = lib.GetTracksUnder(rootId, childPath, history);
+            var subTracking = root.IsLocal ? lib.GetCloudTracking(rootId, childPath) : null;
+            bool isTrackedSubfolder = subTracking is not null && subTracking.CloudKind.IsCloud();
 
             var row = new Border
             {
@@ -603,7 +624,24 @@ public partial class FoldersView : UserControl
                 VerticalAlignment = VerticalAlignment.Center
             };
             nameTb.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
-            Grid.SetColumn(nameTb, 1);
+
+            UIElement titleElement;
+            if (isTrackedSubfolder)
+            {
+                var subTitlePanel = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                subTitlePanel.Children.Add(nameTb);
+                subTitlePanel.Children.Add(CreateCloudBadge(subTracking!.CloudKind, isLocal: true));
+                titleElement = subTitlePanel;
+            }
+            else
+            {
+                titleElement = nameTb;
+            }
+            Grid.SetColumn(titleElement, 1);
 
             var countTb = new TextBlock
             {
@@ -615,40 +653,51 @@ public partial class FoldersView : UserControl
             countTb.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
             Grid.SetColumn(countTb, 2);
 
-            var removeSubBtn = new Button
+            var removeSubBtn = CreateCompactRowButton(
+                "\uE74D",
+                L.Get("Folders_RemoveFolder"),
+                L.Get("Folders_RemoveFromLibraryTooltip"),
+                new Thickness(isTrackedSubfolder ? 0 : 12, 0, 0, 0),
+                (_, e) =>
+                {
+                    e.Handled = true;
+                    ConfirmRemoveSubfolder(root, childPath, navigateUpOnConfirm: false);
+                });
+
+            UIElement actionElement;
+            if (isTrackedSubfolder)
             {
-                Style = (Style)FindResource("Win10ButtonStyle"),
-                ToolTip = L.Get("Folders_RemoveFromLibraryTooltip"),
-                Margin = new Thickness(12, 0, 0, 0),
-                Padding = new Thickness(8, 4, 8, 4)
-            };
-            var removeSubContent = new StackPanel { Orientation = Orientation.Horizontal };
-            removeSubContent.Children.Add(new TextBlock
+                var actionsPanel = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(12, 0, 0, 0)
+                };
+                var updateSubBtn = CreateCompactRowButton(
+                    "\uE896",
+                    L.Get("Folders_UpdateFromCloud"),
+                    L.Get("Folders_UpdateFromCloud"),
+                    new Thickness(0, 0, 8, 0),
+                    (_, e) =>
+                    {
+                        e.Handled = true;
+                        OpenTrackedUpdate(root, childPath);
+                    },
+                    isEnabled: lib.IsAvailable(root));
+                actionsPanel.Children.Add(updateSubBtn);
+                actionsPanel.Children.Add(removeSubBtn);
+                actionElement = actionsPanel;
+            }
+            else
             {
-                Text = "\uE74D",
-                FontFamily = (FontFamily)FindResource("Win10GlyphFont"),
-                FontSize = 11,
-                VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(0, 0, 5, 0)
-            });
-            removeSubContent.Children.Add(new TextBlock
-            {
-                Text = L.Get("Folders_RemoveFolder"),
-                FontSize = 12,
-                VerticalAlignment = VerticalAlignment.Center
-            });
-            removeSubBtn.Content = removeSubContent;
-            removeSubBtn.Click += (_, e) =>
-            {
-                e.Handled = true;
-                ConfirmRemoveSubfolder(root, childPath, navigateUpOnConfirm: false);
-            };
-            Grid.SetColumn(removeSubBtn, 3);
+                actionElement = removeSubBtn;
+            }
+            Grid.SetColumn(actionElement, 3);
 
             rowGrid.Children.Add(icon);
-            rowGrid.Children.Add(nameTb);
+            rowGrid.Children.Add(titleElement);
             rowGrid.Children.Add(countTb);
-            rowGrid.Children.Add(removeSubBtn);
+            rowGrid.Children.Add(actionElement);
             row.Child = rowGrid;
 
             row.MouseEnter += (_, _) =>
@@ -685,6 +734,18 @@ public partial class FoldersView : UserControl
                         menu.Items.Insert(1, new Separator());
                     }
                     menu.Items.Add(new Separator());
+                    if (isTrackedSubfolder)
+                    {
+                        menu.Items.Add(TrackMenuHelper.CreateItem(
+                            L.Get("Folders_UpdateFromCloud"),
+                            "\uE896",
+                            () => OpenTrackedUpdate(root, childPath),
+                            lib.IsAvailable(root)));
+                        menu.Items.Add(TrackMenuHelper.CreateItem(
+                            L.Get("Folders_EditCloudSource"),
+                            "\uE70F",
+                            () => PromptEditCloudSource(root, childPath)));
+                    }
                     menu.Items.Add(TrackMenuHelper.CreateItem(
                         L.Get("Folders_RemoveFolder"),
                         "\uE74D",
@@ -876,8 +937,127 @@ public partial class FoldersView : UserControl
     {
         if (_ctx is null || _currentRootId is not Guid rid) return;
         var root = _ctx.Services.Library.GetRoot(rid);
-        if (root is null || !root.IsCloudTrackedLocal) return;
-        _ctx.OpenUpdateTrackedFolder?.Invoke(root);
+        if (root is null || !root.IsLocal) return;
+        if (_ctx.Services.Library.GetCloudTracking(rid, _currentPath) is null) return;
+        OpenTrackedUpdate(root, _currentPath);
+    }
+
+    private void EditCloudSource_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ctx is null || _currentRootId is not Guid rid) return;
+        var root = _ctx.Services.Library.GetRoot(rid);
+        if (root is null || !root.IsLocal) return;
+        if (_ctx.Services.Library.GetCloudTracking(rid, _currentPath) is null) return;
+        PromptEditCloudSource(root, _currentPath);
+    }
+
+    private void OpenTrackedUpdate(LibraryRoot root, string relativePath)
+    {
+        if (_ctx is null) return;
+        string norm = LibraryRoot.NormalizeFolderPath(relativePath);
+        if (norm.Length == 0)
+        {
+            _ctx.OpenUpdateTrackedFolder?.Invoke(root);
+        }
+        else
+        {
+            _ctx.OpenUpdateTrackedSubfolder?.Invoke(root, norm);
+        }
+    }
+
+    private void PromptEditCloudSource(LibraryRoot root, string relativePath)
+    {
+        if (_ctx is null) return;
+        var tracking = _ctx.Services.Library.GetCloudTracking(root.Id, relativePath);
+        string initialUrl = tracking?.SourceUrl ?? root.SourceUrl ?? string.Empty;
+        _ctx.OpenTextPrompt(
+            L.Get("Folders_EditCloudSourceTitle"),
+            L.Get("Folders_EditCloudSourceMessage"),
+            initialUrl,
+            L.Get("Common_Save"),
+            value =>
+            {
+                try
+                {
+                    _ctx.Services.Library.UpdateCloudTrackingAddress(
+                        root.Id,
+                        relativePath,
+                        value,
+                        tracking?.Cookie ?? root.Cookie,
+                        tracking?.ProxyUrl ?? root.ProxyUrl);
+                }
+                catch (Exception ex)
+                {
+                    _ctx.OpenConfirm(L.Get("Folders_CouldNotUpdateSourceTitle"), ex.Message, L.Get("Common_OK"), null, false);
+                }
+            });
+    }
+
+    private Border CreateCloudBadge(RootKind cloudKind, bool isLocal)
+    {
+        var badge = new Border
+        {
+            Margin = new Thickness(8, 0, 0, 0),
+            Padding = new Thickness(6, 2, 6, 2),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(0),
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        badge.SetResourceReference(Border.BackgroundProperty, "AccentSubtleBrush");
+        badge.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
+
+        string cloudName = cloudKind switch
+        {
+            RootKind.CloudBilibili => "Bilibili",
+            RootKind.CloudGoogleDrive => "Google Drive",
+            _ => "YouTube"
+        };
+        var badgeText = new TextBlock
+        {
+            Text = isLocal ? L.Format("Folders_CloudLocalBadge", cloudName) : cloudName,
+            FontFamily = (FontFamily)FindResource("Win10Font"),
+            FontSize = 10,
+            FontWeight = FontWeights.SemiBold
+        };
+        badgeText.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
+        badge.Child = badgeText;
+        return badge;
+    }
+
+    private Button CreateCompactRowButton(
+        string glyph,
+        string label,
+        string tooltip,
+        Thickness margin,
+        RoutedEventHandler onClick,
+        bool isEnabled = true)
+    {
+        var btn = new Button
+        {
+            Style = (Style)FindResource("Win10ButtonStyle"),
+            ToolTip = tooltip,
+            Margin = margin,
+            Padding = new Thickness(8, 4, 8, 4),
+            IsEnabled = isEnabled
+        };
+        var content = new StackPanel { Orientation = Orientation.Horizontal };
+        content.Children.Add(new TextBlock
+        {
+            Text = glyph,
+            FontFamily = (FontFamily)FindResource("Win10GlyphFont"),
+            FontSize = 11,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 5, 0)
+        });
+        content.Children.Add(new TextBlock
+        {
+            Text = label,
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center
+        });
+        btn.Content = content;
+        btn.Click += onClick;
+        return btn;
     }
 
     private void RemoveRoot_Click(object sender, RoutedEventArgs e)

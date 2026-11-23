@@ -48,6 +48,32 @@ enum FolderScanner {
         return result.sorted { $0.relativePath.localizedStandardCompare($1.relativePath) == .orderedAscending }
     }
 
+    /// Recursively discovers `.musico-cloud.json` manifests under `root`, keyed by normalized
+    /// folder path (`""` for a manifest directly inside `root`).
+    static func scanCloudManifests(root: URL) -> [String: CloudFolderManifest] {
+        guard (try? FileManager.default.contentsOfDirectory(atPath: root.path)) != nil,
+              let enumerator = FileManager.default.enumerator(atPath: root.path) else { return [:] }
+        var result: [String: CloudFolderManifest] = [:]
+        let decoder = JSONDecoder()
+        while let path = enumerator.nextObject() as? String {
+            let name = (path as NSString).lastPathComponent
+            let isDirectory = enumerator.fileAttributes?[.type] as? FileAttributeType == .typeDirectory
+            if isDirectory {
+                if name.hasPrefix(".") { enumerator.skipDescendants() }
+                continue
+            }
+            guard name == CloudFolderManifest.fileName else { continue }
+            let fileURL = root.appendingPathComponent(path, isDirectory: false)
+            guard let data = try? Data(contentsOf: fileURL),
+                  let manifest = try? decoder.decode(CloudFolderManifest.self, from: data) else {
+                continue
+            }
+            let folderRel = LibraryRoot.normalizeFolderPath((path as NSString).deletingLastPathComponent)
+            result[folderRel] = manifest
+        }
+        return result
+    }
+
     static func url(root: URL, relativePath: String) -> URL {
         root.appendingPathComponent(relativePath, isDirectory: false)
     }

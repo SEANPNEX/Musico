@@ -92,6 +92,32 @@ public sealed class PlayHistoryStore : ObservableStore
         Save();
     }
 
+    public void MigrateTracks(IReadOnlyDictionary<string, string> idMigrations)
+    {
+        if (idMigrations.Count == 0) return;
+        bool changed = false;
+        foreach (var kvp in idMigrations)
+        {
+            if (_entries.Remove(kvp.Key, out var entry))
+            {
+                if (_entries.TryGetValue(kvp.Value, out var existing))
+                {
+                    _entries[kvp.Value] = new PlayHistoryEntry(
+                        existing.Count + entry.Count,
+                        existing.LastPlayedUtc >= entry.LastPlayedUtc ? existing.LastPlayedUtc : entry.LastPlayedUtc);
+                }
+                else
+                {
+                    _entries[kvp.Value] = entry;
+                }
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        OnPropertyChanged(nameof(Entries));
+        Save();
+    }
+
     public int GetCount(string id) => _entries.TryGetValue(id, out var entry) ? entry.Count : 0;
 
     public DateTimeOffset? GetLastPlayed(string id) => _entries.TryGetValue(id, out var entry) ? entry.LastPlayedUtc : null;

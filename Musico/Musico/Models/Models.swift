@@ -1,6 +1,14 @@
 import Foundation
 import CryptoKit
 
+struct CloudTrackingInfo: Codable, Equatable, Hashable, Sendable {
+    var sourceURL: String
+    var remoteID: String? = nil
+    var cloudKind: LibraryRoot.Kind
+    var cookie: String? = nil
+    var lastSynced: Date? = nil
+}
+
 struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
         case picked, appFolder, cloudYouTube, cloudBilibili, cloudGoogleDrive
@@ -38,6 +46,7 @@ struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
     var lastSynced: Date? = nil
     var excludedPaths: [String]? = nil
     var linkedCloudKind: Kind? = nil
+    var trackedSubfolders: [String: CloudTrackingInfo]? = nil
 
     var isCloudTrackedLocal: Bool {
         kind.isLocal && !(sourceURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -48,6 +57,17 @@ struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
     }
 
     var normalizedExcludedPaths: [String] { excludedPaths ?? [] }
+
+    var normalizedTrackedSubfolders: [String: CloudTrackingInfo] {
+        guard let trackedSubfolders, !trackedSubfolders.isEmpty else { return [:] }
+        var result: [String: CloudTrackingInfo] = [:]
+        for (rawKey, info) in trackedSubfolders {
+            let norm = Self.normalizeFolderPath(rawKey)
+            guard !norm.isEmpty else { continue }
+            result[norm] = info
+        }
+        return result
+    }
 
     static func normalizeFolderPath(_ path: String) -> String {
         path

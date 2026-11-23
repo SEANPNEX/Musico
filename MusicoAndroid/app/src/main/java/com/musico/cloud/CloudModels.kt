@@ -31,6 +31,7 @@ data class CloudTrackMetadata(
     val durationSec: Double,
     val artworkUrl: String? = null,
     val trackNumber: Int? = null,
+    val relativePath: String? = null,
 )
 
 data class CloudPlaylistResult(

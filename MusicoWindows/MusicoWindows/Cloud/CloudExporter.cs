@@ -29,7 +29,25 @@ public sealed record CloudExportProgress(
     int Completed,
     int Total,
     string CurrentTrackTitle,
-    int FailedCount = 0);
+    int FailedCount = 0,
+    long BytesDownloaded = 0,
+    long? TotalBytes = null,
+    double BytesPerSecond = 0)
+{
+    public double? OverallFraction
+    {
+        get
+        {
+            if (Total <= 0) return null;
+            if (Completed >= Total) return 1.0;
+            if (Total == 1 && TotalBytes is not > 0) return null;
+            double trackFraction = TotalBytes is long totalB && totalB > 0
+                ? Math.Clamp((double)BytesDownloaded / totalB, 0.0, 1.0)
+                : 0.0;
+            return Math.Clamp((Completed + trackFraction) / Total, 0.0, 1.0);
+        }
+    }
+}
 
 public sealed record CloudExportResult(
     int SavedCount,
@@ -194,9 +212,16 @@ public sealed class CloudExporter
             var track = cloudTracks[i];
             progress?.Report(new CloudExportProgress(i, cloudTracks.Count, track.Title, failedCount));
 
+            var trackProgress = CreateChildProgressAdapter(
+                progress,
+                i,
+                cloudTracks.Count,
+                track.Title,
+                failedCount);
+
             try
             {
-                string destPath = await ExportTrackAsync(track, root, destinationFolder, ct).ConfigureAwait(false);
+                string destPath = await ExportTrackAsync(track, root, destinationFolder, trackProgress, ct).ConfigureAwait(false);
                 string trackKey = !string.IsNullOrWhiteSpace(track.RemoteTrackId)
                     ? track.RemoteTrackId!
                     : track.RelativePath;
@@ -246,25 +271,31 @@ public sealed class CloudExporter
         LibraryRoot root,
         Func<string, string?, string?, RootKind?, CancellationToken, Task<CloudPlaylistResult>>? fetchPlaylist = null,
         IProgress<CloudExportProgress>? progress = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? targetFolderPath = null,
+        CloudTrackingInfo? trackingOverride = null)
     {
         ArgumentNullException.ThrowIfNull(root);
-        if (string.IsNullOrWhiteSpace(root.Path))
-        {
-            throw new DirectoryNotFoundException("Saved folder location is unavailable.");
-        }
+        string folderPath = !string.IsNullOrWhiteSpace(targetFolderPath)
+            ? targetFolderPath
+            : !string.IsNullOrWhiteSpace(root.Path)
+                ? root.Path
+                : throw new DirectoryNotFoundException("Saved folder location is unavailable.");
 
-        string folderPath = root.Path;
         Directory.CreateDirectory(folderPath);
 
         CloudFolderManifest? existingManifest = LoadManifest(folderPath);
-        string rawSource = (existingManifest?.SourceUrl ?? root.SourceUrl ?? root.RemoteId ?? string.Empty).Trim();
+        string rawSource = (!string.IsNullOrWhiteSpace(trackingOverride?.SourceUrl)
+            ? trackingOverride!.SourceUrl
+            : existingManifest?.SourceUrl ?? root.SourceUrl ?? root.RemoteId ?? string.Empty).Trim();
         if (rawSource.Length == 0)
         {
             throw new InvalidOperationException("No cloud tracking source URL is associated with this folder.");
         }
 
-        RootKind? kindHint = root.EffectiveCloudKind;
+        RootKind? kindHint = trackingOverride is not null && trackingOverride.CloudKind.IsCloud()
+            ? trackingOverride.CloudKind
+            : root.EffectiveCloudKind;
         if (kindHint is null &&
             existingManifest is not null &&
             Enum.TryParse<RootKind>(existingManifest.CloudKind, ignoreCase: true, out var parsedKind) &&
@@ -273,19 +304,26 @@ public sealed class CloudExporter
             kindHint = parsedKind;
         }
 
+        string? effectiveCookie = trackingOverride is not null
+            ? trackingOverride.Cookie ?? root.Cookie
+            : root.Cookie;
+        string? effectiveProxy = trackingOverride is not null
+            ? trackingOverride.ProxyUrl ?? root.ProxyUrl
+            : root.ProxyUrl;
+
         CloudPlaylistResult playlist;
         if (fetchPlaylist is not null)
         {
-            playlist = await fetchPlaylist(rawSource, root.Cookie, root.ProxyUrl, kindHint, ct).ConfigureAwait(false);
+            playlist = await fetchPlaylist(rawSource, effectiveCookie, effectiveProxy, kindHint, ct).ConfigureAwait(false);
         }
         else
         {
             RootKind resolvedKind = kindHint ?? CloudUrlClassifier.Classify(rawSource);
             playlist = resolvedKind switch
             {
-                RootKind.CloudBilibili => await _bilibili.FetchPlaylistAsync(rawSource, root.Cookie, root.ProxyUrl, ct).ConfigureAwait(false),
-                RootKind.CloudGoogleDrive => await _googleDrive.FetchPlaylistAsync(rawSource, root.Cookie, root.ProxyUrl, ct).ConfigureAwait(false),
-                _ => await _youtube.FetchPlaylistAsync(rawSource, root.Cookie, root.ProxyUrl, ct).ConfigureAwait(false)
+                RootKind.CloudBilibili => await _bilibili.FetchPlaylistAsync(rawSource, effectiveCookie, effectiveProxy, ct).ConfigureAwait(false),
+                RootKind.CloudGoogleDrive => await _googleDrive.FetchPlaylistAsync(rawSource, effectiveCookie, effectiveProxy, ct).ConfigureAwait(false),
+                _ => await _youtube.FetchPlaylistAsync(rawSource, effectiveCookie, effectiveProxy, ct).ConfigureAwait(false)
             };
         }
 
@@ -305,11 +343,17 @@ public sealed class CloudExporter
             RootKind.CloudGoogleDrive => "Google Drive",
             _ => "YouTube"
         };
+        string resolvedSourceUrl = !string.IsNullOrWhiteSpace(trackingOverride?.SourceUrl)
+            ? trackingOverride!.SourceUrl.Trim()
+            : (string.IsNullOrWhiteSpace(playlist.SourceUrl) ? rawSource : playlist.SourceUrl);
+
         var lookupRoot = root with
         {
             Kind = playlist.Kind,
-            SourceUrl = string.IsNullOrWhiteSpace(playlist.SourceUrl) ? rawSource : playlist.SourceUrl,
-            RemoteId = playlist.RemoteId
+            SourceUrl = resolvedSourceUrl,
+            RemoteId = playlist.RemoteId,
+            Cookie = effectiveCookie,
+            ProxyUrl = effectiveProxy
         };
 
         int addedCount = 0;
@@ -353,9 +397,16 @@ public sealed class CloudExporter
                 RemoteTrackId: item.RemoteTrackId,
                 RemoteArtworkUrl: item.ArtworkUrl);
 
+            var trackProgress = CreateChildProgressAdapter(
+                progress,
+                i,
+                playlist.Items.Count,
+                tempTrack.Title,
+                failedCount);
+
             try
             {
-                string destPath = await ExportTrackAsync(tempTrack, lookupRoot, folderPath, ct).ConfigureAwait(false);
+                string destPath = await ExportTrackAsync(tempTrack, lookupRoot, folderPath, trackProgress, ct).ConfigureAwait(false);
                 trackedMap[item.RemoteTrackId] = Path.GetFileName(destPath);
                 addedCount++;
             }
@@ -373,7 +424,7 @@ public sealed class CloudExporter
         SaveManifest(
             folderPath,
             new CloudFolderManifest(
-                SourceUrl: string.IsNullOrWhiteSpace(playlist.SourceUrl) ? rawSource : playlist.SourceUrl,
+                SourceUrl: resolvedSourceUrl,
                 RemoteId: playlist.RemoteId,
                 CloudKind: playlist.Kind.ToString(),
                 LastSyncedUtc: DateTimeOffset.UtcNow,
@@ -423,10 +474,18 @@ public sealed class CloudExporter
         }
     }
 
+    public Task<string> ExportTrackAsync(
+        Track track,
+        LibraryRoot? root,
+        string destinationDirectory,
+        CancellationToken ct = default) =>
+        ExportTrackAsync(track, root, destinationDirectory, progress: null, ct: ct);
+
     public async Task<string> ExportTrackAsync(
         Track track,
         LibraryRoot? root,
         string destinationDirectory,
+        IProgress<CloudExportProgress>? progress,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(track);
@@ -441,11 +500,33 @@ public sealed class CloudExporter
 
         ct.ThrowIfCancellationRequested();
 
+        long lastBytes = 0;
+        long? lastTotal = null;
+        Action<CloudDownloadProgress>? onDownloadProgress = progress is null
+            ? null
+            : dl =>
+            {
+                lastBytes = dl.BytesDownloaded;
+                if (dl.TotalBytes is > 0)
+                {
+                    lastTotal = dl.TotalBytes;
+                }
+                progress.Report(new CloudExportProgress(
+                    Completed: 0,
+                    Total: 1,
+                    CurrentTrackTitle: track.Title,
+                    FailedCount: 0,
+                    BytesDownloaded: dl.BytesDownloaded,
+                    TotalBytes: dl.TotalBytes ?? lastTotal,
+                    BytesPerSecond: dl.BytesPerSecond));
+            };
+
         string cachedPath = await _cloudCache.GetOrDownloadAsync(
             track.Id,
             token => ResolveCloudStreamAsync(track, root, token),
             root?.ProxyUrl,
-            ct).ConfigureAwait(false);
+            ct,
+            onDownloadProgress).ConfigureAwait(false);
 
         ct.ThrowIfCancellationRequested();
         Directory.CreateDirectory(destinationDirectory);
@@ -479,7 +560,52 @@ public sealed class CloudExporter
         }
 
         TryWriteTags(destPath, track);
+
+        if (progress is not null)
+        {
+            long finalBytes = lastTotal ?? lastBytes;
+            if (finalBytes <= 0)
+            {
+                try { finalBytes = new FileInfo(destPath).Length; } catch { /* ignore */ }
+            }
+            progress.Report(new CloudExportProgress(
+                Completed: 1,
+                Total: 1,
+                CurrentTrackTitle: track.Title,
+                FailedCount: 0,
+                BytesDownloaded: finalBytes,
+                TotalBytes: finalBytes > 0 ? finalBytes : null,
+                BytesPerSecond: 0));
+        }
+
         return destPath;
+    }
+
+    private static IProgress<CloudExportProgress>? CreateChildProgressAdapter(
+        IProgress<CloudExportProgress>? parent,
+        int completedIndex,
+        int totalItems,
+        string itemTitle,
+        int failedCount)
+    {
+        if (parent is null) return null;
+        return new InlineProgress<CloudExportProgress>(tp =>
+        {
+            if (tp.Completed != 0) return;
+            parent.Report(new CloudExportProgress(
+                Completed: completedIndex,
+                Total: totalItems,
+                CurrentTrackTitle: itemTitle,
+                FailedCount: failedCount,
+                BytesDownloaded: tp.BytesDownloaded,
+                TotalBytes: tp.TotalBytes,
+                BytesPerSecond: tp.BytesPerSecond));
+        });
+    }
+
+    private sealed class InlineProgress<T>(Action<T> handler) : IProgress<T>
+    {
+        public void Report(T value) => handler(value);
     }
 
     private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct)

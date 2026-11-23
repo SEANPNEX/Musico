@@ -153,5 +153,14 @@ class LocalizationTest {
             assertTrue(ZhHansStrings.lyricsSourceBadge(source).isNotBlank())
             assertNotEquals(EnStrings.lyricsSourceBadge(source), ZhHansStrings.lyricsSourceBadge(source))
         }
+
+        assertTrue(EnStrings.cloudSyncProgress(2, 5, 14).contains("2/5"))
+        assertTrue(ZhHansStrings.cloudSyncProgress(2, 5, 14).contains("2/5"))
+        assertNotEquals(EnStrings.cloudSyncProgress(2, 5, 14), ZhHansStrings.cloudSyncProgress(2, 5, 14))
+
+        assertEquals("1 queue", EnStrings.queueCountLabel(1))
+        assertEquals("3 queues", EnStrings.queueCountLabel(3))
+        assertEquals("3 个队列", ZhHansStrings.queueCountLabel(3))
+        assertNotEquals(EnStrings.queueCountLabel(3), ZhHansStrings.queueCountLabel(3))
     }
 }

@@ -37,6 +37,7 @@ public sealed class AppServices : IDisposable
             cloudCache: CloudCache,
             googleDriveClient: GoogleDrive);
 
+        Downloads = new DownloadManager(CloudExporter, Library);
         Queues = new QueueStore(StateDirectory);
         History = new PlayHistoryStore(StateDirectory);
         Lyrics = new LyricsStore(Path.Combine(StateDirectory, "Lyrics"));
@@ -63,6 +64,7 @@ public sealed class AppServices : IDisposable
     public BilibiliClient Bilibili { get; }
     public GoogleDriveClient GoogleDrive { get; }
     public CloudExporter CloudExporter { get; }
+    public DownloadManager Downloads { get; }
     public LibraryStore Library { get; }
     public QueueStore Queues { get; }
     public PlayHistoryStore History { get; }
@@ -87,6 +89,7 @@ public sealed class AppServices : IDisposable
         if (_disposed) return;
         _disposed = true;
 
+        Downloads.CancelAll();
         Player.PersistPosition(flush: true);
         Player.Shutdown();
         Smtc.Dispose();

@@ -620,7 +620,214 @@ final class LibraryStoreTests: XCTestCase {
         """
         let decoded = try JSONDecoder().decode(LibraryRoot.self, from: Data(legacyJSON.utf8))
         XCTAssertEqual(decoded.normalizedExcludedPaths, [])
+        XCTAssertEqual(decoded.normalizedTrackedSubfolders, [:])
         XCTAssertFalse(decoded.isExcluded("Any/song.mp3"))
+    }
+
+    // MARK: - Subfolder Cloud Tracking, Overlap Prevention, Manifest Discovery & Address Editing
+
+    func testOverlapPreventionRejectsChildAndMigratesContainedPickedRootsOnParentAdd() async throws {
+        let parentDir = makeTempDir()
+        let childA = parentDir.appendingPathComponent("ChildA")
+        let childB = parentDir.appendingPathComponent("Nested/ChildB")
+        touch("songA.mp3", in: childA)
+        touch("Excluded/skip.mp3", in: childA)
+        touch("songB.mp3", in: childB)
+        touch("top.mp3", in: parentDir)
+
+        let store = makeStore()
+        try await store.addRoot(url: childA)
+        try await store.addRoot(url: childB)
+
+        let rootA = try XCTUnwrap(store.roots.first { $0.name == "ChildA" })
+        let rootB = try XCTUnwrap(store.roots.first { $0.name == "ChildB" })
+
+        let cloudA = LibraryRoot(
+            id: UUID(),
+            name: "Cloud A",
+            kind: .cloudYouTube,
+            bookmark: nil,
+            sourceURL: "https://music.youtube.com/playlist?list=PLchildA",
+            remoteID: "PLchildA",
+            cookie: "COOKIE_A"
+        )
+        store.attachCloudTracking(toFolderURL: childA, from: cloudA)
+        store.removeSubfolder(rootID: rootA.id, path: "Excluded")
+
+        let songAID = try XCTUnwrap(store.tracks.first { $0.relativePath == "songA.mp3" }?.id)
+        let pid = store.createPlaylist(name: "Child Mix")
+        store.add([songAID], toPlaylist: pid)
+        store.toggleFavourite(songAID)
+
+        // Adding a child inside an existing root must fail with duplicateRoot.
+        let subInsideA = childA.appendingPathComponent("SubInside")
+        try FileManager.default.createDirectory(at: subInsideA, withIntermediateDirectories: true)
+        do {
+            try await store.addRoot(url: subInsideA)
+            XCTFail("Expected duplicateRoot when adding folder inside existing root")
+        } catch LibraryError.duplicateRoot {}
+
+        // Also cannot add a subfolder inside appFolder.
+        let subInsideApp = docs.appendingPathComponent("AppSub")
+        try FileManager.default.createDirectory(at: subInsideApp, withIntermediateDirectories: true)
+        do {
+            try await store.addRoot(url: subInsideApp)
+            XCTFail("Expected duplicateRoot when adding folder inside appFolder")
+        } catch LibraryError.duplicateRoot {}
+
+        // Adding parentDir migrates ChildA & ChildB, their cloud tracking, exclusions, and playlists/favourites.
+        try await store.addRoot(url: parentDir)
+
+        XCTAssertEqual(store.roots.filter { $0.kind == .picked }.count, 1)
+        let parentRoot = try XCTUnwrap(store.roots.first { $0.kind == .picked })
+        XCTAssertNil(store.root(rootA.id))
+        XCTAssertNil(store.root(rootB.id))
+
+        let migratedA = try XCTUnwrap(store.cloudTracking(rootID: parentRoot.id, path: "ChildA"))
+        XCTAssertEqual(migratedA.sourceURL, "https://music.youtube.com/playlist?list=PLchildA")
+        XCTAssertEqual(migratedA.cookie, "COOKIE_A")
+        XCTAssertEqual(migratedA.cloudKind, .cloudYouTube)
+
+        // Excluded subfolder stayed excluded; non-excluded tracks migrated cleanly.
+        let paths = Set(store.tracks.map(\.relativePath))
+        XCTAssertEqual(paths, ["top.mp3", "ChildA/songA.mp3", "Nested/ChildB/songB.mp3"])
+        let migratedSongAID = try XCTUnwrap(store.tracks.first { $0.relativePath == "ChildA/songA.mp3" }?.id)
+        XCTAssertEqual(store.playlists.first?.trackIDs, [migratedSongAID])
+        XCTAssertTrue(store.isFavourite(migratedSongAID))
+    }
+
+    func testRegisterExportedCloudFolderManifestDiscoveryAndPruningAndAddressEdit() async throws {
+        let parentDir = makeTempDir()
+        touch("root.mp3", in: parentDir)
+
+        let fetcher = MutableCloudFetcher(result: .success(CloudPlaylistResult(
+            kind: .cloudYouTube,
+            remoteID: "PLnew",
+            title: "Updated Remote",
+            tracks: [
+                CloudTrackInfo(remoteTrackID: "v1", relativePath: "v1", title: "Existing", artist: "A", album: "Al", trackNumber: 1, duration: 10, artworkURL: nil)
+            ]
+        )))
+        let store = LibraryStore(
+            directory: state,
+            documentsURL: docs,
+            reader: reader,
+            artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
+            cloudFetcher: fetcher
+        )
+        try await store.addRoot(url: parentDir)
+        let parentRoot = try XCTUnwrap(store.roots.first { $0.kind == .picked })
+
+        // Exclude "Exports/OldMix", then registerExportedCloudFolder un-excludes it and tracks it without duplicate root.
+        let exportedSub = parentDir.appendingPathComponent("Exports/OldMix")
+        touch("track1.m4a", in: exportedSub)
+        await store.rescan()
+        store.removeSubfolder(rootID: parentRoot.id, path: "Exports/OldMix")
+        XCTAssertFalse(store.tracks.contains { $0.relativePath == "Exports/OldMix/track1.m4a" })
+
+        let cloudRoot = LibraryRoot(
+            id: UUID(),
+            name: "Cloud Mix",
+            kind: .cloudYouTube,
+            bookmark: nil,
+            sourceURL: "https://music.youtube.com/playlist?list=PLold",
+            remoteID: "PLold",
+            cookie: "C1"
+        )
+        var syncedQueues: [(String, [String])] = []
+        store.onFolderAdded = { name, ids in syncedQueues.append((name, ids)) }
+
+        try await store.registerExportedCloudFolder(destinationURL: exportedSub, from: cloudRoot)
+
+        XCTAssertEqual(store.roots.filter { $0.kind == .picked }.count, 1)
+        XCTAssertTrue(store.tracks.contains { $0.relativePath == "Exports/OldMix/track1.m4a" })
+        XCTAssertEqual(syncedQueues.last?.0, "OldMix")
+        XCTAssertEqual(syncedQueues.last?.1.count, 1)
+        let subTracking = try XCTUnwrap(store.cloudTracking(rootID: parentRoot.id, path: "Exports/OldMix"))
+        XCTAssertEqual(subTracking.sourceURL, "https://music.youtube.com/playlist?list=PLold")
+
+        // Write external manifest into another subfolder and verify scanOnce discovers it.
+        let externalSub = parentDir.appendingPathComponent("ExternalBili")
+        try FileManager.default.createDirectory(at: externalSub, withIntermediateDirectories: true)
+        let extManifest = CloudFolderManifest(
+            sourceURL: "https://www.bilibili.com/video/BV1xx411c7mD",
+            remoteID: "BV1xx411c7mD",
+            cloudKind: .cloudBilibili,
+            lastSyncedEpochMs: Int64(Date().timeIntervalSince1970 * 1000),
+            tracks: [:]
+        )
+        try CloudExporter.saveManifest(extManifest, in: externalSub)
+        await store.rescan()
+        let discovered = try XCTUnwrap(store.cloudTracking(rootID: parentRoot.id, path: "ExternalBili"))
+        XCTAssertEqual(discovered.cloudKind, .cloudBilibili)
+
+        // Update cloud tracking address (rejects invalid URL, accepts valid URL, persists store & manifest).
+        XCTAssertThrowsError(try store.updateCloudTrackingAddress(
+            rootID: parentRoot.id,
+            path: "ExternalBili",
+            sourceURL: "not-a-cloud-url",
+            cookie: nil
+        ))
+        try store.updateCloudTrackingAddress(
+            rootID: parentRoot.id,
+            path: "ExternalBili",
+            sourceURL: "https://music.youtube.com/playlist?list=PLedited123",
+            cookie: "SID=new"
+        )
+        let editedTracking = try XCTUnwrap(store.cloudTracking(rootID: parentRoot.id, path: "ExternalBili"))
+        XCTAssertEqual(editedTracking.sourceURL, "https://music.youtube.com/playlist?list=PLedited123")
+        XCTAssertEqual(editedTracking.cloudKind, .cloudYouTube)
+        XCTAssertEqual(editedTracking.cookie, "SID=new")
+
+        let diskManifestAfterEdit = try XCTUnwrap(CloudExporter.loadManifest(in: externalSub))
+        XCTAssertEqual(diskManifestAfterEdit.sourceURL, "https://music.youtube.com/playlist?list=PLedited123")
+        XCTAssertEqual(diskManifestAfterEdit.cloudKind, .cloudYouTube)
+
+        // Write a stale manifest with OLD URL & timestamp in ExternalBili and verify rescan preserves newer edited store tracking AND updateTrackedLocalRoot prefers edited tracking.
+        let staleManifest = CloudFolderManifest(
+            sourceURL: "https://www.bilibili.com/video/BV1stale",
+            remoteID: "BV1stale",
+            cloudKind: .cloudBilibili,
+            lastSyncedEpochMs: 1_000,
+            tracks: ["v1": "Existing.m4a"]
+        )
+        touch("Existing.m4a", in: externalSub)
+        try CloudExporter.saveManifest(staleManifest, in: externalSub)
+        await store.rescan()
+        XCTAssertEqual(store.cloudTracking(rootID: parentRoot.id, path: "ExternalBili")?.sourceURL, "https://music.youtube.com/playlist?list=PLedited123")
+
+        let update = try await store.updateTrackedLocalRoot(parentRoot.id, path: "ExternalBili")
+        XCTAssertEqual(fetcher.recordedSources.last, "https://music.youtube.com/playlist?list=PLedited123")
+        XCTAssertEqual(fetcher.recordedCookies.last ?? nil, "SID=new")
+        XCTAssertEqual(update.skippedCount, 1)
+        XCTAssertEqual(CloudExporter.loadManifest(in: externalSub)?.sourceURL, "https://music.youtube.com/playlist?list=PLedited123")
+
+        // Delete ExternalBili folder from disk -> rescan prunes its trackedSubfolders entry.
+        try FileManager.default.removeItem(at: externalSub)
+        await store.rescan()
+        XCTAssertNil(store.cloudTracking(rootID: parentRoot.id, path: "ExternalBili"))
+    }
+}
+
+private final class MutableCloudFetcher: CloudPlaylistFetching, @unchecked Sendable {
+    private let lock = NSLock()
+    private var _result: Result<CloudPlaylistResult, Error>
+    private var _recordedSources: [String] = []
+    private var _recordedCookies: [String?] = []
+
+    var recordedSources: [String] { lock.withLock { _recordedSources } }
+    var recordedCookies: [String?] { lock.withLock { _recordedCookies } }
+
+    init(result: Result<CloudPlaylistResult, Error>) {
+        self._result = result
+    }
+
+    func fetchPlaylist(sourceURL: String, cookie: String?, kindHint: LibraryRoot.Kind?) async throws -> CloudPlaylistResult {
+        lock.withLock {
+            _recordedSources.append(sourceURL)
+            _recordedCookies.append(cookie)
+        }
+        return try lock.withLock { _result }.get()
     }
 }
 

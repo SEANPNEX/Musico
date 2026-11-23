@@ -22,7 +22,8 @@ public sealed record CloudPlaylistItem(
     double DurationSeconds,
     string? ArtworkUrl,
     int TrackNumber,
-    string? FileExtension = null);
+    string? FileExtension = null,
+    string? RelativePath = null);
 
 public sealed record CloudPlaylistResult(
     RootKind Kind,

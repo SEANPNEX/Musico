@@ -4,6 +4,9 @@ import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
+import com.musico.cloud.CloudExporter
+import com.musico.cloud.CloudFolderManifest
+import kotlinx.serialization.json.Json
 import java.io.File
 import java.text.Normalizer
 
@@ -12,6 +15,11 @@ data class ScannedFile(
     val fileSize: Long,
     val modifiedEpochMs: Long,
     val uriString: String? = null,
+)
+
+data class LocalCloudDiscovery(
+    val existingSubfolders: Set<String>,
+    val manifests: Map<String, CloudFolderManifest>,
 )
 
 object FolderScanner {
@@ -163,4 +171,157 @@ object FolderScanner {
     }
 
     fun fileFor(rootDir: File, relativePath: String): File = File(rootDir, relativePath)
+
+    private val manifestJson = Json { ignoreUnknownKeys = true }
+    private const val SAF_MANIFEST_FILE_NAME = "musico-cloud.json"
+
+    /**
+     * Discovers existing local subfolder paths and any cloud tracking manifests inside [rootDir].
+     */
+    fun discoverCloudInfo(rootDir: File): LocalCloudDiscovery? {
+        if (!rootDir.exists() || !rootDir.isDirectory || !rootDir.canRead()) return null
+        val existingSubfolders = linkedSetOf<String>()
+        val manifests = linkedMapOf<String, CloudFolderManifest>()
+        CloudExporter.loadManifest(rootDir)?.let { manifests[""] = it }
+        discoverLocalCloudRecursive(rootDir, prefix = "", existingSubfolders, manifests)
+        return LocalCloudDiscovery(
+            existingSubfolders = existingSubfolders,
+            manifests = manifests,
+        )
+    }
+
+    private fun discoverLocalCloudRecursive(
+        dir: File,
+        prefix: String,
+        existingSubfolders: MutableSet<String>,
+        manifests: MutableMap<String, CloudFolderManifest>,
+    ) {
+        val children = dir.listFiles() ?: return
+        for (entry in children) {
+            val name = entry.name
+            if (name.startsWith(".")) continue
+            if (!entry.isDirectory) continue
+            val rel = normalizePath(if (prefix.isEmpty()) name else "$prefix/$name")
+            existingSubfolders.add(rel)
+            CloudExporter.loadManifest(entry)?.let { manifests[rel] = it }
+            discoverLocalCloudRecursive(entry, rel, existingSubfolders, manifests)
+        }
+    }
+
+    /**
+     * Discovers existing SAF subfolder paths and any cloud tracking manifests inside [treeUri].
+     */
+    fun discoverCloudInfo(context: Context, treeUri: Uri): LocalCloudDiscovery? {
+        val rootDoc = DocumentFile.fromTreeUri(context, treeUri) ?: return null
+        if (!rootDoc.exists() || !rootDoc.isDirectory || !rootDoc.canRead()) return null
+
+        val existingSubfolders = linkedSetOf<String>()
+        val manifests = linkedMapOf<String, CloudFolderManifest>()
+        val rootDocId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
+        if (rootDocId != null) {
+            val listed = discoverSafViaResolver(
+                context = context,
+                treeUri = treeUri,
+                parentDocId = rootDocId,
+                prefix = "",
+                existingSubfolders = existingSubfolders,
+                manifests = manifests,
+            )
+            if (listed) {
+                return LocalCloudDiscovery(
+                    existingSubfolders = existingSubfolders,
+                    manifests = manifests,
+                )
+            }
+        }
+        discoverDocFileCloudRecursive(context, rootDoc, prefix = "", existingSubfolders, manifests)
+        return LocalCloudDiscovery(
+            existingSubfolders = existingSubfolders,
+            manifests = manifests,
+        )
+    }
+
+    private fun discoverSafViaResolver(
+        context: Context,
+        treeUri: Uri,
+        parentDocId: String,
+        prefix: String,
+        existingSubfolders: MutableSet<String>,
+        manifests: MutableMap<String, CloudFolderManifest>,
+    ): Boolean {
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+        )
+        val cursor = try {
+            context.contentResolver.query(childrenUri, projection, null, null, null)
+        } catch (_: Exception) {
+            return false
+        } ?: return false
+
+        val subDirs = mutableListOf<Pair<String, String>>()
+        var dotManifestDocId: String? = null
+        var safManifestDocId: String? = null
+
+        cursor.use { c ->
+            val idIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+
+            while (c.moveToNext()) {
+                val docId = if (idIdx >= 0) c.getString(idIdx) else null
+                val name = if (nameIdx >= 0) c.getString(nameIdx) else null
+                if (docId == null || name == null) continue
+                val mime = if (mimeIdx >= 0) c.getString(mimeIdx) else null
+
+                if (mime == DocumentsContract.Document.MIME_TYPE_DIR) {
+                    if (name.startsWith(".")) continue
+                    val rel = normalizePath(if (prefix.isEmpty()) name else "$prefix/$name")
+                    existingSubfolders.add(rel)
+                    subDirs.add(docId to rel)
+                } else if (name == CloudExporter.MANIFEST_FILE_NAME) {
+                    dotManifestDocId = docId
+                } else if (name == SAF_MANIFEST_FILE_NAME) {
+                    safManifestDocId = docId
+                }
+            }
+        }
+
+        val chosenDocId = dotManifestDocId ?: safManifestDocId
+        if (chosenDocId != null) {
+            val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, chosenDocId)
+            runCatching {
+                context.contentResolver.openInputStream(docUri)?.use { input ->
+                    val text = input.readBytes().toString(Charsets.UTF_8)
+                    manifestJson.decodeFromString<CloudFolderManifest>(text)
+                }
+            }.getOrNull()?.let { manifests[prefix] = it }
+        }
+
+        for ((subId, subRel) in subDirs) {
+            discoverSafViaResolver(context, treeUri, subId, subRel, existingSubfolders, manifests)
+        }
+        return true
+    }
+
+    private fun discoverDocFileCloudRecursive(
+        context: Context,
+        dir: DocumentFile,
+        prefix: String,
+        existingSubfolders: MutableSet<String>,
+        manifests: MutableMap<String, CloudFolderManifest>,
+    ) {
+        CloudExporter.loadManifest(context, dir)?.let { manifests[prefix] = it }
+        for (child in dir.listFiles()) {
+            val name = child.name ?: continue
+            if (name.startsWith(".")) continue
+            if (child.isDirectory) {
+                val rel = normalizePath(if (prefix.isEmpty()) name else "$prefix/$name")
+                existingSubfolders.add(rel)
+                discoverDocFileCloudRecursive(context, child, rel, existingSubfolders, manifests)
+            }
+        }
+    }
 }

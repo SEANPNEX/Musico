@@ -16,6 +16,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.io.FileOutputStream
+import java.io.FilterOutputStream
 import java.io.IOException
 import java.io.OutputStream
 import java.net.HttpURLConnection
@@ -47,6 +48,106 @@ data class CloudUpdateSummary(
     val errors: List<String> = emptyList(),
 )
 
+data class ByteTransferProgress(
+    val bytesDownloaded: Long,
+    val totalBytes: Long?,
+    val bytesPerSecond: Double,
+)
+
+data class CloudExportProgress(
+    val completedTracks: Int,
+    val totalTracks: Int,
+    val currentTrackTitle: String,
+    val failedCount: Int = 0,
+    val trackBytesDownloaded: Long = 0L,
+    val trackTotalBytes: Long? = null,
+    val bytesPerSecond: Double = 0.0,
+) {
+    val trackFraction: Float?
+        get() {
+            val total = trackTotalBytes ?: return null
+            if (total <= 0L) return null
+            return (trackBytesDownloaded.toFloat() / total.toFloat()).coerceIn(0f, 1f)
+        }
+
+    val overallFraction: Float
+        get() {
+            if (totalTracks <= 0) return 0f
+            val base = completedTracks.coerceIn(0, totalTracks).toFloat()
+            val currentPartial = if (completedTracks < totalTracks) {
+                trackFraction ?: 0f
+            } else {
+                0f
+            }
+            return ((base + currentPartial) / totalTracks.toFloat()).coerceIn(0f, 1f)
+        }
+}
+
+class TransferSpeedMeter(
+    private val windowNs: Long = DEFAULT_WINDOW_NS,
+    private val throttleNs: Long = DEFAULT_THROTTLE_NS,
+    private val nanoClock: () -> Long = System::nanoTime,
+) {
+    private val samples = ArrayDeque<Pair<Long, Long>>()
+    private var lastEmitNs: Long = 0L
+    private var lastBytes: Long = 0L
+
+    @Synchronized
+    fun reset() {
+        samples.clear()
+        lastEmitNs = 0L
+        lastBytes = 0L
+    }
+
+    @Synchronized
+    fun record(bytesDownloaded: Long, forceEmit: Boolean = false): Double? {
+        val now = nanoClock()
+        val safeBytes = bytesDownloaded.coerceAtLeast(0L)
+        if (safeBytes < lastBytes) {
+            samples.clear()
+            samples.addLast(now to safeBytes)
+            lastBytes = safeBytes
+            lastEmitNs = now
+            return 0.0
+        }
+
+        if (samples.isEmpty() || safeBytes != lastBytes || now - samples.last().first >= windowNs / 4) {
+            samples.addLast(now to safeBytes)
+        }
+        lastBytes = safeBytes
+
+        while (samples.size > 2 && now - samples[1].first >= windowNs) {
+            samples.removeFirst()
+        }
+
+        if (!forceEmit && lastEmitNs != 0L && now - lastEmitNs < throttleNs) {
+            return null
+        }
+        lastEmitNs = now
+        return computeRateLocked()
+    }
+
+    @Synchronized
+    fun currentSpeed(): Double = computeRateLocked()
+
+    private fun computeRateLocked(): Double {
+        if (samples.size < 2) return 0.0
+        val first = samples.first()
+        val last = samples.last()
+        val dtNs = last.first - first.first
+        if (dtNs <= 0L) return 0.0
+        val dBytes = (last.second - first.second).coerceAtLeast(0L)
+        if (dtNs < MIN_RATE_WINDOW_NS && dBytes == 0L) return 0.0
+        return dBytes.toDouble() * 1_000_000_000.0 / dtNs.toDouble()
+    }
+
+    companion object {
+        const val DEFAULT_WINDOW_NS = 1_500_000_000L
+        const val DEFAULT_THROTTLE_NS = 120_000_000L
+        private const val MIN_RATE_WINDOW_NS = 40_000_000L
+    }
+}
+
 fun interface CloudStreamDownloader {
     suspend fun download(
         url: String,
@@ -61,6 +162,16 @@ fun interface CloudStreamDownloader {
         output: OutputStream,
     ) {
         download(url, headers, output)
+    }
+
+    suspend fun download(
+        url: String,
+        headers: Map<String, String>,
+        contentLength: Long?,
+        output: OutputStream,
+        onBytesProgress: ((ByteTransferProgress) -> Unit)?,
+    ) {
+        download(url, headers, contentLength, output)
     }
 }
 
@@ -79,20 +190,37 @@ class UrlConnectionCloudStreamDownloader(
         url: String,
         headers: Map<String, String>,
         output: OutputStream,
-    ) = download(url, headers, contentLength = null, output = output)
+    ) = download(url, headers, contentLength = null, output = output, onBytesProgress = null)
 
     override suspend fun download(
         url: String,
         headers: Map<String, String>,
         contentLength: Long?,
         output: OutputStream,
+    ) = download(url, headers, contentLength, output, onBytesProgress = null)
+
+    override suspend fun download(
+        url: String,
+        headers: Map<String, String>,
+        contentLength: Long?,
+        output: OutputStream,
+        onBytesProgress: ((ByteTransferProgress) -> Unit)?,
     ) = withContext(Dispatchers.IO) {
+        val meter = if (onBytesProgress != null) TransferSpeedMeter() else null
         val hasAuth = headers.keys.any { it.equals("Authorization", ignoreCase = true) }
         val isYouTube = headers.keys.any { it.equals("X-YouTube-Client-Name", ignoreCase = true) }
         if (contentLength != null && contentLength > CHUNK_SIZE_BYTES && (!hasAuth || isYouTube)) {
-            downloadChunked(url, headers, contentLength, output)
+            downloadChunked(url, headers, contentLength, output, meter, onBytesProgress)
         } else {
-            executeDownloadRequest(url, headers, output)
+            executeDownloadRequest(
+                url = url,
+                headers = headers,
+                output = output,
+                meter = meter,
+                baseBytes = 0L,
+                knownTotalBytes = contentLength,
+                onBytesProgress = onBytesProgress,
+            )
             output.flush()
         }
     }
@@ -102,14 +230,33 @@ class UrlConnectionCloudStreamDownloader(
         headers: Map<String, String>,
         contentLength: Long,
         output: OutputStream,
+        meter: TransferSpeedMeter?,
+        onBytesProgress: ((ByteTransferProgress) -> Unit)?,
     ) {
         val baseHeaders = headers.filterKeys { !it.equals("Range", ignoreCase = true) }
         var offset = 0L
+        onBytesProgress?.invoke(ByteTransferProgress(0L, contentLength, 0.0))
         while (offset < contentLength) {
             currentCoroutineContext().ensureActive()
             val end = minOf(offset + CHUNK_SIZE_BYTES - 1L, contentLength - 1L)
             val chunkHeaders = baseHeaders + ("Range" to "bytes=$offset-$end")
-            val result = executeDownloadRequest(url, chunkHeaders, output)
+            val result = try {
+                executeDownloadRequest(
+                    url = url,
+                    headers = chunkHeaders,
+                    output = output,
+                    meter = meter,
+                    baseBytes = offset,
+                    knownTotalBytes = contentLength,
+                    onBytesProgress = onBytesProgress,
+                )
+            } catch (t: Throwable) {
+                if (t !is CancellationException) {
+                    meter?.record(offset, forceEmit = true)
+                    onBytesProgress?.invoke(ByteTransferProgress(offset, contentLength, 0.0))
+                }
+                throw t
+            }
             if (offset == 0L && result.statusCode == HttpURLConnection.HTTP_OK) {
                 output.flush()
                 return
@@ -133,6 +280,10 @@ class UrlConnectionCloudStreamDownloader(
         url: String,
         headers: Map<String, String>,
         output: OutputStream,
+        meter: TransferSpeedMeter? = null,
+        baseBytes: Long = 0L,
+        knownTotalBytes: Long? = null,
+        onBytesProgress: ((ByteTransferProgress) -> Unit)? = null,
     ): DownloadResult {
         var currentUrl = url
         for (hop in 0 until MAX_REDIRECTS) {
@@ -161,8 +312,15 @@ class UrlConnectionCloudStreamDownloader(
                 }
                 val expectedLength = conn.contentLengthLong
                 val contentRangeTotal = parseContentRangeTotal(conn.getHeaderField("Content-Range"))
+                val resolvedTotal = contentRangeTotal
+                    ?: knownTotalBytes?.takeIf { it > 0L }
+                    ?: if (baseBytes == 0L && expectedLength > 0L) expectedLength else null
                 var totalRead = 0L
                 val buffer = ByteArray(16 * 1024)
+                if (baseBytes == 0L) {
+                    meter?.record(0L, forceEmit = true)
+                    onBytesProgress?.invoke(ByteTransferProgress(0L, resolvedTotal, 0.0))
+                }
                 conn.inputStream.use { input ->
                     while (true) {
                         currentCoroutineContext().ensureActive()
@@ -171,11 +329,35 @@ class UrlConnectionCloudStreamDownloader(
                         if (read > 0) {
                             output.write(buffer, 0, read)
                             totalRead += read
+                            val cumulative = baseBytes + totalRead
+                            val speed = meter?.record(cumulative)
+                            if (speed != null) {
+                                onBytesProgress?.invoke(
+                                    ByteTransferProgress(
+                                        bytesDownloaded = cumulative,
+                                        totalBytes = resolvedTotal,
+                                        bytesPerSecond = speed,
+                                    )
+                                )
+                            }
                         }
                     }
                 }
                 if (expectedLength > 0L && totalRead < expectedLength) {
                     throw IOException("Truncated stream: expected $expectedLength bytes, got $totalRead")
+                }
+                val finalCumulative = baseBytes + totalRead
+                if (onBytesProgress != null) {
+                    val finalSpeed = meter?.record(finalCumulative, forceEmit = true)
+                        ?: meter?.currentSpeed()
+                        ?: 0.0
+                    onBytesProgress.invoke(
+                        ByteTransferProgress(
+                            bytesDownloaded = finalCumulative,
+                            totalBytes = resolvedTotal,
+                            bytesPerSecond = finalSpeed,
+                        )
+                    )
                 }
                 return DownloadResult(
                     statusCode = code,
@@ -214,12 +396,56 @@ class CloudExporter(
     private val cloudResolver: CloudStreamResolver,
     private val downloader: CloudStreamDownloader = UrlConnectionCloudStreamDownloader(),
 ) {
+    private interface ExportSink {
+        val existingNames: MutableSet<String>
+        fun exists(fileName: String): Boolean
+        fun loadManifest(): CloudFolderManifest?
+        fun saveManifest(manifest: CloudFolderManifest)
+        suspend fun downloadTrack(
+            track: Track,
+            root: LibraryRoot?,
+            onBytesProgress: ((ByteTransferProgress) -> Unit)?,
+        ): String
+    }
+
+    private inner class FileExportSink(
+        private val dir: File,
+    ) : ExportSink {
+        override val existingNames: MutableSet<String> = dir.list()?.toMutableSet() ?: mutableSetOf()
+        override fun exists(fileName: String): Boolean = File(dir, fileName).exists()
+        override fun loadManifest(): CloudFolderManifest? = Companion.loadManifest(dir)
+        override fun saveManifest(manifest: CloudFolderManifest) = Companion.saveManifest(dir, manifest)
+        override suspend fun downloadTrack(
+            track: Track,
+            root: LibraryRoot?,
+            onBytesProgress: ((ByteTransferProgress) -> Unit)?,
+        ): String = downloadToFileDir(track, root, dir, existingNames, onBytesProgress)
+    }
+
+    private inner class DocumentExportSink(
+        private val ctx: Context,
+        private val dirDoc: DocumentFile,
+    ) : ExportSink {
+        override val existingNames: MutableSet<String> =
+            dirDoc.listFiles().mapNotNullTo(mutableSetOf()) { it.name }
+
+        override fun exists(fileName: String): Boolean = fileName in existingNames
+        override fun loadManifest(): CloudFolderManifest? = Companion.loadManifest(ctx, dirDoc)
+        override fun saveManifest(manifest: CloudFolderManifest) = Companion.saveManifest(ctx, dirDoc, manifest)
+        override suspend fun downloadTrack(
+            track: Track,
+            root: LibraryRoot?,
+            onBytesProgress: ((ByteTransferProgress) -> Unit)?,
+        ): String = downloadToDocumentDir(ctx, track, root, dirDoc, existingNames, onBytesProgress)
+    }
+
     suspend fun exportPlaylist(
         tracks: List<Track>,
         root: LibraryRoot?,
         parentDir: File,
         folderName: String,
         onProgress: (done: Int, total: Int, title: String) -> Unit = { _, _, _ -> },
+        onDetailedProgress: ((CloudExportProgress) -> Unit)? = null,
     ): CloudExportSummary = withContext(Dispatchers.IO) {
         if (!parentDir.exists() && !parentDir.mkdirs()) {
             throw IOException("Could not create parent folder: ${parentDir.absolutePath}")
@@ -240,57 +466,17 @@ class CloudExporter(
             throw IOException("Could not create folder: ${targetDir.absolutePath}")
         }
 
-        val existingNames = targetDir.list()?.toMutableSet() ?: mutableSetOf()
-        val trackedMap = (loadManifest(targetDir)?.tracks ?: emptyMap()).toMutableMap()
-        val errors = mutableListOf<String>()
-        var savedCount = 0
-        var failedCount = 0
-
-        for ((index, track) in tracks.withIndex()) {
-            currentCoroutineContext().ensureActive()
-            onProgress(index, tracks.size, track.title)
-            try {
-                val savedName = downloadToFileDir(track, root, targetDir, existingNames)
-                existingNames.add(savedName)
-                val trackKey = track.remoteTrackId ?: track.relativePath
-                if (trackKey.isNotEmpty()) {
-                    trackedMap[trackKey] = savedName
-                }
-                savedCount += 1
-            } catch (cancel: CancellationException) {
-                throw cancel
-            } catch (err: Exception) {
-                failedCount += 1
-                errors.add("${track.title}: ${err.message ?: err.javaClass.simpleName}")
-            } finally {
-                onProgress(index + 1, tracks.size, track.title)
-            }
-        }
-
-        val sourceUrl = root?.sourceUrl?.trim()
-        val cloudKind = root?.effectiveCloudKind
-        if (!sourceUrl.isNullOrEmpty() && cloudKind != null) {
-            runCatching {
-                saveManifest(
-                    targetDir,
-                    CloudFolderManifest(
-                        sourceURL = sourceUrl,
-                        remoteID = root.remoteId,
-                        cloudKind = cloudKind.name,
-                        lastSyncedEpochMs = System.currentTimeMillis(),
-                        tracks = trackedMap,
-                    ),
-                )
-            }
-        }
-
-        CloudExportSummary(
-            savedCount = savedCount,
-            failedCount = failedCount,
+        val result = exportPlaylistToSink(
+            tracks = tracks,
+            root = root,
+            sink = FileExportSink(targetDir),
+            onProgress = onProgress,
+            onDetailedProgress = onDetailedProgress,
+        )
+        result.copy(
             targetTreeUri = null,
             targetDir = targetDir,
             savedFolderName = targetDir.name,
-            errors = errors,
         )
     }
 
@@ -300,10 +486,11 @@ class CloudExporter(
         parentTreeUri: Uri,
         folderName: String,
         onProgress: (done: Int, total: Int, title: String) -> Unit = { _, _, _ -> },
+        onDetailedProgress: ((CloudExportProgress) -> Unit)? = null,
     ): CloudExportSummary {
         if (parentTreeUri.scheme == "file") {
             val path = parentTreeUri.path ?: throw IOException("Invalid file URI: $parentTreeUri")
-            return exportPlaylist(tracks, root, File(path), folderName, onProgress)
+            return exportPlaylist(tracks, root, File(path), folderName, onProgress, onDetailedProgress)
         }
         return withContext(Dispatchers.IO) {
             val ctx = context ?: throw IOException("Android context unavailable for SAF export.")
@@ -327,60 +514,103 @@ class CloudExporter(
                     ?: throw IOException("Could not create folder $safeFolder.")
             }
 
-            val existingNames = subDirDoc.listFiles().mapNotNullTo(mutableSetOf()) { it.name }
-            val trackedMap = (loadManifest(ctx, subDirDoc)?.tracks ?: emptyMap()).toMutableMap()
-            val errors = mutableListOf<String>()
-            var savedCount = 0
-            var failedCount = 0
-
-            for ((index, track) in tracks.withIndex()) {
-                currentCoroutineContext().ensureActive()
-                onProgress(index, tracks.size, track.title)
-                try {
-                    val savedName = downloadToDocumentDir(ctx, track, root, subDirDoc, existingNames)
-                    existingNames.add(savedName)
-                    val trackKey = track.remoteTrackId ?: track.relativePath
-                    if (trackKey.isNotEmpty()) {
-                        trackedMap[trackKey] = savedName
-                    }
-                    savedCount += 1
-                } catch (cancel: CancellationException) {
-                    throw cancel
-                } catch (err: Exception) {
-                    failedCount += 1
-                    errors.add("${track.title}: ${err.message ?: err.javaClass.simpleName}")
-                } finally {
-                    onProgress(index + 1, tracks.size, track.title)
-                }
-            }
-
-            val sourceUrl = root?.sourceUrl?.trim()
-            val cloudKind = root?.effectiveCloudKind
-            if (!sourceUrl.isNullOrEmpty() && cloudKind != null) {
-                runCatching {
-                    saveManifest(
-                        ctx,
-                        subDirDoc,
-                        CloudFolderManifest(
-                            sourceURL = sourceUrl,
-                            remoteID = root.remoteId,
-                            cloudKind = cloudKind.name,
-                            lastSyncedEpochMs = System.currentTimeMillis(),
-                            tracks = trackedMap,
-                        ),
-                    )
-                }
-            }
-
-            CloudExportSummary(
-                savedCount = savedCount,
-                failedCount = failedCount,
+            val result = exportPlaylistToSink(
+                tracks = tracks,
+                root = root,
+                sink = DocumentExportSink(ctx, subDirDoc),
+                onProgress = onProgress,
+                onDetailedProgress = onDetailedProgress,
+            )
+            result.copy(
                 targetTreeUri = subDirDoc.uri,
                 targetDir = null,
                 savedFolderName = subDirDoc.name ?: safeFolder,
-                errors = errors,
             )
         }
+    }
+
+    private suspend fun exportPlaylistToSink(
+        tracks: List<Track>,
+        root: LibraryRoot?,
+        sink: ExportSink,
+        onProgress: (done: Int, total: Int, title: String) -> Unit,
+        onDetailedProgress: ((CloudExportProgress) -> Unit)?,
+    ): CloudExportSummary {
+        val trackedMap = (sink.loadManifest()?.tracks ?: emptyMap()).toMutableMap()
+        val errors = mutableListOf<String>()
+        var savedCount = 0
+        var failedCount = 0
+
+        for ((index, track) in tracks.withIndex()) {
+            currentCoroutineContext().ensureActive()
+            onProgress(index, tracks.size, track.title)
+            onDetailedProgress?.invoke(
+                CloudExportProgress(
+                    completedTracks = index,
+                    totalTracks = tracks.size,
+                    currentTrackTitle = track.title,
+                    failedCount = failedCount,
+                )
+            )
+            try {
+                val savedName = sink.downloadTrack(track, root) { bp ->
+                    onDetailedProgress?.invoke(
+                        CloudExportProgress(
+                            completedTracks = index,
+                            totalTracks = tracks.size,
+                            currentTrackTitle = track.title,
+                            failedCount = failedCount,
+                            trackBytesDownloaded = bp.bytesDownloaded,
+                            trackTotalBytes = bp.totalBytes,
+                            bytesPerSecond = bp.bytesPerSecond,
+                        )
+                    )
+                }
+                sink.existingNames.add(savedName)
+                val trackKey = track.remoteTrackId ?: track.relativePath
+                if (trackKey.isNotEmpty()) {
+                    trackedMap[trackKey] = savedName
+                }
+                savedCount += 1
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (err: Exception) {
+                failedCount += 1
+                errors.add("${track.title}: ${err.message ?: err.javaClass.simpleName}")
+            } finally {
+                onProgress(index + 1, tracks.size, track.title)
+                onDetailedProgress?.invoke(
+                    CloudExportProgress(
+                        completedTracks = index + 1,
+                        totalTracks = tracks.size,
+                        currentTrackTitle = track.title,
+                        failedCount = failedCount,
+                    )
+                )
+            }
+        }
+
+        val sourceUrl = root?.sourceUrl?.trim()
+        val cloudKind = root?.effectiveCloudKind
+        if (!sourceUrl.isNullOrEmpty() && cloudKind != null) {
+            runCatching {
+                sink.saveManifest(
+                    CloudFolderManifest(
+                        sourceURL = sourceUrl,
+                        remoteID = root.remoteId,
+                        cloudKind = cloudKind.name,
+                        lastSyncedEpochMs = System.currentTimeMillis(),
+                        tracks = trackedMap,
+                    )
+                )
+            }
+        }
+
+        return CloudExportSummary(
+            savedCount = savedCount,
+            failedCount = failedCount,
+            errors = errors,
+        )
     }
 
     suspend fun updateLocalFolder(
@@ -388,21 +618,132 @@ class CloudExporter(
         targetDir: File,
         fetchPlaylist: suspend (sourceUrl: String, cookie: String?, kindHint: RootKind?) -> CloudPlaylistResult,
         onProgress: (done: Int, total: Int, title: String) -> Unit = { _, _, _ -> },
+        onDetailedProgress: ((CloudExportProgress) -> Unit)? = null,
+        overrideSourceUrl: String? = null,
+        overrideCookie: String? = null,
+        overrideCloudKind: RootKind? = null,
+        subfolderPath: String? = null,
     ): CloudUpdateSummary = withContext(Dispatchers.IO) {
-        val existingManifest = loadManifest(targetDir)
-        val rawSource = (existingManifest?.sourceURL ?: root.sourceUrl ?: root.remoteId ?: "").trim()
+        val normExplicitSub = subfolderPath?.let { LibraryRoot.normalizeFolderPath(it) }?.takeIf { it.isNotEmpty() }
+        val resolvedDir = resolveSubfolderFile(targetDir, normExplicitSub)
+        if (!resolvedDir.exists() && !resolvedDir.mkdirs()) {
+            throw IOException("Could not access target folder: ${resolvedDir.absolutePath}")
+        }
+        updateLocalFolderInSink(
+            root = root,
+            sink = FileExportSink(resolvedDir),
+            effectiveSubPath = normExplicitSub,
+            fetchPlaylist = fetchPlaylist,
+            onProgress = onProgress,
+            onDetailedProgress = onDetailedProgress,
+            overrideSourceUrl = overrideSourceUrl,
+            overrideCookie = overrideCookie,
+            overrideCloudKind = overrideCloudKind,
+        )
+    }
+
+    suspend fun updateLocalFolder(
+        root: LibraryRoot,
+        treeUri: Uri,
+        fetchPlaylist: suspend (sourceUrl: String, cookie: String?, kindHint: RootKind?) -> CloudPlaylistResult,
+        onProgress: (done: Int, total: Int, title: String) -> Unit = { _, _, _ -> },
+        onDetailedProgress: ((CloudExportProgress) -> Unit)? = null,
+        overrideSourceUrl: String? = null,
+        overrideCookie: String? = null,
+        overrideCloudKind: RootKind? = null,
+        subfolderPath: String? = null,
+    ): CloudUpdateSummary {
+        val effectiveSubPath = subfolderPath?.let { LibraryRoot.normalizeFolderPath(it) }?.takeIf { it.isNotEmpty() }
+            ?: root.trackedSubfolderName?.let { LibraryRoot.normalizeFolderPath(it) }?.takeIf { it.isNotEmpty() }
+
+        if (treeUri.scheme == "file") {
+            val path = treeUri.path ?: throw IOException("Invalid file URI: $treeUri")
+            val resolvedDir = resolveSubfolderFile(File(path), effectiveSubPath)
+            if (!resolvedDir.exists() && !resolvedDir.mkdirs()) {
+                throw IOException("Could not access target folder: ${resolvedDir.absolutePath}")
+            }
+            return withContext(Dispatchers.IO) {
+                updateLocalFolderInSink(
+                    root = root,
+                    sink = FileExportSink(resolvedDir),
+                    effectiveSubPath = effectiveSubPath,
+                    fetchPlaylist = fetchPlaylist,
+                    onProgress = onProgress,
+                    onDetailedProgress = onDetailedProgress,
+                    overrideSourceUrl = overrideSourceUrl,
+                    overrideCookie = overrideCookie,
+                    overrideCloudKind = overrideCloudKind,
+                )
+            }
+        }
+        return withContext(Dispatchers.IO) {
+            val ctx = context ?: throw IOException("Android context unavailable for SAF export.")
+            val rootDoc = DocumentFile.fromTreeUri(ctx, treeUri)
+                ?: throw IOException("Could not open saved folder.")
+            val targetDoc = resolveOrCreateSubfolderDoc(rootDoc, effectiveSubPath)
+            if (!targetDoc.exists() || !targetDoc.isDirectory || !targetDoc.canWrite()) {
+                throw IOException("Saved folder is not writable. Re-select it to grant write permission.")
+            }
+
+            updateLocalFolderInSink(
+                root = root,
+                sink = DocumentExportSink(ctx, targetDoc),
+                effectiveSubPath = effectiveSubPath,
+                fetchPlaylist = fetchPlaylist,
+                onProgress = onProgress,
+                onDetailedProgress = onDetailedProgress,
+                overrideSourceUrl = overrideSourceUrl,
+                overrideCookie = overrideCookie,
+                overrideCloudKind = overrideCloudKind,
+            )
+        }
+    }
+
+    private suspend fun updateLocalFolderInSink(
+        root: LibraryRoot,
+        sink: ExportSink,
+        effectiveSubPath: String?,
+        fetchPlaylist: suspend (sourceUrl: String, cookie: String?, kindHint: RootKind?) -> CloudPlaylistResult,
+        onProgress: (done: Int, total: Int, title: String) -> Unit,
+        onDetailedProgress: ((CloudExportProgress) -> Unit)?,
+        overrideSourceUrl: String?,
+        overrideCookie: String?,
+        overrideCloudKind: RootKind?,
+    ): CloudUpdateSummary {
+        val existingManifest = sink.loadManifest()
+        val trackedSubInfo = effectiveSubPath?.let { root.trackingFor(it) }
+        val rootMatchesTarget = effectiveSubPath == null ||
+            (root.trackedSubfolderName?.let { LibraryRoot.normalizeFolderPath(it) } == effectiveSubPath)
+
+        val rawSource = (
+            overrideSourceUrl?.trim()?.takeIf { it.isNotEmpty() }
+                ?: trackedSubInfo?.sourceUrl?.trim()?.takeIf { it.isNotEmpty() }
+                ?: (if (rootMatchesTarget) root.sourceUrl?.trim()?.takeIf { it.isNotEmpty() } else null)
+                ?: existingManifest?.sourceURL?.trim()?.takeIf { it.isNotEmpty() }
+                ?: (if (rootMatchesTarget) root.remoteId?.trim()?.takeIf { it.isNotEmpty() } else null)
+                ?: ""
+            )
         if (rawSource.isEmpty()) throw IOException("No cloud tracking source URL is associated with this folder.")
-        val kindHint = root.effectiveCloudKind
+
+        val effectiveCookie = overrideCookie?.trim()?.takeIf { it.isNotEmpty() }
+            ?: trackedSubInfo?.cookie?.trim()?.takeIf { it.isNotEmpty() }
+            ?: (if (rootMatchesTarget) root.cookie?.trim()?.takeIf { it.isNotEmpty() } else null)
+
+        val urlInferredKind = inferCloudKindFromUrl(rawSource)
+        val kindHint = urlInferredKind
+            ?: overrideCloudKind
+            ?: trackedSubInfo?.cloudKind
+            ?: (if (rootMatchesTarget) root.effectiveCloudKind else null)
             ?: existingManifest?.cloudKind?.let { raw -> runCatching { RootKind.valueOf(raw) }.getOrNull() }
 
-        val playlist = fetchPlaylist(rawSource, root.cookie, kindHint)
-        if (!targetDir.exists() && !targetDir.mkdirs()) {
-            throw IOException("Could not access target folder: ${targetDir.absolutePath}")
-        }
-
+        val playlist = fetchPlaylist(rawSource, effectiveCookie, kindHint)
         val cloudKind = cloudKindForSource(playlist.source)
-        val lookupRoot = root.copy(kind = cloudKind, sourceUrl = rawSource, remoteId = playlist.remoteId)
-        val existingNames = targetDir.list()?.toMutableSet() ?: mutableSetOf()
+        val lookupRoot = root.copy(
+            kind = cloudKind,
+            sourceUrl = rawSource,
+            remoteId = playlist.remoteId,
+            cookie = effectiveCookie,
+        )
         val trackedMap = (existingManifest?.tracks ?: emptyMap()).toMutableMap()
         val sourceSlug = sourceSlugForKind(cloudKind)
         val nowMs = System.currentTimeMillis()
@@ -414,11 +755,27 @@ class CloudExporter(
         for ((index, meta) in playlist.tracks.withIndex()) {
             currentCoroutineContext().ensureActive()
             onProgress(index, playlist.tracks.size, meta.title)
+            onDetailedProgress?.invoke(
+                CloudExportProgress(
+                    completedTracks = index,
+                    totalTracks = playlist.tracks.size,
+                    currentTrackTitle = meta.title,
+                    failedCount = failedCount,
+                )
+            )
 
             val recordedName = trackedMap[meta.remoteTrackId]
-            if (recordedName != null && File(targetDir, recordedName).exists()) {
+            if (recordedName != null && sink.exists(recordedName)) {
                 skippedCount += 1
                 onProgress(index + 1, playlist.tracks.size, meta.title)
+                onDetailedProgress?.invoke(
+                    CloudExportProgress(
+                        completedTracks = index + 1,
+                        totalTracks = playlist.tracks.size,
+                        currentTrackTitle = meta.title,
+                        failedCount = failedCount,
+                    )
+                )
                 continue
             }
 
@@ -442,8 +799,20 @@ class CloudExporter(
             )
 
             try {
-                val savedName = downloadToFileDir(tempTrack, lookupRoot, targetDir, existingNames)
-                existingNames.add(savedName)
+                val savedName = sink.downloadTrack(tempTrack, lookupRoot) { bp ->
+                    onDetailedProgress?.invoke(
+                        CloudExportProgress(
+                            completedTracks = index,
+                            totalTracks = playlist.tracks.size,
+                            currentTrackTitle = meta.title,
+                            failedCount = failedCount,
+                            trackBytesDownloaded = bp.bytesDownloaded,
+                            trackTotalBytes = bp.totalBytes,
+                            bytesPerSecond = bp.bytesPerSecond,
+                        )
+                    )
+                }
+                sink.existingNames.add(savedName)
                 trackedMap[meta.remoteTrackId] = savedName
                 addedCount += 1
             } catch (cancel: CancellationException) {
@@ -453,21 +822,28 @@ class CloudExporter(
                 errors.add("${meta.title}: ${err.message ?: err.javaClass.simpleName}")
             } finally {
                 onProgress(index + 1, playlist.tracks.size, meta.title)
+                onDetailedProgress?.invoke(
+                    CloudExportProgress(
+                        completedTracks = index + 1,
+                        totalTracks = playlist.tracks.size,
+                        currentTrackTitle = meta.title,
+                        failedCount = failedCount,
+                    )
+                )
             }
         }
 
-        saveManifest(
-            targetDir,
+        sink.saveManifest(
             CloudFolderManifest(
                 sourceURL = rawSource,
                 remoteID = playlist.remoteId,
                 cloudKind = cloudKind.name,
                 lastSyncedEpochMs = System.currentTimeMillis(),
                 tracks = trackedMap,
-            ),
+            )
         )
 
-        CloudUpdateSummary(
+        return CloudUpdateSummary(
             addedCount = addedCount,
             skippedCount = skippedCount,
             failedCount = failedCount,
@@ -476,120 +852,11 @@ class CloudExporter(
         )
     }
 
-    suspend fun updateLocalFolder(
-        root: LibraryRoot,
-        treeUri: Uri,
-        fetchPlaylist: suspend (sourceUrl: String, cookie: String?, kindHint: RootKind?) -> CloudPlaylistResult,
-        onProgress: (done: Int, total: Int, title: String) -> Unit = { _, _, _ -> },
-    ): CloudUpdateSummary {
-        if (treeUri.scheme == "file") {
-            val path = treeUri.path ?: throw IOException("Invalid file URI: $treeUri")
-            val baseDir = File(path)
-            val targetDir = root.trackedSubfolderName?.takeIf { it.isNotBlank() }?.let { File(baseDir, it) } ?: baseDir
-            return updateLocalFolder(root, targetDir, fetchPlaylist, onProgress)
-        }
-        return withContext(Dispatchers.IO) {
-            val ctx = context ?: throw IOException("Android context unavailable for SAF export.")
-            val rootDoc = DocumentFile.fromTreeUri(ctx, treeUri)
-                ?: throw IOException("Could not open saved folder.")
-            val targetDoc = root.trackedSubfolderName?.takeIf { it.isNotBlank() }?.let { subName ->
-                rootDoc.findFile(subName)?.takeIf { it.isDirectory }
-                    ?: rootDoc.createDirectory(subName)
-                    ?: throw IOException("Could not open subfolder $subName.")
-            } ?: rootDoc
-            if (!targetDoc.exists() || !targetDoc.isDirectory || !targetDoc.canWrite()) {
-                throw IOException("Saved folder is not writable. Re-select it to grant write permission.")
-            }
-
-            val existingManifest = loadManifest(ctx, targetDoc)
-            val rawSource = (existingManifest?.sourceURL ?: root.sourceUrl ?: root.remoteId ?: "").trim()
-            if (rawSource.isEmpty()) throw IOException("No cloud tracking source URL is associated with this folder.")
-            val kindHint = root.effectiveCloudKind
-                ?: existingManifest?.cloudKind?.let { raw -> runCatching { RootKind.valueOf(raw) }.getOrNull() }
-
-            val playlist = fetchPlaylist(rawSource, root.cookie, kindHint)
-            val cloudKind = cloudKindForSource(playlist.source)
-            val lookupRoot = root.copy(kind = cloudKind, sourceUrl = rawSource, remoteId = playlist.remoteId)
-            val existingNames = targetDoc.listFiles().mapNotNullTo(mutableSetOf()) { it.name }
-            val trackedMap = (existingManifest?.tracks ?: emptyMap()).toMutableMap()
-            val sourceSlug = sourceSlugForKind(cloudKind)
-            val nowMs = System.currentTimeMillis()
-            val errors = mutableListOf<String>()
-            var addedCount = 0
-            var skippedCount = 0
-            var failedCount = 0
-
-            for ((index, meta) in playlist.tracks.withIndex()) {
-                currentCoroutineContext().ensureActive()
-                onProgress(index, playlist.tracks.size, meta.title)
-
-                val recordedName = trackedMap[meta.remoteTrackId]
-                if (recordedName != null && recordedName in existingNames) {
-                    skippedCount += 1
-                    onProgress(index + 1, playlist.tracks.size, meta.title)
-                    continue
-                }
-
-                val relPath = "$sourceSlug/${meta.remoteTrackId}"
-                val tempTrack = Track(
-                    id = Track.makeId(root.id, relPath),
-                    rootId = root.id,
-                    relativePath = relPath,
-                    title = meta.title.ifBlank { meta.remoteTrackId },
-                    artist = meta.artist.ifBlank { root.name },
-                    album = meta.album.ifBlank { playlist.title.ifBlank { root.name } },
-                    albumArtist = meta.artist.ifBlank { root.name },
-                    trackNumber = meta.trackNumber ?: (index + 1),
-                    durationSec = meta.durationSec,
-                    fileSize = 0L,
-                    modifiedEpochMs = 0L,
-                    dateAddedEpochMs = nowMs,
-                    cloudSource = playlist.source,
-                    remoteTrackId = meta.remoteTrackId,
-                    remoteArtworkUrl = meta.artworkUrl,
-                )
-
-                try {
-                    val savedName = downloadToDocumentDir(ctx, tempTrack, lookupRoot, targetDoc, existingNames)
-                    existingNames.add(savedName)
-                    trackedMap[meta.remoteTrackId] = savedName
-                    addedCount += 1
-                } catch (cancel: CancellationException) {
-                    throw cancel
-                } catch (err: Exception) {
-                    failedCount += 1
-                    errors.add("${meta.title}: ${err.message ?: err.javaClass.simpleName}")
-                } finally {
-                    onProgress(index + 1, playlist.tracks.size, meta.title)
-                }
-            }
-
-            saveManifest(
-                ctx,
-                targetDoc,
-                CloudFolderManifest(
-                    sourceURL = rawSource,
-                    remoteID = playlist.remoteId,
-                    cloudKind = cloudKind.name,
-                    lastSyncedEpochMs = System.currentTimeMillis(),
-                    tracks = trackedMap,
-                ),
-            )
-
-            CloudUpdateSummary(
-                addedCount = addedCount,
-                skippedCount = skippedCount,
-                failedCount = failedCount,
-                totalRemoteCount = playlist.tracks.size,
-                errors = errors,
-            )
-        }
-    }
-
     suspend fun exportTrack(
         track: Track,
         root: LibraryRoot?,
         targetDir: File,
+        onDetailedProgress: ((CloudExportProgress) -> Unit)? = null,
     ): String = withContext(Dispatchers.IO) {
         if (!targetDir.exists() && !targetDir.mkdirs()) {
             throw IOException("Could not create destination folder: ${targetDir.absolutePath}")
@@ -598,17 +865,44 @@ class CloudExporter(
             throw IOException("Destination is not a directory: ${targetDir.absolutePath}")
         }
         val existingNames = targetDir.list()?.toSet().orEmpty()
-        downloadToFileDir(track, root, targetDir, existingNames)
+        onDetailedProgress?.invoke(
+            CloudExportProgress(
+                completedTracks = 0,
+                totalTracks = 1,
+                currentTrackTitle = track.title,
+            )
+        )
+        val savedName = downloadToFileDir(track, root, targetDir, existingNames) { bp ->
+            onDetailedProgress?.invoke(
+                CloudExportProgress(
+                    completedTracks = 0,
+                    totalTracks = 1,
+                    currentTrackTitle = track.title,
+                    trackBytesDownloaded = bp.bytesDownloaded,
+                    trackTotalBytes = bp.totalBytes,
+                    bytesPerSecond = bp.bytesPerSecond,
+                )
+            )
+        }
+        onDetailedProgress?.invoke(
+            CloudExportProgress(
+                completedTracks = 1,
+                totalTracks = 1,
+                currentTrackTitle = track.title,
+            )
+        )
+        savedName
     }
 
     suspend fun exportTrack(
         track: Track,
         root: LibraryRoot?,
         targetTreeUri: Uri,
+        onDetailedProgress: ((CloudExportProgress) -> Unit)? = null,
     ): String {
         if (targetTreeUri.scheme == "file") {
             val path = targetTreeUri.path ?: throw IOException("Invalid file URI: $targetTreeUri")
-            return exportTrack(track, root, File(path))
+            return exportTrack(track, root, File(path), onDetailedProgress)
         }
         return withContext(Dispatchers.IO) {
             val ctx = context ?: throw IOException("Android context unavailable for SAF export.")
@@ -618,7 +912,33 @@ class CloudExporter(
                 throw IOException("Selected folder is not writable.")
             }
             val existingNames = dirDoc.listFiles().mapNotNullTo(mutableSetOf()) { it.name }
-            downloadToDocumentDir(ctx, track, root, dirDoc, existingNames)
+            onDetailedProgress?.invoke(
+                CloudExportProgress(
+                    completedTracks = 0,
+                    totalTracks = 1,
+                    currentTrackTitle = track.title,
+                )
+            )
+            val savedName = downloadToDocumentDir(ctx, track, root, dirDoc, existingNames) { bp ->
+                onDetailedProgress?.invoke(
+                    CloudExportProgress(
+                        completedTracks = 0,
+                        totalTracks = 1,
+                        currentTrackTitle = track.title,
+                        trackBytesDownloaded = bp.bytesDownloaded,
+                        trackTotalBytes = bp.totalBytes,
+                        bytesPerSecond = bp.bytesPerSecond,
+                    )
+                )
+            }
+            onDetailedProgress?.invoke(
+                CloudExportProgress(
+                    completedTracks = 1,
+                    totalTracks = 1,
+                    currentTrackTitle = track.title,
+                )
+            )
+            savedName
         }
     }
 
@@ -627,21 +947,17 @@ class CloudExporter(
         root: LibraryRoot?,
         targetDir: File,
         existingNames: Set<String>,
+        onBytesProgress: ((ByteTransferProgress) -> Unit)? = null,
     ): String {
-        return withStreamRetry(track, root) { stream ->
+        return withStreamRetry(track, root, onBytesProgress) { stream ->
             val (ext, _) = extensionAndMimeFor(stream)
             val baseName = sanitizeFileName(track.title, track.remoteTrackId ?: "track")
             val fileName = uniqueFileName(existingNames, baseName, ext)
             val targetFile = File(targetDir, fileName)
             val partFile = File(targetDir, ".$fileName.part")
             try {
-                FileOutputStream(partFile).use { out ->
-                    downloader.download(
-                        stream.url,
-                        downloadHeadersFor(track, stream),
-                        stream.contentLength,
-                        out,
-                    )
+                FileOutputStream(partFile).use { rawOut ->
+                    downloadWithMeteredProgress(track, stream, rawOut, onBytesProgress)
                 }
                 if (!partFile.renameTo(targetFile)) {
                     partFile.copyTo(targetFile, overwrite = true)
@@ -662,8 +978,9 @@ class CloudExporter(
         root: LibraryRoot?,
         dirDoc: DocumentFile,
         existingNames: Set<String>,
+        onBytesProgress: ((ByteTransferProgress) -> Unit)? = null,
     ): String {
-        return withStreamRetry(track, root) { stream ->
+        return withStreamRetry(track, root, onBytesProgress) { stream ->
             val (ext, mimeType) = extensionAndMimeFor(stream)
             val baseName = sanitizeFileName(track.title, track.remoteTrackId ?: "track")
             val fileName = uniqueFileName(existingNames, baseName, ext)
@@ -672,19 +989,114 @@ class CloudExporter(
             try {
                 val out = ctx.contentResolver.openOutputStream(doc.uri)
                     ?: throw IOException("Could not open output stream for $fileName.")
-                out.use { streamOut ->
-                    downloader.download(
-                        stream.url,
-                        downloadHeadersFor(track, stream),
-                        stream.contentLength,
-                        streamOut,
-                    )
+                out.use { rawOut ->
+                    downloadWithMeteredProgress(track, stream, rawOut, onBytesProgress)
                 }
                 doc.name ?: fileName
             } catch (t: Throwable) {
                 runCatching { doc.delete() }
                 throw t
             }
+        }
+    }
+
+    private suspend fun downloadWithMeteredProgress(
+        track: Track,
+        stream: ResolvedStream,
+        rawOut: OutputStream,
+        onBytesProgress: ((ByteTransferProgress) -> Unit)?,
+    ) {
+        if (onBytesProgress == null) {
+            downloader.download(
+                stream.url,
+                downloadHeadersFor(track, stream),
+                stream.contentLength,
+                rawOut,
+            )
+            return
+        }
+
+        val meter = TransferSpeedMeter()
+        var downloaderReported = false
+        val countingOut = CountingOutputStream(rawOut) { written ->
+            if (!downloaderReported) {
+                meter.record(written)?.let { speed ->
+                    onBytesProgress(ByteTransferProgress(written, stream.contentLength, speed))
+                }
+            }
+        }
+        downloader.download(
+            stream.url,
+            downloadHeadersFor(track, stream),
+            stream.contentLength,
+            countingOut,
+        ) { progress ->
+            downloaderReported = true
+            onBytesProgress(progress)
+        }
+        if (!downloaderReported && countingOut.bytesWritten > 0L) {
+            val finalSpeed = meter.record(countingOut.bytesWritten, forceEmit = true) ?: meter.currentSpeed()
+            onBytesProgress(ByteTransferProgress(countingOut.bytesWritten, stream.contentLength, finalSpeed))
+        }
+    }
+
+    private class CountingOutputStream(
+        delegate: OutputStream,
+        private val onWritten: (Long) -> Unit,
+    ) : FilterOutputStream(delegate) {
+        var bytesWritten: Long = 0L
+            private set
+
+        override fun write(b: Int) {
+            out.write(b)
+            bytesWritten += 1L
+            onWritten(bytesWritten)
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            out.write(b, off, len)
+            if (len > 0) {
+                bytesWritten += len.toLong()
+                onWritten(bytesWritten)
+            }
+        }
+    }
+
+    private fun resolveSubfolderFile(baseDir: File, subPath: String?): File {
+        if (subPath.isNullOrBlank()) return baseDir
+        var current = baseDir
+        for (segment in subPath.split('/')) {
+            if (segment.isNotEmpty()) {
+                current = File(current, segment)
+            }
+        }
+        return current
+    }
+
+    private fun resolveOrCreateSubfolderDoc(rootDoc: DocumentFile, subPath: String?): DocumentFile {
+        if (subPath.isNullOrBlank()) return rootDoc
+        var current = rootDoc
+        for (segment in subPath.split('/')) {
+            if (segment.isEmpty()) continue
+            val existing = current.findFile(segment)?.takeIf { it.isDirectory }
+                ?: current.listFiles().firstOrNull { it.isDirectory && it.name.equals(segment, ignoreCase = true) }
+            current = existing
+                ?: current.createDirectory(segment)
+                ?: throw IOException("Could not open subfolder $segment.")
+        }
+        return current
+    }
+
+    private fun inferCloudKindFromUrl(rawUrl: String): RootKind? {
+        val clean = extractCloudSourceInput(rawUrl)
+        if (clean.isEmpty()) return null
+        return when {
+            GoogleDriveClient.canHandle(clean) -> RootKind.CLOUD_GOOGLE_DRIVE
+            BilibiliClient.canHandle(clean) && !YouTubeClient.canHandle(clean) -> RootKind.CLOUD_BILIBILI
+            YouTubeClient.canHandle(clean) && !BilibiliClient.canHandle(clean) -> RootKind.CLOUD_YOUTUBE
+            clean.contains("bilibili", ignoreCase = true) || clean.contains("b23.tv", ignoreCase = true) -> RootKind.CLOUD_BILIBILI
+            YouTubeClient.canHandle(clean) -> RootKind.CLOUD_YOUTUBE
+            else -> null
         }
     }
 
@@ -697,6 +1109,7 @@ class CloudExporter(
     private suspend fun <T> withStreamRetry(
         track: Track,
         root: LibraryRoot?,
+        onBytesProgress: ((ByteTransferProgress) -> Unit)? = null,
         block: suspend (ResolvedStream) -> T,
     ): T {
         val firstStream = cloudResolver.resolve(track, root, forceRefresh = false)
@@ -705,6 +1118,7 @@ class CloudExporter(
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (_: Exception) {
+            onBytesProgress?.invoke(ByteTransferProgress(0L, null, 0.0))
             cloudResolver.invalidate(track, root)
             val refreshed = cloudResolver.resolve(track, root, forceRefresh = true)
             block(refreshed)

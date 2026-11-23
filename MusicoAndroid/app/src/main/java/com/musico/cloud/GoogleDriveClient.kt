@@ -1,5 +1,12 @@
 package com.musico.cloud
 
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
@@ -20,6 +27,38 @@ sealed interface GoogleDriveTarget {
     data class Open(override val id: String, override val resourceKey: String? = null) : GoogleDriveTarget
 }
 
+data class DriveFolderNode(
+    val folderId: String,
+    val resourceKey: String?,
+    val folderPath: String,
+    val title: String,
+    val depth: Int,
+)
+
+data class DriveSingleFolderResult(
+    val folderId: String,
+    val folderPath: String,
+    val title: String,
+    val tracks: List<CloudTrackMetadata>,
+    val subfolders: List<DriveFolderNode>,
+)
+
+data class DriveCrawlProgress(
+    val rootTitle: String,
+    val completedFolders: Int,
+    val totalDiscoveredFolders: Int,
+    val tracksSoFar: Int,
+    val isComplete: Boolean,
+)
+
+data class DriveCrawlBatch(
+    val rootRemoteId: String,
+    val rootTitle: String,
+    val batchTracks: List<CloudTrackMetadata>,
+    val knownFolderPaths: Set<String>,
+    val progress: DriveCrawlProgress,
+)
+
 class GoogleDriveClient(
     private val httpClient: CloudHttpClient = UrlConnectionCloudHttpClient(),
 ) {
@@ -31,40 +70,127 @@ class GoogleDriveClient(
         val isFolder: Boolean = false,
     )
 
+    internal data class DriveIvdPage(
+        val entries: List<DriveEntry>,
+        val nextPageToken: String? = null,
+    )
+
     internal data class DecodedTrackId(
         val fileId: String,
         val extension: String?,
         val resourceKey: String?,
     )
 
+    @Volatile
+    private var cachedApiKey: String? = null
+
     suspend fun fetchPlaylist(sourceUrl: String, cookie: String? = null): CloudPlaylistResult {
+        val collected = mutableListOf<CloudTrackMetadata>()
+        val result = crawlProgressive(
+            sourceUrl = sourceUrl,
+            cookie = cookie,
+            onBatch = { batch ->
+                collected.addAll(batch.batchTracks)
+            },
+        )
+        return result.copy(
+            tracks = collected.mapIndexed { idx, track ->
+                track.copy(
+                    album = track.album.ifBlank { result.title },
+                    trackNumber = idx + 1,
+                )
+            },
+        )
+    }
+
+    suspend fun crawlProgressive(
+        sourceUrl: String,
+        cookie: String? = null,
+        priorityPathProvider: () -> String? = { null },
+        onBatch: suspend (DriveCrawlBatch) -> Unit,
+    ): CloudPlaylistResult {
         val target = parseTarget(sourceUrl)
             ?: throw IOException("Not a recognized Google Drive URL.")
 
         return when (target) {
-            is GoogleDriveTarget.Folder -> fetchFolder(target.id, target.resourceKey, cookie)
-            is GoogleDriveTarget.File -> fetchSingleFile(target.id, target.resourceKey, cookie)
-            is GoogleDriveTarget.Open -> fetchOpenTarget(target.id, target.resourceKey, cookie)
+            is GoogleDriveTarget.Folder -> crawlFolderProgressively(
+                rootFolderId = target.id,
+                rootResourceKey = target.resourceKey,
+                cookie = cookie,
+                priorityPathProvider = priorityPathProvider,
+                onBatch = onBatch,
+            )
+            is GoogleDriveTarget.File -> {
+                val single = fetchSingleFile(target.id, target.resourceKey, cookie)
+                onBatch(
+                    DriveCrawlBatch(
+                        rootRemoteId = single.remoteId,
+                        rootTitle = single.title,
+                        batchTracks = single.tracks,
+                        knownFolderPaths = emptySet(),
+                        progress = DriveCrawlProgress(
+                            rootTitle = single.title,
+                            completedFolders = 1,
+                            totalDiscoveredFolders = 1,
+                            tracksSoFar = single.tracks.size,
+                            isComplete = true,
+                        ),
+                    )
+                )
+                single
+            }
+            is GoogleDriveTarget.Open -> crawlOpenTarget(
+                itemId = target.id,
+                resourceKey = target.resourceKey,
+                cookie = cookie,
+                priorityPathProvider = priorityPathProvider,
+                onBatch = onBatch,
+            )
         }
     }
 
-    private suspend fun fetchOpenTarget(
+    private suspend fun crawlOpenTarget(
         itemId: String,
         resourceKey: String?,
         cookie: String?,
+        priorityPathProvider: () -> String?,
+        onBatch: suspend (DriveCrawlBatch) -> Unit,
     ): CloudPlaylistResult {
         val openUrl = buildDriveOpenUrl(itemId, resourceKey)
-        val resp = httpClient.get(openUrl, headers = baseHeaders(cookie), followRedirects = true)
+        val resp = getWithRetry(openUrl, headers = baseHeaders(cookie))
         checkAccessAndStatus(resp, "Google Drive item")
 
         val finalTarget = parseTarget(resp.finalUrl)
         if (finalTarget is GoogleDriveTarget.Folder) {
             val rk = finalTarget.resourceKey ?: resourceKey
-            return fetchFolder(finalTarget.id, rk, cookie, prefetchedFolderResponse = resp)
+            return crawlFolderProgressively(
+                rootFolderId = finalTarget.id,
+                rootResourceKey = rk,
+                cookie = cookie,
+                prefetchedFolderResponse = resp,
+                priorityPathProvider = priorityPathProvider,
+                onBatch = onBatch,
+            )
         }
         if (finalTarget is GoogleDriveTarget.File) {
             val rk = finalTarget.resourceKey ?: resourceKey
-            return fetchSingleFile(finalTarget.id, rk, cookie, prefetchedViewResponse = resp)
+            val single = fetchSingleFile(finalTarget.id, rk, cookie, prefetchedViewResponse = resp)
+            onBatch(
+                DriveCrawlBatch(
+                    rootRemoteId = single.remoteId,
+                    rootTitle = single.title,
+                    batchTracks = single.tracks,
+                    knownFolderPaths = emptySet(),
+                    progress = DriveCrawlProgress(
+                        rootTitle = single.title,
+                        completedFolders = 1,
+                        totalDiscoveredFolders = 1,
+                        tracksSoFar = single.tracks.size,
+                        isComplete = true,
+                    ),
+                )
+            )
+            return single
         }
 
         val html = resp.bodyText
@@ -72,107 +198,312 @@ class GoogleDriveClient(
             html.contains("flip-entry", ignoreCase = true) ||
             html.contains(FOLDER_MIME_TYPE, ignoreCase = true)
         ) {
-            return fetchFolder(itemId, resourceKey, cookie, prefetchedFolderResponse = resp)
+            return crawlFolderProgressively(
+                rootFolderId = itemId,
+                rootResourceKey = resourceKey,
+                cookie = cookie,
+                prefetchedFolderResponse = resp,
+                priorityPathProvider = priorityPathProvider,
+                onBatch = onBatch,
+            )
         }
-        return fetchSingleFile(itemId, resourceKey, cookie, prefetchedViewResponse = resp)
+        val single = fetchSingleFile(itemId, resourceKey, cookie, prefetchedViewResponse = resp)
+        onBatch(
+            DriveCrawlBatch(
+                rootRemoteId = single.remoteId,
+                rootTitle = single.title,
+                batchTracks = single.tracks,
+                knownFolderPaths = emptySet(),
+                progress = DriveCrawlProgress(
+                    rootTitle = single.title,
+                    completedFolders = 1,
+                    totalDiscoveredFolders = 1,
+                    tracksSoFar = single.tracks.size,
+                    isComplete = true,
+                ),
+            )
+        )
+        return single
     }
 
-    private suspend fun fetchFolder(
+    suspend fun fetchSingleFolder(
+        folderId: String,
+        resourceKey: String?,
+        cookie: String?,
+        folderPath: String = "",
+        explicitTitle: String? = null,
+        depth: Int = 0,
+        prefetchedResponse: CloudHttpResponse? = null,
+    ): DriveSingleFolderResult {
+        val (folderTitle, entries) = fetchFolderPage(
+            folderId = folderId,
+            resourceKey = resourceKey,
+            cookie = cookie,
+            fallbackTitle = explicitTitle,
+            prefetchedResponse = prefetchedResponse,
+        )
+        val albumName = if (depth == 0) {
+            folderTitle
+        } else {
+            explicitTitle?.takeIf { it.isNotBlank() } ?: folderTitle
+        }
+
+        val normFolderPath = normalizeFolderPath(folderPath)
+        val usedFileNamesLower = HashSet<String>()
+        val usedSubfolderNamesLower = HashSet<String>()
+        val tracks = mutableListOf<CloudTrackMetadata>()
+        val subfolders = mutableListOf<DriveFolderNode>()
+
+        for (entry in entries) {
+            if (entry.isFolder || entry.mimeType.equals(FOLDER_MIME_TYPE, ignoreCase = true)) {
+                val subSegment = disambiguateSegment(
+                    usedLower = usedSubfolderNamesLower,
+                    rawName = entry.name,
+                    fallback = entry.id,
+                    preserveExtension = false,
+                )
+                val childPath = if (normFolderPath.isEmpty()) subSegment else "$normFolderPath/$subSegment"
+                subfolders.add(
+                    DriveFolderNode(
+                        folderId = entry.id,
+                        resourceKey = entry.resourceKey ?: resourceKey,
+                        folderPath = childPath,
+                        title = entry.name.trim().ifEmpty { subSegment },
+                        depth = depth + 1,
+                    )
+                )
+                continue
+            }
+            if (!isAudioEntry(entry.name, entry.mimeType)) continue
+            val ext = resolveExtension(entry.name, entry.mimeType)
+            val remoteTrackId = encodeRemoteTrackId(entry.id, ext, entry.resourceKey ?: resourceKey)
+            val cleanTitle = stripAudioExtension(entry.name).ifBlank { entry.id }
+            val fileName = disambiguateFileName(
+                usedLower = usedFileNamesLower,
+                rawName = entry.name,
+                resolvedExt = ext,
+                fallbackStem = entry.id,
+            )
+            val relPath = if (normFolderPath.isEmpty()) fileName else "$normFolderPath/$fileName"
+            tracks.add(
+                CloudTrackMetadata(
+                    remoteTrackId = remoteTrackId,
+                    title = cleanTitle,
+                    artist = DEFAULT_ARTIST,
+                    album = albumName,
+                    durationSec = 0.0,
+                    trackNumber = tracks.size + 1,
+                    relativePath = relPath,
+                )
+            )
+        }
+
+        return DriveSingleFolderResult(
+            folderId = folderId,
+            folderPath = normFolderPath,
+            title = folderTitle,
+            tracks = tracks,
+            subfolders = subfolders,
+        )
+    }
+
+    private suspend fun crawlFolderProgressively(
         rootFolderId: String,
         rootResourceKey: String?,
         cookie: String?,
         prefetchedFolderResponse: CloudHttpResponse? = null,
+        priorityPathProvider: () -> String? = { null },
+        onBatch: suspend (DriveCrawlBatch) -> Unit,
     ): CloudPlaylistResult {
-        val visitedFolders = mutableSetOf<String>()
-        val collected = mutableListOf<CloudTrackMetadata>()
-        var rootTitle: String? = null
-        var foldersVisited = 0
+        val rootResult = fetchSingleFolder(
+            folderId = rootFolderId,
+            resourceKey = rootResourceKey,
+            cookie = cookie,
+            folderPath = "",
+            explicitTitle = null,
+            depth = 0,
+            prefetchedResponse = prefetchedFolderResponse,
+        )
+        val rootTitle = rootResult.title.takeIf { it.isNotBlank() } ?: "Google Drive ($rootFolderId)"
 
-        suspend fun visitFolder(
-            folderId: String,
-            resourceKey: String?,
-            explicitTitle: String?,
-            depth: Int,
-            prefetched: CloudHttpResponse?,
-        ) {
-            if (!visitedFolders.add(folderId)) return
-            if (foldersVisited >= MAX_FOLDERS) return
-            foldersVisited += 1
+        val visitedFolders = mutableSetOf(rootFolderId)
+        val pendingQueue = ArrayList<DriveFolderNode>()
+        val knownFolderPaths = LinkedHashSet<String>()
+        val collectedTracks = ArrayList<CloudTrackMetadata>(rootResult.tracks)
 
-            val (folderTitle, entries) = fetchFolderPage(
-                folderId = folderId,
-                resourceKey = resourceKey,
-                cookie = cookie,
-                fallbackTitle = explicitTitle,
-                prefetchedResponse = prefetched,
-            )
-            if (depth == 0) {
-                rootTitle = folderTitle
-            }
-            val albumName = if (depth == 0) {
-                folderTitle
-            } else {
-                explicitTitle?.takeIf { it.isNotBlank() } ?: folderTitle
-            }
-
-            val subfolders = mutableListOf<DriveEntry>()
-            for (entry in entries) {
-                if (entry.isFolder || entry.mimeType.equals(FOLDER_MIME_TYPE, ignoreCase = true)) {
-                    subfolders.add(entry)
-                    continue
+        if (MAX_FOLDER_DEPTH > 0) {
+            for (sub in rootResult.subfolders) {
+                if (visitedFolders.size >= MAX_FOLDERS) break
+                if (visitedFolders.add(sub.folderId)) {
+                    pendingQueue.add(sub)
+                    knownFolderPaths.add(sub.folderPath)
                 }
-                if (!isAudioEntry(entry.name, entry.mimeType)) continue
-                val ext = resolveExtension(entry.name, entry.mimeType)
-                val remoteTrackId = encodeRemoteTrackId(entry.id, ext, entry.resourceKey)
-                val cleanTitle = stripAudioExtension(entry.name).ifBlank { entry.id }
-                collected.add(
-                    CloudTrackMetadata(
-                        remoteTrackId = remoteTrackId,
-                        title = cleanTitle,
-                        artist = DEFAULT_ARTIST,
-                        album = albumName,
-                        durationSec = 0.0,
-                        trackNumber = collected.size + 1,
-                    )
-                )
             }
+        }
 
-            if (depth < MAX_FOLDER_DEPTH) {
-                for (sub in subfolders) {
-                    if (foldersVisited >= MAX_FOLDERS) break
-                    runCatching {
-                        visitFolder(
-                            folderId = sub.id,
-                            resourceKey = sub.resourceKey,
-                            explicitTitle = sub.name,
-                            depth = depth + 1,
-                            prefetched = null,
-                        )
+        val initialComplete = pendingQueue.isEmpty()
+        onBatch(
+            DriveCrawlBatch(
+                rootRemoteId = rootFolderId,
+                rootTitle = rootTitle,
+                batchTracks = rootResult.tracks,
+                knownFolderPaths = knownFolderPaths.toSet(),
+                progress = DriveCrawlProgress(
+                    rootTitle = rootTitle,
+                    completedFolders = 1,
+                    totalDiscoveredFolders = 1 + pendingQueue.size,
+                    tracksSoFar = collectedTracks.size,
+                    isComplete = initialComplete,
+                ),
+            )
+        )
+
+        if (initialComplete) {
+            return CloudPlaylistResult(
+                source = CloudSource.GOOGLE_DRIVE,
+                remoteId = rootFolderId,
+                title = rootTitle,
+                tracks = collectedTracks.mapIndexed { idx, track ->
+                    track.copy(
+                        album = track.album.ifBlank { rootTitle },
+                        trackNumber = idx + 1,
+                    )
+                },
+            )
+        }
+
+        val stateMutex = Mutex()
+        val emitMutex = Mutex()
+        val signal = Channel<Unit>(Channel.UNLIMITED)
+        var inFlight = 0
+        var completedFolders = 1
+
+        coroutineScope {
+            val workerCount = minOf(MAX_CONCURRENT_WORKERS, pendingQueue.size.coerceAtLeast(1))
+            repeat(workerCount) {
+                launch {
+                    while (true) {
+                        val node: DriveFolderNode? = stateMutex.withLock {
+                            if (pendingQueue.isEmpty()) {
+                                if (inFlight == 0) {
+                                    signal.close()
+                                    return@launch
+                                }
+                                null
+                            } else {
+                                val nextIdx = pickNextFolderIndex(pendingQueue, priorityPathProvider())
+                                inFlight += 1
+                                pendingQueue.removeAt(nextIdx)
+                            }
+                        }
+                        if (node == null) {
+                            val recv = signal.receiveCatching()
+                            if (recv.isClosed) return@launch
+                            continue
+                        }
+
+                        val fetched = try {
+                            fetchSingleFolder(
+                                folderId = node.folderId,
+                                resourceKey = node.resourceKey,
+                                cookie = cookie,
+                                folderPath = node.folderPath,
+                                explicitTitle = node.title,
+                                depth = node.depth,
+                                prefetchedResponse = null,
+                            )
+                        } catch (cancel: CancellationException) {
+                            throw cancel
+                        } catch (_: Exception) {
+                            null
+                        }
+
+                        var batchToEmit: DriveCrawlBatch? = null
+                        var wakeWorkers = 0
+                        var closeSignal = false
+
+                        stateMutex.withLock {
+                            inFlight -= 1
+                            completedFolders += 1
+
+                            val batchTracks = fetched?.tracks.orEmpty()
+                            collectedTracks.addAll(batchTracks)
+
+                            if (fetched != null && node.depth < MAX_FOLDER_DEPTH) {
+                                for (child in fetched.subfolders) {
+                                    if (visitedFolders.size >= MAX_FOLDERS) break
+                                    if (visitedFolders.add(child.folderId)) {
+                                        pendingQueue.add(child)
+                                        knownFolderPaths.add(child.folderPath)
+                                        wakeWorkers += 1
+                                    }
+                                }
+                            }
+
+                            val doneNow = pendingQueue.isEmpty() && inFlight == 0
+                            if (doneNow) {
+                                closeSignal = true
+                            }
+                            if (batchTracks.isNotEmpty() || wakeWorkers > 0 || doneNow) {
+                                batchToEmit = DriveCrawlBatch(
+                                    rootRemoteId = rootFolderId,
+                                    rootTitle = rootTitle,
+                                    batchTracks = batchTracks,
+                                    knownFolderPaths = knownFolderPaths.toSet(),
+                                    progress = DriveCrawlProgress(
+                                        rootTitle = rootTitle,
+                                        completedFolders = completedFolders,
+                                        totalDiscoveredFolders = visitedFolders.size,
+                                        tracksSoFar = collectedTracks.size,
+                                        isComplete = doneNow,
+                                    ),
+                                )
+                            }
+                        }
+
+                        if (wakeWorkers > 0) {
+                            repeat(minOf(wakeWorkers, MAX_CONCURRENT_WORKERS)) {
+                                signal.trySend(Unit)
+                            }
+                        }
+                        if (closeSignal) {
+                            signal.close()
+                        }
+                        batchToEmit?.let { batch ->
+                            emitMutex.withLock {
+                                onBatch(batch)
+                            }
+                        }
+                        if (closeSignal) {
+                            return@launch
+                        }
                     }
                 }
             }
         }
 
-        visitFolder(
-            folderId = rootFolderId,
-            resourceKey = rootResourceKey,
-            explicitTitle = null,
-            depth = 0,
-            prefetched = prefetchedFolderResponse,
-        )
-
-        val finalTitle = rootTitle?.takeIf { it.isNotBlank() } ?: "Google Drive ($rootFolderId)"
         return CloudPlaylistResult(
             source = CloudSource.GOOGLE_DRIVE,
             remoteId = rootFolderId,
-            title = finalTitle,
-            tracks = collected.mapIndexed { idx, track ->
+            title = rootTitle,
+            tracks = collectedTracks.mapIndexed { idx, track ->
                 track.copy(
-                    album = track.album.ifBlank { finalTitle },
+                    album = track.album.ifBlank { rootTitle },
                     trackNumber = idx + 1,
                 )
             },
         )
+    }
+
+    private fun pickNextFolderIndex(
+        pendingQueue: List<DriveFolderNode>,
+        rawPriorityPath: String?,
+    ): Int {
+        val priorityPath = rawPriorityPath?.let(::normalizeFolderPath)?.takeIf { it.isNotEmpty() } ?: return 0
+        pendingQueue.indexOfFirst { it.folderPath == priorityPath }.takeIf { it >= 0 }?.let { return it }
+        pendingQueue.indexOfFirst { priorityPath.startsWith("${it.folderPath}/") }.takeIf { it >= 0 }?.let { return it }
+        pendingQueue.indexOfFirst { it.folderPath.startsWith("$priorityPath/") }.takeIf { it >= 0 }?.let { return it }
+        return 0
     }
 
     private suspend fun fetchFolderPage(
@@ -185,11 +516,12 @@ class GoogleDriveClient(
         val headers = baseHeaders(cookie)
         var title: String? = null
         var primaryAuthFailure: IOException? = null
+        var apiKey: String? = cachedApiKey
 
         val primaryUrl = buildFolderUrl(folderId, resourceKey)
         val primaryResp = prefetchedResponse ?: runCatching {
-            httpClient.get(primaryUrl, headers = headers, followRedirects = true)
-        }.getOrNull()
+            getWithRetry(primaryUrl, headers = headers)
+        }.onFailure { if (it is CancellationException) throw it }.getOrNull()
 
         if (primaryResp != null) {
             if (isAuthOrNotFound(primaryResp)) {
@@ -197,12 +529,47 @@ class GoogleDriveClient(
             } else if (primaryResp.statusCode in 200..299) {
                 val html = primaryResp.bodyText
                 title = extractPageTitle(html)
+                extractApiKey(html)?.let { extracted ->
+                    apiKey = extracted
+                    cachedApiKey = extracted
+                }
                 val ivdRaw = extractDriveIvdJson(html)
                 if (ivdRaw != null) {
-                    val entries = parseDriveIvdEntries(ivdRaw)
-                    if (entries != null) {
+                    val ivdPage = parseDriveIvdPage(ivdRaw)
+                    if (ivdPage != null) {
                         val resolvedTitle = title ?: fallbackTitle ?: "Google Drive ($folderId)"
-                        return resolvedTitle to entries
+                        val nextToken = ivdPage.nextPageToken
+                        if (nextToken == null) {
+                            return resolvedTitle to ivdPage.entries
+                        }
+
+                        val merged = LinkedHashMap<String, DriveEntry>()
+                        for (entry in ivdPage.entries) {
+                            merged.putIfAbsent(entry.id, entry)
+                        }
+
+                        val paginatedOk = paginateDriveApi(
+                            folderId = folderId,
+                            resourceKey = resourceKey,
+                            cookie = cookie,
+                            apiKey = apiKey,
+                            initialNextPageToken = nextToken,
+                            merged = merged,
+                        )
+                        if (paginatedOk) {
+                            return resolvedTitle to merged.values.toList()
+                        }
+
+                        // Supplement with embeddedfolderview if pagination failed to complete.
+                        val embeddedResp = runCatching {
+                            getWithRetry(buildEmbeddedFolderViewUrl(folderId, resourceKey), headers = headers)
+                        }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+                        if (embeddedResp != null && embeddedResp.statusCode in 200..299 && !isAuthOrNotFound(embeddedResp)) {
+                            for (entry in parseEmbeddedFolderEntries(embeddedResp.bodyText)) {
+                                merged.putIfAbsent(entry.id, entry)
+                            }
+                        }
+                        return resolvedTitle to merged.values.toList()
                     }
                 }
             }
@@ -210,8 +577,8 @@ class GoogleDriveClient(
 
         val embeddedUrl = buildEmbeddedFolderViewUrl(folderId, resourceKey)
         val embeddedResp = runCatching {
-            httpClient.get(embeddedUrl, headers = headers, followRedirects = true)
-        }.getOrNull()
+            getWithRetry(embeddedUrl, headers = headers)
+        }.onFailure { if (it is CancellationException) throw it }.getOrNull()
 
         if (embeddedResp != null) {
             if (isAuthOrNotFound(embeddedResp)) {
@@ -236,6 +603,152 @@ class GoogleDriveClient(
             throw IOException("Google Drive folder request failed (HTTP ${embeddedResp.statusCode}).")
         }
         throw IOException("Could not load Google Drive folder ($folderId).")
+    }
+
+    private suspend fun paginateDriveApi(
+        folderId: String,
+        resourceKey: String?,
+        cookie: String?,
+        apiKey: String?,
+        initialNextPageToken: String,
+        merged: LinkedHashMap<String, DriveEntry>,
+    ): Boolean {
+        val apiHeaders = buildDriveApiHeaders(folderId, resourceKey, cookie, apiKey)
+        var pageToken: String? = initialNextPageToken
+        var pageCount = 0
+        var useV3Only = false
+        val seenTokens = HashSet<String>().apply { add(initialNextPageToken) }
+
+        while (pageCount < MAX_API_PAGES) {
+            pageCount += 1
+            var parsed: DriveIvdPage? = null
+
+            if (!useV3Only) {
+                val c6Resp = runCatching {
+                    getWithRetry(buildClients6FilesUrl(folderId, apiKey, pageToken), headers = apiHeaders)
+                }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+                if (c6Resp != null && c6Resp.statusCode in 200..299) {
+                    parsed = parseDriveApiPage(c6Resp.bodyText)
+                }
+                if (parsed == null) {
+                    useV3Only = true
+                }
+            }
+
+            if (parsed == null) {
+                val v3Resp = runCatching {
+                    getWithRetry(buildDriveV3FilesUrl(folderId, apiKey, pageToken), headers = apiHeaders)
+                }.onFailure { if (it is CancellationException) throw it }.getOrNull()
+                if (v3Resp != null && v3Resp.statusCode in 200..299) {
+                    parsed = parseDriveApiPage(v3Resp.bodyText)
+                }
+            }
+
+            if (parsed == null) {
+                return false
+            }
+
+            for (entry in parsed.entries) {
+                merged.putIfAbsent(entry.id, entry)
+            }
+            val next = parsed.nextPageToken
+            if (next.isNullOrBlank()) {
+                return true
+            }
+            if (!seenTokens.add(next)) {
+                return true
+            }
+            pageToken = next
+        }
+        return true
+    }
+
+    internal fun parseDriveApiPage(rawJson: String): DriveIvdPage? {
+        val obj = runCatching { rawJson.parseJsonObject() }.getOrNull() ?: return null
+        val items = obj.arr("items") ?: obj.arr("files") ?: return null
+        val entries = mutableListOf<DriveEntry>()
+        for (item in items) {
+            val entry = parseSingleIvdEntry(item) ?: continue
+            entries.add(entry)
+        }
+        val nextToken = obj.str("nextPageToken")?.takeIf { it.isNotBlank() }
+        return DriveIvdPage(entries = entries, nextPageToken = nextToken)
+    }
+
+    private suspend fun getWithRetry(
+        url: String,
+        headers: Map<String, String>,
+    ): CloudHttpResponse {
+        var attempt = 0
+        while (true) {
+            val resp = httpClient.get(url, headers = headers, followRedirects = true)
+            val shouldRetry = resp.statusCode == 429 || resp.statusCode in 500..599
+            if (!shouldRetry || attempt >= MAX_HTTP_RETRIES) {
+                return resp
+            }
+            val retryAfterSec = headerValue(resp.headers, "Retry-After")?.trim()?.toLongOrNull()
+            val delayMs = if (retryAfterSec != null && retryAfterSec >= 0L) {
+                (retryAfterSec * 1000L).coerceIn(50L, 2_000L)
+            } else {
+                150L * (1L shl attempt)
+            }
+            attempt += 1
+            delay(delayMs)
+        }
+    }
+
+    private fun buildDriveApiHeaders(
+        folderId: String,
+        resourceKey: String?,
+        cookie: String?,
+        apiKey: String?,
+    ): Map<String, String> {
+        val headers = LinkedHashMap<String, String>(baseHeaders(cookie))
+        headers["Referer"] = "https://drive.google.com/"
+        headers["Origin"] = "https://drive.google.com"
+        if (!apiKey.isNullOrBlank()) {
+            headers["X-Goog-Api-Key"] = apiKey
+        }
+        if (!resourceKey.isNullOrBlank()) {
+            headers["X-Goog-Drive-Resource-Keys"] = "$folderId/$resourceKey"
+        }
+        return headers
+    }
+
+    private fun buildClients6FilesUrl(
+        folderId: String,
+        apiKey: String?,
+        pageToken: String?,
+    ): String = buildString {
+        val query = "'${folderId.replace("'", "\\'")}' in parents and trashed = false"
+        append("https://clients6.google.com/drive/v2beta/files?openDrive=true&reason=102")
+        append("&supportsAllDrives=true&includeItemsFromAllDrives=true")
+        append("&maxResults=1000")
+        append("&q=").append(encodeQuery(query))
+        if (!pageToken.isNullOrBlank()) {
+            append("&pageToken=").append(encodeQuery(pageToken))
+        }
+        if (!apiKey.isNullOrBlank()) {
+            append("&key=").append(encodeQuery(apiKey))
+        }
+    }
+
+    private fun buildDriveV3FilesUrl(
+        folderId: String,
+        apiKey: String?,
+        pageToken: String?,
+    ): String = buildString {
+        val query = "'${folderId.replace("'", "\\'")}' in parents and trashed = false"
+        append("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&includeItemsFromAllDrives=true")
+        append("&pageSize=1000")
+        append("&fields=").append(encodeQuery("nextPageToken,files(id,name,mimeType,resourceKey)"))
+        append("&q=").append(encodeQuery(query))
+        if (!pageToken.isNullOrBlank()) {
+            append("&pageToken=").append(encodeQuery(pageToken))
+        }
+        if (!apiKey.isNullOrBlank()) {
+            append("&key=").append(encodeQuery(apiKey))
+        }
     }
 
     private suspend fun fetchSingleFile(
@@ -292,6 +805,7 @@ class GoogleDriveClient(
 
         val cleanTitle = stripAudioExtension(resolvedName).ifBlank { resolvedName }
         val remoteTrackId = encodeRemoteTrackId(fileId, ext, resourceKey)
+        val relFileName = disambiguateFileName(HashSet(), resolvedName, ext, fileId)
 
         return CloudPlaylistResult(
             source = CloudSource.GOOGLE_DRIVE,
@@ -305,6 +819,7 @@ class GoogleDriveClient(
                     album = cleanTitle,
                     durationSec = 0.0,
                     trackNumber = 1,
+                    relativePath = relFileName,
                 )
             ),
         )
@@ -394,16 +909,28 @@ class GoogleDriveClient(
         throw (lastError ?: IOException("Could not resolve Google Drive stream for ${decoded.fileId}."))
     }
 
-    internal fun parseDriveIvdEntries(rawJson: String): List<DriveEntry>? {
+    internal fun parseDriveIvdEntries(rawJson: String): List<DriveEntry>? =
+        parseDriveIvdPage(rawJson)?.entries
+
+    internal fun parseDriveIvdPage(rawJson: String): DriveIvdPage? {
         val element = runCatching { cloudJson.parseToJsonElement(rawJson) }.getOrNull() ?: return null
         val rootArray = element as? JsonArray ?: return null
 
+        val isEnvelope = rootArray.isNotEmpty() && rootArray[0] is JsonArray && (rootArray[0] as JsonArray).let { inner ->
+            inner.isEmpty() || inner[0] is JsonArray || inner[0] is JsonObject
+        }
         val candidateArray: JsonArray = when {
             rootArray.isEmpty() -> JsonArray(emptyList())
-            rootArray[0] is JsonArray && (rootArray[0] as JsonArray).let { inner ->
-                inner.isEmpty() || inner[0] is JsonArray
-            } -> rootArray[0] as JsonArray
+            isEnvelope -> rootArray[0] as JsonArray
             else -> rootArray
+        }
+        val nextPageToken = if (isEnvelope) {
+            (rootArray.getOrNull(1) as? JsonPrimitive)
+                ?.takeIf { it.isString }
+                ?.contentOrNull
+                ?.takeIf { it.isNotBlank() }
+        } else {
+            null
         }
 
         val entries = mutableListOf<DriveEntry>()
@@ -411,7 +938,7 @@ class GoogleDriveClient(
             val entry = parseSingleIvdEntry(item) ?: continue
             entries.add(entry)
         }
-        return entries
+        return DriveIvdPage(entries = entries, nextPageToken = nextPageToken)
     }
 
     private fun parseSingleIvdEntry(item: JsonElement): DriveEntry? {
@@ -663,18 +1190,27 @@ class GoogleDriveClient(
     }
 
     companion object {
-        private const val MAX_FOLDER_DEPTH = 4
-        private const val MAX_FOLDERS = 30
+        private const val MAX_FOLDER_DEPTH = 12
+        private const val MAX_FOLDERS = 2000
+        private const val MAX_API_PAGES = 100
+        private const val MAX_CONCURRENT_WORKERS = 4
+        private const val MAX_HTTP_RETRIES = 3
         private const val DEFAULT_ARTIST = "Google Drive"
         private const val DEFAULT_STREAM_TTL_MS = 60L * 60L * 1000L
         private const val FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
         private const val USER_AGENT =
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
-        val AUDIO_EXTENSIONS: Set<String> = setOf(
-            "mp3", "m4a", "aac", "flac", "wav", "aif", "aiff", "alac", "caf", "ogg", "opus", "webm",
+        val SUPPORTED_AUDIO_EXTENSIONS: Set<String> = setOf(
+            "mp3", "m4a", "mp4", "aac", "flac", "wav", "aif", "aiff", "alac", "caf",
+            "ogg", "oga", "opus", "webm", "wma", "m4b", "m4r", "amr", "3gp", "ape",
+            "wv", "dsf", "dff", "ac3", "dts", "spx", "mpc",
         )
 
+        val AUDIO_EXTENSIONS: Set<String> = SUPPORTED_AUDIO_EXTENSIONS
+
+        private val GOOGLE_API_KEY_REGEX = Regex("""AIzaSy[0-9A-Za-z_-]{33}""")
+        private val PATH_SEPARATOR_AND_CONTROL_REGEX = Regex("""[/\\\u0000-\u001F\u007F]""")
         private val DRIVE_ID_REGEX = Regex("^[A-Za-z0-9_-]{3,}$")
         private val RESOURCE_KEY_VALUE_REGEX = Regex("^0-[A-Za-z0-9_-]{6,}$")
         private val IVD_ASSIGNMENT_REGEX = Regex("""window(?:\[['"]_DRIVE_ivd['"]\]|\._DRIVE_ivd)\s*=\s*""")
@@ -1023,6 +1559,70 @@ class GoogleDriveClient(
             return clean.takeIf { it.startsWith("audio/", ignoreCase = true) }
         }
 
+        internal fun extractApiKey(html: String): String? =
+            GOOGLE_API_KEY_REGEX.find(html)?.value
+
+        internal fun normalizeFolderPath(path: String): String =
+            path.replace('\\', '/').trim { it == '/' || it.isWhitespace() }
+
+        internal fun sanitizePathSegment(raw: String, fallback: String): String {
+            val safeFallback = PATH_SEPARATOR_AND_CONTROL_REGEX.replace(fallback, "_")
+                .trim()
+                .takeIf { it.isNotEmpty() && it != "." && it != ".." }
+                ?: "item"
+            val cleaned = PATH_SEPARATOR_AND_CONTROL_REGEX.replace(raw, "_").trim()
+            if (cleaned.isEmpty() || cleaned == "." || cleaned == "..") {
+                return safeFallback
+            }
+            return cleaned
+        }
+
+        internal fun disambiguateSegment(
+            usedLower: MutableSet<String>,
+            rawName: String,
+            fallback: String,
+            preserveExtension: Boolean = false,
+        ): String {
+            val clean = sanitizePathSegment(rawName, fallback)
+            if (usedLower.add(clean.lowercase())) return clean
+            var index = 2
+            while (true) {
+                val candidate = if (preserveExtension) {
+                    val dot = clean.lastIndexOf('.')
+                    if (dot > 0 && dot < clean.lastIndex) {
+                        "${clean.substring(0, dot)} ($index)${clean.substring(dot)}"
+                    } else {
+                        "$clean ($index)"
+                    }
+                } else {
+                    "$clean ($index)"
+                }
+                if (usedLower.add(candidate.lowercase())) return candidate
+                index += 1
+            }
+        }
+
+        internal fun disambiguateFileName(
+            usedLower: MutableSet<String>,
+            rawName: String,
+            resolvedExt: String?,
+            fallbackStem: String,
+        ): String {
+            val clean = sanitizePathSegment(rawName, fallbackStem)
+            val hasExt = audioExtensionFromName(clean) != null
+            val withExt = if (!hasExt && !resolvedExt.isNullOrBlank()) {
+                "$clean.${resolvedExt.lowercase()}"
+            } else {
+                clean
+            }
+            return disambiguateSegment(
+                usedLower = usedLower,
+                rawName = withExt,
+                fallback = fallbackStem,
+                preserveExtension = true,
+            )
+        }
+
         internal fun extensionForMimeType(mimeType: String?): String? {
             val clean = mimeType?.substringBefore(';')?.trim()?.lowercase() ?: return null
             return when {
@@ -1038,6 +1638,7 @@ class GoogleDriveClient(
                 clean.contains("opus") -> "opus"
                 clean.contains("ogg") -> "ogg"
                 clean.contains("webm") -> "webm"
+                clean.contains("wma") || clean.contains("x-ms-wma") -> "wma"
                 else -> null
             }
         }
@@ -1045,16 +1646,18 @@ class GoogleDriveClient(
         internal fun mimeTypeForExtension(extension: String?): String? {
             return when (extension?.lowercase()) {
                 "mp3" -> "audio/mpeg"
-                "m4a" -> "audio/mp4"
+                "m4a", "m4b", "m4r" -> "audio/mp4"
+                "mp4" -> "audio/mp4"
                 "aac" -> "audio/aac"
                 "flac" -> "audio/flac"
                 "wav" -> "audio/wav"
                 "aif", "aiff" -> "audio/aiff"
                 "alac" -> "audio/alac"
                 "caf" -> "audio/x-caf"
-                "ogg" -> "audio/ogg"
+                "ogg", "oga" -> "audio/ogg"
                 "opus" -> "audio/opus"
                 "webm" -> "audio/webm"
+                "wma" -> "audio/x-ms-wma"
                 else -> null
             }
         }

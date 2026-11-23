@@ -31,11 +31,13 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AddToDrive
 import androidx.compose.material.icons.rounded.ChevronRight
+import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.CloudQueue
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOff
 import androidx.compose.material.icons.rounded.Language
@@ -65,6 +67,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -75,8 +78,10 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -95,21 +100,26 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.documentfile.provider.DocumentFile
 import com.musico.audio.PlayerUiState
-import com.musico.cloud.CloudExportSummary
 import com.musico.cloud.CloudExporter
-import com.musico.cloud.CloudUpdateSummary
 import com.musico.cloud.extractCloudSourceInput
 import com.musico.i18n.AppStrings
 import com.musico.i18n.LanguageStore
 import com.musico.i18n.LocalStrings
+import com.musico.model.CloudTrackingInfo
 import com.musico.model.LibraryRoot
 import com.musico.model.PlayQueue
 import com.musico.model.RootKind
 import com.musico.model.Track
+import com.musico.store.CloudDownloadJob
+import com.musico.store.CloudDownloadKind
+import com.musico.store.CloudDownloadManager
+import com.musico.store.CloudDownloadStatus
+import com.musico.store.CloudSyncProgress
 import com.musico.store.LibraryException
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
 import com.musico.store.PlayHistoryUiState
+import com.musico.ui.components.CloudTransferProgressSection
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.LanguageDialog
@@ -126,8 +136,6 @@ import com.musico.update.UpdateManager
 import com.musico.update.UpdateUiState
 import com.musico.update.hasAvailableUpdate
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import java.io.File
 import kotlin.random.Random
@@ -135,6 +143,18 @@ import kotlin.random.Random
 data class FolderRef(
     val rootId: String,
     val path: String = ""
+)
+
+private data class FolderUpdateTarget(
+    val root: LibraryRoot,
+    val subfolderPath: String = "",
+)
+
+private data class EditCloudSourceTarget(
+    val root: LibraryRoot,
+    val subfolderPath: String = "",
+    val tracking: CloudTrackingInfo,
+    val reopenUpdateOnSave: Boolean = false,
 )
 
 private fun folderDepth(ref: FolderRef?): Int {
@@ -172,6 +192,9 @@ fun FoldersScreen(
     trackActions: TrackActionState,
     updateManager: UpdateManager,
     cloudExporter: CloudExporter,
+    cloudDownloadManager: CloudDownloadManager = remember(libraryStore, cloudExporter) {
+        CloudDownloadManager(libraryStore, cloudExporter)
+    },
     languageStore: LanguageStore? = null,
     onPickFolder: ((Uri) -> Unit) -> Unit,
     modifier: Modifier = Modifier
@@ -179,15 +202,20 @@ fun FoldersScreen(
     val strings = LocalStrings.current
     val scope = rememberCoroutineScope()
     val updateState by updateManager.state.collectAsStateWithLifecycle()
+    val downloadJobs by cloudDownloadManager.jobs.collectAsStateWithLifecycle()
+    val activeDownloadCount = remember(downloadJobs) { downloadJobs.count { it.isActive } }
+
     var currentFolder by remember { mutableStateOf<FolderRef?>(null) }
     var importError by remember { mutableStateOf<String?>(null) }
     var removingRoot by remember { mutableStateOf<LibraryRoot?>(null) }
     var removingSubfolder by remember { mutableStateOf<FolderRef?>(null) }
     var savingCloudTarget by remember { mutableStateOf<Pair<LibraryRoot, List<Track>>?>(null) }
-    var updatingTrackedRoot by remember { mutableStateOf<LibraryRoot?>(null) }
+    var updatingTarget by remember { mutableStateOf<FolderUpdateTarget?>(null) }
+    var editingCloudSource by remember { mutableStateOf<EditCloudSourceTarget?>(null) }
     var showAddCloudDialog by remember { mutableStateOf(false) }
     var showUpdateDialog by remember { mutableStateOf(false) }
     var showLanguageDialog by remember { mutableStateOf(false) }
+    var showDownloadsSheet by remember { mutableStateOf(false) }
     var detailMenuExpanded by remember { mutableStateOf(false) }
 
     BackHandler(enabled = currentFolder != null) {
@@ -202,6 +230,12 @@ fun FoldersScreen(
 
     val activeRef = currentFolder
     val currentRoot = activeRef?.let { ref -> libraryState.roots.firstOrNull { it.id == ref.rootId } }
+
+    LaunchedEffect(activeRef, currentRoot?.kind) {
+        if (activeRef != null && currentRoot?.kind == RootKind.CLOUD_GOOGLE_DRIVE) {
+            libraryStore.prioritizeCloudFolder(activeRef.rootId, activeRef.path)
+        }
+    }
 
     fun launchAddFolder() {
         onPickFolder { uri ->
@@ -231,6 +265,10 @@ fun FoldersScreen(
                 TopAppBar(
                     title = { Text(strings.foldersTitle) },
                     actions = {
+                        DownloadsToolbarButton(
+                            activeCount = activeDownloadCount,
+                            onClick = { showDownloadsSheet = true },
+                        )
                         if (languageStore != null) {
                             IconButton(onClick = { showLanguageDialog = true }) {
                                 Icon(
@@ -286,7 +324,8 @@ fun FoldersScreen(
                 val hasExcluded = activeRef.path.isEmpty() &&
                     (currentRoot?.excludedPaths?.isNotEmpty() == true)
                 val isCloudRootDetail = currentRoot?.kind?.isCloud == true
-                val isTrackedLocalDetail = activeRef.path.isEmpty() && currentRoot?.isCloudTrackedLocal == true
+                val currentTracking = currentRoot?.takeIf { !it.kind.isCloud }?.trackingFor(activeRef.path)
+                val isTrackedLocalDetail = currentTracking != null
                 val showDetailMenu = activeRef.path.isNotEmpty() || isRemovableRootDetail || hasExcluded || isCloudRootDetail || isTrackedLocalDetail
 
                 TopAppBar(
@@ -314,6 +353,12 @@ fun FoldersScreen(
                         )
                     },
                     actions = {
+                        if (activeDownloadCount > 0) {
+                            DownloadsToolbarButton(
+                                activeCount = activeDownloadCount,
+                                onClick = { showDownloadsSheet = true },
+                            )
+                        }
                         val activeFolderKey = libraryStore.folderKey(activeRef.rootId, activeRef.path)
                         val folderSort = libraryState.folderSortOrders[activeFolderKey]
                             ?: libraryStore.folderSortOrder(activeRef.rootId, activeRef.path)
@@ -352,17 +397,27 @@ fun FoldersScreen(
                                             }
                                         )
                                     }
-                                    if (isTrackedLocalDetail) {
-                                        currentRoot?.let { trackedRoot ->
-                                            DropdownMenuItem(
-                                                text = { Text(strings.updateFromCloud) },
-                                                leadingIcon = { Icon(Icons.Rounded.CloudDownload, contentDescription = null) },
-                                                onClick = {
-                                                    detailMenuExpanded = false
-                                                    updatingTrackedRoot = trackedRoot
-                                                }
-                                            )
-                                        }
+                                    if (rootForMenu != null && currentTracking != null) {
+                                        DropdownMenuItem(
+                                            text = { Text(strings.updateFromCloud) },
+                                            leadingIcon = { Icon(Icons.Rounded.CloudDownload, contentDescription = null) },
+                                            onClick = {
+                                                detailMenuExpanded = false
+                                                updatingTarget = FolderUpdateTarget(rootForMenu, activeRef.path)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(strings.editCloudSourceEllipsis) },
+                                            leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                            onClick = {
+                                                detailMenuExpanded = false
+                                                editingCloudSource = EditCloudSourceTarget(
+                                                    root = rootForMenu,
+                                                    subfolderPath = activeRef.path,
+                                                    tracking = currentTracking,
+                                                )
+                                            }
+                                        )
                                     }
                                     if (activeRef.path.isNotEmpty()) {
                                         DropdownMenuItem(
@@ -467,7 +522,14 @@ fun FoldersScreen(
                             }
                             savingCloudTarget = root to tracks
                         },
-                        onUpdateTrackedRoot = { root -> updatingTrackedRoot = root },
+                        onUpdateTrackedRoot = { root -> updatingTarget = FolderUpdateTarget(root, "") },
+                        onEditTrackedRootSource = { root, tracking ->
+                            editingCloudSource = EditCloudSourceTarget(
+                                root = root,
+                                subfolderPath = "",
+                                tracking = tracking,
+                            )
+                        },
                         onRestoreExcluded = { rootId -> scope.launch { libraryStore.restoreExcludedFolders(rootId) } },
                         onAddFolder = ::launchAddFolder,
                         onAddCloudFolder = { showAddCloudDialog = true }
@@ -476,6 +538,7 @@ fun FoldersScreen(
                     val rootForRef = libraryState.roots.firstOrNull { it.id == ref.rootId }
                     FolderDetailContent(
                         ref = ref,
+                        root = rootForRef,
                         rootName = rootForRef?.let { displayRootName(it, strings) } ?: strings.folderFallbackTitle,
                         libraryStore = libraryStore,
                         libraryState = libraryState,
@@ -485,7 +548,17 @@ fun FoldersScreen(
                         activeQueue = activeQueue,
                         trackActions = trackActions,
                         onNavigate = { nextRef -> currentFolder = nextRef },
-                        onRequestRemoveSubfolder = { removingSubfolder = it }
+                        onRequestRemoveSubfolder = { removingSubfolder = it },
+                        onUpdateTrackedSubfolder = { r, subPath ->
+                            updatingTarget = FolderUpdateTarget(r, subPath)
+                        },
+                        onEditTrackedSubfolderSource = { r, subPath, tracking ->
+                            editingCloudSource = EditCloudSourceTarget(
+                                root = r,
+                                subfolderPath = subPath,
+                                tracking = tracking,
+                            )
+                        },
                     )
                 }
             }
@@ -517,28 +590,67 @@ fun FoldersScreen(
         )
     }
 
+    if (showDownloadsSheet) {
+        DownloadsBottomSheet(
+            cloudDownloadManager = cloudDownloadManager,
+            strings = strings,
+            onDismiss = { showDownloadsSheet = false },
+        )
+    }
+
     val pendingSaveCloud = savingCloudTarget
     if (pendingSaveCloud != null) {
         SaveCloudPlaylistDialog(
             root = pendingSaveCloud.first,
             tracks = pendingSaveCloud.second,
-            libraryStore = libraryStore,
-            cloudExporter = cloudExporter,
+            cloudDownloadManager = cloudDownloadManager,
             onPickFolder = onPickFolder,
-            onFolderSavedWithoutLibrary = { folderName ->
-                trackActions.playerController.onFolderAdded(folderName, emptyList())
-            },
             onDismiss = { savingCloudTarget = null },
         )
     }
 
-    val pendingUpdateTracked = updatingTrackedRoot
-    if (pendingUpdateTracked != null) {
+    val pendingUpdateTarget = updatingTarget
+    if (pendingUpdateTarget != null) {
+        val latestRoot = libraryState.roots.firstOrNull { it.id == pendingUpdateTarget.root.id } ?: pendingUpdateTarget.root
+        val currentTracking = latestRoot.trackingFor(pendingUpdateTarget.subfolderPath)
         UpdateTrackedFolderDialog(
-            root = pendingUpdateTracked,
+            root = latestRoot,
+            subfolderPath = pendingUpdateTarget.subfolderPath,
+            tracking = currentTracking,
+            cloudDownloadManager = cloudDownloadManager,
+            onEditSource = {
+                val trackInfo = currentTracking ?: CloudTrackingInfo(
+                    sourceUrl = latestRoot.sourceUrl.orEmpty(),
+                    remoteId = latestRoot.remoteId,
+                    cloudKind = latestRoot.effectiveCloudKind ?: RootKind.CLOUD_YOUTUBE,
+                    cookie = latestRoot.cookie,
+                    lastSyncedEpochMs = latestRoot.lastSyncedEpochMs,
+                )
+                updatingTarget = null
+                editingCloudSource = EditCloudSourceTarget(
+                    root = latestRoot,
+                    subfolderPath = pendingUpdateTarget.subfolderPath,
+                    tracking = trackInfo,
+                    reopenUpdateOnSave = true,
+                )
+            },
+            onDismiss = { updatingTarget = null },
+        )
+    }
+
+    val pendingEditCloud = editingCloudSource
+    if (pendingEditCloud != null) {
+        EditCloudSourceDialog(
+            target = pendingEditCloud,
             libraryStore = libraryStore,
-            cloudExporter = cloudExporter,
-            onDismiss = { updatingTrackedRoot = null },
+            onDismiss = { editingCloudSource = null },
+            onSaved = {
+                val updatedRoot = libraryStore.state.value.roots.firstOrNull { it.id == pendingEditCloud.root.id }
+                    ?: pendingEditCloud.root
+                if (pendingEditCloud.reopenUpdateOnSave) {
+                    updatingTarget = FolderUpdateTarget(updatedRoot, pendingEditCloud.subfolderPath)
+                }
+            },
         )
     }
 
@@ -699,32 +811,269 @@ private fun AddCloudFolderDialog(
 }
 
 @Composable
+private fun DownloadsToolbarButton(
+    activeCount: Int,
+    onClick: () -> Unit,
+) {
+    val strings = LocalStrings.current
+    IconButton(onClick = onClick) {
+        BadgedBox(
+            badge = {
+                if (activeCount > 0) {
+                    Badge { Text("$activeCount") }
+                }
+            }
+        ) {
+            Icon(
+                imageVector = Icons.Rounded.Download,
+                contentDescription = strings.downloadsTitle,
+                tint = if (activeCount > 0) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
+            )
+        }
+    }
+}
+
+@Composable
+private fun CloudSourceBadge(
+    cloudKind: RootKind?,
+    isLocal: Boolean,
+) {
+    val strings = LocalStrings.current
+    val label = when {
+        !isLocal -> when (cloudKind) {
+            RootKind.CLOUD_YOUTUBE -> strings.badgeYouTube
+            RootKind.CLOUD_BILIBILI -> strings.badgeBilibili
+            RootKind.CLOUD_GOOGLE_DRIVE -> strings.badgeGoogleDrive
+            else -> null
+        }
+        else -> when (cloudKind) {
+            RootKind.CLOUD_YOUTUBE -> strings.badgeYouTubeLocal
+            RootKind.CLOUD_BILIBILI -> strings.badgeBilibiliLocal
+            RootKind.CLOUD_GOOGLE_DRIVE -> strings.badgeGoogleDriveLocal
+            else -> strings.badgeCloudLocal
+        }
+    } ?: return
+
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        shape = MaterialTheme.shapes.extraSmall,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSecondaryContainer,
+            maxLines = 1,
+            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DownloadsBottomSheet(
+    cloudDownloadManager: CloudDownloadManager,
+    strings: AppStrings,
+    onDismiss: () -> Unit,
+) {
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    val jobs by cloudDownloadManager.jobs.collectAsStateWithLifecycle()
+    val hasFinished = remember(jobs) { jobs.any { !it.isActive } }
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 12.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = strings.downloadsTitle,
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                TextButton(
+                    enabled = hasFinished,
+                    onClick = { cloudDownloadManager.clearFinished() },
+                ) {
+                    Text(strings.clearFinished)
+                }
+            }
+            HorizontalDivider()
+
+            if (jobs.isEmpty()) {
+                EmptyState(
+                    icon = Icons.Rounded.Download,
+                    title = strings.noDownloadsTitle,
+                    description = strings.noDownloadsDesc,
+                )
+            } else {
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false),
+                    contentPadding = PaddingValues(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    items(jobs, key = { it.id }) { job ->
+                        DownloadJobCard(
+                            job = job,
+                            strings = strings,
+                            onCancel = { cloudDownloadManager.cancel(job.id) },
+                            onDismiss = { cloudDownloadManager.dismiss(job.id) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun DownloadJobCard(
+    job: CloudDownloadJob,
+    strings: AppStrings,
+    onCancel: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val kindLabel = when (job.kind) {
+        CloudDownloadKind.PLAYLIST_EXPORT -> strings.downloadKindPlaylistExport
+        CloudDownloadKind.TRACK_EXPORT -> strings.downloadKindTrackExport
+        CloudDownloadKind.FOLDER_UPDATE -> strings.downloadKindFolderUpdate
+    }
+    ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = job.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = kindLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                if (job.isActive) {
+                    TextButton(onClick = onCancel) {
+                        Text(strings.cancel)
+                    }
+                } else {
+                    IconButton(onClick = onDismiss) {
+                        Icon(Icons.Rounded.Close, contentDescription = strings.dismiss)
+                    }
+                }
+            }
+
+            if (job.isActive) {
+                val activeStatus = when (job.kind) {
+                    CloudDownloadKind.PLAYLIST_EXPORT ->
+                        if (job.currentTrackTitle.isNotBlank()) {
+                            strings.savingProgressWithTitle(job.completedTracks, job.totalTracks, job.currentTrackTitle)
+                        } else {
+                            strings.savingProgress(job.completedTracks, job.totalTracks)
+                        }
+                    CloudDownloadKind.TRACK_EXPORT -> strings.downloadingTrack(job.title)
+                    CloudDownloadKind.FOLDER_UPDATE ->
+                        if (job.totalTracks > 0) {
+                            if (job.currentTrackTitle.isNotBlank()) {
+                                strings.checkingProgressWithTitle(job.completedTracks, job.totalTracks, job.currentTrackTitle)
+                            } else {
+                                strings.checkingProgress(job.completedTracks, job.totalTracks)
+                            }
+                        } else {
+                            strings.fetchingLatestCloudPlaylist
+                        }
+                }
+                CloudTransferProgressSection(job = job, statusLine = activeStatus)
+            } else {
+                val summaryText = when (job.status) {
+                    CloudDownloadStatus.CANCELLED -> strings.downloadStatusCancelled
+                    CloudDownloadStatus.FAILED ->
+                        if (job.locationUnavailable) strings.savedFolderLocationUnavailable
+                        else (job.errorMessage ?: strings.downloadStatusFailed)
+                    CloudDownloadStatus.COMPLETED -> when (job.kind) {
+                        CloudDownloadKind.PLAYLIST_EXPORT -> job.exportSummary?.let { res ->
+                            strings.savePlaylistSummary(res.savedCount, job.totalTracks, res.failedCount)
+                        } ?: strings.downloadStatusCompleted
+                        CloudDownloadKind.TRACK_EXPORT ->
+                            job.savedFileName?.let { strings.savedAsFile(it) } ?: strings.downloadStatusCompleted
+                        CloudDownloadKind.FOLDER_UPDATE -> job.updateSummary?.let { res ->
+                            if (res.addedCount > 0) {
+                                strings.updateAddedSongsSummary(res.addedCount, res.skippedCount)
+                            } else {
+                                strings.alreadyUpToDateSummary(res.skippedCount)
+                            }
+                        } ?: strings.downloadStatusCompleted
+                    }
+                    CloudDownloadStatus.RUNNING -> ""
+                }
+                val color = if (job.status == CloudDownloadStatus.FAILED) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                }
+                Text(
+                    text = summaryText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = color,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun SaveCloudPlaylistDialog(
     root: LibraryRoot,
     tracks: List<Track>,
-    libraryStore: LibraryStore,
-    cloudExporter: CloudExporter,
+    cloudDownloadManager: CloudDownloadManager,
     onPickFolder: ((Uri) -> Unit) -> Unit,
-    onFolderSavedWithoutLibrary: (String) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val strings = LocalStrings.current
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
+    val jobs by cloudDownloadManager.jobs.collectAsStateWithLifecycle()
     val defaultName = remember(root.id, root.name, strings.cloudPlaylistDefaultName) {
         CloudExporter.sanitizeFileName(root.name, strings.cloudPlaylistDefaultName)
     }
     var folderName by remember(root.id) { mutableStateOf(defaultName) }
     var pickedParentUri by remember(root.id) { mutableStateOf<Uri?>(null) }
     var addToLibrary by remember(root.id) { mutableStateOf(true) }
-    var isExporting by remember(root.id) { mutableStateOf(false) }
-    var progressDone by remember(root.id) { mutableIntStateOf(0) }
-    var progressTotal by remember(root.id) { mutableIntStateOf(tracks.size) }
-    var progressTitle by remember(root.id) { mutableStateOf("") }
-    var summary by remember(root.id) { mutableStateOf<CloudExportSummary?>(null) }
-    var libraryStatusText by remember(root.id) { mutableStateOf<String?>(null) }
-    var errorText by remember(root.id) { mutableStateOf<String?>(null) }
-    var exportJob by remember(root.id) { mutableStateOf<Job?>(null) }
+    var jobId by remember(root.id) { mutableStateOf<String?>(null) }
+
+    val activeJob = remember(jobs, jobId) {
+        jobId?.let { id -> jobs.firstOrNull { it.id == id } }
+    }
+    val isExporting = activeJob?.isActive == true
+    val summary = activeJob?.exportSummary
+    val isFailed = activeJob?.status == CloudDownloadStatus.FAILED
+    val isCancelled = activeJob?.status == CloudDownloadStatus.CANCELLED
 
     val pickedLocationLabel = remember(pickedParentUri, strings.noFolderSelected) {
         val uri = pickedParentUri ?: return@remember strings.noFolderSelected
@@ -739,13 +1088,15 @@ private fun SaveCloudPlaylistDialog(
     }
 
     AlertDialog(
-        onDismissRequest = { if (!isExporting) onDismiss() },
+        onDismissRequest = onDismiss,
         icon = { Icon(Icons.Rounded.Download, contentDescription = null) },
         title = {
             Text(
                 when {
                     isExporting -> strings.savingPlaylistTitle
                     summary != null -> strings.saveCompleteTitle
+                    isFailed -> strings.saveFailedTitle
+                    isCancelled -> strings.downloadStatusCancelled
                     else -> strings.saveToLocalFolderTitle
                 }
             )
@@ -757,13 +1108,12 @@ private fun SaveCloudPlaylistDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (summary == null) {
+                if (activeJob == null) {
                     OutlinedTextField(
                         value = folderName,
                         onValueChange = { folderName = it },
                         label = { Text(strings.folderNameLabel) },
                         singleLine = true,
-                        enabled = !isExporting,
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -790,11 +1140,9 @@ private fun SaveCloudPlaylistDialog(
                                 modifier = Modifier.weight(1f),
                             )
                             OutlinedButton(
-                                enabled = !isExporting,
                                 onClick = {
                                     onPickFolder { uri ->
                                         pickedParentUri = uri
-                                        errorText = null
                                     }
                                 },
                             ) {
@@ -805,14 +1153,11 @@ private fun SaveCloudPlaylistDialog(
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .clickable(enabled = !isExporting) {
-                                addToLibrary = !addToLibrary
-                            },
+                            .clickable { addToLibrary = !addToLibrary },
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Checkbox(
                             checked = addToLibrary,
-                            enabled = !isExporting,
                             onCheckedChange = { addToLibrary = it },
                         )
                         Spacer(Modifier.width(4.dp))
@@ -821,50 +1166,44 @@ private fun SaveCloudPlaylistDialog(
                             style = MaterialTheme.typography.bodyMedium,
                         )
                     }
+                } else if (isExporting) {
+                    val statusLine = if (activeJob.currentTrackTitle.isNotBlank()) {
+                        strings.savingProgressWithTitle(
+                            activeJob.completedTracks,
+                            activeJob.totalTracks,
+                            activeJob.currentTrackTitle,
+                        )
+                    } else {
+                        strings.savingProgress(activeJob.completedTracks, activeJob.totalTracks)
+                    }
+                    CloudTransferProgressSection(job = activeJob, statusLine = statusLine)
                 }
 
-                if (isExporting) {
-                    val fraction = if (progressTotal > 0) {
-                        (progressDone.toFloat() / progressTotal.toFloat()).coerceIn(0f, 1f)
-                    } else {
-                        0f
-                    }
-                    LinearProgressIndicator(
-                        progress = { fraction },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    val statusLine = if (progressTitle.isNotBlank()) {
-                        strings.savingProgressWithTitle(progressDone, progressTotal, progressTitle)
-                    } else {
-                        strings.savingProgress(progressDone, progressTotal)
-                    }
+                if (summary != null) {
                     Text(
-                        text = statusLine,
-                        style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                    )
-                }
-
-                val result = summary
-                if (result != null) {
-                    val summaryMsg = strings.savePlaylistSummary(result.savedCount, tracks.size, result.failedCount)
-                    Text(
-                        text = summaryMsg,
+                        text = strings.savePlaylistSummary(summary.savedCount, tracks.size, summary.failedCount),
                         style = MaterialTheme.typography.bodyMedium,
                     )
-                    val libNote = libraryStatusText
-                    if (libNote != null) {
+                    if (activeJob.libraryAddAttempted) {
+                        val libNote = if (activeJob.libraryUpdated) {
+                            strings.addedSavedFolderWithCloudTracking
+                        } else {
+                            val addErr = activeJob.libraryAddError
+                            if (addErr != null) {
+                                localizeLibraryError(addErr, strings.couldNotAddFolderToLibraryFallback, strings)
+                            } else {
+                                strings.couldNotAddFolderToLibraryFallback
+                            }
+                        }
                         Text(
                             text = libNote,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    if (result.errors.isNotEmpty()) {
+                    if (summary.errors.isNotEmpty()) {
                         Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                            result.errors.take(5).forEach { msg ->
+                            summary.errors.take(5).forEach { msg ->
                                 Text(
                                     text = "• $msg",
                                     style = MaterialTheme.typography.bodySmall,
@@ -873,9 +1212,9 @@ private fun SaveCloudPlaylistDialog(
                                     overflow = TextOverflow.Ellipsis,
                                 )
                             }
-                            if (result.errors.size > 5) {
+                            if (summary.errors.size > 5) {
                                 Text(
-                                    text = strings.andMoreErrors(result.errors.size - 5),
+                                    text = strings.andMoreErrors(summary.errors.size - 5),
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -884,98 +1223,57 @@ private fun SaveCloudPlaylistDialog(
                     }
                 }
 
-                val err = errorText
-                if (err != null) {
+                if (isFailed) {
                     Text(
-                        text = err,
+                        text = activeJob?.errorMessage ?: strings.couldNotSavePlaylistFallback,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.error,
+                    )
+                } else if (isCancelled) {
+                    Text(
+                        text = strings.downloadStatusCancelled,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
         },
         confirmButton = {
-            if (summary != null) {
-                Button(onClick = onDismiss) {
-                    Text(strings.done)
+            when {
+                activeJob == null -> {
+                    Button(
+                        enabled = pickedParentUri != null && folderName.trim().isNotEmpty() && tracks.isNotEmpty(),
+                        onClick = {
+                            val parentUri = pickedParentUri ?: return@Button
+                            jobId = cloudDownloadManager.startPlaylistExport(
+                                tracks = tracks,
+                                root = root,
+                                parentUri = parentUri,
+                                folderName = folderName,
+                                addToLibrary = addToLibrary,
+                            )
+                        },
+                    ) {
+                        Text(strings.save)
+                    }
                 }
-            } else if (!isExporting) {
-                Button(
-                    enabled = pickedParentUri != null && folderName.trim().isNotEmpty() && tracks.isNotEmpty(),
-                    onClick = {
-                        val parentUri = pickedParentUri ?: return@Button
-                        isExporting = true
-                        errorText = null
-                        progressDone = 0
-                        progressTotal = tracks.size
-                        progressTitle = tracks.firstOrNull()?.title.orEmpty()
-                        exportJob = scope.launch {
-                            try {
-                                val res = cloudExporter.exportPlaylist(
-                                    tracks = tracks,
-                                    root = root,
-                                    parentTreeUri = parentUri,
-                                    folderName = folderName,
-                                    onProgress = { done, total, title ->
-                                        progressDone = done
-                                        progressTotal = total
-                                        progressTitle = title
-                                    },
-                                )
-                                if (addToLibrary && res.savedCount > 0) {
-                                    val isDirectFileDir = parentUri.scheme == "file" && res.targetDir != null
-                                    val savedUri = if (isDirectFileDir) {
-                                        Uri.fromFile(res.targetDir!!)
-                                    } else {
-                                        parentUri
-                                    }
-                                    val trackedSub = if (isDirectFileDir) null else res.savedFolderName
-                                    val addResult = libraryStore.addPickedRoot(
-                                        treeUri = savedUri,
-                                        cloudSourceRoot = root,
-                                        trackedSubfolderName = trackedSub,
-                                    )
-                                    if (addResult.isSuccess) {
-                                        libraryStatusText = strings.addedSavedFolderWithCloudTracking
-                                    } else {
-                                        val addErr = addResult.exceptionOrNull()
-                                        libraryStatusText = if (addErr != null) {
-                                            localizeLibraryError(addErr, strings.couldNotAddFolderToLibraryFallback, strings)
-                                        } else {
-                                            strings.couldNotAddFolderToLibraryFallback
-                                        }
-                                    }
-                                } else if (!addToLibrary && res.savedCount > 0) {
-                                    val savedName = res.savedFolderName?.trim()?.takeIf { it.isNotEmpty() }
-                                    if (savedName != null) {
-                                        onFolderSavedWithoutLibrary(savedName)
-                                    }
-                                }
-                                summary = res
-                            } catch (cancel: CancellationException) {
-                                throw cancel
-                            } catch (err: Exception) {
-                                errorText = err.message ?: strings.couldNotSavePlaylistFallback
-                            } finally {
-                                isExporting = false
-                                exportJob = null
-                            }
-                        }
-                    },
-                ) {
-                    Text(strings.save)
+                isExporting -> {
+                    TextButton(onClick = onDismiss) {
+                        Text(strings.runInBackground)
+                    }
+                }
+                else -> {
+                    Button(onClick = onDismiss) {
+                        Text(strings.done)
+                    }
                 }
             }
         },
         dismissButton = {
-            if (summary == null) {
+            if (activeJob == null || isExporting) {
                 TextButton(
                     onClick = {
-                        if (isExporting) {
-                            exportJob?.cancel()
-                            exportJob = null
-                            isExporting = false
-                        }
+                        jobId?.let(cloudDownloadManager::cancel)
                         onDismiss()
                     },
                 ) {
@@ -989,65 +1287,52 @@ private fun SaveCloudPlaylistDialog(
 @Composable
 private fun UpdateTrackedFolderDialog(
     root: LibraryRoot,
-    libraryStore: LibraryStore,
-    cloudExporter: CloudExporter,
+    subfolderPath: String,
+    tracking: CloudTrackingInfo?,
+    cloudDownloadManager: CloudDownloadManager,
+    onEditSource: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val strings = LocalStrings.current
-    val scope = rememberCoroutineScope()
-    var isUpdating by remember { mutableStateOf(true) }
-    var progressDone by remember { mutableIntStateOf(0) }
-    var progressTotal by remember { mutableIntStateOf(0) }
-    var progressTitle by remember(root.id) { mutableStateOf("") }
-    var summary by remember { mutableStateOf<CloudUpdateSummary?>(null) }
-    var errorText by remember { mutableStateOf<String?>(null) }
-    var syncJob by remember { mutableStateOf<Job?>(null) }
+    val jobs by cloudDownloadManager.jobs.collectAsStateWithLifecycle()
+    val folderTitle = remember(root, subfolderPath, strings) {
+        val norm = LibraryRoot.normalizeFolderPath(subfolderPath)
+        if (norm.isEmpty()) displayRootName(root, strings) else norm.substringAfterLast('/')
+    }
+    val trackingUrl = tracking?.sourceUrl ?: root.sourceUrl
+    var jobId by remember(root.id, subfolderPath, trackingUrl) { mutableStateOf<String?>(null) }
 
-    androidx.compose.runtime.LaunchedEffect(root.id) {
-        val treeUri = root.treeUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
-        if (treeUri == null) {
-            errorText = strings.savedFolderLocationUnavailable
-            isUpdating = false
-            return@LaunchedEffect
-        }
-        syncJob = scope.launch {
-            try {
-                val res = cloudExporter.updateLocalFolder(
-                    root = root,
-                    treeUri = treeUri,
-                    fetchPlaylist = { url, cookie, kindHint ->
-                        libraryStore.fetchCloudPlaylist(url, cookie, kindHint)
-                    },
-                    onProgress = { done, total, title ->
-                        progressDone = done
-                        progressTotal = total
-                        progressTitle = title
-                    },
-                )
-                libraryStore.markRootCloudSynced(root.id)
-                if (res.addedCount > 0) {
-                    libraryStore.rescan()
-                }
-                summary = res
-            } catch (cancel: CancellationException) {
-                throw cancel
-            } catch (err: Exception) {
-                errorText = err.message ?: strings.couldNotUpdateFromCloudFallback
-            } finally {
-                isUpdating = false
-                syncJob = null
-            }
-        }
+    LaunchedEffect(root.id, subfolderPath, trackingUrl) {
+        jobId = cloudDownloadManager.startFolderUpdate(
+            root = root,
+            subfolderPath = subfolderPath,
+            sourceUrlOverride = trackingUrl,
+            cookieOverride = tracking?.cookie,
+        )
     }
 
+    val activeJob = remember(jobs, jobId, folderTitle, trackingUrl) {
+        jobId?.let { id -> jobs.firstOrNull { it.id == id } } ?: CloudDownloadJob(
+            id = jobId.orEmpty(),
+            kind = CloudDownloadKind.FOLDER_UPDATE,
+            title = folderTitle,
+            subtitle = trackingUrl,
+        )
+    }
+    val isUpdating = activeJob.isActive
+    val summary = activeJob.updateSummary
+    val isFailed = activeJob.status == CloudDownloadStatus.FAILED
+    val isCancelled = activeJob.status == CloudDownloadStatus.CANCELLED
+
     AlertDialog(
-        onDismissRequest = { if (!isUpdating) onDismiss() },
+        onDismissRequest = onDismiss,
         icon = { Icon(Icons.Rounded.CloudDownload, contentDescription = null) },
         title = {
             Text(
                 when {
-                    isUpdating -> strings.updatingFolderTitle(displayRootName(root, strings))
+                    isUpdating -> strings.updatingFolderTitle(folderTitle)
                     summary != null -> strings.updateCompleteTitle
+                    isCancelled -> strings.downloadStatusCancelled
                     else -> strings.updateFromCloud
                 }
             )
@@ -1059,59 +1344,68 @@ private fun UpdateTrackedFolderDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                root.sourceUrl?.let { url ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     Text(
-                        text = url,
+                        text = trackingUrl ?: strings.notAvailable,
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
                     )
+                    TextButton(
+                        onClick = {
+                            if (isUpdating) {
+                                jobId?.let(cloudDownloadManager::cancel)
+                            }
+                            onEditSource()
+                        }
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Edit,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(strings.edit)
+                    }
                 }
 
                 if (isUpdating) {
-                    if (progressTotal > 0) {
-                        val fraction = (progressDone.toFloat() / progressTotal.toFloat()).coerceIn(0f, 1f)
-                        LinearProgressIndicator(
-                            progress = { fraction },
-                            modifier = Modifier.fillMaxWidth(),
-                        )
-                        Text(
-                            text = if (progressTitle.isNotBlank()) {
-                                strings.checkingProgressWithTitle(progressDone, progressTotal, progressTitle)
-                            } else {
-                                strings.checkingProgress(progressDone, progressTotal)
-                            },
-                            style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
+                    val statusLine = if (activeJob.totalTracks > 0) {
+                        if (activeJob.currentTrackTitle.isNotBlank()) {
+                            strings.checkingProgressWithTitle(
+                                activeJob.completedTracks,
+                                activeJob.totalTracks,
+                                activeJob.currentTrackTitle,
+                            )
+                        } else {
+                            strings.checkingProgress(activeJob.completedTracks, activeJob.totalTracks)
+                        }
                     } else {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                        Text(
-                            text = strings.fetchingLatestCloudPlaylist,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                        strings.fetchingLatestCloudPlaylist
                     }
+                    CloudTransferProgressSection(job = activeJob, statusLine = statusLine)
                 }
 
-                val result = summary
-                if (result != null) {
-                    val summaryLine = if (result.addedCount > 0) {
-                        strings.updateAddedSongsSummary(result.addedCount, result.skippedCount)
+                if (summary != null) {
+                    val summaryLine = if (summary.addedCount > 0) {
+                        strings.updateAddedSongsSummary(summary.addedCount, summary.skippedCount)
                     } else {
-                        strings.alreadyUpToDateSummary(result.skippedCount)
+                        strings.alreadyUpToDateSummary(summary.skippedCount)
                     }
                     Text(summaryLine, style = MaterialTheme.typography.bodyMedium)
-                    if (result.failedCount > 0) {
+                    if (summary.failedCount > 0) {
                         Text(
-                            text = strings.failedCountLine(result.failedCount),
+                            text = strings.failedCountLine(summary.failedCount),
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.error,
                         )
-                        result.errors.take(5).forEach { msg ->
+                        summary.errors.take(5).forEach { msg ->
                             Text(
                                 text = "• $msg",
                                 style = MaterialTheme.typography.bodySmall,
@@ -1123,6 +1417,103 @@ private fun UpdateTrackedFolderDialog(
                     }
                 }
 
+                if (isFailed) {
+                    val errMessage = if (activeJob.locationUnavailable) {
+                        strings.savedFolderLocationUnavailable
+                    } else {
+                        activeJob.errorMessage ?: strings.couldNotUpdateFromCloudFallback
+                    }
+                    Text(
+                        text = errMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                    )
+                } else if (isCancelled) {
+                    Text(
+                        text = strings.downloadStatusCancelled,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            if (isUpdating) {
+                TextButton(onClick = onDismiss) {
+                    Text(strings.runInBackground)
+                }
+            } else {
+                Button(onClick = onDismiss) {
+                    Text(strings.done)
+                }
+            }
+        },
+        dismissButton = {
+            if (isUpdating) {
+                TextButton(
+                    onClick = {
+                        jobId?.let(cloudDownloadManager::cancel)
+                        onDismiss()
+                    },
+                ) {
+                    Text(strings.cancel)
+                }
+            }
+        },
+    )
+}
+
+@Composable
+private fun EditCloudSourceDialog(
+    target: EditCloudSourceTarget,
+    libraryStore: LibraryStore,
+    onDismiss: () -> Unit,
+    onSaved: () -> Unit,
+) {
+    val strings = LocalStrings.current
+    val scope = rememberCoroutineScope()
+    var url by remember(target) { mutableStateOf(target.tracking.sourceUrl) }
+    var cookie by remember(target) { mutableStateOf(target.tracking.cookie.orEmpty()) }
+    var isSaving by remember(target) { mutableStateOf(false) }
+    var errorText by remember(target) { mutableStateOf<String?>(null) }
+
+    AlertDialog(
+        onDismissRequest = { if (!isSaving) onDismiss() },
+        icon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+        title = { Text(strings.editCloudSourceTitle) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                OutlinedTextField(
+                    value = url,
+                    onValueChange = {
+                        url = it
+                        errorText = null
+                    },
+                    label = { Text(strings.cloudUrlLabel) },
+                    placeholder = { Text(strings.cloudUrlPlaceholder) },
+                    supportingText = { Text(strings.cloudUrlSupportingText) },
+                    singleLine = true,
+                    enabled = !isSaving,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                OutlinedTextField(
+                    value = cookie,
+                    onValueChange = { cookie = it },
+                    label = { Text(strings.cookieOptionalLabel) },
+                    placeholder = { Text(strings.cookiePlaceholder) },
+                    minLines = 2,
+                    maxLines = 3,
+                    enabled = !isSaving,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                if (isSaving) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
                 val err = errorText
                 if (err != null) {
                     Text(
@@ -1134,24 +1525,37 @@ private fun UpdateTrackedFolderDialog(
             }
         },
         confirmButton = {
-            if (!isUpdating) {
-                Button(onClick = onDismiss) {
-                    Text(strings.done)
-                }
+            TextButton(
+                enabled = extractCloudSourceInput(url).isNotEmpty() && !isSaving,
+                onClick = {
+                    isSaving = true
+                    errorText = null
+                    scope.launch {
+                        val res = libraryStore.updateCloudTrackingAddress(
+                            rootId = target.root.id,
+                            path = target.subfolderPath,
+                            newSourceUrl = url,
+                            cookie = cookie.takeIf { it.isNotBlank() },
+                        )
+                        isSaving = false
+                        res.onSuccess {
+                            onDismiss()
+                            onSaved()
+                        }.onFailure { err ->
+                            errorText = localizeLibraryError(err, strings.couldNotUpdateFromCloudFallback, strings)
+                        }
+                    }
+                },
+            ) {
+                Text(strings.save)
             }
         },
         dismissButton = {
-            if (isUpdating) {
-                TextButton(
-                    onClick = {
-                        syncJob?.cancel()
-                        syncJob = null
-                        isUpdating = false
-                        onDismiss()
-                    },
-                ) {
-                    Text(strings.cancel)
-                }
+            TextButton(
+                enabled = !isSaving,
+                onClick = onDismiss,
+            ) {
+                Text(strings.cancel)
             }
         },
     )
@@ -1171,6 +1575,7 @@ private fun FolderRootList(
     onRequestRemove: (LibraryRoot) -> Unit,
     onSaveCloudRoot: (LibraryRoot) -> Unit,
     onUpdateTrackedRoot: (LibraryRoot) -> Unit,
+    onEditTrackedRootSource: (LibraryRoot, CloudTrackingInfo) -> Unit,
     onRestoreExcluded: (String) -> Unit,
     onAddFolder: () -> Unit,
     onAddCloudFolder: () -> Unit
@@ -1232,6 +1637,8 @@ private fun FolderRootList(
                     historyState.entries[id]?.count ?: 0
                 }.map { it.id }
             }
+            val rootTracking = remember(root) { root.trackingFor("") }
+            val syncProgress = libraryState.cloudSyncProgress[root.id]
             val isRemovable = root.kind != RootKind.APP_FOLDER
 
             Column(modifier = Modifier.animateItem()) {
@@ -1267,6 +1674,8 @@ private fun FolderRootList(
                             available = available,
                             songCount = count,
                             rootTrackIds = rootTrackIds,
+                            rootTracking = rootTracking,
+                            syncProgress = syncProgress,
                             queues = queues,
                             activeQueue = activeQueue,
                             trackActions = trackActions,
@@ -1274,6 +1683,7 @@ private fun FolderRootList(
                             onRelocate = { onRelocateRoot(root.id) },
                             onSaveCloudRoot = { onSaveCloudRoot(root) },
                             onUpdateTrackedRoot = { onUpdateTrackedRoot(root) },
+                            onEditTrackedRootSource = { info -> onEditTrackedRootSource(root, info) },
                             onRestoreExcluded = { onRestoreExcluded(root.id) },
                             onRemove = { onRequestRemove(root) }
                         )
@@ -1284,6 +1694,8 @@ private fun FolderRootList(
                         available = available,
                         songCount = count,
                         rootTrackIds = rootTrackIds,
+                        rootTracking = rootTracking,
+                        syncProgress = syncProgress,
                         queues = queues,
                         activeQueue = activeQueue,
                         trackActions = trackActions,
@@ -1291,6 +1703,7 @@ private fun FolderRootList(
                         onRelocate = {},
                         onSaveCloudRoot = {},
                         onUpdateTrackedRoot = { onUpdateTrackedRoot(root) },
+                        onEditTrackedRootSource = { info -> onEditTrackedRootSource(root, info) },
                         onRestoreExcluded = { onRestoreExcluded(root.id) },
                         onRemove = {}
                     )
@@ -1348,6 +1761,8 @@ private fun RootItemRow(
     available: Boolean,
     songCount: Int,
     rootTrackIds: List<String>,
+    rootTracking: CloudTrackingInfo?,
+    syncProgress: CloudSyncProgress?,
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
@@ -1355,6 +1770,7 @@ private fun RootItemRow(
     onRelocate: () -> Unit,
     onSaveCloudRoot: () -> Unit,
     onUpdateTrackedRoot: () -> Unit,
+    onEditTrackedRootSource: (CloudTrackingInfo) -> Unit,
     onRestoreExcluded: () -> Unit,
     onRemove: () -> Unit
 ) {
@@ -1394,38 +1810,43 @@ private fun RootItemRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false)
                     )
-                    val badgeLabel = when {
-                        root.kind == RootKind.CLOUD_YOUTUBE -> strings.badgeYouTube
-                        root.kind == RootKind.CLOUD_BILIBILI -> strings.badgeBilibili
-                        root.kind == RootKind.CLOUD_GOOGLE_DRIVE -> strings.badgeGoogleDrive
-                        root.isCloudTrackedLocal -> when (root.linkedCloudKind) {
-                            RootKind.CLOUD_YOUTUBE -> strings.badgeYouTubeLocal
-                            RootKind.CLOUD_BILIBILI -> strings.badgeBilibiliLocal
-                            RootKind.CLOUD_GOOGLE_DRIVE -> strings.badgeGoogleDriveLocal
-                            else -> strings.badgeCloudLocal
-                        }
-                        else -> null
-                    }
-                    if (badgeLabel != null) {
-                        Surface(
-                            color = MaterialTheme.colorScheme.secondaryContainer,
-                            shape = MaterialTheme.shapes.extraSmall
-                        ) {
-                            Text(
-                                text = badgeLabel,
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSecondaryContainer,
-                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
-                            )
-                        }
+                    when {
+                        root.kind.isCloud -> CloudSourceBadge(cloudKind = root.kind, isLocal = false)
+                        rootTracking != null -> CloudSourceBadge(cloudKind = rootTracking.cloudKind, isLocal = true)
                     }
                 }
             },
             supportingContent = {
-                Text(
-                    text = if (available) strings.songCount(songCount) else strings.folderUnavailable,
-                    color = if (available) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
-                )
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = if (available) strings.songCount(songCount) else strings.folderUnavailable,
+                        color = if (available) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
+                    )
+                    if (syncProgress != null) {
+                        Text(
+                            text = strings.cloudSyncProgress(
+                                syncProgress.completedFolders,
+                                syncProgress.totalFolders,
+                                syncProgress.tracksFound,
+                            ),
+                            style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (syncProgress.totalFolders > 0) {
+                            LinearProgressIndicator(
+                                progress = {
+                                    (syncProgress.completedFolders.toFloat() / syncProgress.totalFolders.toFloat())
+                                        .coerceIn(0f, 1f)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
             },
             trailingContent = {
                 Box {
@@ -1447,13 +1868,21 @@ private fun RootItemRow(
                                 }
                             )
                         }
-                        if (root.isCloudTrackedLocal) {
+                        if (!root.kind.isCloud && rootTracking != null) {
                             DropdownMenuItem(
                                 text = { Text(strings.updateFromCloud) },
                                 leadingIcon = { Icon(Icons.Rounded.CloudDownload, contentDescription = null) },
                                 onClick = {
                                     menuExpanded = false
                                     onUpdateTrackedRoot()
+                                }
+                            )
+                            DropdownMenuItem(
+                                text = { Text(strings.editCloudSourceEllipsis) },
+                                leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onEditTrackedRootSource(rootTracking)
                                 }
                             )
                         }
@@ -1493,7 +1922,7 @@ private fun RootItemRow(
                                 }
                             )
                         }
-                        if ((isRemovable || root.kind == RootKind.PICKED || root.excludedPaths.isNotEmpty()) && rootTrackIds.isNotEmpty()) {
+                        if ((isRemovable || root.kind == RootKind.PICKED || root.excludedPaths.isNotEmpty() || (!root.kind.isCloud && rootTracking != null)) && rootTrackIds.isNotEmpty()) {
                             HorizontalDivider()
                         }
                         if (rootTrackIds.isNotEmpty()) {
@@ -1552,6 +1981,7 @@ private fun RootItemRow(
 @Composable
 private fun FolderDetailContent(
     ref: FolderRef,
+    root: LibraryRoot?,
     rootName: String,
     libraryStore: LibraryStore,
     libraryState: LibraryUiState,
@@ -1561,14 +1991,18 @@ private fun FolderDetailContent(
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
     onNavigate: (FolderRef) -> Unit,
-    onRequestRemoveSubfolder: (FolderRef) -> Unit
+    onRequestRemoveSubfolder: (FolderRef) -> Unit,
+    onUpdateTrackedSubfolder: (LibraryRoot, String) -> Unit,
+    onEditTrackedSubfolderSource: (LibraryRoot, String, CloudTrackingInfo) -> Unit,
 ) {
     val strings = LocalStrings.current
     val playCounts: (String) -> Int = { id -> historyState.entries[id]?.count ?: 0 }
+    val syncProgress = libraryState.cloudSyncProgress[ref.rootId]
     val (subfolders, directTracks) = remember(
         libraryState.tracks,
         libraryState.folderSortOrders,
         libraryState.folderTrackOrders,
+        libraryState.cloudSyncProgress,
         historyState.entries,
         ref,
     ) {
@@ -1591,7 +2025,7 @@ private fun FolderDetailContent(
     }
 
     val listState = rememberLazyListState()
-    val headerCount = 1 + 1 + subfolders.size
+    val headerCount = 1 + (if (syncProgress != null) 1 else 0) + 1 + subfolders.size
     val dragState = rememberDragReorderState(
         items = directTracks,
         listState = listState,
@@ -1618,6 +2052,42 @@ private fun FolderDetailContent(
                 ref = ref,
                 onNavigate = onNavigate
             )
+        }
+
+        if (syncProgress != null) {
+            item(key = "cloud_sync_banner") {
+                ElevatedCard(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp),
+                ) {
+                    Column(
+                        modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = strings.cloudSyncProgress(
+                                syncProgress.completedFolders,
+                                syncProgress.totalFolders,
+                                syncProgress.tracksFound,
+                            ),
+                            style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        if (syncProgress.totalFolders > 0) {
+                            LinearProgressIndicator(
+                                progress = {
+                                    (syncProgress.completedFolders.toFloat() / syncProgress.totalFolders.toFloat())
+                                        .coerceIn(0f, 1f)
+                                },
+                                modifier = Modifier.fillMaxWidth(),
+                            )
+                        } else {
+                            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        }
+                    }
+                }
+            }
         }
 
         if (allTracks.isEmpty()) {
@@ -1665,6 +2135,9 @@ private fun FolderDetailContent(
             ) {
                 libraryStore.tracksUnder(ref.rootId, childPath, playCounts).map { it.id }
             }
+            val subTracking = remember(root, childPath) {
+                root?.takeIf { !it.kind.isCloud }?.trackingFor(childPath)
+            }
             var menuExpanded by remember { mutableStateOf(false) }
             val dismissState = rememberSwipeToDismissBoxState(
                 confirmValueChange = { value ->
@@ -1703,7 +2176,22 @@ private fun FolderDetailContent(
                                 tint = MaterialTheme.colorScheme.primary
                             )
                         },
-                        headlineContent = { Text(folderName) },
+                        headlineContent = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    text = folderName,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                if (subTracking != null) {
+                                    CloudSourceBadge(cloudKind = subTracking.cloudKind, isLocal = true)
+                                }
+                            }
+                        },
                         supportingContent = { Text(strings.songCount(childIds.size)) },
                         trailingContent = {
                             Box {
@@ -1714,6 +2202,25 @@ private fun FolderDetailContent(
                                     expanded = menuExpanded,
                                     onDismissRequest = { menuExpanded = false }
                                 ) {
+                                    if (root != null && subTracking != null) {
+                                        DropdownMenuItem(
+                                            text = { Text(strings.updateFromCloud) },
+                                            leadingIcon = { Icon(Icons.Rounded.CloudDownload, contentDescription = null) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                onUpdateTrackedSubfolder(root, childPath)
+                                            }
+                                        )
+                                        DropdownMenuItem(
+                                            text = { Text(strings.editCloudSourceEllipsis) },
+                                            leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                onEditTrackedSubfolderSource(root, childPath, subTracking)
+                                            }
+                                        )
+                                        HorizontalDivider()
+                                    }
                                     DropdownMenuItem(
                                         text = { Text(strings.removeFolder) },
                                         leadingIcon = {

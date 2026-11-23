@@ -154,6 +154,16 @@
                             <TextBlock Text="{DynamicResource Str_Folders_UpdateFromCloud}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
+                    <Button x:Name="EditCloudSourceButton"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            Margin="8,0,0,0"
+                            Visibility="Collapsed"
+                            Click="EditCloudSource_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE70F;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
+                            <TextBlock Text="{DynamicResource Str_Folders_EditCloudSource}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                     <Button x:Name="RemoveRootButton"
                             Style="{StaticResource Win10ButtonStyle}"
                             Margin="8,0,0,0"

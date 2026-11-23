@@ -94,6 +94,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
 
         _engine.TrackEnded += OnEngineTrackEnded;
         Library.OnTracksRemoved = OnLibraryTracksRemoved;
+        Library.OnTracksMigrated = OnLibraryTracksMigrated;
         Library.OnFolderAdded = OnLibraryFolderAdded;
         Library.TrackUpdated += OnLibraryTrackUpdated;
 
@@ -491,6 +492,51 @@ public sealed class PlayerController : ObservableStore, IDisposable
         Play(ids, startAt);
     }
 
+    public void SyncNamedQueue(string queueName, IReadOnlyList<string> ids)
+    {
+        if (string.IsNullOrWhiteSpace(queueName) || ids.Count == 0) return;
+
+        string title = queueName.Trim();
+        var existing = Queues.Queues.FirstOrDefault(q => string.Equals(q.Name, title, StringComparison.Ordinal));
+        if (existing is not null && existing.Id == Queues.ActiveId)
+        {
+            if (existing.TrackIds.SequenceEqual(ids, StringComparer.Ordinal))
+            {
+                return;
+            }
+
+            if (IsPlaying || _isLoaded || CurrentTrack is not null)
+            {
+                string? currentId = CurrentTrack?.Id ?? existing.CurrentTrackId;
+                int preservedIdx = -1;
+                if (!string.IsNullOrEmpty(currentId))
+                {
+                    for (int i = 0; i < ids.Count; i++)
+                    {
+                        if (string.Equals(ids[i], currentId, StringComparison.Ordinal))
+                        {
+                            preservedIdx = i;
+                            break;
+                        }
+                    }
+                }
+
+                if (preservedIdx >= 0)
+                {
+                    double savedPos = _isLoaded ? _engine.CurrentTimeSeconds : existing.PositionSeconds;
+                    Queues.Update(existing.Id, q =>
+                    {
+                        q.Replace(ids, preservedIdx);
+                        q.PositionSeconds = savedPos;
+                    });
+                    return;
+                }
+            }
+        }
+
+        CreateOrReplaceFolderQueue(title, ids, startPlayback: false);
+    }
+
     public void PlayInNamedQueue(string queueName, IReadOnlyList<string> ids, int startAt = 0, bool? shuffle = null)
     {
         if (ids.Count == 0) return;
@@ -717,6 +763,21 @@ public sealed class PlayerController : ObservableStore, IDisposable
         Queues.RemoveTracks(ids);
         History.RemoveTracks(ids);
         if (currentRemoved) StartCurrent(autoplay: wasPlaying);
+    }
+
+    private void OnLibraryTracksMigrated(IReadOnlyDictionary<string, string> idMigrations)
+    {
+        if (idMigrations.Count == 0) return;
+        Queues.MigrateTracks(idMigrations);
+        History.MigrateTracks(idMigrations);
+        if (CurrentTrack is not null && idMigrations.TryGetValue(CurrentTrack.Id, out string? newId))
+        {
+            var migrated = Library.GetTrack(newId);
+            if (migrated is not null)
+            {
+                CurrentTrack = migrated;
+            }
+        }
     }
 
     private void OnLibraryTrackUpdated(Track updated)

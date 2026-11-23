@@ -60,7 +60,7 @@ public partial class PlaylistsView : UserControl
         PlaylistsStack.Children.Clear();
 
         // Favourites built-in playlist
-        var favIds = lib.Tracks.Where(t => lib.Favourites.Contains(t.Id)).Select(t => t.Id).ToList();
+        var favIds = lib.GetFavouriteTracks(_ctx.Services.History).Select(t => t.Id).ToList();
         PlaylistsStack.Children.Add(CreatePlaylistCard(
             title: L.Get("Nav_Favourites"),
             count: lib.Favourites.Count,
@@ -73,11 +73,12 @@ public partial class PlaylistsView : UserControl
         foreach (var pl in lib.Playlists)
         {
             var captured = pl;
+            var plTrackIds = lib.GetPlaylistTracks(pl.Id, _ctx.Services.History).Select(t => t.Id).ToList();
             PlaylistsStack.Children.Add(CreatePlaylistCard(
                 title: pl.Name,
                 count: pl.TrackIds.Count,
                 glyph: "\uE8D6",
-                trackIds: pl.TrackIds,
+                trackIds: plTrackIds,
                 onClick: () => _ctx.OpenPlaylist(PlaylistRef.User(captured.Id)),
                 playlist: captured));
         }
@@ -193,11 +194,22 @@ public partial class PlaylistsView : UserControl
             trackIds,
             null,
             _ctx.OpenTextPrompt,
-            playlist is null ? null : menu =>
+            menu =>
             {
-                menu.Items.Add(new Separator());
-                menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Common_RenameEllipsis"), "\uE70F", () => PromptRename(playlist)));
-                menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Common_Delete"), "\uE74D", () => ConfirmDelete(playlist)));
+                if (trackIds.Count > 0)
+                {
+                    menu.Items.Insert(0, TrackMenuHelper.CreateItem(
+                        L.Get("Common_Play"),
+                        "\uE768",
+                        () => _ctx.Services.Player.PlayInNamedQueue(title, trackIds)));
+                    menu.Items.Insert(1, new Separator());
+                }
+                if (playlist is not null)
+                {
+                    menu.Items.Add(new Separator());
+                    menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Common_RenameEllipsis"), "\uE70F", () => PromptRename(playlist)));
+                    menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Common_Delete"), "\uE74D", () => ConfirmDelete(playlist)));
+                }
             });
 
         return card;

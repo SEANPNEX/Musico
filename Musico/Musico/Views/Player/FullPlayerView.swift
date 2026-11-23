@@ -212,9 +212,22 @@ private struct PlayerPage: View {
 
                 PlaybackScrubber()
                 transport
-                Text(L10n.displayQueueName(queues.active.name) + " · " + positionText)
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 0) {
+                    MarqueeText(
+                        text: L10n.displayQueueName(queues.active.name),
+                        font: .footnote,
+                        alignment: .center
+                    )
+                    if !positionText.isEmpty {
+                        Text(" · " + positionText)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(1)
+                    }
+                }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
                 panelButtons
             } else {
                 ContentUnavailableView(L10n.tr("Nothing Playing"), systemImage: "music.note",

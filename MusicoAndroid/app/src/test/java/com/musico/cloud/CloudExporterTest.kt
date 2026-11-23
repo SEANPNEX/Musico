@@ -1,14 +1,29 @@
 package com.musico.cloud
 
+import android.net.Uri
+import com.musico.core.ArtworkCache
+import com.musico.core.MetadataReading
+import com.musico.core.TrackMetadata
 import com.musico.model.LibraryRoot
 import com.musico.model.RootKind
 import com.musico.model.Track
+import com.musico.store.CloudDownloadJob
+import com.musico.store.CloudDownloadKind
+import com.musico.store.CloudDownloadManager
+import com.musico.store.CloudDownloadStatus
+import com.musico.store.LibraryStore
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -583,5 +598,380 @@ class CloudExporterTest {
                 recordedRanges,
             )
         }
+    }
+
+    @Test
+    fun transferSpeedMeterComputesSlidingWindowRateThrottlesAndResets() {
+        var nowNs = 1_000_000_000L
+        val meter = TransferSpeedMeter(
+            windowNs = 1_500_000_000L,
+            throttleNs = 120_000_000L,
+            nanoClock = { nowNs },
+        )
+
+        // Initial sample -> dt == 0 -> 0.0 rate
+        assertEquals(0.0, meter.record(0L, forceEmit = false)!!, 0.001)
+
+        // Within throttleNs (50ms) -> suppressed unless forceEmit = true
+        nowNs += 50_000_000L
+        assertNull(meter.record(100_000L, forceEmit = false))
+
+        // At 500ms -> 1,000,000 bytes in 0.5s => 2,000,000 B/s
+        nowNs += 450_000_000L
+        val rate1 = meter.record(1_000_000L, forceEmit = false)!!
+        assertEquals(2_000_000.0, rate1, 1_000.0)
+
+        // Advance past window (now = 3.0s, adding +1,500,000 bytes in 1.5s => ~1,000,000 B/s)
+        nowNs += 1_000_000_000L
+        meter.record(1_500_000L, forceEmit = true)
+        nowNs += 500_000_000L
+        val rate2 = meter.record(2_500_000L, forceEmit = true)!!
+        assertTrue(rate2 > 900_000.0 && rate2 < 1_600_000.0)
+
+        // Rollback on retry (bytesDownloaded < lastBytes) clears samples and returns 0.0
+        assertEquals(0.0, meter.record(500L, forceEmit = false)!!, 0.001)
+    }
+
+    @Test
+    fun cloudExportProgressComputesTrackAndBlendedOverallFraction() {
+        val unknownLen = CloudExportProgress(
+            completedTracks = 1,
+            totalTracks = 4,
+            currentTrackTitle = "Track 2",
+            trackBytesDownloaded = 512L,
+            trackTotalBytes = null,
+        )
+        assertNull(unknownLen.trackFraction)
+        assertEquals(0.25f, unknownLen.overallFraction, 0.001f)
+
+        val halfwaySecond = CloudExportProgress(
+            completedTracks = 1,
+            totalTracks = 4,
+            currentTrackTitle = "Track 2",
+            trackBytesDownloaded = 500L,
+            trackTotalBytes = 1000L,
+        )
+        assertEquals(0.5f, halfwaySecond.trackFraction!!, 0.001f)
+        assertEquals(0.375f, halfwaySecond.overallFraction, 0.001f)
+
+        val done = CloudExportProgress(
+            completedTracks = 4,
+            totalTracks = 4,
+            currentTrackTitle = "Track 4",
+            trackBytesDownloaded = 1000L,
+            trackTotalBytes = 1000L,
+        )
+        assertEquals(1f, done.overallFraction, 0.001f)
+    }
+
+    @Test
+    fun urlConnectionDownloaderReportsLiveBytesProgressAcrossSingleAndChunkedTransfers() = runBlocking {
+        val smallPayload = ByteArray(16_384) { (it % 199).toByte() }
+        val largeSize = 4 * 1024 * 1024 + 512 * 1024
+        val largePayload = ByteArray(largeSize) { (it % 251).toByte() }
+
+        LocalTestHttpServer { path, headers ->
+            when (path) {
+                "/small" -> LocalTestHttpServer.HttpReply(statusCode = 200, body = smallPayload)
+                "/large" -> {
+                    val range = headers["range"]?.removePrefix("bytes=")?.split('-')
+                    val start = range?.getOrNull(0)?.toIntOrNull() ?: 0
+                    val end = minOf(range?.getOrNull(1)?.toIntOrNull() ?: (largeSize - 1), largeSize - 1)
+                    LocalTestHttpServer.HttpReply(
+                        statusCode = 206,
+                        headers = mapOf("Content-Range" to "bytes $start-$end/$largeSize"),
+                        body = largePayload,
+                        offset = start,
+                        length = end - start + 1,
+                    )
+                }
+                else -> LocalTestHttpServer.HttpReply(statusCode = 404, body = ByteArray(0))
+            }
+        }.use { server ->
+            val downloader = UrlConnectionCloudStreamDownloader()
+            val smallEvents = mutableListOf<ByteTransferProgress>()
+            val smallOut = ByteArrayOutputStream()
+            downloader.download(
+                url = "http://127.0.0.1:${server.port}/small",
+                headers = emptyMap(),
+                contentLength = smallPayload.size.toLong(),
+                output = smallOut,
+            ) { smallEvents.add(it) }
+            assertArrayEquals(smallPayload, smallOut.toByteArray())
+            assertTrue(smallEvents.isNotEmpty())
+            assertEquals(smallPayload.size.toLong(), smallEvents.last().bytesDownloaded)
+            assertEquals(smallPayload.size.toLong(), smallEvents.last().totalBytes)
+
+            val chunkEvents = mutableListOf<ByteTransferProgress>()
+            val largeOut = ByteArrayOutputStream()
+            downloader.download(
+                url = "http://127.0.0.1:${server.port}/large",
+                headers = emptyMap(),
+                contentLength = largeSize.toLong(),
+                output = largeOut,
+            ) { chunkEvents.add(it) }
+            assertArrayEquals(largePayload, largeOut.toByteArray())
+            assertTrue(chunkEvents.size >= 2)
+            assertEquals(largeSize.toLong(), chunkEvents.last().bytesDownloaded)
+            assertEquals(largeSize.toLong(), chunkEvents.last().totalBytes)
+            assertTrue(chunkEvents.zipWithNext().all { (a, b) -> b.bytesDownloaded >= a.bytesDownloaded })
+        }
+    }
+
+    @Test
+    fun exporterDetailedProgressAndUpdateLocalFolderManifestPrecedenceAndSubfolder() = runBlocking {
+        val parentDir = tempFolder.newFolder("export_parent")
+        val resolver = FakeCloudStreamResolver { track, _, _ ->
+            ResolvedStream(
+                url = "https://cdn.example/${track.remoteTrackId}.m4a",
+                mimeType = "audio/mp4",
+                contentLength = 1000L,
+            )
+        }
+        val downloader = object : CloudStreamDownloader {
+            override suspend fun download(url: String, headers: Map<String, String>, output: OutputStream) {
+                download(url, headers, 1000L, output, null)
+            }
+
+            override suspend fun download(
+                url: String,
+                headers: Map<String, String>,
+                contentLength: Long?,
+                output: OutputStream,
+                onBytesProgress: ((ByteTransferProgress) -> Unit)?,
+            ) {
+                val payload = ByteArray(1000) { 7 }
+                onBytesProgress?.invoke(ByteTransferProgress(500L, 1000L, 1024.0))
+                output.write(payload, 0, 500)
+                onBytesProgress?.invoke(ByteTransferProgress(1000L, 1000L, 2048.0))
+                output.write(payload, 500, 500)
+            }
+        }
+        val exporter = CloudExporter(context = null, cloudResolver = resolver, downloader = downloader)
+        val root = cloudRoot()
+        val t1 = cloudTrack("t1", "Song 1", remoteId = "r1")
+        val t2 = cloudTrack("t2", "Song 2", remoteId = "r2")
+
+        val detailed = mutableListOf<CloudExportProgress>()
+        val summary = exporter.exportPlaylist(
+            tracks = listOf(t1, t2),
+            root = root,
+            parentDir = parentDir,
+            folderName = "My Mix",
+            onDetailedProgress = { detailed.add(it) },
+        )
+        assertEquals(2, summary.savedCount)
+        assertTrue(detailed.any { it.completedTracks == 0 && (it.trackFraction ?: 0f) > 0f && it.overallFraction > 0f })
+        assertTrue(detailed.any { it.completedTracks == 2 && it.overallFraction == 1f })
+
+        // Update tracked subfolder where stale manifest has old URL, but explicit override URL takes precedence AND rewrites manifest!
+        val localRootDir = tempFolder.newFolder("local_root")
+        val subDir = File(localRootDir, "Nested/SubMix").apply { mkdirs() }
+        val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
+        val staleManifest = CloudFolderManifest(
+            sourceURL = "https://www.youtube.com/playlist?list=STALE_MANIFEST_URL",
+            remoteID = "STALE_MANIFEST_URL",
+            cloudKind = RootKind.CLOUD_YOUTUBE.name,
+            lastSyncedEpochMs = 100L,
+            tracks = mapOf("r1" to "Song 1.m4a"),
+        )
+        File(subDir, CloudExporter.MANIFEST_FILE_NAME).writeText(json.encodeToString(staleManifest), Charsets.UTF_8)
+        File(subDir, "Song 1.m4a").writeBytes(ByteArray(100))
+
+        var requestedUrl: String? = null
+        val localRoot = LibraryRoot(
+            id = "picked-1",
+            name = "local_root",
+            kind = RootKind.PICKED,
+            treeUri = localRootDir.toURI().toString(),
+        )
+        val updateSummary = exporter.updateLocalFolder(
+            root = localRoot,
+            targetDir = localRootDir,
+            fetchPlaylist = { sourceUrl, _, _ ->
+                requestedUrl = sourceUrl
+                CloudPlaylistResult(
+                    source = CloudSource.BILIBILI,
+                    remoteId = "BV_EDITED",
+                    title = "Edited Bili",
+                    tracks = listOf(
+                        CloudTrackMetadata(
+                            remoteTrackId = "r1",
+                            title = "Song 1",
+                            artist = "Artist",
+                            album = "Edited Bili",
+                            durationSec = 10.0,
+                            trackNumber = 1,
+                        ),
+                        CloudTrackMetadata(
+                            remoteTrackId = "r2",
+                            title = "Song 2",
+                            artist = "Artist",
+                            album = "Edited Bili",
+                            durationSec = 10.0,
+                            trackNumber = 2,
+                        ),
+                    ),
+                )
+            },
+            overrideSourceUrl = "https://www.bilibili.com/video/BV_EDITED",
+            overrideCloudKind = RootKind.CLOUD_BILIBILI,
+            subfolderPath = "Nested/SubMix",
+        )
+
+        assertEquals("https://www.bilibili.com/video/BV_EDITED", requestedUrl)
+        assertEquals(1, updateSummary.addedCount)
+        assertEquals(1, updateSummary.skippedCount)
+        assertTrue(File(subDir, "Song 2.m4a").exists())
+
+        val rewritten = CloudExporter.loadManifest(subDir)
+        assertNotNull(rewritten)
+        assertEquals("https://www.bilibili.com/video/BV_EDITED", rewritten?.sourceURL)
+        assertEquals("BV_EDITED", rewritten?.remoteID)
+        assertEquals(RootKind.CLOUD_BILIBILI.name, rewritten?.cloudKind)
+    }
+
+    @Test
+    fun cloudDownloadManagerRunsBackgroundExportsFolderUpdatesAndSupportsCancelDismissClear() = runBlocking {
+        val stateDir = tempFolder.newFolder("dl_state")
+        val docsDir = tempFolder.newFolder("dl_docs")
+        val stubReader = object : MetadataReading {
+            override suspend fun read(uri: Uri, fileNameHint: String?): TrackMetadata = TrackMetadata(durationSec = 10.0)
+            override suspend fun read(file: File): TrackMetadata = TrackMetadata(durationSec = 10.0)
+        }
+        val fakeHttp = object : CloudHttpClient {
+            override suspend fun get(url: String, headers: Map<String, String>, followRedirects: Boolean): CloudHttpResponse {
+                if (url.contains("drive.google.com/drive/folders/1DriveUpd")) {
+                    val ivd = """[[["gd_new",["1DriveUpd"],"02 New Song.mp3","audio/mpeg"]]]"""
+                    val esc = ivd.replace("\"", "\\x22").replace("[", "\\x5b").replace("]", "\\x5d")
+                    val html = """<html><head><title>Drive Update - Google Drive</title></head><body><script>window['_DRIVE_ivd']='$esc';</script></body></html>"""
+                    return CloudHttpResponse(200, url, emptyMap(), html.toByteArray())
+                }
+                return CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+            }
+
+            override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse =
+                CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+
+            override suspend fun probeRange(url: String, headers: Map<String, String>): Int = 206
+        }
+        val libraryStore = LibraryStore(
+            directory = stateDir,
+            appFolderDir = docsDir,
+            reader = stubReader,
+            artwork = ArtworkCache(File(stateDir, "art")),
+            context = null,
+            cloudHttpClient = fakeHttp,
+            youTubeClient = YouTubeClient(fakeHttp),
+            bilibiliClient = BilibiliClient(fakeHttp),
+            googleDriveClient = GoogleDriveClient(fakeHttp),
+        )
+
+        val slowGate = CompletableDeferred<Unit>()
+        val slowStarted = CompletableDeferred<Unit>()
+        var blockDownloads = false
+        val resolver = FakeCloudStreamResolver { track, _, _ ->
+            ResolvedStream(url = "https://cdn.example/${track.remoteTrackId}.m4a", mimeType = "audio/mp4", contentLength = 500L)
+        }
+        val downloader = object : CloudStreamDownloader {
+            override suspend fun download(url: String, headers: Map<String, String>, output: OutputStream) {
+                download(url, headers, 500L, output, null)
+            }
+
+            override suspend fun download(
+                url: String,
+                headers: Map<String, String>,
+                contentLength: Long?,
+                output: OutputStream,
+                onBytesProgress: ((ByteTransferProgress) -> Unit)?,
+            ) {
+                if (blockDownloads) {
+                    slowStarted.complete(Unit)
+                    slowGate.await()
+                }
+                onBytesProgress?.invoke(ByteTransferProgress(500L, 500L, 4096.0))
+                output.write(ByteArray(500) { 1 })
+            }
+        }
+        val exporter = CloudExporter(context = null, cloudResolver = resolver, downloader = downloader)
+        val manager = CloudDownloadManager(libraryStore = libraryStore, cloudExporter = exporter)
+
+        suspend fun awaitTerminal(jobId: String): CloudDownloadJob = withTimeout(5_000L) {
+            while (true) {
+                val job = manager.job(jobId)
+                if (job != null && !job.isActive) return@withTimeout job
+                delay(15L)
+            }
+            error("unreachable")
+        }
+
+        // 1. Playlist export into APP_FOLDER adds tracked subfolder without duplicating roots
+        val exportJobId = manager.startPlaylistExport(
+            tracks = listOf(cloudTrack("1", "Track One", remoteId = "gd_old", source = CloudSource.GOOGLE_DRIVE)),
+            root = cloudRoot().copy(
+                kind = RootKind.CLOUD_GOOGLE_DRIVE,
+                sourceUrl = "https://drive.google.com/drive/folders/1DriveUpd",
+                remoteId = "1DriveUpd",
+            ),
+            parentDir = docsDir,
+            folderName = "Drive Mix",
+            addToLibrary = true,
+        )
+        val finishedExport = awaitTerminal(exportJobId)
+        assertEquals(CloudDownloadStatus.COMPLETED, finishedExport.status)
+        assertTrue(finishedExport.libraryUpdated)
+        assertEquals(1, finishedExport.exportSummary?.savedCount)
+        assertNotNull(libraryStore.cloudTracking(LibraryRoot.APP_FOLDER_ID, "Drive Mix"))
+
+        // 2. Folder update on APP_FOLDER tracked subfolder fetches missing remote track and updates library
+        val appRoot = libraryStore.state.value.roots.first { it.id == LibraryRoot.APP_FOLDER_ID }
+        val updateJobId = manager.startFolderUpdate(root = appRoot, subfolderPath = "Drive Mix")
+        val finishedUpdate = awaitTerminal(updateJobId)
+        assertEquals(CloudDownloadStatus.COMPLETED, finishedUpdate.status)
+        assertEquals(1, finishedUpdate.updateSummary?.addedCount)
+        assertTrue(finishedUpdate.libraryUpdated)
+
+        // 3. Single track export inside indexed docsDir completes and marks libraryUpdated
+        val singleJobId = manager.startTrackExport(
+            track = cloudTrack("s1", "Single Hit", remoteId = "s_1"),
+            root = cloudRoot(),
+            targetDir = docsDir,
+        )
+        val finishedSingle = awaitTerminal(singleJobId)
+        assertEquals(CloudDownloadStatus.COMPLETED, finishedSingle.status)
+        assertEquals("Single Hit.m4a", finishedSingle.savedFileName)
+        assertTrue(finishedSingle.libraryUpdated)
+
+        // 4. Folder update with missing treeUri fails with locationUnavailable = true
+        val unavailJobId = manager.startFolderUpdate(
+            root = LibraryRoot(
+                id = "missing-picked",
+                name = "Missing",
+                kind = RootKind.PICKED,
+                treeUri = null,
+                sourceUrl = "https://drive.google.com/drive/folders/1DriveUpd",
+            ),
+        )
+        val unavailJob = manager.job(unavailJobId)!!
+        assertEquals(CloudDownloadStatus.FAILED, unavailJob.status)
+        assertTrue(unavailJob.locationUnavailable)
+
+        // 5. Cancel active download sets CANCELLED; dismiss / clearFinished clean up job list
+        blockDownloads = true
+        val cancelledJobId = manager.startTrackExport(
+            track = cloudTrack("s2", "Slow Song", remoteId = "s_2"),
+            root = cloudRoot(),
+            targetDir = docsDir,
+        )
+        slowStarted.await()
+        manager.cancel(cancelledJobId)
+        val cancelledJob = awaitTerminal(cancelledJobId)
+        assertEquals(CloudDownloadStatus.CANCELLED, cancelledJob.status)
+        slowGate.complete(Unit)
+
+        manager.dismiss(singleJobId)
+        assertNull(manager.job(singleJobId))
+        manager.clearFinished()
+        assertTrue(manager.jobs.value.isEmpty())
     }
 }

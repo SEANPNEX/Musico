@@ -138,6 +138,9 @@ final class SheetEnvironmentTests: XCTestCase {
         try await present(AddCloudFolderSheet(), over: false, attachEmptyHostEnvironment: true)
         try await present(SaveCloudPlaylistSheet(root: cloudRoot), over: false, attachEmptyHostEnvironment: true)
         try await present(UpdateTrackedFolderSheet(root: cloudRoot), over: false, attachEmptyHostEnvironment: true)
+        try await present(UpdateTrackedFolderSheet(root: cloudRoot, subfolderPath: "Sub", subfolderName: "Sub"), over: false, attachEmptyHostEnvironment: true)
+        try await present(EditCloudTrackingSheet(root: cloudRoot), over: false, attachEmptyHostEnvironment: true)
+        try await present(EditCloudTrackingSheet(root: cloudRoot, path: "Sub", folderName: "Sub"), over: false, attachEmptyHostEnvironment: true)
         try await present(DownloadsListView(), over: false, attachEmptyHostEnvironment: true)
         try await present(AddSongsToPlaylistSheet(playlistID: UUID()), over: false, attachEmptyHostEnvironment: true)
         try await present(
@@ -246,6 +249,8 @@ final class SheetEnvironmentTests: XCTestCase {
             PlayerBar(sidePanel: .constant(.queue), isQueueMainActive: true, onOpen: {})
             QueuesView(embeddedInInspector: true, onDone: {})
             FullPlayerView(onClose: {})
+            MarqueeText(text: "A Very Long Queue Name That Should Scroll Cleanly Across Narrow Screens", font: .footnote)
+                .frame(width: 140)
         }
         .onAppear { rendered.fulfill() }
         .modifier(NewPlaylistAlert())

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Globalization;
 using System.Net.Http;
 using MusicoWindows.Cloud;
@@ -5,6 +6,14 @@ using MusicoWindows.Core;
 using MusicoWindows.Models;
 
 namespace MusicoWindows.Stores;
+
+public sealed record CloudSyncProgress(
+    Guid RootId,
+    int FoldersDone,
+    int FoldersTotal,
+    int TracksDiscovered,
+    bool IsCompleted,
+    string? CurrentFolderPath = null);
 
 /// <summary>
 /// The music library: folder roots, the track index, albums, artists, playlists, and favourites.
@@ -42,6 +51,18 @@ public sealed class LibraryStore : ObservableStore
     private readonly GoogleDriveClient _googleDrive;
     private readonly HttpMessageHandler? _artworkHandler;
     private readonly CloudAudioCache? _cloudCache;
+
+    private sealed class ActiveCloudSync
+    {
+        public CancellationTokenSource Cts { get; } = new();
+        public GoogleDriveTraversalHandle? Handle { get; set; }
+        public Task Task { get; set; } = Task.CompletedTask;
+    }
+
+    private readonly object _cloudSyncLock = new();
+    private readonly Dictionary<Guid, ActiveCloudSync> _activeCloudSyncs = new();
+    private readonly Dictionary<Guid, CloudSyncProgress> _cloudSyncProgress = new();
+    private readonly Dictionary<Guid, HashSet<string>> _knownCloudSubfolders = new();
 
     private readonly Dictionary<Guid, string> _rootPaths = new();
     private Dictionary<string, Track> _byId = new();
@@ -98,7 +119,17 @@ public sealed class LibraryStore : ObservableStore
 
         if (!_appFolderRemoved)
         {
-            loadedRoots.Insert(0, CreateAppFolderRoot() with { ExcludedPaths = savedAppRoot?.ExcludedPaths });
+            loadedRoots.Insert(0, CreateAppFolderRoot() with
+            {
+                SourceUrl = savedAppRoot?.SourceUrl,
+                RemoteId = savedAppRoot?.RemoteId,
+                Cookie = savedAppRoot?.Cookie,
+                ProxyUrl = savedAppRoot?.ProxyUrl,
+                LastSyncedUtc = savedAppRoot?.LastSyncedUtc,
+                ExcludedPaths = savedAppRoot?.ExcludedPaths,
+                LinkedCloudKind = savedAppRoot?.LinkedCloudKind,
+                TrackedSubfolders = savedAppRoot?.TrackedSubfolders
+            });
             _rootPaths[LibraryRoot.AppFolderId] = _musicDirectory;
         }
 
@@ -143,6 +174,7 @@ public sealed class LibraryStore : ObservableStore
     public bool AppFolderRemoved { get => _appFolderRemoved; private set => SetProperty(ref _appFolderRemoved, value); }
     public ArtworkCache Artwork { get; }
     public Action<ISet<string>>? OnTracksRemoved { get; set; }
+    public Action<IReadOnlyDictionary<string, string>>? OnTracksMigrated { get; set; }
     public Action<string, IReadOnlyList<string>>? OnFolderAdded { get; set; }
     public event Action<Track>? TrackUpdated;
 
@@ -236,6 +268,33 @@ public sealed class LibraryStore : ObservableStore
         return false;
     }
 
+    private static bool IsStrictSubdirectory(string parentNormalized, string childNormalized)
+    {
+        string prefix = Path.EndsInDirectorySeparator(parentNormalized)
+            ? parentNormalized
+            : parentNormalized + Path.DirectorySeparatorChar;
+        return childNormalized.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static (string Key, CloudTrackingInfo Value)? FindTrackedSubfolderEntry(
+        Dictionary<string, CloudTrackingInfo>? map,
+        string normalizedRelativePath)
+    {
+        if (map is null || map.Count == 0 || string.IsNullOrEmpty(normalizedRelativePath)) return null;
+        if (map.TryGetValue(normalizedRelativePath, out var exact))
+        {
+            return (normalizedRelativePath, exact);
+        }
+        foreach (var kvp in map)
+        {
+            if (string.Equals(LibraryRoot.NormalizeFolderPath(kvp.Key), normalizedRelativePath, StringComparison.OrdinalIgnoreCase))
+            {
+                return (kvp.Key, kvp.Value);
+            }
+        }
+        return null;
+    }
+
     public async Task AddRootAsync(string path, LibraryRoot? cloudSourceRoot = null)
     {
         if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
@@ -244,11 +303,21 @@ public sealed class LibraryStore : ObservableStore
         }
 
         string normalized = NormalizeDirPath(path);
-        if (_rootPaths.Values.Any(existing => string.Equals(NormalizeDirPath(existing), normalized, StringComparison.OrdinalIgnoreCase)))
+        foreach (var existingRoot in _roots)
         {
-            throw new InvalidOperationException("That folder is already in your library.");
+            if (!existingRoot.IsLocal || !_rootPaths.TryGetValue(existingRoot.Id, out string? existingPath)) continue;
+            string normExisting = NormalizeDirPath(existingPath);
+            if (string.Equals(normExisting, normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("That folder is already in your library.");
+            }
+            if (IsStrictSubdirectory(normExisting, normalized))
+            {
+                throw new InvalidOperationException("That folder is already inside an indexed library folder.");
+            }
         }
 
+        Guid newRootId = Guid.NewGuid();
         string name = new DirectoryInfo(normalized).Name;
         string? sourceUrl = null;
         string? remoteId = null;
@@ -273,18 +342,101 @@ public sealed class LibraryStore : ObservableStore
             sourceUrl = manifest.SourceUrl.Trim();
             remoteId = manifest.RemoteId;
             lastSyncedUtc = manifest.LastSyncedUtc;
-            if (Enum.TryParse<RootKind>(manifest.CloudKind, ignoreCase: true, out var parsedKind) && parsedKind.IsCloud())
+            linkedCloudKind = ResolveCloudKindFromManifest(manifest, sourceUrl);
+        }
+
+        var migratedTrackedSubfolders = new Dictionary<string, CloudTrackingInfo>(StringComparer.Ordinal);
+        var migratedExcluded = new List<string>();
+        var idMigrations = new Dictionary<string, string>(StringComparer.Ordinal);
+        var childIdsToRemove = new HashSet<Guid>();
+
+        foreach (var existingRoot in _roots)
+        {
+            if (!existingRoot.IsLocal || !_rootPaths.TryGetValue(existingRoot.Id, out string? existingPath)) continue;
+            if (existingRoot.Kind == RootKind.AppFolder && !_appFolderRemovable) continue;
+
+            string normChild = NormalizeDirPath(existingPath);
+            if (!IsStrictSubdirectory(normalized, normChild)) continue;
+
+            childIdsToRemove.Add(existingRoot.Id);
+            string relPrefix = LibraryRoot.NormalizeFolderPath(Path.GetRelativePath(normalized, normChild));
+
+            if (existingRoot.IsCloudTrackedLocal && existingRoot.EffectiveCloudKind is { } childCloudKind)
             {
-                linkedCloudKind = parsedKind;
+                migratedTrackedSubfolders[relPrefix] = new CloudTrackingInfo(
+                    existingRoot.SourceUrl!.Trim(),
+                    existingRoot.RemoteId,
+                    childCloudKind,
+                    existingRoot.Cookie,
+                    existingRoot.ProxyUrl,
+                    existingRoot.LastSyncedUtc);
             }
-            else
+
+            if (existingRoot.TrackedSubfolders is { Count: > 0 })
             {
-                try { linkedCloudKind = CloudUrlClassifier.Classify(sourceUrl); } catch { /* ignore */ }
+                foreach (var kvp in existingRoot.TrackedSubfolders)
+                {
+                    string normSub = LibraryRoot.NormalizeFolderPath(kvp.Key);
+                    string combined = string.IsNullOrEmpty(normSub) ? relPrefix : $"{relPrefix}/{normSub}";
+                    migratedTrackedSubfolders[combined] = kvp.Value;
+                }
+            }
+
+            if (existingRoot.ExcludedPaths is { Count: > 0 })
+            {
+                foreach (string ex in existingRoot.ExcludedPaths)
+                {
+                    string normEx = LibraryRoot.NormalizeFolderPath(ex);
+                    if (normEx.Length > 0)
+                    {
+                        migratedExcluded.Add($"{relPrefix}/{normEx}");
+                    }
+                }
+            }
+
+            if (existingRoot.Kind == RootKind.AppFolder)
+            {
+                AppFolderRemoved = true;
             }
         }
 
+        if (childIdsToRemove.Count > 0)
+        {
+            var remappedTracks = new List<Track>(_tracks.Count);
+            foreach (var t in _tracks)
+            {
+                if (childIdsToRemove.Contains(t.RootId) &&
+                    _rootPaths.TryGetValue(t.RootId, out string? childPath))
+                {
+                    string relPrefix = LibraryRoot.NormalizeFolderPath(Path.GetRelativePath(normalized, NormalizeDirPath(childPath)));
+                    string newRel = string.IsNullOrEmpty(relPrefix) ? t.RelativePath : $"{relPrefix}/{t.RelativePath}";
+                    string newId = Track.MakeId(newRootId, newRel);
+                    if (!string.Equals(t.Id, newId, StringComparison.Ordinal))
+                    {
+                        idMigrations[t.Id] = newId;
+                    }
+                    remappedTracks.Add(t with { Id = newId, RootId = newRootId, RelativePath = newRel });
+                }
+                else
+                {
+                    remappedTracks.Add(t);
+                }
+            }
+            _tracks = remappedTracks;
+
+            foreach (var childId in childIdsToRemove)
+            {
+                _rootPaths.Remove(childId);
+                RemoveFolderPrefsForRoot(childId);
+            }
+
+            _roots = _roots.Where(r => !childIdsToRemove.Contains(r.Id)).ToList();
+            MigrateTrackReferences(idMigrations);
+            RebuildIndex();
+        }
+
         var root = new LibraryRoot(
-            Id: Guid.NewGuid(),
+            Id: newRootId,
             Name: name,
             Kind: RootKind.Picked,
             Path: normalized,
@@ -293,7 +445,9 @@ public sealed class LibraryStore : ObservableStore
             Cookie: cookie,
             ProxyUrl: proxyUrl,
             LastSyncedUtc: lastSyncedUtc,
-            LinkedCloudKind: linkedCloudKind);
+            ExcludedPaths: migratedExcluded.Count > 0 ? migratedExcluded : null,
+            LinkedCloudKind: linkedCloudKind,
+            TrackedSubfolders: migratedTrackedSubfolders.Count > 0 ? migratedTrackedSubfolders : null);
         _roots = [.. _roots, root];
         _rootPaths[root.Id] = normalized;
         OnPropertyChanged(nameof(Roots));
@@ -301,6 +455,105 @@ public sealed class LibraryStore : ObservableStore
         await RescanAsync();
         var addedIds = GetTracksUnder(root.Id, string.Empty).Select(t => t.Id).ToList();
         OnFolderAdded?.Invoke(root.Name, addedIds);
+    }
+
+    public async Task RegisterExportedCloudFolderAsync(string destinationFolder, LibraryRoot cloudRoot)
+    {
+        if (string.IsNullOrWhiteSpace(destinationFolder)) return;
+        string target = NormalizeDirPath(destinationFolder);
+
+        CloudTrackingInfo? tracking = null;
+        if (cloudRoot.EffectiveCloudKind is { } cloudKind && !string.IsNullOrWhiteSpace(cloudRoot.SourceUrl))
+        {
+            tracking = new CloudTrackingInfo(
+                cloudRoot.SourceUrl.Trim(),
+                cloudRoot.RemoteId,
+                cloudKind,
+                cloudRoot.Cookie,
+                cloudRoot.ProxyUrl,
+                DateTimeOffset.UtcNow);
+        }
+
+        for (int i = 0; i < _roots.Count; i++)
+        {
+            var root = _roots[i];
+            if (!root.IsLocal || !_rootPaths.TryGetValue(root.Id, out string? rootPath)) continue;
+            string normRoot = NormalizeDirPath(rootPath);
+
+            if (string.Equals(target, normRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                if (tracking is not null)
+                {
+                    var updated = new List<LibraryRoot>(_roots);
+                    updated[i] = root with
+                    {
+                        SourceUrl = tracking.SourceUrl,
+                        RemoteId = tracking.RemoteId ?? root.RemoteId,
+                        Cookie = tracking.Cookie ?? root.Cookie,
+                        ProxyUrl = tracking.ProxyUrl ?? root.ProxyUrl,
+                        LastSyncedUtc = tracking.LastSynced,
+                        LinkedCloudKind = tracking.CloudKind
+                    };
+                    _roots = updated;
+                    OnPropertyChanged(nameof(Roots));
+                    SaveLibrary();
+                }
+
+                await RescanAsync();
+                NotifyFolderAddedByPath(target);
+                return;
+            }
+
+            if (IsStrictSubdirectory(normRoot, target))
+            {
+                string relPath = LibraryRoot.NormalizeFolderPath(Path.GetRelativePath(normRoot, target));
+                var updatedRoot = root;
+
+                if (root.ExcludedPaths is { Count: > 0 } && root.IsExcluded(relPath))
+                {
+                    var nextExcluded = root.ExcludedPaths
+                        .Select(LibraryRoot.NormalizeFolderPath)
+                        .Where(ex => ex.Length > 0 &&
+                                     !string.Equals(ex, relPath, StringComparison.Ordinal) &&
+                                     !relPath.StartsWith(ex + "/", StringComparison.Ordinal) &&
+                                     !ex.StartsWith(relPath + "/", StringComparison.Ordinal))
+                        .ToList();
+                    updatedRoot = updatedRoot with
+                    {
+                        ExcludedPaths = nextExcluded.Count > 0 ? nextExcluded : null
+                    };
+                }
+
+                if (tracking is not null && relPath.Length > 0)
+                {
+                    var nextTracked = updatedRoot.TrackedSubfolders is not null
+                        ? new Dictionary<string, CloudTrackingInfo>(updatedRoot.TrackedSubfolders, StringComparer.Ordinal)
+                        : new Dictionary<string, CloudTrackingInfo>(StringComparer.Ordinal);
+                    if (FindTrackedSubfolderEntry(nextTracked, relPath) is { } existing &&
+                        !string.Equals(existing.Key, relPath, StringComparison.Ordinal))
+                    {
+                        nextTracked.Remove(existing.Key);
+                    }
+                    nextTracked[relPath] = tracking;
+                    updatedRoot = updatedRoot with { TrackedSubfolders = nextTracked };
+                }
+
+                if (!ReferenceEquals(updatedRoot, root))
+                {
+                    var updated = new List<LibraryRoot>(_roots);
+                    updated[i] = updatedRoot;
+                    _roots = updated;
+                    OnPropertyChanged(nameof(Roots));
+                    SaveLibrary();
+                }
+
+                await RescanAsync();
+                NotifyFolderAddedByPath(target);
+                return;
+            }
+        }
+
+        await AddRootAsync(target, cloudRoot);
     }
 
     public void AttachCloudTracking(string folderPath, LibraryRoot cloudSourceRoot)
@@ -330,16 +583,235 @@ public sealed class LibraryStore : ObservableStore
         SaveLibrary();
     }
 
-    public void MarkRootCloudSynced(Guid rootId)
+    public void MarkRootCloudSynced(Guid rootId) => MarkCloudSynced(rootId, string.Empty);
+
+    public void MarkCloudSynced(Guid rootId, string relativePath)
     {
         int idx = _roots.FindIndex(r => r.Id == rootId);
         if (idx < 0) return;
 
+        string norm = LibraryRoot.NormalizeFolderPath(relativePath);
         var updated = new List<LibraryRoot>(_roots);
-        updated[idx] = updated[idx] with { LastSyncedUtc = DateTimeOffset.UtcNow };
+        var current = updated[idx];
+
+        if (norm.Length == 0)
+        {
+            updated[idx] = current with { LastSyncedUtc = DateTimeOffset.UtcNow };
+        }
+        else if (FindTrackedSubfolderEntry(current.TrackedSubfolders, norm) is { } entry)
+        {
+            var nextTracked = new Dictionary<string, CloudTrackingInfo>(current.TrackedSubfolders!, StringComparer.Ordinal);
+            nextTracked[entry.Key] = new CloudTrackingInfo(
+                entry.Value.SourceUrl,
+                entry.Value.RemoteId,
+                entry.Value.CloudKind,
+                entry.Value.Cookie,
+                entry.Value.ProxyUrl,
+                DateTimeOffset.UtcNow);
+            updated[idx] = current with { TrackedSubfolders = nextTracked };
+        }
+        else
+        {
+            return;
+        }
+
         _roots = updated;
         OnPropertyChanged(nameof(Roots));
         SaveLibrary();
+    }
+
+    public CloudTrackingInfo? GetCloudTracking(Guid rootId, string relativePath)
+    {
+        var root = GetRoot(rootId);
+        if (root is null) return null;
+
+        string norm = LibraryRoot.NormalizeFolderPath(relativePath);
+        if (norm.Length == 0)
+        {
+            if (root.EffectiveCloudKind is { } kind && !string.IsNullOrWhiteSpace(root.SourceUrl))
+            {
+                return new CloudTrackingInfo(
+                    root.SourceUrl!,
+                    root.RemoteId,
+                    kind,
+                    root.Cookie,
+                    root.ProxyUrl,
+                    root.LastSyncedUtc);
+            }
+            return null;
+        }
+
+        return FindTrackedSubfolderEntry(root.TrackedSubfolders, norm)?.Value;
+    }
+
+    public void UpdateCloudTrackingAddress(
+        Guid rootId,
+        string relativePath,
+        string newSourceUrl,
+        string? cookie,
+        string? proxyUrl)
+    {
+        string extractedUrl = CloudUrlClassifier.ExtractCloudUrl(newSourceUrl);
+        RootKind newKind = CloudUrlClassifier.Classify(extractedUrl);
+        string? normalizedProxy = YouTubeClient.NormalizeProxyUrl(proxyUrl);
+        string? trimmedCookie = string.IsNullOrWhiteSpace(cookie) ? null : cookie.Trim();
+        string? resolvedRemoteId = TryExtractRemoteId(extractedUrl, newKind);
+
+        int idx = _roots.FindIndex(r => r.Id == rootId);
+        if (idx < 0) return;
+
+        var current = _roots[idx];
+        string norm = LibraryRoot.NormalizeFolderPath(relativePath);
+        var updated = new List<LibraryRoot>(_roots);
+
+        if (norm.Length == 0)
+        {
+            updated[idx] = current.IsCloud
+                ? current with
+                {
+                    Kind = newKind,
+                    Path = extractedUrl,
+                    SourceUrl = extractedUrl,
+                    RemoteId = resolvedRemoteId ?? current.RemoteId,
+                    Cookie = trimmedCookie,
+                    ProxyUrl = normalizedProxy
+                }
+                : current with
+                {
+                    SourceUrl = extractedUrl,
+                    RemoteId = resolvedRemoteId ?? current.RemoteId,
+                    LinkedCloudKind = newKind,
+                    Cookie = trimmedCookie,
+                    ProxyUrl = normalizedProxy
+                };
+
+            if (current.IsLocal && _rootPaths.TryGetValue(rootId, out string? rootDiskPath) && Directory.Exists(rootDiskPath))
+            {
+                UpdateManifestOnDisk(rootDiskPath, extractedUrl, resolvedRemoteId ?? current.RemoteId, newKind);
+            }
+        }
+        else
+        {
+            var nextTracked = current.TrackedSubfolders is not null
+                ? new Dictionary<string, CloudTrackingInfo>(current.TrackedSubfolders, StringComparer.Ordinal)
+                : new Dictionary<string, CloudTrackingInfo>(StringComparer.Ordinal);
+            var existing = FindTrackedSubfolderEntry(nextTracked, norm);
+            string key = existing?.Key ?? norm;
+
+            nextTracked[key] = new CloudTrackingInfo(
+                sourceUrl: extractedUrl,
+                remoteId: resolvedRemoteId ?? existing?.Value.RemoteId,
+                cloudKind: newKind,
+                cookie: trimmedCookie,
+                proxyUrl: normalizedProxy,
+                lastSynced: existing?.Value.LastSynced);
+
+            updated[idx] = current with { TrackedSubfolders = nextTracked };
+
+            if (current.IsLocal && _rootPaths.TryGetValue(rootId, out string? rootDiskPath))
+            {
+                string subDiskPath = FolderScanner.CombinePath(rootDiskPath, norm);
+                if (Directory.Exists(subDiskPath))
+                {
+                    UpdateManifestOnDisk(subDiskPath, extractedUrl, resolvedRemoteId ?? existing?.Value.RemoteId, newKind);
+                }
+            }
+        }
+
+        _roots = updated;
+        OnPropertyChanged(nameof(Roots));
+        SaveLibrary();
+    }
+
+    private static void UpdateManifestOnDisk(string folderPath, string sourceUrl, string? remoteId, RootKind cloudKind)
+    {
+        var existing = CloudExporter.LoadManifest(folderPath);
+        var manifest = new CloudFolderManifest(
+            SourceUrl: sourceUrl,
+            RemoteId: remoteId ?? existing?.RemoteId,
+            CloudKind: cloudKind.ToString(),
+            LastSyncedUtc: existing?.LastSyncedUtc ?? DateTimeOffset.UtcNow,
+            Tracks: existing?.Tracks is not null
+                ? new Dictionary<string, string>(existing.Tracks, StringComparer.Ordinal)
+                : new Dictionary<string, string>(StringComparer.Ordinal));
+        CloudExporter.SaveManifest(folderPath, manifest);
+    }
+
+    private static string? TryExtractRemoteId(string url, RootKind kind)
+    {
+        try
+        {
+            return kind switch
+            {
+                RootKind.CloudYouTube => YouTubeClient.ParseInput(url).RemoteId,
+                RootKind.CloudBilibili => BilibiliClient.ParseTarget(url).Id,
+                RootKind.CloudGoogleDrive => GoogleDriveClient.ParseInput(url).Id,
+                _ => null
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private static RootKind? ResolveCloudKindFromManifest(CloudFolderManifest manifest, string sourceUrl)
+    {
+        if (Enum.TryParse<RootKind>(manifest.CloudKind, ignoreCase: true, out var parsedKind) && parsedKind.IsCloud())
+        {
+            return parsedKind;
+        }
+        try
+        {
+            return CloudUrlClassifier.Classify(sourceUrl);
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public CloudSyncProgress? GetCloudSyncProgress(Guid rootId)
+    {
+        lock (_cloudSyncLock)
+        {
+            return _cloudSyncProgress.TryGetValue(rootId, out var progress) ? progress : null;
+        }
+    }
+
+    public void PrioritizeCloudFolder(Guid rootId, string path)
+    {
+        GoogleDriveTraversalHandle? handle;
+        lock (_cloudSyncLock)
+        {
+            _activeCloudSyncs.TryGetValue(rootId, out var active);
+            handle = active?.Handle;
+        }
+        handle?.PrioritizeFolder(path);
+    }
+
+    public Task WaitForCloudSyncAsync(Guid rootId)
+    {
+        lock (_cloudSyncLock)
+        {
+            return _activeCloudSyncs.TryGetValue(rootId, out var active)
+                ? active.Task
+                : Task.CompletedTask;
+        }
+    }
+
+    private void CancelCloudSync(Guid rootId)
+    {
+        ActiveCloudSync? active;
+        lock (_cloudSyncLock)
+        {
+            if (_activeCloudSyncs.Remove(rootId, out active))
+            {
+                active.Cts.Cancel();
+            }
+            _cloudSyncProgress.Remove(rootId);
+            _knownCloudSubfolders.Remove(rootId);
+        }
     }
 
     public async Task<LibraryRoot> AddCloudRootAsync(
@@ -353,11 +825,80 @@ public sealed class LibraryStore : ObservableStore
         string? normalizedProxy = YouTubeClient.NormalizeProxyUrl(proxyUrl);
         string? trimmedCookie = string.IsNullOrWhiteSpace(cookie) ? null : cookie.Trim();
 
+        if (kind == RootKind.CloudGoogleDrive)
+        {
+            var session = await _googleDrive
+                .StartProgressiveFolderFetchAsync(extractedUrl, trimmedCookie, normalizedProxy, ct)
+                .ConfigureAwait(false);
+
+            var rootResult = session.RootResult;
+            if (_roots.Any(r => r.Kind == rootResult.Kind &&
+                                string.Equals(r.RemoteId, rootResult.RemoteId, StringComparison.OrdinalIgnoreCase)))
+            {
+                session.Dispose();
+                throw new InvalidOperationException("That cloud playlist is already in your library.");
+            }
+
+            var root = new LibraryRoot(
+                Id: Guid.NewGuid(),
+                Name: rootResult.Title,
+                Kind: rootResult.Kind,
+                Path: rootResult.SourceUrl,
+                SourceUrl: rootResult.SourceUrl,
+                RemoteId: rootResult.RemoteId,
+                Cookie: trimmedCookie,
+                ProxyUrl: normalizedProxy,
+                LastSyncedUtc: DateTimeOffset.UtcNow);
+
+            var initialTracks = await BuildCloudTracksAsync(root, rootResult, Array.Empty<Track>(), ct).ConfigureAwait(false);
+
+            lock (_cloudSyncLock)
+            {
+                if (session.DiscoveredSubfolderPaths.Count > 0)
+                {
+                    var known = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (string sub in session.DiscoveredSubfolderPaths)
+                    {
+                        string normSub = LibraryRoot.NormalizeFolderPath(sub);
+                        if (normSub.Length > 0) known.Add(normSub);
+                    }
+                    _knownCloudSubfolders[root.Id] = known;
+                }
+
+                _cloudSyncProgress[root.Id] = new CloudSyncProgress(
+                    RootId: root.Id,
+                    FoldersDone: 1,
+                    FoldersTotal: 1 + session.DiscoveredSubfolderPaths.Count,
+                    TracksDiscovered: initialTracks.Count,
+                    IsCompleted: !session.HasMoreSubfolders);
+            }
+
+            _roots = [.. _roots, root];
+            OnPropertyChanged(nameof(Roots));
+            Publish([.. _tracks, .. initialTracks]);
+            OnFolderAdded?.Invoke(root.Name, initialTracks.Select(t => t.Id).ToList());
+
+            if (session.HasMoreSubfolders)
+            {
+                var active = new ActiveCloudSync { Handle = session.TraversalHandle };
+                lock (_cloudSyncLock)
+                {
+                    _activeCloudSyncs[root.Id] = active;
+                }
+                active.Task = Task.Run(() => RunDriveBackgroundSyncAsync(root, session, active, initialTracks), CancellationToken.None);
+            }
+            else
+            {
+                session.Dispose();
+            }
+
+            return root;
+        }
+
         CloudPlaylistResult result = kind switch
         {
             RootKind.CloudYouTube => await _youtube.FetchPlaylistAsync(extractedUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false),
             RootKind.CloudBilibili => await _bilibili.FetchPlaylistAsync(extractedUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false),
-            RootKind.CloudGoogleDrive => await _googleDrive.FetchPlaylistAsync(extractedUrl, trimmedCookie, normalizedProxy, ct).ConfigureAwait(false),
             _ => throw new ArgumentException($"Unsupported cloud source: {kind}")
         };
 
@@ -367,7 +908,7 @@ public sealed class LibraryStore : ObservableStore
             throw new InvalidOperationException("That cloud playlist is already in your library.");
         }
 
-        var root = new LibraryRoot(
+        var nonDriveRoot = new LibraryRoot(
             Id: Guid.NewGuid(),
             Name: result.Title,
             Kind: result.Kind,
@@ -378,13 +919,185 @@ public sealed class LibraryStore : ObservableStore
             ProxyUrl: normalizedProxy,
             LastSyncedUtc: DateTimeOffset.UtcNow);
 
-        var newTracks = await BuildCloudTracksAsync(root, result, Array.Empty<Track>(), ct).ConfigureAwait(false);
+        var newTracks = await BuildCloudTracksAsync(nonDriveRoot, result, Array.Empty<Track>(), ct).ConfigureAwait(false);
 
-        _roots = [.. _roots, root];
+        _roots = [.. _roots, nonDriveRoot];
         OnPropertyChanged(nameof(Roots));
         Publish([.. _tracks, .. newTracks]);
-        OnFolderAdded?.Invoke(root.Name, newTracks.Select(t => t.Id).ToList());
-        return root;
+        OnFolderAdded?.Invoke(nonDriveRoot.Name, newTracks.Select(t => t.Id).ToList());
+        return nonDriveRoot;
+    }
+
+    private async Task RunDriveBackgroundSyncAsync(
+        LibraryRoot root,
+        GoogleDriveInitialSession session,
+        ActiveCloudSync active,
+        List<Track> initialTracks)
+    {
+        var ct = active.Cts.Token;
+        var pendingNewTracks = new List<Track>();
+        var syncTimer = Stopwatch.StartNew();
+        long lastUiNotifyMs = 0;
+        int discoveredCount = initialTracks.Count;
+
+        void FlushPendingTracksLocked(bool force)
+        {
+            if (!_roots.Any(r => r.Id == root.Id))
+            {
+                pendingNewTracks.Clear();
+                return;
+            }
+
+            if (pendingNewTracks.Count > 0)
+            {
+                var existingById = new HashSet<string>(_tracks.Select(t => t.Id), StringComparer.Ordinal);
+                var toAdd = pendingNewTracks.Where(t => existingById.Add(t.Id)).ToList();
+                pendingNewTracks.Clear();
+                if (toAdd.Count > 0)
+                {
+                    Publish([.. _tracks, .. toAdd]);
+                }
+                else if (force)
+                {
+                    OnPropertyChanged(nameof(Tracks));
+                }
+            }
+            else if (force)
+            {
+                OnPropertyChanged(nameof(Tracks));
+            }
+        }
+
+        try
+        {
+            var finalResult = await session.ContinueRemainingAsync(batch =>
+            {
+                if (ct.IsCancellationRequested) return;
+                if (!_roots.Any(r => r.Id == root.Id)) return;
+
+                var batchTracks = BuildCloudTracksSync(root, batch.Items, root.Name);
+                bool shouldNotify = false;
+                lock (_cloudSyncLock)
+                {
+                    if (!_roots.Any(r => r.Id == root.Id)) return;
+
+                    if (batch.DiscoveredSubfolderPaths.Count > 0)
+                    {
+                        if (!_knownCloudSubfolders.TryGetValue(root.Id, out var known))
+                        {
+                            known = new HashSet<string>(StringComparer.Ordinal);
+                            _knownCloudSubfolders[root.Id] = known;
+                        }
+                        foreach (string sub in batch.DiscoveredSubfolderPaths)
+                        {
+                            string normSub = LibraryRoot.NormalizeFolderPath(sub);
+                            if (normSub.Length > 0) known.Add(normSub);
+                        }
+                    }
+
+                    pendingNewTracks.AddRange(batchTracks);
+                    discoveredCount += batchTracks.Count;
+
+                    _cloudSyncProgress[root.Id] = new CloudSyncProgress(
+                        RootId: root.Id,
+                        FoldersDone: batch.FoldersVisited,
+                        FoldersTotal: Math.Max(batch.KnownFoldersTotal, batch.FoldersVisited),
+                        TracksDiscovered: discoveredCount,
+                        IsCompleted: batch.IsComplete,
+                        CurrentFolderPath: batch.FolderRelativePath);
+
+                    long nowMs = syncTimer.ElapsedMilliseconds;
+                    if (batch.IsComplete || pendingNewTracks.Count >= 100 || (nowMs - lastUiNotifyMs) >= 300)
+                    {
+                        lastUiNotifyMs = nowMs;
+                        shouldNotify = true;
+                        FlushPendingTracksLocked(force: batch.IsComplete);
+                    }
+                }
+
+                if (shouldNotify)
+                {
+                    OnPropertyChanged(nameof(CloudSyncProgress));
+                }
+            }, ct).ConfigureAwait(false);
+
+            lock (_cloudSyncLock)
+            {
+                if (_roots.Any(r => r.Id == root.Id))
+                {
+                    FlushPendingTracksLocked(force: true);
+                    _cloudSyncProgress[root.Id] = new CloudSyncProgress(
+                        RootId: root.Id,
+                        FoldersDone: finalResult.Items.Count > 0 ? Math.Max(1, _cloudSyncProgress.GetValueOrDefault(root.Id)?.FoldersDone ?? 1) : 1,
+                        FoldersTotal: Math.Max(1, _cloudSyncProgress.GetValueOrDefault(root.Id)?.FoldersTotal ?? 1),
+                        TracksDiscovered: _tracks.Count(t => t.RootId == root.Id),
+                        IsCompleted: true);
+                    UpdateCloudRootSynced(root.Id, finalResult.Title);
+                    SaveLibrary();
+                }
+            }
+            OnPropertyChanged(nameof(CloudSyncProgress));
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancelled via RemoveRoot or shutdown.
+        }
+        catch
+        {
+            lock (_cloudSyncLock)
+            {
+                FlushPendingTracksLocked(force: true);
+                if (_cloudSyncProgress.TryGetValue(root.Id, out var prev))
+                {
+                    _cloudSyncProgress[root.Id] = prev with { IsCompleted = true };
+                }
+            }
+            OnPropertyChanged(nameof(CloudSyncProgress));
+        }
+        finally
+        {
+            lock (_cloudSyncLock)
+            {
+                if (_activeCloudSyncs.TryGetValue(root.Id, out var current) && ReferenceEquals(current, active))
+                {
+                    _activeCloudSyncs.Remove(root.Id);
+                }
+            }
+            active.Cts.Dispose();
+            session.Dispose();
+        }
+    }
+
+    private List<Track> BuildCloudTracksSync(LibraryRoot root, IReadOnlyList<CloudPlaylistItem> items, string fallbackAlbum)
+    {
+        var now = DateTimeOffset.UtcNow;
+        var list = new List<Track>(items.Count);
+        foreach (var item in items)
+        {
+            string relPath = MakeCloudRelativePath(item);
+            if (root.IsExcluded(relPath)) continue;
+            string trackId = Track.MakeId(root.Id, relPath);
+            list.Add(ApplyMetadataOverride(new Track(
+                Id: trackId,
+                RootId: root.Id,
+                RelativePath: relPath,
+                Title: item.Title,
+                Artist: item.Artist,
+                Album: string.IsNullOrWhiteSpace(item.Album) ? fallbackAlbum : item.Album,
+                AlbumArtist: "Google Drive",
+                TrackNumber: item.TrackNumber,
+                DiscNumber: 1,
+                DurationSeconds: item.DurationSeconds,
+                FileSize: 0,
+                ModifiedUtc: now,
+                HasEmbeddedLyrics: false,
+                DateAddedUtc: now,
+                ArtworkKey: null,
+                CloudSource: CloudSources.GoogleDrive,
+                RemoteTrackId: item.RemoteTrackId,
+                RemoteArtworkUrl: item.ArtworkUrl)));
+        }
+        return list;
     }
 
     public async Task<string> CreateSubfolderAsync(Guid rootId, string parentPath, string folderName)
@@ -474,6 +1187,8 @@ public sealed class LibraryStore : ObservableStore
             if (!_appFolderRemovable) return;
             AppFolderRemoved = true;
         }
+
+        CancelCloudSync(id);
 
         _rootPaths.Remove(id);
         var updatedRoots = new List<LibraryRoot>(_roots);
@@ -636,15 +1351,17 @@ public sealed class LibraryStore : ObservableStore
         var kept = snapshotTracks.Where(t => !_rootPaths.ContainsKey(t.RootId) && !t.IsCloud).ToList();
         var pending = new List<(LibraryRoot Root, string RootPath, ScannedFile File, Track? Old)>();
         var removed = new HashSet<string>();
+        var allIdMigrations = new Dictionary<string, string>(StringComparer.Ordinal);
         bool reread = _rereadAll;
         bool cloudSynced = false;
+        bool trackedSubfoldersChanged = false;
 
         foreach (var root in snapshotRoots)
         {
             if (!_rootPaths.TryGetValue(root.Id, out string? rootPath)) continue;
 
             var existingTracks = snapshotTracks.Where(t => t.RootId == root.Id).ToList();
-            var scanned = await Task.Run(() => FolderScanner.Scan(rootPath));
+            var (scanned, manifestFolders) = await Task.Run(() => FolderScanner.ScanWithManifests(rootPath));
 
             // Treat unreadable folders or picked folders that suddenly list zero files (when they had tracks)
             // as temporarily unreachable so we do not purge playlists.
@@ -652,6 +1369,11 @@ public sealed class LibraryStore : ObservableStore
             {
                 kept.AddRange(existingTracks);
                 continue;
+            }
+
+            if (SyncTrackedSubfoldersFromManifests(root.Id, rootPath, manifestFolders))
+            {
+                trackedSubfoldersChanged = true;
             }
 
             var existingByRel = new Dictionary<string, Track>(StringComparer.Ordinal);
@@ -692,6 +1414,11 @@ public sealed class LibraryStore : ObservableStore
             }
         }
 
+        if (trackedSubfoldersChanged)
+        {
+            OnPropertyChanged(nameof(Roots));
+        }
+
         ScanTotal = pending.Count;
         var now = DateTimeOffset.UtcNow;
 
@@ -720,6 +1447,17 @@ public sealed class LibraryStore : ObservableStore
         // Sync cloud roots; preserve existing cloud tracks on transient network failure.
         foreach (var root in snapshotRoots.Where(r => r.IsCloud))
         {
+            bool activeSyncRunning;
+            lock (_cloudSyncLock)
+            {
+                activeSyncRunning = _activeCloudSyncs.ContainsKey(root.Id);
+            }
+            if (activeSyncRunning)
+            {
+                kept.AddRange(_tracks.Where(t => t.RootId == root.Id));
+                continue;
+            }
+
             var existingTracks = snapshotTracks.Where(t => t.RootId == root.Id).ToList();
             try
             {
@@ -732,13 +1470,19 @@ public sealed class LibraryStore : ObservableStore
                     _ => throw new InvalidOperationException($"Unsupported cloud source: {root.Kind}")
                 };
 
-                var synced = await BuildCloudTracksAsync(root, result, existingTracks, CancellationToken.None).ConfigureAwait(false);
+                var idMigrations = new Dictionary<string, string>(StringComparer.Ordinal);
+                var synced = await BuildCloudTracksAsync(root, result, existingTracks, CancellationToken.None, idMigrations).ConfigureAwait(false);
                 kept.AddRange(synced);
+
+                foreach (var kvp in idMigrations)
+                {
+                    allIdMigrations[kvp.Key] = kvp.Value;
+                }
 
                 var syncedIds = new HashSet<string>(synced.Select(t => t.Id), StringComparer.Ordinal);
                 foreach (var old in existingTracks)
                 {
-                    if (!syncedIds.Contains(old.Id))
+                    if (!syncedIds.Contains(old.Id) && !idMigrations.ContainsKey(old.Id))
                     {
                         removed.Add(old.Id);
                     }
@@ -753,6 +1497,11 @@ public sealed class LibraryStore : ObservableStore
             }
         }
 
+        if (allIdMigrations.Count > 0)
+        {
+            MigrateTrackReferences(allIdMigrations);
+        }
+
         // A root or subfolder removed while scanning must not leave orphan tracks behind.
         var activeRoots = _roots.ToDictionary(r => r.Id);
         var finalTracks = kept
@@ -763,7 +1512,12 @@ public sealed class LibraryStore : ObservableStore
 
         if (reread) _rereadAll = false;
 
-        if (pending.Count == 0 && removed.Count == 0 && !cloudSynced && finalTracks.Count == _tracks.Count)
+        if (pending.Count == 0 &&
+            removed.Count == 0 &&
+            !cloudSynced &&
+            !trackedSubfoldersChanged &&
+            allIdMigrations.Count == 0 &&
+            finalTracks.Count == _tracks.Count)
         {
             if (reread) SaveLibrary();
             return;
@@ -778,6 +1532,169 @@ public sealed class LibraryStore : ObservableStore
                 .Concat(_metadataOverrides.Values.Select(o => o.ArtworkKey))
                 .Where(k => k is not null)!);
         await Task.Run(() => Artwork.Prune(keepKeys));
+    }
+
+    private bool SyncTrackedSubfoldersFromManifests(
+        Guid rootId,
+        string rootPath,
+        IReadOnlyList<string> manifestFolders)
+    {
+        int idx = _roots.FindIndex(r => r.Id == rootId);
+        if (idx < 0) return false;
+        var root = _roots[idx];
+
+        var nextTracked = new Dictionary<string, CloudTrackingInfo>(StringComparer.Ordinal);
+        foreach (string relDir in manifestFolders)
+        {
+            string normRel = LibraryRoot.NormalizeFolderPath(relDir);
+            if (normRel.Length == 0 || root.IsExcluded(normRel)) continue;
+
+            string fullDir = FolderScanner.CombinePath(rootPath, normRel);
+            var manifest = CloudExporter.LoadManifest(fullDir);
+            if (manifest is null) continue;
+
+            string sourceUrl = manifest.SourceUrl.Trim();
+            RootKind? resolvedKind = ResolveCloudKindFromManifest(manifest, sourceUrl);
+            if (resolvedKind is not { } cloudKind) continue;
+
+            var existingEntry = FindTrackedSubfolderEntry(root.TrackedSubfolders, normRel)?.Value;
+            nextTracked[normRel] = new CloudTrackingInfo(
+                sourceUrl: sourceUrl,
+                remoteId: manifest.RemoteId ?? existingEntry?.RemoteId,
+                cloudKind: cloudKind,
+                cookie: existingEntry?.Cookie,
+                proxyUrl: existingEntry?.ProxyUrl,
+                lastSynced: manifest.LastSyncedUtc);
+        }
+
+        var normalizedNext = nextTracked.Count > 0 ? nextTracked : null;
+        if (AreTrackedSubfoldersEqual(root.TrackedSubfolders, normalizedNext))
+        {
+            return false;
+        }
+
+        var updated = new List<LibraryRoot>(_roots);
+        updated[idx] = root with { TrackedSubfolders = normalizedNext };
+        _roots = updated;
+        return true;
+    }
+
+    private static bool AreTrackedSubfoldersEqual(
+        Dictionary<string, CloudTrackingInfo>? a,
+        Dictionary<string, CloudTrackingInfo>? b)
+    {
+        int countA = a?.Count ?? 0;
+        int countB = b?.Count ?? 0;
+        if (countA != countB) return false;
+        if (countA == 0) return true;
+
+        foreach (var kvp in a!)
+        {
+            if (!b!.TryGetValue(kvp.Key, out var other)) return false;
+            if (!string.Equals(kvp.Value.SourceUrl, other.SourceUrl, StringComparison.Ordinal) ||
+                !string.Equals(kvp.Value.RemoteId, other.RemoteId, StringComparison.Ordinal) ||
+                kvp.Value.CloudKind != other.CloudKind ||
+                kvp.Value.LastSynced != other.LastSynced ||
+                !string.Equals(kvp.Value.Cookie, other.Cookie, StringComparison.Ordinal) ||
+                !string.Equals(kvp.Value.ProxyUrl, other.ProxyUrl, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    private void MigrateTrackReferences(IReadOnlyDictionary<string, string> idMigrations)
+    {
+        if (idMigrations.Count == 0) return;
+
+        bool playlistsChanged = false;
+        var updatedPlaylists = new List<Playlist>(_playlists.Count);
+        foreach (var pl in _playlists)
+        {
+            bool changed = false;
+            var nextIds = new List<string>(pl.TrackIds.Count);
+            foreach (string id in pl.TrackIds)
+            {
+                if (idMigrations.TryGetValue(id, out string? replacement))
+                {
+                    nextIds.Add(replacement);
+                    changed = true;
+                }
+                else
+                {
+                    nextIds.Add(id);
+                }
+            }
+            if (changed) playlistsChanged = true;
+            updatedPlaylists.Add(changed ? pl with { TrackIds = nextIds } : pl);
+        }
+        if (playlistsChanged)
+        {
+            _playlists = updatedPlaylists;
+            OnPropertyChanged(nameof(Playlists));
+        }
+
+        bool favsChanged = false;
+        foreach (var kvp in idMigrations)
+        {
+            if (_favourites.Remove(kvp.Key))
+            {
+                _favourites.Add(kvp.Value);
+                favsChanged = true;
+            }
+        }
+        for (int i = 0; i < _favouritesOrder.Count; i++)
+        {
+            if (idMigrations.TryGetValue(_favouritesOrder[i], out string? replacement))
+            {
+                _favouritesOrder[i] = replacement;
+                favsChanged = true;
+            }
+        }
+        if (favsChanged)
+        {
+            OnPropertyChanged(nameof(Favourites));
+        }
+
+        if (playlistsChanged || favsChanged)
+        {
+            SavePlaylists();
+        }
+
+        foreach (var kvp in idMigrations)
+        {
+            if (_metadataOverrides.Remove(kvp.Key, out var ov))
+            {
+                _metadataOverrides[kvp.Value] = ov;
+            }
+        }
+
+        foreach (string key in _folderPrefs.Keys.ToList())
+        {
+            var prefs = _folderPrefs[key];
+            if (prefs.CustomTrackOrder is not { Count: > 0 } order) continue;
+            bool orderChanged = false;
+            var nextOrder = new List<string>(order.Count);
+            foreach (string id in order)
+            {
+                if (idMigrations.TryGetValue(id, out string? replacement))
+                {
+                    nextOrder.Add(replacement);
+                    orderChanged = true;
+                }
+                else
+                {
+                    nextOrder.Add(id);
+                }
+            }
+            if (orderChanged)
+            {
+                _folderPrefs[key] = prefs with { CustomTrackOrder = nextOrder };
+            }
+        }
+
+        OnTracksMigrated?.Invoke(idMigrations);
     }
 
     private void UpdateCloudRootSynced(Guid rootId, string title)
@@ -799,7 +1716,8 @@ public sealed class LibraryStore : ObservableStore
         LibraryRoot root,
         CloudPlaylistResult result,
         IReadOnlyList<Track> existingTracks,
-        CancellationToken ct)
+        CancellationToken ct,
+        IDictionary<string, string>? idMigrations = null)
     {
         var existingByRemoteId = new Dictionary<string, Track>(StringComparer.Ordinal);
         foreach (var t in existingTracks)
@@ -836,6 +1754,13 @@ public sealed class LibraryStore : ObservableStore
             if (!seenTrackIds.Add(trackId)) continue;
 
             existingByRemoteId.TryGetValue(item.RemoteTrackId, out var old);
+            if (old is not null && !string.Equals(old.Id, trackId, StringComparison.Ordinal))
+            {
+                if (idMigrations is not null)
+                {
+                    idMigrations[old.Id] = trackId;
+                }
+            }
 
             string? artKey = null;
             if (!string.IsNullOrWhiteSpace(item.ArtworkUrl))
@@ -910,6 +1835,35 @@ public sealed class LibraryStore : ObservableStore
 
     private static string MakeCloudRelativePath(CloudPlaylistItem item)
     {
+        string ext = string.IsNullOrWhiteSpace(item.FileExtension)
+            ? ".m4a"
+            : item.FileExtension.StartsWith('.') ? item.FileExtension : "." + item.FileExtension;
+
+        if (!string.IsNullOrWhiteSpace(item.RelativePath))
+        {
+            string[] rawSegments = item.RelativePath.Replace('\\', '/')
+                .Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            var cleanSegments = new List<string>(rawSegments.Length);
+            foreach (string seg in rawSegments)
+            {
+                string sanitized = GoogleDriveClient.SanitizePathSegment(seg, "Item");
+                if (sanitized.Length > 0)
+                {
+                    cleanSegments.Add(sanitized);
+                }
+            }
+
+            if (cleanSegments.Count > 0)
+            {
+                string last = cleanSegments[^1];
+                if (string.IsNullOrEmpty(Path.GetExtension(last)))
+                {
+                    cleanSegments[^1] = $"{last}{ext}";
+                }
+                return string.Join('/', cleanSegments);
+            }
+        }
+
         string safe = item.RemoteTrackId
             .Replace('/', '_')
             .Replace('\\', '_')
@@ -918,9 +1872,6 @@ public sealed class LibraryStore : ObservableStore
             .Replace('&', '_')
             .Replace('=', '_')
             .Replace('|', '_');
-        string ext = string.IsNullOrWhiteSpace(item.FileExtension)
-            ? ".m4a"
-            : item.FileExtension.StartsWith('.') ? item.FileExtension : "." + item.FileExtension;
         return $"{safe}{ext}";
     }
 
@@ -1281,6 +2232,33 @@ public sealed class LibraryStore : ObservableStore
             else
             {
                 direct.Add(track);
+            }
+        }
+
+        List<string>? knownSnapshot = null;
+        lock (_cloudSyncLock)
+        {
+            if (_knownCloudSubfolders.TryGetValue(rootId, out var known) && known.Count > 0)
+            {
+                knownSnapshot = known.ToList();
+            }
+        }
+
+        if (knownSnapshot is not null)
+        {
+            var root = GetRoot(rootId);
+            foreach (string subRel in knownSnapshot)
+            {
+                if (root is not null && root.IsExcluded(subRel)) continue;
+                if (!subRel.StartsWith(prefix, StringComparison.Ordinal)) continue;
+                string rest = subRel[prefix.Length..];
+                if (rest.Length == 0) continue;
+                int slash = rest.IndexOf('/');
+                string directFolder = slash >= 0 ? rest[..slash] : rest;
+                if (directFolder.Length > 0)
+                {
+                    folders.Add(directFolder);
+                }
             }
         }
 

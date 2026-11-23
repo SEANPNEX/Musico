@@ -147,14 +147,10 @@ final class DownloadManager {
 
                 if addToLibrary, let library, FileManager.default.fileExists(atPath: result.destinationURL.path) {
                     do {
-                        try await library.addRoot(url: result.destinationURL)
-                    } catch LibraryError.duplicateRoot {
-                        await library.rescan()
-                        library.notifyFolderQueueSync(folderURL: result.destinationURL)
+                        try await library.registerExportedCloudFolder(destinationURL: result.destinationURL, from: root)
                     } catch {
                         job.errors.append(L10n.tr("Saved songs, but couldn’t add folder to library: %@", error.localizedDescription))
                     }
-                    library.attachCloudTracking(toFolderURL: result.destinationURL, from: root)
                 }
 
                 job.summaryMessage = L10n.tr(
@@ -239,10 +235,19 @@ final class DownloadManager {
     }
 
     @discardableResult
-    func startTrackedFolderUpdate(root: LibraryRoot, library: LibraryStore) -> DownloadJob {
+    func startTrackedFolderUpdate(
+        root: LibraryRoot,
+        subfolderPath: String = "",
+        tracking: CloudTrackingInfo? = nil,
+        library: LibraryStore
+    ) -> DownloadJob {
+        let normPath = LibraryRoot.normalizeFolderPath(subfolderPath)
+        let displayTitle = normPath.isEmpty
+            ? L10n.displayRootName(root)
+            : (normPath as NSString).lastPathComponent
         let job = DownloadJob(
             kind: .folderUpdate,
-            title: L10n.displayRootName(root),
+            title: displayTitle,
             totalTracks: 0,
             currentTrackTitle: ""
         )
@@ -252,8 +257,10 @@ final class DownloadManager {
         let task = Task { @MainActor [weak self] in
             defer { self?.tasks[job.id] = nil }
             do {
+                _ = tracking
                 let result = try await library.updateTrackedLocalRoot(
                     root.id,
+                    path: normPath,
                     cache: cache,
                     onDetailedProgress: { progress in
                         guard job.state == .running else { return }

@@ -488,6 +488,14 @@ final class PlayerController {
         startCurrent(autoplay: true)
     }
 
+    /// Creates or replaces a named queue without switching away from another active queue,
+    /// preserving current-song playback when that named queue is already active.
+    func syncNamedQueue(_ ids: [String], name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !ids.isEmpty, !trimmed.isEmpty else { return }
+        syncQueuePreservingPlayback(name: trimmed, trackIDs: ids)
+    }
+
     func playNext(_ ids: [String]) {
         let wasEmpty = queues.active.currentTrackID == nil
         queues.updateActive { $0.insertNext(ids) }
@@ -693,6 +701,10 @@ final class PlayerController {
     }
 
     private func syncFolderQueue(name: String, trackIDs: [String]) {
+        syncQueuePreservingPlayback(name: name, trackIDs: trackIDs)
+    }
+
+    private func syncQueuePreservingPlayback(name: String, trackIDs: [String]) {
         let previousCurrentID = queues.active.currentTrackID
         let wasPlaying = isPlaying || isBuffering
         let queueID = queues.createOrReplaceQueue(named: name, trackIDs: trackIDs, startAt: nil)

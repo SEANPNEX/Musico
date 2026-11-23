@@ -23,6 +23,8 @@ struct FoldersView: View {
     @State private var exportingRoot: LibraryRoot?
     /// Local folder linked to a cloud source queued for incremental sync.
     @State private var updatingTrackedRoot: LibraryRoot?
+    /// Local folder linked to a cloud source queued for address editing.
+    @State private var editingTrackingRoot: LibraryRoot?
 
     var body: some View {
         List {
@@ -142,6 +144,11 @@ struct FoldersView: View {
                 .environment(\.downloadManager, downloadManager)
                 .environment(\.locale, languageManager.effectiveLocale)
         }
+        .sheet(item: $editingTrackingRoot) { root in
+            EditCloudTrackingSheet(root: root, path: "", library: library)
+                .environment(library)
+                .environment(\.locale, languageManager.effectiveLocale)
+        }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
             guard case .success(let url) = result else { return }
             let target = relocating
@@ -216,6 +223,24 @@ struct FoldersView: View {
     }
 
     @MainActor
+    static func localTrackingBadgeLabel(for kind: LibraryRoot.Kind?) -> String {
+        switch kind {
+        case .cloudYouTube: return L10n.tr("YouTube · Local")
+        case .cloudBilibili: return L10n.tr("Bilibili · Local")
+        case .cloudGoogleDrive: return L10n.tr("Google Drive · Local")
+        default: return L10n.tr("Cloud · Local")
+        }
+    }
+
+    static func localTrackingColor(for kind: LibraryRoot.Kind?) -> Color {
+        switch kind {
+        case .cloudYouTube, .cloudBilibili: .red
+        case .cloudGoogleDrive: .blue
+        default: .accentColor
+        }
+    }
+
+    @MainActor
     private static func sourceLabel(for root: LibraryRoot) -> String? {
         switch root.kind {
         case .cloudYouTube:
@@ -226,12 +251,7 @@ struct FoldersView: View {
             return L10n.tr("Google Drive")
         case .picked, .appFolder:
             guard root.isCloudTrackedLocal else { return nil }
-            switch root.linkedCloudKind {
-            case .cloudYouTube: return L10n.tr("YouTube · Local")
-            case .cloudBilibili: return L10n.tr("Bilibili · Local")
-            case .cloudGoogleDrive: return L10n.tr("Google Drive · Local")
-            default: return L10n.tr("Cloud · Local")
-            }
+            return localTrackingBadgeLabel(for: root.linkedCloudKind)
         }
     }
 
@@ -241,6 +261,7 @@ struct FoldersView: View {
         let count = library.tracks.lazy.filter { $0.rootID == root.id }.count
         let removable = library.isRemovable(root)
         let syncError = library.cloudSyncErrors[root.id]
+        let syncProgress = library.cloudSyncProgress[root.id]
         let rootDisplayName = L10n.displayRootName(root)
         NavigationLink(value: FolderRef(root: root.id, path: "")) {
             HStack(spacing: 12) {
@@ -260,7 +281,21 @@ struct FoldersView: View {
                                 .foregroundStyle(Color.accentColor)
                         }
                     }
-                    if let syncError {
+                    if let syncProgress {
+                        HStack(spacing: 6) {
+                            ProgressView()
+                                .controlSize(.mini)
+                            Text(L10n.tr(
+                                "Loading %@ / %@ folders · %@ songs…",
+                                String(syncProgress.foldersDone),
+                                String(syncProgress.foldersTotal),
+                                String(syncProgress.tracksLoaded)
+                            ))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                        }
+                    } else if let syncError {
                         Text(L10n.tr("%@ · Sync issue: %@", L10n.songCount(count), syncError))
                             .font(.subheadline)
                             .foregroundStyle(.orange)
@@ -302,6 +337,9 @@ struct FoldersView: View {
             if root.isCloudTrackedLocal {
                 Button(L10n.tr("Update from Cloud"), systemImage: "icloud.and.arrow.down") {
                     updatingTrackedRoot = root
+                }
+                Button(L10n.tr("Edit Cloud Source…"), systemImage: "link") {
+                    editingTrackingRoot = root
                 }
             }
             if root.kind == .picked {
@@ -414,6 +452,14 @@ struct AddCloudFolderSheet: View {
 }
 
 struct FolderDetailView: View {
+    private struct FolderTrackingTarget: Identifiable {
+        let root: LibraryRoot
+        let path: String
+        let displayName: String
+
+        var id: String { "\(root.id.uuidString)::\(path)" }
+    }
+
     let ref: FolderRef
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
@@ -424,7 +470,8 @@ struct FolderDetailView: View {
     @State private var confirmRemove = false
     @State private var removingSubfolder: FolderRef?
     @State private var showExportSheet = false
-    @State private var showUpdateTrackedSheet = false
+    @State private var updatingTarget: FolderTrackingTarget?
+    @State private var editingTarget: FolderTrackingTarget?
 
     var body: some View {
         let root = library.root(ref.root)
@@ -439,9 +486,25 @@ struct FolderDetailView: View {
             ? (root.map { L10n.displayRootName($0) } ?? L10n.tr("Folder"))
             : (ref.path as NSString).lastPathComponent
         let currentSortOrder = library.folderSortOrder(root: ref.root, path: ref.path)
+        let syncProgress = library.cloudSyncProgress[ref.root]
+        let currentTracking = library.cloudTracking(rootID: ref.root, path: ref.path)
 
         List {
-            if everything.isEmpty {
+            if let syncProgress {
+                HStack(spacing: 10) {
+                    ProgressView()
+                    Text(L10n.tr(
+                        "Loading %@ / %@ folders · %@ songs…",
+                        String(syncProgress.foldersDone),
+                        String(syncProgress.foldersTotal),
+                        String(syncProgress.tracksLoaded)
+                    ))
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 2)
+            }
+            if everything.isEmpty && contents.folders.isEmpty && syncProgress == nil {
                 ContentUnavailableView(
                     L10n.tr("No Music Here"),
                     systemImage: root?.kind.isCloud == true ? "icloud" : "folder",
@@ -449,14 +512,32 @@ struct FolderDetailView: View {
                                       ? "Pull to refresh to sync tracks from this cloud source."
                                       : "Songs you add to this folder appear after a rescan."))
                 )
-            } else {
+            } else if !everything.isEmpty {
                 PlayShuffleButtons(ids: everything.map(\.id), queueName: queueName)
             }
             ForEach(contents.folders, id: \.self) { name in
                 let child = FolderRef(root: ref.root, path: ref.path.isEmpty ? name : ref.path + "/" + name)
+                let childTracking = library.cloudTracking(rootID: child.root, path: child.path)
                 NavigationLink(value: child) {
-                    HStack(spacing: 12) {
-                        Label(name, systemImage: "folder")
+                    HStack(spacing: 10) {
+                        if let childTracking {
+                            Image(systemName: "folder.fill")
+                                .foregroundStyle(FoldersView.localTrackingColor(for: childTracking.cloudKind))
+                        } else {
+                            Image(systemName: "folder")
+                                .foregroundStyle(Color.accentColor)
+                        }
+                        Text(name)
+                            .lineLimit(1)
+                        if let childTracking {
+                            Text(FoldersView.localTrackingBadgeLabel(for: childTracking.cloudKind))
+                                .font(.caption2.weight(.semibold))
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.14), in: Capsule())
+                                .foregroundStyle(Color.accentColor)
+                                .lineLimit(1)
+                        }
                         Spacer()
                         Button(L10n.tr("Remove Folder"), systemImage: "minus.circle") {
                             removingSubfolder = child
@@ -478,6 +559,14 @@ struct FolderDetailView: View {
                     if !childIDs.isEmpty {
                         Button(L10n.tr("Play Folder"), systemImage: "play.fill") {
                             player.playInNamedQueue(childIDs, name: name)
+                        }
+                    }
+                    if let root, root.kind.isLocal, childTracking != nil {
+                        Button(L10n.tr("Update from Cloud"), systemImage: "icloud.and.arrow.down") {
+                            updatingTarget = FolderTrackingTarget(root: root, path: child.path, displayName: name)
+                        }
+                        Button(L10n.tr("Edit Cloud Source…"), systemImage: "link") {
+                            editingTarget = FolderTrackingTarget(root: root, path: child.path, displayName: name)
                         }
                     }
                     Button(L10n.tr("Remove Folder"), systemImage: "trash", role: .destructive) {
@@ -523,6 +612,9 @@ struct FolderDetailView: View {
         .listStyle(.plain)
         .navigationTitle(currentName)
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: ref) {
+            library.prioritizeCloudFolder(rootID: ref.root, path: ref.path)
+        }
         .refreshable { await library.rescan() }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
@@ -537,11 +629,15 @@ struct FolderDetailView: View {
                     }
                     .help(L10n.tr("Save to Local Folder…"))
                 }
-                if ref.path.isEmpty, let root, root.isCloudTrackedLocal {
+                if let root, root.kind.isLocal, currentTracking != nil {
                     Button(L10n.tr("Update from Cloud"), systemImage: "icloud.and.arrow.down") {
-                        showUpdateTrackedSheet = true
+                        updatingTarget = FolderTrackingTarget(root: root, path: ref.path, displayName: currentName)
                     }
                     .help(L10n.tr("Update from Cloud"))
+                    Button(L10n.tr("Edit Cloud Source…"), systemImage: "link") {
+                        editingTarget = FolderTrackingTarget(root: root, path: ref.path, displayName: currentName)
+                    }
+                    .help(L10n.tr("Edit Cloud Source…"))
                 }
                 if excludedCount > 0 {
                     Button(L10n.tr("Restore Removed Subfolders (%@)", String(excludedCount)), systemImage: "arrow.uturn.backward") {
@@ -565,13 +661,27 @@ struct FolderDetailView: View {
                     .environment(\.locale, languageManager.effectiveLocale)
             }
         }
-        .sheet(isPresented: $showUpdateTrackedSheet) {
-            if let root {
-                UpdateTrackedFolderSheet(root: root, library: library, downloadManager: downloadManager)
-                    .environment(library)
-                    .environment(\.downloadManager, downloadManager)
-                    .environment(\.locale, languageManager.effectiveLocale)
-            }
+        .sheet(item: $updatingTarget) { target in
+            UpdateTrackedFolderSheet(
+                root: target.root,
+                subfolderPath: target.path,
+                subfolderName: target.displayName,
+                library: library,
+                downloadManager: downloadManager
+            )
+            .environment(library)
+            .environment(\.downloadManager, downloadManager)
+            .environment(\.locale, languageManager.effectiveLocale)
+        }
+        .sheet(item: $editingTarget) { target in
+            EditCloudTrackingSheet(
+                root: target.root,
+                path: target.path,
+                folderName: target.displayName,
+                library: library
+            )
+            .environment(library)
+            .environment(\.locale, languageManager.effectiveLocale)
         }
         .confirmationDialog(L10n.tr("Remove “%@” from your library?", currentName),
                             isPresented: $confirmRemove,
@@ -792,23 +902,61 @@ struct SaveCloudPlaylistSheet: View {
 
 struct UpdateTrackedFolderSheet: View {
     let root: LibraryRoot
+    let subfolderPath: String
+    let subfolderName: String?
     private let explicitLibrary: LibraryStore?
     private let explicitDownloadManager: DownloadManager?
     @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
     @Environment(\.downloadManager) private var envDownloadManager
+    @Environment(\.languageManager) private var languageManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var activeJobID: UUID?
     @State private var didAttemptStart = false
+    @State private var showEditSheet = false
 
-    init(root: LibraryRoot, library: LibraryStore? = nil, downloadManager: DownloadManager? = nil) {
+    init(
+        root: LibraryRoot,
+        subfolderPath: String = "",
+        subfolderName: String? = nil,
+        library: LibraryStore? = nil,
+        downloadManager: DownloadManager? = nil
+    ) {
         self.root = root
+        self.subfolderPath = LibraryRoot.normalizeFolderPath(subfolderPath)
+        self.subfolderName = subfolderName
         self.explicitLibrary = library
         self.explicitDownloadManager = downloadManager
     }
 
     private var library: LibraryStore? { explicitLibrary ?? envLibrary }
     private var downloadManager: DownloadManager { explicitDownloadManager ?? envDownloadManager }
+
+    private var displayFolderName: String {
+        if let subfolderName, !subfolderName.isEmpty {
+            return subfolderName
+        }
+        if !subfolderPath.isEmpty {
+            return (subfolderPath as NSString).lastPathComponent
+        }
+        return L10n.displayRootName(root)
+    }
+
+    private var currentTracking: CloudTrackingInfo? {
+        if let live = library?.cloudTracking(rootID: root.id, path: subfolderPath) {
+            return live
+        }
+        if subfolderPath.isEmpty, let src = root.sourceURL, !src.isEmpty {
+            return CloudTrackingInfo(
+                sourceURL: src,
+                remoteID: root.remoteID,
+                cloudKind: root.effectiveCloudKind ?? .cloudYouTube,
+                cookie: root.cookie,
+                lastSynced: root.lastSynced
+            )
+        }
+        return root.normalizedTrackedSubfolders[subfolderPath]
+    }
 
     private var activeJob: DownloadJob? {
         activeJobID.flatMap { id in downloadManager.jobs.first(where: { $0.id == id }) }
@@ -836,12 +984,20 @@ struct UpdateTrackedFolderSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                if let sourceURL = root.sourceURL, !sourceURL.isEmpty {
+                if let sourceURL = currentTracking?.sourceURL, !sourceURL.isEmpty {
                     Section(L10n.tr("Cloud Source")) {
-                        Text(sourceURL)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .textSelection(.enabled)
+                        HStack(alignment: .center, spacing: 8) {
+                            Text(sourceURL)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                            Spacer(minLength: 8)
+                            Button(L10n.tr("Edit")) {
+                                showEditSheet = true
+                            }
+                            .buttonStyle(.borderless)
+                            .disabled(library == nil)
+                        }
                     }
                 }
 
@@ -903,10 +1059,28 @@ struct UpdateTrackedFolderSheet: View {
                     }
                 }
             }
-            .navigationTitle(L10n.tr("Update “%@”", L10n.displayRootName(root)))
+            .navigationTitle(L10n.tr("Update “%@”", displayFolderName))
             .navigationBarTitleDisplayMode(.inline)
             .task {
                 startUpdateIfNeeded()
+            }
+            .sheet(isPresented: $showEditSheet) {
+                let sheet = EditCloudTrackingSheet(
+                    root: root,
+                    path: subfolderPath,
+                    folderName: displayFolderName,
+                    library: library,
+                    onSaved: {
+                        restartUpdateAfterAddressEdit()
+                    }
+                )
+                .environment(\.languageManager, languageManager)
+                .environment(\.locale, languageManager.effectiveLocale)
+                if let library {
+                    sheet.environment(library)
+                } else {
+                    sheet
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -933,6 +1107,156 @@ struct UpdateTrackedFolderSheet: View {
         guard !didAttemptStart else { return }
         didAttemptStart = true
         guard let library else { return }
-        activeJobID = downloadManager.startTrackedFolderUpdate(root: root, library: library).id
+        activeJobID = downloadManager.startTrackedFolderUpdate(
+            root: root,
+            subfolderPath: subfolderPath,
+            tracking: currentTracking,
+            library: library
+        ).id
+    }
+
+    private func restartUpdateAfterAddressEdit() {
+        if let jobID = activeJobID, activeJob?.state == .running {
+            downloadManager.cancel(jobID: jobID)
+        }
+        guard let library else { return }
+        activeJobID = downloadManager.startTrackedFolderUpdate(
+            root: root,
+            subfolderPath: subfolderPath,
+            tracking: currentTracking,
+            library: library
+        ).id
+    }
+}
+
+struct EditCloudTrackingSheet: View {
+    let root: LibraryRoot
+    let path: String
+    let folderName: String?
+    var onSaved: (() -> Void)? = nil
+    private let explicitLibrary: LibraryStore?
+    @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
+    @Environment(\.dismiss) private var dismiss
+
+    @State private var urlText: String
+    @State private var cookieText: String
+    @State private var errorMessage: String?
+
+    init(
+        root: LibraryRoot,
+        path: String = "",
+        folderName: String? = nil,
+        library: LibraryStore? = nil,
+        onSaved: (() -> Void)? = nil
+    ) {
+        self.root = root
+        let normPath = LibraryRoot.normalizeFolderPath(path)
+        self.path = normPath
+        self.folderName = folderName
+        self.explicitLibrary = library
+        self.onSaved = onSaved
+
+        let existingTracking = library?.cloudTracking(rootID: root.id, path: normPath)
+            ?? (normPath.isEmpty
+                ? root.sourceURL.map {
+                    CloudTrackingInfo(
+                        sourceURL: $0,
+                        remoteID: root.remoteID,
+                        cloudKind: root.effectiveCloudKind ?? .cloudYouTube,
+                        cookie: root.cookie,
+                        lastSynced: root.lastSynced
+                    )
+                }
+                : root.normalizedTrackedSubfolders[normPath])
+        _urlText = State(initialValue: existingTracking?.sourceURL ?? "")
+        _cookieText = State(initialValue: existingTracking?.cookie ?? "")
+    }
+
+    private var library: LibraryStore? { explicitLibrary ?? envLibrary }
+
+    private var displayFolderName: String {
+        if let folderName, !folderName.isEmpty {
+            return folderName
+        }
+        if !path.isEmpty {
+            return (path as NSString).lastPathComponent
+        }
+        return L10n.displayRootName(root)
+    }
+
+    private var extractedURL: String {
+        CloudSourceInput.extract(from: urlText)
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(L10n.tr("Folder")) {
+                    Text(displayFolderName)
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    TextField(L10n.tr("YouTube, Bilibili, or Google Drive URL or ID"), text: $urlText)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .keyboardType(.URL)
+                } header: {
+                    Text(L10n.tr("Cloud Tracking Address"))
+                } footer: {
+                    Text(L10n.tr("Updating the address links this local folder to the new cloud playlist or folder on future updates."))
+                }
+
+                Section {
+                    TextField(L10n.tr("Cookie (optional)"), text: $cookieText, axis: .vertical)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                        .lineLimit(2...4)
+                } header: {
+                    Text(L10n.tr("Authentication"))
+                }
+
+                if let errorMessage {
+                    Section {
+                        Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.red)
+                    }
+                }
+            }
+            .navigationTitle(L10n.tr("Edit Cloud Source"))
+            .navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                if urlText.isEmpty, let live = library?.cloudTracking(rootID: root.id, path: path) {
+                    urlText = live.sourceURL
+                    cookieText = live.cookie ?? ""
+                }
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L10n.tr("Cancel")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L10n.tr("Save")) { save() }
+                        .disabled(extractedURL.isEmpty || library == nil)
+                }
+            }
+        }
+    }
+
+    private func save() {
+        guard let library else { return }
+        errorMessage = nil
+        do {
+            try library.updateCloudTrackingAddress(
+                rootID: root.id,
+                path: path,
+                sourceURL: urlText,
+                cookie: cookieText
+            )
+            onSaved?()
+            dismiss()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
     }
 }

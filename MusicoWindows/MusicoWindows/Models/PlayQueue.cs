@@ -309,6 +309,20 @@ public sealed class PlayQueue
         }
     }
 
+    public bool MigrateTrackIds(IReadOnlyDictionary<string, string> idMigrations)
+    {
+        bool changed = false;
+        for (int i = 0; i < TrackIds.Count; i++)
+        {
+            if (idMigrations.TryGetValue(TrackIds[i], out string? replacement))
+            {
+                TrackIds[i] = replacement;
+                changed = true;
+            }
+        }
+        return changed;
+    }
+
     public PlayQueue Clone()
     {
         return new PlayQueue(Name)

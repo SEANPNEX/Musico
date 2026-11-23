@@ -1073,22 +1073,22 @@ final class CloudSourcesTests: XCTestCase {
         XCTAssertEqual(result.tracks.count, 3)
 
         XCTAssertEqual(result.tracks[0].remoteTrackID, "file_root_mp3")
-        XCTAssertEqual(result.tracks[0].relativePath, "gdrive/file_root_mp3.mp3")
+        XCTAssertEqual(result.tracks[0].relativePath, "01 - Intro.mp3")
         XCTAssertEqual(result.tracks[0].title, "01 - Intro")
         XCTAssertEqual(result.tracks[0].album, "OST Collection")
         XCTAssertEqual(result.tracks[0].artist, "Google Drive")
 
         XCTAssertEqual(result.tracks[1].remoteTrackID, "file_noext_mime#0-rkHiddenFlac")
-        XCTAssertEqual(result.tracks[1].relativePath, "gdrive/file_noext_mime.flac")
+        XCTAssertEqual(result.tracks[1].relativePath, "Hidden Track.flac")
         XCTAssertEqual(result.tracks[1].title, "Hidden Track")
         XCTAssertEqual(result.tracks[1].album, "OST Collection")
 
         XCTAssertEqual(result.tracks[2].remoteTrackID, "file_sub_wav")
-        XCTAssertEqual(result.tracks[2].relativePath, "gdrive/file_sub_wav.wav")
+        XCTAssertEqual(result.tracks[2].relativePath, "Disc 2/02 - Bonus.wav")
         XCTAssertEqual(result.tracks[2].title, "02 - Bonus")
         XCTAssertEqual(result.tracks[2].album, "Disc 2")
 
-        // Verify LibraryStore wiring (albumArtist = "Google Drive", flat cloud folderContents)
+        // Verify LibraryStore hierarchical wiring (albumArtist = "Google Drive", subfolder hierarchy preserved)
         let state = makeTempDir()
         let store = await MainActor.run {
             LibraryStore(
@@ -1103,10 +1103,24 @@ final class CloudSourcesTests: XCTestCase {
         try await store.addCloudRoot(sourceURL: "https://drive.google.com/drive/folders/fld_root?resourcekey=0-rkRoot")
         let root = try await MainActor.run { try XCTUnwrap(store.roots.last) }
         XCTAssertEqual(root.kind, .cloudGoogleDrive)
-        let contents = await MainActor.run { store.folderContents(root: root.id, path: "") }
-        XCTAssertTrue(contents.folders.isEmpty)
-        XCTAssertEqual(contents.tracks.count, 3)
-        XCTAssertTrue(contents.tracks.allSatisfy { $0.cloudSource == "gdrive" && $0.albumArtist == "Google Drive" })
+
+        for _ in 0..<200 {
+            let syncing = await MainActor.run { store.cloudSyncProgress[root.id] != nil }
+            if !syncing { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let rootContents = await MainActor.run { store.folderContents(root: root.id, path: "") }
+        XCTAssertEqual(rootContents.folders, ["Disc 2"])
+        XCTAssertEqual(rootContents.tracks.map(\.relativePath), ["01 - Intro.mp3", "Hidden Track.flac"])
+
+        let subContents = await MainActor.run { store.folderContents(root: root.id, path: "Disc 2") }
+        XCTAssertTrue(subContents.folders.isEmpty)
+        XCTAssertEqual(subContents.tracks.map(\.relativePath), ["Disc 2/02 - Bonus.wav"])
+
+        let allTracks = await MainActor.run { store.tracks }
+        XCTAssertEqual(allTracks.count, 3)
+        XCTAssertTrue(allTracks.allSatisfy { $0.cloudSource == "gdrive" && $0.albumArtist == "Google Drive" })
     }
 
     func testGoogleDriveEmbeddedFolderViewFallbackAndHTMLEntities() async throws {
@@ -1142,7 +1156,7 @@ final class CloudSourcesTests: XCTestCase {
         XCTAssertEqual(result.title, "Jazz & Blues")
         XCTAssertEqual(result.tracks.count, 1)
         XCTAssertEqual(result.tracks[0].remoteTrackID, "file_aiff#0-rkAiff")
-        XCTAssertEqual(result.tracks[0].relativePath, "gdrive/file_aiff.aiff")
+        XCTAssertEqual(result.tracks[0].relativePath, "Miles' Tune & Co.aiff")
         XCTAssertEqual(result.tracks[0].title, "Miles' Tune & Co")
         XCTAssertEqual(result.tracks[0].album, "Jazz & Blues")
     }
@@ -1189,10 +1203,10 @@ final class CloudSourcesTests: XCTestCase {
         XCTAssertEqual(single.remoteID, "singleFlac")
         XCTAssertEqual(single.title, "03 - Sunrise")
         XCTAssertEqual(single.tracks.count, 1)
-        XCTAssertEqual(single.tracks[0].relativePath, "gdrive/singleFlac.flac")
+        XCTAssertEqual(single.tracks[0].relativePath, "03 - Sunrise.flac")
 
         let opened = try await client.fetchPlaylist(sourceURL: "https://drive.google.com/open?id=openFile1", cookie: nil)
-        XCTAssertEqual(opened.tracks.first?.relativePath, "gdrive/openFile1.m4a")
+        XCTAssertEqual(opened.tracks.first?.relativePath, "Open Track.m4a")
         XCTAssertEqual(opened.tracks.first?.title, "Open Track")
 
         do {
@@ -1311,5 +1325,418 @@ final class CloudSourcesTests: XCTestCase {
             }
             XCTAssertTrue(msg.contains("Anyone with the link"))
         }
+    }
+
+    // MARK: - Google Drive Pagination, Retries, Sanitization, Hierarchy & Progressive Loading
+
+    func testGoogleDriveLimitsExtensionsAndLegacyFlatCompatibility() async throws {
+        XCTAssertEqual(GoogleDriveClient.maxDepth, 12)
+        XCTAssertEqual(GoogleDriveClient.maxFolders, 2000)
+        for ext in ["mp4", "ogg", "opus", "webm", "wma", "mp3", "flac", "m4a", "wav"] {
+            XCTAssertTrue(GoogleDriveClient.supportedAudioExtensions.contains(ext), "Missing extension: \(ext)")
+        }
+
+        // Legacy persisted Drive tracks ("gdrive/...") still render flat at root before rescan migration.
+        let state = makeTempDir()
+        let rootID = UUID()
+        let legacyJSON: [String: Any] = [
+            "roots": [
+                [
+                    "id": rootID.uuidString,
+                    "name": "Legacy Drive",
+                    "kind": "cloudGoogleDrive",
+                    "sourceURL": "https://drive.google.com/drive/folders/fld_legacy",
+                    "remoteID": "fld_legacy"
+                ]
+            ],
+            "tracks": [
+                [
+                    "id": Track.makeID(rootID: rootID, relativePath: "gdrive/f1.mp3"),
+                    "rootID": rootID.uuidString,
+                    "relativePath": "gdrive/f1.mp3",
+                    "title": "Legacy One",
+                    "artist": "Google Drive",
+                    "album": "Legacy Drive",
+                    "albumArtist": "Google Drive",
+                    "duration": 0,
+                    "fileSize": 0,
+                    "modified": 0,
+                    "hasEmbeddedLyrics": false,
+                    "dateAdded": 0,
+                    "cloudSource": "gdrive",
+                    "remoteTrackID": "f1"
+                ],
+                [
+                    "id": Track.makeID(rootID: rootID, relativePath: "gdrive/f2.opus"),
+                    "rootID": rootID.uuidString,
+                    "relativePath": "gdrive/f2.opus",
+                    "title": "Legacy Opus",
+                    "artist": "Google Drive",
+                    "album": "Legacy Drive",
+                    "albumArtist": "Google Drive",
+                    "duration": 0,
+                    "fileSize": 0,
+                    "modified": 0,
+                    "hasEmbeddedLyrics": false,
+                    "dateAdded": 0,
+                    "cloudSource": "gdrive",
+                    "remoteTrackID": "f2"
+                ]
+            ]
+        ]
+        let libData = try JSONSerialization.data(withJSONObject: legacyJSON)
+        try libData.write(to: state.appendingPathComponent("library.json"))
+
+        let store = await MainActor.run {
+            LibraryStore(
+                directory: state,
+                documentsURL: makeTempDir(),
+                reader: StubReader(),
+                artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork"))
+            )
+        }
+        let flatContents = await MainActor.run { store.folderContents(root: rootID, path: "") }
+        XCTAssertTrue(flatContents.folders.isEmpty)
+        XCTAssertEqual(flatContents.tracks.count, 2)
+    }
+
+    func testGoogleDriveIVDPaginationV2BetaV3AndEmbeddedFallbackAndEmptyIVDSkip() async throws {
+        let apiKey = "AIzaSyAbCdEfGhIjKlMnOpQrStUvWxYz0123456"
+        XCTAssertEqual(GoogleDriveClient.extractDriveApiKey(from: #"var cfg={"key":"\#(apiKey)"};"#), apiKey)
+        XCTAssertNil(GoogleDriveClient.extractDriveApiKey(from: "no key here"))
+
+        let jsEscape: @Sendable (String) -> String = { s in
+            s.replacingOccurrences(of: "\\", with: "\\\\")
+                .replacingOccurrences(of: "\"", with: "\\x22")
+        }
+
+        // 1. Empty _DRIVE_ivd ([[], null]) must NOT trigger embeddedfolderview fallback.
+        let emptyIVDHTML = "<html><title>Empty - Google Drive</title><script>window['_DRIVE_ivd'] = '\(jsEscape("[[], null]"))';</script></html>"
+        let emptyParsed = GoogleDriveClient.parseDriveIVDWithPagination(from: emptyIVDHTML)
+        XCTAssertNotNil(emptyParsed)
+        XCTAssertEqual(emptyParsed?.items, [])
+        XCTAssertNil(emptyParsed?.nextPageToken)
+
+        let emptyTransport = MockCloudTransport { req in
+            let url = req.url!.absoluteString
+            if url.contains("/drive/folders/fld_empty") {
+                return HTTPResponseData(statusCode: 200, headers: ["Content-Type": "text/html"], data: Data(emptyIVDHTML.utf8), finalURL: req.url)
+            }
+            XCTFail("Unexpected fallback request for valid empty IVD: \(url)")
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: req.url)
+        }
+        let emptyBatch = try await GoogleDriveClient(transport: emptyTransport, retryDelaysNanoseconds: [1_000_000])
+            .fetchSingleFolder(folderID: "fld_empty")
+        XCTAssertTrue(emptyBatch.tracks.isEmpty)
+        XCTAssertTrue(emptyBatch.discoveredSubfolders.isEmpty)
+        XCTAssertEqual(emptyTransport.requests.count, 1)
+
+        // 2. Paginated folder using v2beta -> v3 fallback across pages.
+        let page0JSON = """
+        [[["f_p0",["fld_pag"],"01 - Page0.mp3","audio/mpeg"]],"tok_page_1"]
+        """
+        let page0HTML = """
+        <html><head><title>Big Folder - Google Drive</title></head>
+        <body><script>var k="\(apiKey)"; window['_DRIVE_ivd'] = '\(jsEscape(page0JSON))';</script></body></html>
+        """
+        let parsedPage0 = GoogleDriveClient.parseDriveIVDWithPagination(from: page0HTML)
+        XCTAssertEqual(parsedPage0?.nextPageToken, "tok_page_1")
+        XCTAssertEqual(parsedPage0?.items.count, 1)
+
+        let transport = MockCloudTransport { req in
+            let url = req.url!.absoluteString
+            if url.contains("/drive/folders/fld_pag") {
+                return HTTPResponseData(statusCode: 200, headers: ["Content-Type": "text/html"], data: Data(page0HTML.utf8), finalURL: req.url)
+            }
+            if url.contains("clients6.google.com/drive/v2beta/files") {
+                XCTAssertEqual(req.value(forHTTPHeaderField: "Referer"), "https://drive.google.com/")
+                XCTAssertEqual(req.value(forHTTPHeaderField: "Origin"), "https://drive.google.com")
+                XCTAssertEqual(req.value(forHTTPHeaderField: "X-Goog-Api-Key"), apiKey)
+                XCTAssertEqual(req.value(forHTTPHeaderField: "X-Goog-Drive-Resource-Keys"), "fld_pag/0-rkPag")
+                XCTAssertEqual(req.value(forHTTPHeaderField: "Cookie"), "SID=abc")
+                if url.contains("pageToken=tok_page_1") {
+                    let body: [String: Any] = [
+                        "nextPageToken": "tok_page_2",
+                        "items": [
+                            ["id": "f_p1", "title": "02 - Page1.opus", "mimeType": "audio/opus", "labels": ["trashed": false]],
+                            ["id": "f_trashed", "title": "Deleted.mp3", "mimeType": "audio/mpeg", "labels": ["trashed": true]]
+                        ]
+                    ]
+                    return HTTPResponseData(statusCode: 200, headers: [:], data: try JSONSerialization.data(withJSONObject: body), finalURL: req.url)
+                }
+                // Simulate v2beta failure on page 2 -> triggers v3 fallback
+                return HTTPResponseData(statusCode: 403, headers: [:], data: Data(), finalURL: req.url)
+            }
+            if url.contains("www.googleapis.com/drive/v3/files") {
+                XCTAssertTrue(url.contains("pageToken=tok_page_2"))
+                XCTAssertTrue(url.contains("key=\(apiKey)"))
+                let body: [String: Any] = [
+                    "files": [
+                        ["id": "f_p2", "name": "03 - Page2.wma", "mimeType": "audio/x-ms-wma"]
+                    ]
+                ]
+                return HTTPResponseData(statusCode: 200, headers: [:], data: try JSONSerialization.data(withJSONObject: body), finalURL: req.url)
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: req.url)
+        }
+
+        let client = GoogleDriveClient(transport: transport, retryDelaysNanoseconds: [1_000_000])
+        let res = try await client.fetchPlaylist(
+            sourceURL: "https://drive.google.com/drive/folders/fld_pag?resourcekey=0-rkPag",
+            cookie: "SID=abc"
+        )
+        XCTAssertEqual(res.tracks.map(\.relativePath), ["01 - Page0.mp3", "02 - Page1.opus", "03 - Page2.wma"])
+
+        // 3. When both v2beta & v3 fail, fallback to embeddedfolderview merged by id.
+        let embFallbackTransport = MockCloudTransport { req in
+            let url = req.url!.absoluteString
+            if url.contains("/drive/folders/fld_fb") {
+                let html = "<html><title>FB - Google Drive</title><script>var k='\(apiKey)'; window['_DRIVE_ivd']='\(jsEscape(page0JSON))';</script></html>"
+                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(html.utf8), finalURL: req.url)
+            }
+            if url.contains("v2beta/files") || url.contains("v3/files") {
+                return HTTPResponseData(statusCode: 403, headers: [:], data: Data(), finalURL: req.url)
+            }
+            if url.contains("/embeddedfolderview") {
+                let emb = """
+                <html><body>
+                  <div class="flip-entry"><a href="https://drive.google.com/file/d/f_p0/view"><div class="flip-entry-title">01 - Page0.mp3</div></a></div>
+                  <div class="flip-entry"><a href="https://drive.google.com/file/d/f_emb2/view"><div class="flip-entry-title">04 - Embedded.webm</div></a></div>
+                </body></html>
+                """
+                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(emb.utf8), finalURL: req.url)
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: req.url)
+        }
+        let fbRes = try await GoogleDriveClient(transport: embFallbackTransport, retryDelaysNanoseconds: [1_000_000])
+            .fetchPlaylist(sourceURL: "https://drive.google.com/drive/folders/fld_fb", cookie: nil)
+        XCTAssertEqual(fbRes.tracks.map(\.relativePath), ["01 - Page0.mp3", "04 - Embedded.webm"])
+    }
+
+    func testGoogleDriveRetries429And5xxAndSanitizesDuplicatesAndDeepDepth() async throws {
+        let subAttempts = SendableValueBox(0)
+
+        let htmlFor: @Sendable (String, [[Any]]) throws -> String = { title, entries in
+            let data = try JSONSerialization.data(withJSONObject: [entries, NSNull()])
+            let json = String(data: data, encoding: .utf8)!
+            return "<html><head><title>\(title) - Google Drive</title></head><body><script>window['_DRIVE_ivd']=\(json);</script></body></html>"
+        }
+
+        let transport = MockCloudTransport { req in
+            let url = req.url!.absoluteString
+            if url.contains("/drive/folders/fld_root") {
+                let html = try htmlFor("Root", [
+                    ["f_dup1", ["fld_root"], "Song/One.mp3", "audio/mpeg"],
+                    ["f_dup2", ["fld_root"], "Song\\One.mp3", "audio/mpeg"],
+                    ["fld_d1", ["fld_root"], "Artist/Band", "application/vnd.google-apps.folder"]
+                ])
+                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(html.utf8), finalURL: req.url)
+            }
+            if url.contains("/drive/folders/fld_d1") {
+                let attempt = subAttempts.withLock { count -> Int in count += 1; return count }
+                if attempt == 1 {
+                    return HTTPResponseData(statusCode: 429, headers: [:], data: Data(), finalURL: req.url)
+                }
+                if attempt == 2 {
+                    return HTTPResponseData(statusCode: 503, headers: [:], data: Data(), finalURL: req.url)
+                }
+                let html = try htmlFor("Artist/Band", [
+                    ["fld_d2", ["fld_d1"], "L2", "application/vnd.google-apps.folder"]
+                ])
+                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(html.utf8), finalURL: req.url)
+            }
+            for depth in 2...6 {
+                if url.contains("/drive/folders/fld_d\(depth)") {
+                    if depth < 6 {
+                        let html = try htmlFor("L\(depth)", [
+                            ["fld_d\(depth + 1)", ["fld_d\(depth)"], "L\(depth + 1)", "application/vnd.google-apps.folder"]
+                        ])
+                        return HTTPResponseData(statusCode: 200, headers: [:], data: Data(html.utf8), finalURL: req.url)
+                    } else {
+                        let html = try htmlFor("L6", [
+                            ["f_deep", ["fld_d6"], "Deep Song.opus", "audio/opus"]
+                        ])
+                        return HTTPResponseData(statusCode: 200, headers: [:], data: Data(html.utf8), finalURL: req.url)
+                    }
+                }
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: req.url)
+        }
+
+        let client = GoogleDriveClient(transport: transport, retryDelaysNanoseconds: [1_000_000, 2_000_000])
+        let res = try await client.fetchPlaylist(sourceURL: "https://drive.google.com/drive/folders/fld_root", cookie: nil)
+
+        XCTAssertEqual(subAttempts.value, 3)
+        let paths = Set(res.tracks.map(\.relativePath))
+        XCTAssertEqual(paths, [
+            "Song-One.mp3",
+            "Song-One (f_dup2).mp3",
+            "Artist-Band/L2/L3/L4/L5/L6/Deep Song.opus"
+        ])
+    }
+
+    func testGoogleDriveProgressiveAddPriorityMigrationAndConditionalPruning() async throws {
+        let htmlFor: @Sendable (String, [[Any]]) throws -> String = { title, entries in
+            let data = try JSONSerialization.data(withJSONObject: [entries, NSNull()])
+            let json = String(data: data, encoding: .utf8)!
+            return "<html><head><title>\(title) - Google Drive</title></head><body><script>window['_DRIVE_ivd']=\(json);</script></body></html>"
+        }
+
+        let phaseBox = SendableValueBox(1) // 1 = initial progressive, 2 = rescan with error (no prune), 3 = rescan clean (prune deleted)
+
+        let transport = MockCloudTransport { req in
+            let url = req.url!.absoluteString
+            let currentPhase = phaseBox.value
+
+            if url.contains("/drive/folders/fld_prog") {
+                if currentPhase == 3 {
+                    let html = try htmlFor("Prog Drive", [
+                        ["f_keep", ["fld_prog"], "Keep.mp3", "audio/mpeg"]
+                    ])
+                    return HTTPResponseData(statusCode: 200, headers: [:], data: Data(html.utf8), finalURL: req.url)
+                }
+                let html = try htmlFor("Prog Drive", [
+                    ["f_keep", ["fld_prog"], "Keep.mp3", "audio/mpeg"],
+                    ["fld_alpha", ["fld_prog"], "Alpha", "application/vnd.google-apps.folder"],
+                    ["fld_zeta", ["fld_prog"], "Zeta", "application/vnd.google-apps.folder"]
+                ])
+                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(html.utf8), finalURL: req.url)
+            }
+            if url.contains("/drive/folders/fld_alpha") {
+                if currentPhase == 2 {
+                    return HTTPResponseData(statusCode: 500, headers: [:], data: Data(), finalURL: req.url)
+                }
+                let html = try htmlFor("Alpha", [
+                    ["f_alpha", ["fld_alpha"], "AlphaSong.mp3", "audio/mpeg"]
+                ])
+                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(html.utf8), finalURL: req.url)
+            }
+            if url.contains("/drive/folders/fld_zeta") {
+                let html = try htmlFor("Zeta", [
+                    ["f_zeta", ["fld_zeta"], "ZetaSong.mp3", "audio/mpeg"]
+                ])
+                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(html.utf8), finalURL: req.url)
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: req.url)
+        }
+
+        let service = LiveCloudService(transport: transport, driveRetryDelaysNanoseconds: [1_000_000])
+        let state = makeTempDir()
+        let store = await MainActor.run {
+            LibraryStore(
+                directory: state,
+                documentsURL: makeTempDir(),
+                reader: StubReader(),
+                artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
+                cloudFetcher: service,
+                artworkDownloader: { _ in nil }
+            )
+        }
+
+        try await store.addCloudRoot(sourceURL: "https://drive.google.com/drive/folders/fld_prog")
+        let root = try await MainActor.run { try XCTUnwrap(store.roots.last) }
+
+        // Immediately after addCloudRoot returns, unloaded subfolders are already visible in folderContents!
+        let initialContents = await MainActor.run { store.folderContents(root: root.id, path: "") }
+        XCTAssertEqual(initialContents.folders, ["Alpha", "Zeta"])
+        await MainActor.run { store.prioritizeCloudFolder(rootID: root.id, path: "Zeta") }
+
+        for _ in 0..<200 {
+            let done = await MainActor.run { store.cloudSyncProgress[root.id] == nil }
+            if done { break }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let loadedPaths = await MainActor.run { Set(store.tracks.map(\.relativePath)) }
+        XCTAssertEqual(loadedPaths, ["Keep.mp3", "Alpha/AlphaSong.mp3", "Zeta/ZetaSong.mp3"])
+
+        // Phase 2: partial subtree 500 error -> MUST NOT prune existing tracks!
+        phaseBox.withLock { $0 = 2 }
+        await store.rescan()
+        let afterErrorPaths = await MainActor.run { Set(store.tracks.map(\.relativePath)) }
+        XCTAssertEqual(afterErrorPaths, ["Keep.mp3", "Alpha/AlphaSong.mp3", "Zeta/ZetaSong.mp3"])
+
+        // Phase 3: clean full crawl without errors -> prunes removed tracks!
+        phaseBox.withLock { $0 = 3 }
+        await store.rescan()
+        let afterCleanPaths = await MainActor.run { Set(store.tracks.map(\.relativePath)) }
+        XCTAssertEqual(afterCleanPaths, ["Keep.mp3"])
+
+        // Legacy "gdrive/..." migration preserves playlist & favourite IDs on rescan.
+        let migrateState = makeTempDir()
+        let migRootID = UUID()
+        let oldTrackID = Track.makeID(rootID: migRootID, relativePath: "gdrive/f_keep.mp3")
+        // Write legacy library + playlist/favourite and reload
+        let legacyLibJSON: [String: Any] = [
+            "roots": [[
+                "id": migRootID.uuidString,
+                "name": "Prog Drive",
+                "kind": "cloudGoogleDrive",
+                "sourceURL": "https://drive.google.com/drive/folders/fld_prog",
+                "remoteID": "fld_prog"
+            ]],
+            "tracks": [[
+                "id": oldTrackID,
+                "rootID": migRootID.uuidString,
+                "relativePath": "gdrive/f_keep.mp3",
+                "title": "Keep",
+                "artist": "Google Drive",
+                "album": "Prog Drive",
+                "albumArtist": "Google Drive",
+                "duration": 0,
+                "fileSize": 0,
+                "modified": 0,
+                "hasEmbeddedLyrics": false,
+                "dateAdded": 1000,
+                "cloudSource": "gdrive",
+                "remoteTrackID": "f_keep"
+            ]]
+        ]
+        let legacyPlaylistsJSON: [String: Any] = [
+            "playlists": [[
+                "id": UUID().uuidString,
+                "name": "Drive Favs",
+                "trackIDs": [oldTrackID]
+            ]],
+            "favourites": [oldTrackID]
+        ]
+        try JSONSerialization.data(withJSONObject: legacyLibJSON).write(to: migrateState.appendingPathComponent("library.json"))
+        try JSONSerialization.data(withJSONObject: legacyPlaylistsJSON).write(to: migrateState.appendingPathComponent("playlists.json"))
+
+        let reloadedMig = await MainActor.run {
+            LibraryStore(
+                directory: migrateState,
+                documentsURL: makeTempDir(),
+                reader: StubReader(),
+                artwork: ArtworkCache(directory: migrateState.appendingPathComponent("Artwork")),
+                cloudFetcher: service,
+                artworkDownloader: { _ in nil }
+            )
+        }
+        await reloadedMig.rescan()
+        let newTrackID = Track.makeID(rootID: migRootID, relativePath: "Keep.mp3")
+        await MainActor.run {
+            XCTAssertEqual(reloadedMig.tracks.map(\.relativePath), ["Keep.mp3"])
+            XCTAssertEqual(reloadedMig.tracks.first?.id, newTrackID)
+            XCTAssertEqual(reloadedMig.playlists.first?.trackIDs, [newTrackID])
+            XCTAssertTrue(reloadedMig.isFavourite(newTrackID))
+            XCTAssertFalse(reloadedMig.isFavourite(oldTrackID))
+        }
+    }
+}
+
+private final class SendableValueBox<Value>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: Value
+
+    init(_ initial: Value) {
+        self.storage = initial
+    }
+
+    var value: Value { lock.withLock { storage } }
+
+    @discardableResult
+    func withLock<T>(_ body: (inout Value) -> T) -> T {
+        lock.withLock { body(&storage) }
     }
 }

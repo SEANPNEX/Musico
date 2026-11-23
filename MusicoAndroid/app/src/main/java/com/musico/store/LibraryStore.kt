@@ -7,6 +7,7 @@ import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
 import com.musico.cloud.BilibiliClient
 import com.musico.cloud.CloudExporter
+import com.musico.cloud.CloudFolderManifest
 import com.musico.cloud.CloudHttpClient
 import com.musico.cloud.CloudPlaylistResult
 import com.musico.cloud.CloudSource
@@ -17,11 +18,13 @@ import com.musico.cloud.YouTubeClient
 import com.musico.cloud.extractCloudSourceInput
 import com.musico.core.ArtworkCache
 import com.musico.core.FolderScanner
+import com.musico.core.LocalCloudDiscovery
 import com.musico.core.MetadataReading
 import com.musico.core.Persistence
 import com.musico.core.ScannedFile
 import com.musico.core.TrackMetadata
 import com.musico.model.Album
+import com.musico.model.CloudTrackingInfo
 import com.musico.model.LibraryRoot
 import com.musico.model.Playlist
 import com.musico.model.RootKind
@@ -30,19 +33,25 @@ import com.musico.model.Track
 import com.musico.model.TrackMetadataOverride
 import com.musico.model.TrackSortOrder
 import com.musico.model.sortTracks
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import java.io.File
 import java.text.Normalizer
 import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.abs
 
 sealed class LibraryException(message: String) : Exception(message) {
@@ -50,6 +59,13 @@ sealed class LibraryException(message: String) : Exception(message) {
     data object NotAFolder : LibraryException("That location could not be opened as a folder.")
     data object UnsupportedCloudUrl : LibraryException("Enter a valid YouTube, Bilibili, or Google Drive URL.")
 }
+
+data class CloudSyncProgress(
+    val rootId: String,
+    val completedFolders: Int,
+    val totalFolders: Int,
+    val tracksFound: Int,
+)
 
 data class LibraryUiState(
     val roots: List<LibraryRoot> = emptyList(),
@@ -65,6 +81,7 @@ data class LibraryUiState(
     val isScanning: Boolean = false,
     val scanDone: Int = 0,
     val scanTotal: Int = 0,
+    val cloudSyncProgress: Map<String, CloudSyncProgress> = emptyMap(),
 )
 
 class LibraryStore(
@@ -114,6 +131,11 @@ class LibraryStore(
 
     private var rescanRequested = false
     private var scanningJob: Job? = null
+    private val stateLock = Any()
+    private val cloudSyncScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val activeCloudSyncJobs = ConcurrentHashMap<String, Job>()
+    private val cloudPriorityPaths = ConcurrentHashMap<String, String>()
+    private val knownCloudSubfolders = ConcurrentHashMap<String, Set<String>>()
 
     private val _state = MutableStateFlow(LibraryUiState())
     val state: StateFlow<LibraryUiState> = _state.asStateFlow()
@@ -123,13 +145,25 @@ class LibraryStore(
         rereadAll = loadedLib != null && loadedLib.readerVersion != READER_VERSION
 
         val savedAppRoot = loadedLib?.roots?.firstOrNull { it.kind == RootKind.APP_FOLDER }
-        val userRoots = loadedLib?.roots?.filter { it.kind != RootKind.APP_FOLDER }.orEmpty()
-        val appRoot = LibraryRoot(
-            id = LibraryRoot.APP_FOLDER_ID,
-            name = APP_FOLDER_NAME,
-            kind = RootKind.APP_FOLDER,
-            treeUri = null,
-            excludedPaths = savedAppRoot?.excludedPaths.orEmpty(),
+        val userRoots = loadedLib?.roots
+            ?.filter { it.kind != RootKind.APP_FOLDER }
+            .orEmpty()
+            .map { migrateLegacySubfolderTracking(it) }
+        val appRoot = migrateLegacySubfolderTracking(
+            LibraryRoot(
+                id = LibraryRoot.APP_FOLDER_ID,
+                name = APP_FOLDER_NAME,
+                kind = RootKind.APP_FOLDER,
+                treeUri = null,
+                sourceUrl = savedAppRoot?.sourceUrl,
+                remoteId = savedAppRoot?.remoteId,
+                cookie = savedAppRoot?.cookie,
+                lastSyncedEpochMs = savedAppRoot?.lastSyncedEpochMs,
+                excludedPaths = savedAppRoot?.excludedPaths.orEmpty(),
+                linkedCloudKind = savedAppRoot?.linkedCloudKind,
+                trackedSubfolderName = savedAppRoot?.trackedSubfolderName,
+                trackedSubfolders = savedAppRoot?.trackedSubfolders.orEmpty(),
+            )
         )
         val initialRoots = listOf(appRoot) + userRoots
         makeAppFolderVisible(appFolderDir)
@@ -191,20 +225,20 @@ class LibraryStore(
     }
 
     private fun saveLibrary() {
-        val current = _state.value
-        runCatching {
-            Persistence.save(
-                LibraryFile(
-                    roots = current.roots,
-                    tracks = current.tracks,
-                    readerVersion = if (rereadAll) null else READER_VERSION,
-                    trackUris = trackUris.toMap(),
-                    metadataOverrides = metadataOverrides.toMap(),
-                    folderSortOrders = folderSortOrders.toMap(),
-                    folderTrackOrders = folderTrackOrders.toMap(),
-                ),
-                libraryFile,
+        val snapshot = synchronized(stateLock) {
+            val current = _state.value
+            LibraryFile(
+                roots = current.roots,
+                tracks = current.tracks,
+                readerVersion = if (rereadAll) null else READER_VERSION,
+                trackUris = trackUris.toMap(),
+                metadataOverrides = metadataOverrides.toMap(),
+                folderSortOrders = folderSortOrders.toMap(),
+                folderTrackOrders = folderTrackOrders.toMap(),
             )
+        }
+        runCatching {
+            Persistence.save(snapshot, libraryFile)
         }
     }
 
@@ -328,6 +362,260 @@ class LibraryStore(
         )
     }
 
+    private fun migrateLegacySubfolderTracking(root: LibraryRoot): LibraryRoot {
+        val sub = root.trackedSubfolderName?.let { LibraryRoot.normalizeFolderPath(it) }?.takeIf { it.isNotEmpty() }
+            ?: return root
+        val url = root.sourceUrl?.takeIf { it.isNotBlank() }
+        val kind = root.effectiveCloudKind
+        val nextSubs = if (url != null && kind != null && !root.trackedSubfolders.containsKey(sub)) {
+            root.trackedSubfolders + (
+                sub to CloudTrackingInfo(
+                    sourceUrl = url,
+                    remoteId = root.remoteId,
+                    cloudKind = kind,
+                    cookie = root.cookie,
+                    lastSyncedEpochMs = root.lastSyncedEpochMs,
+                )
+                )
+        } else {
+            root.trackedSubfolders
+        }
+        return root.copy(
+            sourceUrl = null,
+            remoteId = null,
+            cookie = null,
+            lastSyncedEpochMs = null,
+            linkedCloudKind = null,
+            trackedSubfolderName = null,
+            trackedSubfolders = nextSubs,
+        )
+    }
+
+    private fun joinFolderPaths(parent: String, child: String): String {
+        val p = LibraryRoot.normalizeFolderPath(parent)
+        val c = LibraryRoot.normalizeFolderPath(child)
+        return when {
+            p.isEmpty() -> c
+            c.isEmpty() -> p
+            else -> "$p/$c"
+        }
+    }
+
+    private fun unexcludePath(excludedPaths: List<String>, relPath: String): List<String> {
+        val norm = LibraryRoot.normalizeFolderPath(relPath)
+        if (norm.isEmpty() || excludedPaths.isEmpty()) return excludedPaths
+        return excludedPaths.filterNot { raw ->
+            val ex = LibraryRoot.normalizeFolderPath(raw)
+            ex == norm || norm.startsWith("$ex/") || ex.startsWith("$norm/")
+        }
+    }
+
+    private fun fileCanonicalForRoot(root: LibraryRoot): String? {
+        if (root.kind == RootKind.APP_FOLDER) {
+            return runCatching { appFolderDir.canonicalPath }.getOrElse { appFolderDir.absolutePath }
+        }
+        if (root.kind != RootKind.PICKED) return null
+        val file = fileFromUriString(root.treeUri) ?: return null
+        return runCatching { file.canonicalPath }.getOrElse { file.absolutePath }
+    }
+
+    private fun safRelativePath(parentDocId: String, childDocId: String): String? {
+        if (parentDocId == childDocId) return ""
+        if (parentDocId.endsWith(":") && childDocId.startsWith(parentDocId)) {
+            return LibraryRoot.normalizeFolderPath(childDocId.substring(parentDocId.length))
+        }
+        if (childDocId.startsWith("$parentDocId/")) {
+            return LibraryRoot.normalizeFolderPath(childDocId.substring(parentDocId.length + 1))
+        }
+        return null
+    }
+
+    private fun findContainingRoot(
+        candidateKey: String,
+        treeUriString: String,
+        treeUri: Uri?,
+        subNorm: String?,
+    ): Pair<Int, String>? {
+        val baseFile = fileFromUriString(treeUriString) ?: treeUri?.let {
+            if (it.scheme == "file" && it.path != null) File(it.path!!) else null
+        }
+        val targetFile = baseFile?.let { base ->
+            if (subNorm != null) File(base, subNorm) else base
+        }
+        val targetCanonical = targetFile?.let { f ->
+            runCatching { f.canonicalPath }.getOrElse { f.absolutePath }
+        }
+        val candidateDocId = if (treeUri != null && treeUri.scheme == "content") {
+            runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
+        } else {
+            null
+        }
+
+        val roots = _state.value.roots
+        for ((index, root) in roots.withIndex()) {
+            if (root.kind.isCloud) continue
+
+            if (targetCanonical != null) {
+                val rootCanonical = fileCanonicalForRoot(root)
+                if (rootCanonical != null) {
+                    if (targetCanonical == rootCanonical) {
+                        return index to ""
+                    }
+                    val prefix = if (rootCanonical.endsWith(File.separator)) rootCanonical else "$rootCanonical${File.separator}"
+                    if (targetCanonical.startsWith(prefix)) {
+                        val rel = targetCanonical.substring(prefix.length).replace(File.separatorChar, '/')
+                        return index to LibraryRoot.normalizeFolderPath(rel)
+                    }
+                }
+            }
+
+            if (root.kind == RootKind.PICKED && treeUri != null && treeUri.scheme == "content" && candidateDocId != null) {
+                val rootUri = root.treeUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+                if (rootUri != null && rootUri.scheme == "content" && rootUri.authority == treeUri.authority) {
+                    val rootDocId = runCatching { DocumentsContract.getTreeDocumentId(rootUri) }.getOrNull()
+                    if (rootDocId != null) {
+                        val baseRel = safRelativePath(rootDocId, candidateDocId)
+                        if (baseRel != null) {
+                            return index to joinFolderPaths(baseRel, subNorm.orEmpty())
+                        }
+                    }
+                }
+            }
+
+            if (root.kind == RootKind.PICKED && root.treeUri != null && canonicalUriKey(root.treeUri) == candidateKey) {
+                return index to subNorm.orEmpty()
+            }
+        }
+        return null
+    }
+
+    private fun findContainedChildRoots(
+        treeUriString: String,
+        treeUri: Uri?,
+    ): List<Pair<LibraryRoot, String>> {
+        val result = mutableListOf<Pair<LibraryRoot, String>>()
+        val parentDir = fileFromUriString(treeUriString) ?: treeUri?.let {
+            if (it.scheme == "file" && it.path != null) File(it.path!!) else null
+        }
+
+        if (parentDir != null) {
+            val parentCanonical = runCatching { parentDir.canonicalPath }.getOrElse { parentDir.absolutePath }
+            val prefix = if (parentCanonical.endsWith(File.separator)) parentCanonical else "$parentCanonical${File.separator}"
+            for (root in _state.value.roots) {
+                if (root.kind != RootKind.PICKED) continue
+                val childCanonical = fileCanonicalForRoot(root) ?: continue
+                if (childCanonical.startsWith(prefix)) {
+                    val rel = LibraryRoot.normalizeFolderPath(
+                        childCanonical.substring(prefix.length).replace(File.separatorChar, '/')
+                    )
+                    if (rel.isNotEmpty()) {
+                        result.add(root to rel)
+                    }
+                }
+            }
+            return result
+        }
+
+        if (treeUri != null && treeUri.scheme == "content") {
+            val parentDocId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull() ?: return emptyList()
+            for (root in _state.value.roots) {
+                if (root.kind != RootKind.PICKED) continue
+                val childUri = root.treeUri?.let { runCatching { Uri.parse(it) }.getOrNull() } ?: continue
+                if (childUri.scheme != "content" || childUri.authority != treeUri.authority) continue
+                val childDocId = runCatching { DocumentsContract.getTreeDocumentId(childUri) }.getOrNull() ?: continue
+                val rel = safRelativePath(parentDocId, childDocId)
+                if (!rel.isNullOrEmpty()) {
+                    result.add(root to rel)
+                }
+            }
+        }
+        return result
+    }
+
+    private fun migrateContainedChildRoots(
+        newRootId: String,
+        contained: List<Pair<LibraryRoot, String>>,
+        migratedSubfolders: MutableMap<String, CloudTrackingInfo>,
+        migratedExcluded: MutableList<String>,
+    ) {
+        if (contained.isEmpty()) return
+        val containedIds = contained.map { it.first.id }.toSet()
+        val idMap = HashMap<String, String>()
+        val currentState = _state.value
+
+        synchronized(stateLock) {
+            for ((childRoot, childRel) in contained) {
+                childRoot.trackingFor("")?.let { rootTracking ->
+                    migratedSubfolders.putIfAbsent(childRel, rootTracking)
+                }
+                for ((subKey, info) in childRoot.trackedSubfolders) {
+                    val mergedKey = joinFolderPaths(childRel, subKey)
+                    if (mergedKey.isNotEmpty()) {
+                        migratedSubfolders.putIfAbsent(mergedKey, info)
+                    }
+                }
+                for (ex in childRoot.excludedPaths) {
+                    val mergedEx = joinFolderPaths(childRel, ex)
+                    if (mergedEx.isNotEmpty()) {
+                        migratedExcluded.add(mergedEx)
+                    }
+                }
+
+                val childTracks = currentState.tracks.filter { it.rootId == childRoot.id }
+                for (t in childTracks) {
+                    val newRel = joinFolderPaths(childRel, t.relativePath)
+                    val newId = Track.makeId(newRootId, newRel)
+                    idMap[t.id] = newId
+                    metadataOverrides.remove(t.id)?.let { ov -> metadataOverrides[newId] = ov }
+                    trackUris.remove(t.id)
+                }
+
+                val oldPrefix = "${childRoot.id}\u001F"
+                for (key in folderSortOrders.keys.filter { it.startsWith(oldPrefix) }.toList()) {
+                    val order = folderSortOrders.remove(key) ?: continue
+                    val oldSub = key.substring(oldPrefix.length)
+                    val newKey = "$newRootId\u001F${joinFolderPaths(childRel, oldSub)}"
+                    folderSortOrders.putIfAbsent(newKey, order)
+                }
+                for (key in folderTrackOrders.keys.filter { it.startsWith(oldPrefix) }.toList()) {
+                    val ids = folderTrackOrders.remove(key) ?: continue
+                    val oldSub = key.substring(oldPrefix.length)
+                    val newKey = "$newRootId\u001F${joinFolderPaths(childRel, oldSub)}"
+                    folderTrackOrders.putIfAbsent(newKey, ids.map { idMap[it] ?: it })
+                }
+
+                releasePersistableReadPermission(childRoot.treeUri)
+            }
+
+            val nextRoots = currentState.roots.filterNot { it.id in containedIds }
+            val nextTracks = currentState.tracks.filterNot { it.rootId in containedIds }
+            val nextPlaylists = if (idMap.isEmpty()) currentState.playlists else {
+                currentState.playlists.map { pl ->
+                    pl.copy(trackIds = pl.trackIds.map { idMap[it] ?: it })
+                }
+            }
+            val nextFavourites = if (idMap.isEmpty()) currentState.favourites else {
+                currentState.favourites.mapTo(mutableSetOf()) { idMap[it] ?: it }
+            }
+            val (albums, artists, newById) = buildIndices(nextTracks)
+            byId = newById
+            _state.value = currentState.copy(
+                roots = nextRoots,
+                availableRootIds = currentState.availableRootIds - containedIds,
+                tracks = nextTracks,
+                albums = albums,
+                artists = artists,
+                playlists = nextPlaylists,
+                favourites = nextFavourites,
+                folderSortOrders = folderSortOrders.toMap(),
+                folderTrackOrders = folderTrackOrders.toMap(),
+            )
+        }
+        if (idMap.isNotEmpty()) {
+            savePlaylists()
+        }
+    }
+
     private suspend fun addPickedRootInternal(
         name: String,
         treeUriString: String,
@@ -336,83 +624,173 @@ class LibraryStore(
         cloudSourceRoot: LibraryRoot? = null,
         trackedSubfolderName: String? = null,
     ): Result<Unit> {
-        val appCanonical = runCatching { appFolderDir.canonicalPath }.getOrElse { appFolderDir.absolutePath }
-        val duplicateIndex = _state.value.roots.indexOfFirst { root ->
-            when (root.kind) {
-                RootKind.APP_FOLDER -> appCanonical == candidateKey
-                RootKind.PICKED -> root.treeUri?.let { canonicalUriKey(it) == candidateKey } == true
-                RootKind.CLOUD_YOUTUBE, RootKind.CLOUD_BILIBILI, RootKind.CLOUD_GOOGLE_DRIVE -> false
+        val subNorm = trackedSubfolderName?.let { LibraryRoot.normalizeFolderPath(it) }?.takeIf { it.isNotEmpty() }
+        val containing = findContainingRoot(candidateKey, treeUriString, treeUri, subNorm)
+
+        if (containing != null) {
+            val (existingIndex, relPath) = containing
+            val existing = _state.value.roots[existingIndex]
+
+            if (cloudSourceRoot == null) {
+                if (relPath.isNotEmpty() && existing.isExcluded(relPath)) {
+                    val updatedRoot = existing.copy(
+                        excludedPaths = unexcludePath(existing.excludedPaths, relPath),
+                    )
+                    synchronized(stateLock) {
+                        val updatedRoots = _state.value.roots.toMutableList()
+                        updatedRoots[existingIndex] = updatedRoot
+                        _state.value = _state.value.copy(roots = updatedRoots)
+                    }
+                    saveLibrary()
+                    rescan()
+                    return Result.success(Unit)
+                }
+                return Result.failure(LibraryException.DuplicateRoot)
             }
-        }
-        if (duplicateIndex >= 0) {
-            if (cloudSourceRoot != null) {
-                val updatedRoots = _state.value.roots.toMutableList()
-                val existing = updatedRoots[duplicateIndex]
-                val updatedRoot = existing.copy(
+
+            val cloudKind = cloudSourceRoot.effectiveCloudKind
+            val trackingInfo = cloudSourceRoot.sourceUrl?.takeIf { it.isNotBlank() }?.let { url ->
+                if (cloudKind != null) {
+                    CloudTrackingInfo(
+                        sourceUrl = url,
+                        remoteId = cloudSourceRoot.remoteId,
+                        cloudKind = cloudKind,
+                        cookie = cloudSourceRoot.cookie,
+                        lastSyncedEpochMs = System.currentTimeMillis(),
+                    )
+                } else null
+            }
+
+            val updatedRoot = if (relPath.isEmpty()) {
+                existing.copy(
                     sourceUrl = cloudSourceRoot.sourceUrl ?: existing.sourceUrl,
                     remoteId = cloudSourceRoot.remoteId ?: existing.remoteId,
-                    linkedCloudKind = cloudSourceRoot.effectiveCloudKind ?: existing.linkedCloudKind,
+                    linkedCloudKind = cloudKind ?: existing.linkedCloudKind,
                     cookie = cloudSourceRoot.cookie ?: existing.cookie,
                     lastSyncedEpochMs = System.currentTimeMillis(),
-                    trackedSubfolderName = trackedSubfolderName ?: existing.trackedSubfolderName,
+                    trackedSubfolderName = null,
                 )
-                updatedRoots[duplicateIndex] = updatedRoot
-                _state.value = _state.value.copy(roots = updatedRoots)
-                saveLibrary()
-                rescan()
-                notifyFolderAdded(updatedRoot, trackedSubfolderName)
-                return Result.success(Unit)
+            } else {
+                val nextSubs = if (trackingInfo != null) {
+                    existing.trackedSubfolders + (relPath to trackingInfo)
+                } else {
+                    existing.trackedSubfolders
+                }
+                existing.copy(
+                    excludedPaths = unexcludePath(existing.excludedPaths, relPath),
+                    trackedSubfolders = nextSubs,
+                )
             }
-            return Result.failure(LibraryException.DuplicateRoot)
+
+            synchronized(stateLock) {
+                val updatedRoots = _state.value.roots.toMutableList()
+                updatedRoots[existingIndex] = updatedRoot
+                _state.value = _state.value.copy(roots = updatedRoots)
+            }
+            saveLibrary()
+            rescan()
+            notifyFolderAddedForPath(updatedRoot, relPath)
+            return Result.success(Unit)
         }
 
         if (treeUri != null) {
             takePersistableReadPermission(treeUri)
         }
-        val manifest = if (cloudSourceRoot == null && treeUri != null) {
-            resolveManifestForPickedUri(treeUri, trackedSubfolderName)
+
+        val newRootId = UUID.randomUUID().toString()
+        val contained = if (subNorm == null) findContainedChildRoots(treeUriString, treeUri) else emptyList()
+        val migratedSubfolders = linkedMapOf<String, CloudTrackingInfo>()
+        val migratedExcluded = mutableListOf<String>()
+        migrateContainedChildRoots(
+            newRootId = newRootId,
+            contained = contained,
+            migratedSubfolders = migratedSubfolders,
+            migratedExcluded = migratedExcluded,
+        )
+
+        val localBaseDir = fileFromUriString(treeUriString) ?: treeUri?.let {
+            if (it.scheme == "file" && it.path != null) File(it.path!!) else null
+        }
+        val manifest = if (cloudSourceRoot == null) {
+            when {
+                localBaseDir != null -> {
+                    val target = if (subNorm != null) File(localBaseDir, subNorm) else localBaseDir
+                    CloudExporter.loadManifest(target)
+                }
+                treeUri != null -> resolveManifestForPickedUri(treeUri, subNorm)
+                else -> null
+            }
         } else {
             null
         }
         val manifestKind = manifest?.cloudKind?.let { raw ->
             runCatching { RootKind.valueOf(raw) }.getOrNull()
         }
-        val root = LibraryRoot(
-            id = UUID.randomUUID().toString(),
-            name = name,
-            kind = RootKind.PICKED,
-            treeUri = treeUriString,
-            sourceUrl = cloudSourceRoot?.sourceUrl ?: manifest?.sourceURL,
-            remoteId = cloudSourceRoot?.remoteId ?: manifest?.remoteID,
-            cookie = cloudSourceRoot?.cookie,
-            lastSyncedEpochMs = if (cloudSourceRoot != null) {
-                System.currentTimeMillis()
-            } else {
-                manifest?.lastSyncedEpochMs?.takeIf { it > 0L }
-            },
-            linkedCloudKind = cloudSourceRoot?.effectiveCloudKind ?: manifestKind,
-            trackedSubfolderName = trackedSubfolderName,
-        )
-        val current = _state.value
-        _state.value = current.copy(
-            roots = current.roots + root,
-            availableRootIds = current.availableRootIds + root.id,
-        )
+
+        val cloudKind = cloudSourceRoot?.effectiveCloudKind ?: manifestKind
+        val trackingUrl = cloudSourceRoot?.sourceUrl ?: manifest?.sourceURL
+        val trackingRemoteId = cloudSourceRoot?.remoteId ?: manifest?.remoteID
+        val trackingSyncedMs = if (cloudSourceRoot != null) {
+            System.currentTimeMillis()
+        } else {
+            manifest?.lastSyncedEpochMs?.takeIf { it > 0L }
+        }
+
+        val root = if (subNorm != null) {
+            if (!trackingUrl.isNullOrBlank() && cloudKind != null) {
+                migratedSubfolders[subNorm] = CloudTrackingInfo(
+                    sourceUrl = trackingUrl,
+                    remoteId = trackingRemoteId,
+                    cloudKind = cloudKind,
+                    cookie = cloudSourceRoot?.cookie,
+                    lastSyncedEpochMs = trackingSyncedMs,
+                )
+            }
+            LibraryRoot(
+                id = newRootId,
+                name = name,
+                kind = RootKind.PICKED,
+                treeUri = treeUriString,
+                excludedPaths = migratedExcluded.distinct(),
+                trackedSubfolders = migratedSubfolders,
+            )
+        } else {
+            LibraryRoot(
+                id = newRootId,
+                name = name,
+                kind = RootKind.PICKED,
+                treeUri = treeUriString,
+                sourceUrl = trackingUrl,
+                remoteId = trackingRemoteId,
+                cookie = cloudSourceRoot?.cookie,
+                lastSyncedEpochMs = trackingSyncedMs,
+                excludedPaths = migratedExcluded.distinct(),
+                linkedCloudKind = cloudKind,
+                trackedSubfolders = migratedSubfolders,
+            )
+        }
+
+        synchronized(stateLock) {
+            val current = _state.value
+            _state.value = current.copy(
+                roots = current.roots + root,
+                availableRootIds = current.availableRootIds + root.id,
+            )
+        }
         saveLibrary()
         rescan()
-        notifyFolderAdded(root, trackedSubfolderName)
+        notifyFolderAddedForPath(root, subNorm.orEmpty())
         return Result.success(Unit)
     }
 
-    private fun notifyFolderAdded(root: LibraryRoot, trackedSubfolderName: String?) {
-        val sub = trackedSubfolderName?.trim()?.takeIf { it.isNotEmpty() }
-        val folderName = sub ?: root.name
-        val subPath = sub?.let { LibraryRoot.normalizeFolderPath(it) }.orEmpty()
-        val trackIds = tracksUnder(root.id, subPath).map { it.id }
+    private fun notifyFolderAddedForPath(root: LibraryRoot, relPath: String) {
+        val norm = LibraryRoot.normalizeFolderPath(relPath)
+        val folderName = if (norm.isEmpty()) root.name else norm.substringAfterLast('/')
+        val trackIds = tracksUnder(root.id, norm).map { it.id }
         onFolderAdded?.invoke(folderName, trackIds)
     }
 
-    private fun resolveManifestForPickedUri(treeUri: Uri, subfolderName: String?): com.musico.cloud.CloudFolderManifest? {
+    private fun resolveManifestForPickedUri(treeUri: Uri, subfolderName: String?): CloudFolderManifest? {
         if (treeUri.scheme == "file" && treeUri.path != null) {
             val base = File(treeUri.path!!)
             val target = subfolderName?.takeIf { it.isNotBlank() }?.let { File(base, it) } ?: base
@@ -420,8 +798,180 @@ class LibraryStore(
         }
         val ctx = context ?: return null
         val rootDoc = runCatching { DocumentFile.fromTreeUri(ctx, treeUri) }.getOrNull() ?: return null
-        val targetDoc = subfolderName?.takeIf { it.isNotBlank() }?.let { rootDoc.findFile(it) } ?: rootDoc
+        var targetDoc = rootDoc
+        if (!subfolderName.isNullOrBlank()) {
+            for (seg in subfolderName.split('/')) {
+                if (seg.isEmpty()) continue
+                targetDoc = targetDoc.findFile(seg) ?: return null
+            }
+        }
         return CloudExporter.loadManifest(ctx, targetDoc)
+    }
+
+    fun classifyCloudUrl(rawInput: String): Pair<String, RootKind>? {
+        val trimmedUrl = extractCloudSourceInput(rawInput)
+        if (trimmedUrl.isEmpty()) return null
+        val isGoogleDrive = GoogleDriveClient.canHandle(trimmedUrl)
+        val isBilibili = BilibiliClient.canHandle(trimmedUrl)
+        val isYouTube = YouTubeClient.canHandle(trimmedUrl)
+        if (!isGoogleDrive && !isBilibili && !isYouTube) return null
+        val kind = when {
+            isGoogleDrive -> RootKind.CLOUD_GOOGLE_DRIVE
+            isBilibili && !isYouTube -> RootKind.CLOUD_BILIBILI
+            isYouTube && !isBilibili -> RootKind.CLOUD_YOUTUBE
+            trimmedUrl.contains("bilibili", ignoreCase = true) || trimmedUrl.contains("b23.tv", ignoreCase = true) ->
+                RootKind.CLOUD_BILIBILI
+            else -> RootKind.CLOUD_YOUTUBE
+        }
+        return trimmedUrl to kind
+    }
+
+    fun cloudTracking(rootId: String, path: String = ""): CloudTrackingInfo? {
+        val root = _state.value.roots.firstOrNull { it.id == rootId } ?: return null
+        return root.trackingFor(path)
+    }
+
+    suspend fun updateCloudTrackingAddress(
+        rootId: String,
+        path: String = "",
+        newSourceUrl: String,
+        cookie: String? = null,
+    ): Result<CloudTrackingInfo> {
+        val (cleanedUrl, newCloudKind) = classifyCloudUrl(newSourceUrl)
+            ?: return Result.failure(LibraryException.UnsupportedCloudUrl)
+        val cleanCookie = cookie?.trim()?.takeIf { it.isNotEmpty() }
+        val normPath = LibraryRoot.normalizeFolderPath(path)
+
+        var updatedRoot: LibraryRoot? = null
+        var updatedInfo: CloudTrackingInfo? = null
+
+        synchronized(stateLock) {
+            val current = _state.value
+            val index = current.roots.indexOfFirst { it.id == rootId }
+            if (index < 0) return Result.failure(LibraryException.NotAFolder)
+            val root = current.roots[index]
+            val prevTracking = root.trackingFor(normPath)
+            val preservedRemoteId = if (prevTracking?.sourceUrl == cleanedUrl) prevTracking.remoteId else null
+            val info = CloudTrackingInfo(
+                sourceUrl = cleanedUrl,
+                remoteId = preservedRemoteId,
+                cloudKind = newCloudKind,
+                cookie = cleanCookie,
+                lastSyncedEpochMs = prevTracking?.lastSyncedEpochMs,
+            )
+
+            val nextRoot = when {
+                root.kind.isCloud -> root.copy(
+                    kind = newCloudKind,
+                    sourceUrl = cleanedUrl,
+                    remoteId = preservedRemoteId,
+                    cookie = cleanCookie,
+                )
+                normPath.isEmpty() -> root.copy(
+                    sourceUrl = cleanedUrl,
+                    remoteId = preservedRemoteId,
+                    linkedCloudKind = newCloudKind,
+                    cookie = cleanCookie,
+                    trackedSubfolderName = null,
+                )
+                else -> {
+                    val clearLegacy = root.trackedSubfolderName?.let {
+                        LibraryRoot.normalizeFolderPath(it) == normPath
+                    } == true
+                    val nextSubs = root.trackedSubfolders + (normPath to info)
+                    if (clearLegacy) {
+                        root.copy(
+                            sourceUrl = null,
+                            remoteId = null,
+                            linkedCloudKind = null,
+                            cookie = null,
+                            lastSyncedEpochMs = null,
+                            trackedSubfolderName = null,
+                            trackedSubfolders = nextSubs,
+                        )
+                    } else {
+                        root.copy(trackedSubfolders = nextSubs)
+                    }
+                }
+            }
+
+            val nextRoots = current.roots.toMutableList()
+            nextRoots[index] = nextRoot
+            _state.value = current.copy(roots = nextRoots)
+            updatedRoot = nextRoot
+            updatedInfo = info
+        }
+
+        saveLibrary()
+        val finalRoot = updatedRoot!!
+        val finalInfo = updatedInfo!!
+        if (!finalRoot.kind.isCloud) {
+            withContext(Dispatchers.IO) {
+                rewriteManifestOnDisk(finalRoot, normPath, finalInfo)
+            }
+        }
+        return Result.success(finalInfo)
+    }
+
+    private fun rewriteManifestOnDisk(
+        root: LibraryRoot,
+        normPath: String,
+        info: CloudTrackingInfo,
+    ) {
+        val baseFile: File? = when {
+            root.kind == RootKind.APP_FOLDER -> appFolderDir
+            else -> fileFromUriString(root.treeUri)
+        }
+        if (baseFile != null) {
+            var targetDir: File = baseFile
+            if (normPath.isNotEmpty()) {
+                for (seg in normPath.split('/')) {
+                    if (seg.isNotEmpty()) targetDir = File(targetDir, seg)
+                }
+            }
+            if (!targetDir.exists() || !targetDir.isDirectory) return
+            val existing = CloudExporter.loadManifest(targetDir)
+            runCatching {
+                CloudExporter.saveManifest(
+                    targetDir,
+                    CloudFolderManifest(
+                        sourceURL = info.sourceUrl,
+                        remoteID = info.remoteId,
+                        cloudKind = info.cloudKind.name,
+                        lastSyncedEpochMs = info.lastSyncedEpochMs ?: existing?.lastSyncedEpochMs ?: 0L,
+                        tracks = existing?.tracks ?: emptyMap(),
+                    ),
+                )
+            }
+            return
+        }
+
+        val ctx = context ?: return
+        val treeUri = root.treeUri?.let { runCatching { Uri.parse(it) }.getOrNull() } ?: return
+        var targetDoc = runCatching { DocumentFile.fromTreeUri(ctx, treeUri) }.getOrNull() ?: return
+        if (normPath.isNotEmpty()) {
+            for (seg in normPath.split('/')) {
+                if (seg.isEmpty()) continue
+                targetDoc = targetDoc.findFile(seg)?.takeIf { it.isDirectory }
+                    ?: targetDoc.listFiles().firstOrNull { it.isDirectory && it.name.equals(seg, ignoreCase = true) }
+                    ?: return
+            }
+        }
+        if (!targetDoc.exists() || !targetDoc.isDirectory || !targetDoc.canWrite()) return
+        val existing = CloudExporter.loadManifest(ctx, targetDoc)
+        runCatching {
+            CloudExporter.saveManifest(
+                ctx,
+                targetDoc,
+                CloudFolderManifest(
+                    sourceURL = info.sourceUrl,
+                    remoteID = info.remoteId,
+                    cloudKind = info.cloudKind.name,
+                    lastSyncedEpochMs = info.lastSyncedEpochMs ?: existing?.lastSyncedEpochMs ?: 0L,
+                    tracks = existing?.tracks ?: emptyMap(),
+                ),
+            )
+        }
     }
 
     suspend fun fetchCloudPlaylist(
@@ -443,13 +993,35 @@ class LibraryStore(
         }
     }
 
-    fun markRootCloudSynced(rootId: String, syncedEpochMs: Long = System.currentTimeMillis()) {
-        val current = _state.value
-        val index = current.roots.indexOfFirst { it.id == rootId }
-        if (index < 0) return
-        val updated = current.roots.toMutableList()
-        updated[index] = updated[index].copy(lastSyncedEpochMs = syncedEpochMs)
-        _state.value = current.copy(roots = updated)
+    fun markRootCloudSynced(
+        rootId: String,
+        syncedEpochMs: Long = System.currentTimeMillis(),
+        subfolderPath: String? = null,
+    ) {
+        val normSub = subfolderPath?.let { LibraryRoot.normalizeFolderPath(it) }?.takeIf { it.isNotEmpty() }
+        synchronized(stateLock) {
+            val current = _state.value
+            val index = current.roots.indexOfFirst { it.id == rootId }
+            if (index < 0) return
+            val root = current.roots[index]
+            val updatedRoot = if (normSub == null) {
+                root.copy(lastSyncedEpochMs = syncedEpochMs)
+            } else {
+                val existingSub = root.trackedSubfolders[normSub]
+                if (existingSub != null) {
+                    root.copy(
+                        trackedSubfolders = root.trackedSubfolders + (normSub to existingSub.copy(lastSyncedEpochMs = syncedEpochMs)),
+                    )
+                } else if (root.trackedSubfolderName?.let { LibraryRoot.normalizeFolderPath(it) } == normSub) {
+                    root.copy(lastSyncedEpochMs = syncedEpochMs)
+                } else {
+                    root
+                }
+            }
+            val updated = current.roots.toMutableList()
+            updated[index] = updatedRoot
+            _state.value = current.copy(roots = updated)
+        }
         saveLibrary()
     }
 
@@ -467,42 +1039,69 @@ class LibraryStore(
         }
         takePersistableReadPermission(treeUri)
 
-        val updatedRoots = current.roots.toMutableList()
-        updatedRoots[index] = updatedRoots[index].copy(
-            name = name,
-            treeUri = treeUri.toString(),
-        )
-        _state.value = current.copy(
-            roots = updatedRoots,
-            availableRootIds = current.availableRootIds + rootId,
-        )
+        synchronized(stateLock) {
+            val latest = _state.value
+            val idx = latest.roots.indexOfFirst { it.id == rootId }
+            if (idx >= 0) {
+                val updatedRoots = latest.roots.toMutableList()
+                updatedRoots[idx] = updatedRoots[idx].copy(
+                    name = name,
+                    treeUri = treeUri.toString(),
+                )
+                _state.value = latest.copy(
+                    roots = updatedRoots,
+                    availableRootIds = latest.availableRootIds + rootId,
+                )
+            }
+        }
         saveLibrary()
         rescan()
         return Result.success(Unit)
     }
 
-    suspend fun addCloudRoot(sourceUrl: String, cookie: String? = null): Result<Unit> {
-        val trimmedUrl = extractCloudSourceInput(sourceUrl)
-        if (trimmedUrl.isEmpty()) {
-            return Result.failure(LibraryException.UnsupportedCloudUrl)
+    fun prioritizeCloudFolder(rootId: String, path: String) {
+        val norm = LibraryRoot.normalizeFolderPath(path)
+        if (norm.isEmpty()) {
+            cloudPriorityPaths.remove(rootId)
+        } else {
+            cloudPriorityPaths[rootId] = norm
         }
+    }
+
+    suspend fun awaitCloudSync(rootId: String? = null) {
+        if (rootId != null) {
+            activeCloudSyncJobs[rootId]?.join()
+        } else {
+            activeCloudSyncJobs.values.toList().forEach { it.join() }
+        }
+    }
+
+    suspend fun addCloudRoot(sourceUrl: String, cookie: String? = null): Result<Unit> {
+        val (trimmedUrl, classifiedKind) = classifyCloudUrl(sourceUrl)
+            ?: return Result.failure(LibraryException.UnsupportedCloudUrl)
         val cleanCookie = cookie?.trim()?.takeIf { it.isNotEmpty() }
 
-        val isGoogleDrive = GoogleDriveClient.canHandle(trimmedUrl)
-        val isBilibili = BilibiliClient.canHandle(trimmedUrl)
-        val isYouTube = YouTubeClient.canHandle(trimmedUrl)
-        if (!isGoogleDrive && !isBilibili && !isYouTube) {
-            return Result.failure(LibraryException.UnsupportedCloudUrl)
+        if (classifiedKind == RootKind.CLOUD_GOOGLE_DRIVE) {
+            val draftRoot = LibraryRoot(
+                id = UUID.randomUUID().toString(),
+                name = "Google Drive",
+                kind = RootKind.CLOUD_GOOGLE_DRIVE,
+                sourceUrl = trimmedUrl,
+                cookie = cleanCookie,
+            )
+            val firstBatchSignal = CompletableDeferred<Result<Unit>>()
+            launchGoogleDriveSync(
+                root = draftRoot,
+                isNewRoot = true,
+                firstBatchSignal = firstBatchSignal,
+            )
+            return firstBatchSignal.await()
         }
 
         val playlist = try {
             withContext(Dispatchers.IO) {
-                when {
-                    isGoogleDrive -> googleDriveClient.fetchPlaylist(trimmedUrl, cleanCookie)
-                    isBilibili && !isYouTube -> bilibiliClient.fetchPlaylist(trimmedUrl, cleanCookie)
-                    isYouTube && !isBilibili -> youTubeClient.fetchPlaylist(trimmedUrl, cleanCookie)
-                    trimmedUrl.contains("bilibili", ignoreCase = true) || trimmedUrl.contains("b23.tv", ignoreCase = true) ->
-                        bilibiliClient.fetchPlaylist(trimmedUrl, cleanCookie)
+                when (classifiedKind) {
+                    RootKind.CLOUD_BILIBILI -> bilibiliClient.fetchPlaylist(trimmedUrl, cleanCookie)
                     else -> youTubeClient.fetchPlaylist(trimmedUrl, cleanCookie)
                 }
             }
@@ -544,50 +1143,60 @@ class LibraryStore(
             )
         }
 
-        val current = _state.value
-        _state.value = current.copy(
-            roots = current.roots + root,
-            availableRootIds = current.availableRootIds + root.id,
-        )
-        publish(current.tracks + newTracks)
+        synchronized(stateLock) {
+            val current = _state.value
+            _state.value = current.copy(
+                roots = current.roots + root,
+                availableRootIds = current.availableRootIds + root.id,
+            )
+        }
+        publish(_state.value.tracks + newTracks)
         onFolderAdded?.invoke(root.name, newTracks.map { it.id })
         return Result.success(Unit)
     }
 
     fun removeRoot(rootId: String) {
-        val current = _state.value
-        val index = current.roots.indexOfFirst { it.id == rootId }
-        if (index < 0) return
-        val root = current.roots[index]
-        if (root.kind == RootKind.APP_FOLDER) return
+        activeCloudSyncJobs.remove(rootId)?.cancel()
+        cloudPriorityPaths.remove(rootId)
+        knownCloudSubfolders.remove(rootId)
 
-        if (root.kind == RootKind.PICKED) {
-            releasePersistableReadPermission(root.treeUri)
+        var removedIds: Set<String> = emptySet()
+        synchronized(stateLock) {
+            val current = _state.value
+            val index = current.roots.indexOfFirst { it.id == rootId }
+            if (index < 0) return
+            val root = current.roots[index]
+            if (root.kind == RootKind.APP_FOLDER) return
+
+            if (root.kind == RootKind.PICKED) {
+                releasePersistableReadPermission(root.treeUri)
+            }
+
+            val updatedRoots = current.roots.toMutableList().apply { removeAt(index) }
+            removedIds = current.tracks.filter { it.rootId == rootId }.map { it.id }.toSet()
+            val keptTracks = current.tracks.filter { it.rootId != rootId }
+            for (id in removedIds) {
+                trackUris.remove(id)
+                metadataOverrides.remove(id)
+            }
+            val rootPrefix = "$rootId\u001F"
+            folderSortOrders.keys.removeAll { it.startsWith(rootPrefix) }
+            folderTrackOrders.keys.removeAll { it.startsWith(rootPrefix) }
+
+            val (albums, artists, idMap) = buildIndices(keptTracks)
+            byId = idMap
+
+            _state.value = current.copy(
+                roots = updatedRoots,
+                availableRootIds = current.availableRootIds - rootId,
+                tracks = keptTracks,
+                albums = albums,
+                artists = artists,
+                folderSortOrders = folderSortOrders.toMap(),
+                folderTrackOrders = folderTrackOrders.toMap(),
+                cloudSyncProgress = current.cloudSyncProgress - rootId,
+            )
         }
-
-        val updatedRoots = current.roots.toMutableList().apply { removeAt(index) }
-        val removedIds = current.tracks.filter { it.rootId == rootId }.map { it.id }.toSet()
-        val keptTracks = current.tracks.filter { it.rootId != rootId }
-        for (id in removedIds) {
-            trackUris.remove(id)
-            metadataOverrides.remove(id)
-        }
-        val rootPrefix = "$rootId\u001F"
-        folderSortOrders.keys.removeAll { it.startsWith(rootPrefix) }
-        folderTrackOrders.keys.removeAll { it.startsWith(rootPrefix) }
-
-        val (albums, artists, idMap) = buildIndices(keptTracks)
-        byId = idMap
-
-        _state.value = current.copy(
-            roots = updatedRoots,
-            availableRootIds = current.availableRootIds - rootId,
-            tracks = keptTracks,
-            albums = albums,
-            artists = artists,
-            folderSortOrders = folderSortOrders.toMap(),
-            folderTrackOrders = folderTrackOrders.toMap(),
-        )
         forget(removedIds)
         saveLibrary()
     }
@@ -683,6 +1292,219 @@ class LibraryStore(
         }
     }
 
+    private fun launchGoogleDriveSync(
+        root: LibraryRoot,
+        isNewRoot: Boolean,
+        firstBatchSignal: CompletableDeferred<Result<Unit>>? = null,
+    ) {
+        activeCloudSyncJobs.remove(root.id)?.cancel()
+        val sourceUrl = root.sourceUrl ?: root.remoteId
+        if (sourceUrl.isNullOrBlank()) {
+            firstBatchSignal?.complete(Result.failure(LibraryException.UnsupportedCloudUrl))
+            return
+        }
+
+        val job = cloudSyncScope.launch {
+            var resolvedRoot = root
+            var hasInitialized = false
+            val existingTracks = synchronized(stateLock) {
+                _state.value.tracks.filter { it.rootId == root.id }
+            }
+            val existingByRel = LinkedHashMap<String, Track>(existingTracks.size).apply {
+                for (t in existingTracks) putIfAbsent(t.relativePath, t)
+            }
+            val seenRel = HashSet<String>()
+            val crawledAllTracks = ArrayList<Track>()
+            val syncNow = System.currentTimeMillis()
+
+            try {
+                googleDriveClient.crawlProgressive(
+                    sourceUrl = sourceUrl,
+                    cookie = root.cookie,
+                    priorityPathProvider = { cloudPriorityPaths[root.id] },
+                ) { batch ->
+                    if (!isActive) throw CancellationException()
+                    val isFirstBatch = !hasInitialized
+                    if (!hasInitialized) {
+                        if (isNewRoot) {
+                            val duplicate = synchronized(stateLock) {
+                                _state.value.roots.any {
+                                    it.kind == RootKind.CLOUD_GOOGLE_DRIVE && it.remoteId == batch.rootRemoteId
+                                }
+                            }
+                            if (duplicate) {
+                                firstBatchSignal?.complete(Result.failure(LibraryException.DuplicateRoot))
+                                throw CancellationException("Duplicate root")
+                            }
+                        }
+                        resolvedRoot = root.copy(
+                            name = batch.rootTitle.ifBlank { root.name },
+                            remoteId = batch.rootRemoteId,
+                            lastSyncedEpochMs = if (batch.progress.isComplete) System.currentTimeMillis() else root.lastSyncedEpochMs,
+                        )
+                        synchronized(stateLock) {
+                            val cur = _state.value
+                            val updatedRoots = if (isNewRoot) {
+                                cur.roots + resolvedRoot
+                            } else {
+                                if (cur.roots.none { it.id == resolvedRoot.id }) {
+                                    throw CancellationException("Root removed")
+                                }
+                                cur.roots.map { if (it.id == resolvedRoot.id) resolvedRoot else it }
+                            }
+                            _state.value = cur.copy(
+                                roots = updatedRoots,
+                                availableRootIds = cur.availableRootIds + resolvedRoot.id,
+                            )
+                        }
+                        hasInitialized = true
+                    } else {
+                        val stillExists = synchronized(stateLock) {
+                            _state.value.roots.any { it.id == resolvedRoot.id }
+                        }
+                        if (!stillExists) throw CancellationException("Root removed")
+                    }
+
+                    val batchTracks = buildCloudTracks(
+                        root = resolvedRoot,
+                        items = batch.batchTracks,
+                        existingByRel = existingByRel,
+                        nowMs = syncNow,
+                    )
+                    for (t in batchTracks) {
+                        if (seenRel.add(t.relativePath)) {
+                            crawledAllTracks.add(t)
+                        }
+                    }
+
+                    var removedOnComplete: Set<String> = emptySet()
+                    var completeTrackIds: List<String>? = null
+
+                    synchronized(stateLock) {
+                        val cur = _state.value
+                        if (cur.roots.none { it.id == resolvedRoot.id }) {
+                            throw CancellationException("Root removed")
+                        }
+
+                        if (batch.progress.isComplete) {
+                            knownCloudSubfolders.remove(resolvedRoot.id)
+                        } else {
+                            knownCloudSubfolders[resolvedRoot.id] = batch.knownFolderPaths
+                        }
+
+                        val nextProgress = if (batch.progress.isComplete) {
+                            cur.cloudSyncProgress - resolvedRoot.id
+                        } else {
+                            cur.cloudSyncProgress + (
+                                resolvedRoot.id to CloudSyncProgress(
+                                    rootId = resolvedRoot.id,
+                                    completedFolders = batch.progress.completedFolders,
+                                    totalFolders = batch.progress.totalDiscoveredFolders,
+                                    tracksFound = crawledAllTracks.size,
+                                )
+                            )
+                        }
+
+                        val nextRoots = if (batch.progress.isComplete) {
+                            val doneAt = System.currentTimeMillis()
+                            cur.roots.map {
+                                if (it.id == resolvedRoot.id) {
+                                    it.copy(
+                                        name = batch.rootTitle.ifBlank { it.name },
+                                        remoteId = batch.rootRemoteId,
+                                        lastSyncedEpochMs = doneAt,
+                                    )
+                                } else it
+                            }
+                        } else {
+                            cur.roots
+                        }
+
+                        val otherTracks = cur.tracks.filter { it.rootId != resolvedRoot.id }
+                        val rootTracksNext = if (!batch.progress.isComplete) {
+                            // Merge without deleting existing tracks until the full crawl finishes.
+                            val mergedByRel = LinkedHashMap<String, Track>()
+                            for (t in cur.tracks) {
+                                if (t.rootId == resolvedRoot.id) mergedByRel[t.relativePath] = t
+                            }
+                            for (t in batchTracks) {
+                                mergedByRel[t.relativePath] = t
+                            }
+                            mergedByRel.values.toList()
+                        } else {
+                            if (crawledAllTracks.isEmpty() && existingByRel.isNotEmpty()) {
+                                existingByRel.values.toList()
+                            } else {
+                                removedOnComplete = existingByRel
+                                    .filterKeys { it !in seenRel }
+                                    .values
+                                    .mapTo(mutableSetOf()) { it.id }
+                                crawledAllTracks.toList()
+                            }
+                        }
+
+                        val activeRootMap = nextRoots.associateBy { it.id }
+                        val combined = (otherTracks + rootTracksNext).filter { t ->
+                            val r = activeRootMap[t.rootId] ?: return@filter false
+                            !r.isExcluded(t.relativePath)
+                        }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+
+                        val (albums, artists, idMap) = buildIndices(combined)
+                        byId = idMap
+                        _state.value = cur.copy(
+                            roots = nextRoots,
+                            tracks = combined,
+                            albums = albums,
+                            artists = artists,
+                            cloudSyncProgress = nextProgress,
+                        )
+                        if (batch.progress.isComplete) {
+                            completeTrackIds = combined.filter { it.rootId == resolvedRoot.id }.map { it.id }
+                        }
+                    }
+
+                    if (isFirstBatch || batchTracks.isNotEmpty() || batch.progress.isComplete) {
+                        saveLibrary()
+                    }
+                    if (removedOnComplete.isNotEmpty()) {
+                        for (id in removedOnComplete) {
+                            trackUris.remove(id)
+                            metadataOverrides.remove(id)
+                        }
+                        forget(removedOnComplete)
+                    }
+                    if (firstBatchSignal != null && !firstBatchSignal.isCompleted) {
+                        firstBatchSignal.complete(Result.success(Unit))
+                    }
+                    if (batch.progress.isComplete && isNewRoot) {
+                        onFolderAdded?.invoke(resolvedRoot.name, completeTrackIds.orEmpty())
+                    }
+                }
+            } catch (cancel: CancellationException) {
+                knownCloudSubfolders.remove(resolvedRoot.id)
+                synchronized(stateLock) {
+                    val cur = _state.value
+                    _state.value = cur.copy(cloudSyncProgress = cur.cloudSyncProgress - resolvedRoot.id)
+                }
+                if (firstBatchSignal != null && !firstBatchSignal.isCompleted) {
+                    firstBatchSignal.complete(Result.failure(cancel))
+                }
+                throw cancel
+            } catch (err: Exception) {
+                knownCloudSubfolders.remove(resolvedRoot.id)
+                synchronized(stateLock) {
+                    val cur = _state.value
+                    _state.value = cur.copy(cloudSyncProgress = cur.cloudSyncProgress - resolvedRoot.id)
+                }
+                if (firstBatchSignal != null && !firstBatchSignal.isCompleted) {
+                    firstBatchSignal.complete(Result.failure(err))
+                }
+            }
+        }
+        activeCloudSyncJobs[root.id] = job
+        job.invokeOnCompletion { activeCloudSyncJobs.remove(root.id, job) }
+    }
+
     private suspend fun scanOnce() {
         _state.value = _state.value.copy(scanDone = 0, scanTotal = 0)
 
@@ -696,6 +1518,7 @@ class LibraryStore(
         val removed = mutableSetOf<String>()
         val reread = rereadAll
         val updatedRoots = currentRoots.toMutableList()
+        val progressiveDriveRootIds = mutableSetOf<String>()
         var rootsChanged = false
         var cloudTracksChanged = false
 
@@ -709,12 +1532,23 @@ class LibraryStore(
                     kept.addAll(existingTracks)
                     continue
                 }
+                if (root.kind == RootKind.CLOUD_GOOGLE_DRIVE) {
+                    val signal = CompletableDeferred<Result<Unit>>()
+                    launchGoogleDriveSync(root = root, isNewRoot = false, firstBatchSignal = signal)
+                    val firstRes = signal.await()
+                    if (firstRes.isSuccess) {
+                        progressiveDriveRootIds.add(root.id)
+                        updatedRoots[rootIndex] = _state.value.roots.firstOrNull { it.id == root.id } ?: root
+                    } else {
+                        kept.addAll(existingTracks)
+                    }
+                    continue
+                }
                 val syncResult = withContext(Dispatchers.IO) {
                     runCatching {
                         when (root.kind) {
                             RootKind.CLOUD_YOUTUBE -> youTubeClient.fetchPlaylist(url, root.cookie)
                             RootKind.CLOUD_BILIBILI -> bilibiliClient.fetchPlaylist(url, root.cookie)
-                            RootKind.CLOUD_GOOGLE_DRIVE -> googleDriveClient.fetchPlaylist(url, root.cookie)
                             else -> null
                         }
                     }
@@ -757,8 +1591,8 @@ class LibraryStore(
                 continue
             }
 
-            val scanned: List<ScannedFile>? = withContext(Dispatchers.IO) {
-                scanRoot(root)
+            val (scanned, discovery) = withContext(Dispatchers.IO) {
+                scanRoot(root) to discoverLocalCloudInfo(root)
             }
 
             // Treat unreachable/suddenly empty picked root as temporarily unreadable to avoid purging playlists.
@@ -767,6 +1601,15 @@ class LibraryStore(
                 continue
             }
 
+            if (discovery != null) {
+                val syncedRoot = reconcileLocalCloudTracking(root, scanned, discovery)
+                if (syncedRoot != root) {
+                    updatedRoots[rootIndex] = syncedRoot
+                    rootsChanged = true
+                }
+            }
+            val effectiveRoot = updatedRoots[rootIndex]
+
             val existingByRel = LinkedHashMap<String, Track>()
             for (t in existingTracks) {
                 existingByRel.putIfAbsent(t.relativePath, t)
@@ -774,7 +1617,7 @@ class LibraryStore(
 
             val seen = mutableSetOf<String>()
             for (file in scanned) {
-                if (root.isExcluded(file.relativePath)) continue
+                if (effectiveRoot.isExcluded(file.relativePath)) continue
                 if (!seen.add(file.relativePath)) continue
                 val old = existingByRel[file.relativePath]
                 if (old != null && file.uriString != null) {
@@ -787,7 +1630,7 @@ class LibraryStore(
                 ) {
                     kept.add(applyMetadataOverride(old))
                 } else {
-                    pending.add(PendingScan(root = root, file = file, old = old))
+                    pending.add(PendingScan(root = effectiveRoot, file = file, old = old))
                 }
             }
 
@@ -833,29 +1676,65 @@ class LibraryStore(
 
             if ((index + 1) % batchSize == 0 && index + 1 < pending.size) {
                 val notReached = pending.subList(index + 1, pending.size).mapNotNull { it.old }
-                publish(kept + notReached)
+                publishWithProgressiveDrive(kept + notReached, progressiveDriveRootIds)
             }
         }
 
-        if (rootsChanged) {
-            _state.value = _state.value.copy(roots = updatedRoots)
+        var hadStateChange = false
+        synchronized(stateLock) {
+            val latest = _state.value
+            val finalRoots = if (rootsChanged) {
+                val updatedMap = updatedRoots.associateBy { it.id }
+                latest.roots.map { existing ->
+                    if (existing.id in progressiveDriveRootIds) existing else (updatedMap[existing.id] ?: existing)
+                }
+            } else {
+                latest.roots
+            }
+            val activeRoots = finalRoots.associateBy { it.id }
+            val liveDriveTracks = if (progressiveDriveRootIds.isEmpty()) {
+                emptyList()
+            } else {
+                latest.tracks.filter { it.rootId in progressiveDriveRootIds }
+            }
+            val finalTracks = (kept.filter { it.rootId !in progressiveDriveRootIds } + liveDriveTracks)
+                .filter { track ->
+                    val r = activeRoots[track.rootId] ?: return@filter false
+                    !r.isExcluded(track.relativePath)
+                }
+                .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+
+            val finalIds = finalTracks.map { it.id }.toSet()
+            val finalRemoved = removed.filter { it !in finalIds }.toSet()
+            if (reread) rereadAll = false
+
+            if (pending.isEmpty() && finalRemoved.isEmpty() && !cloudTracksChanged && finalTracks.size == latest.tracks.size) {
+                if (rootsChanged) {
+                    _state.value = latest.copy(roots = finalRoots)
+                }
+                if (reread || rootsChanged) {
+                    hadStateChange = false
+                }
+            } else {
+                hadStateChange = true
+                val (albums, artists, idMap) = buildIndices(finalTracks)
+                byId = idMap
+                _state.value = latest.copy(
+                    roots = finalRoots,
+                    tracks = finalTracks,
+                    albums = albums,
+                    artists = artists,
+                )
+            }
         }
 
-        val activeRoots = _state.value.roots.associateBy { it.id }
-        val finalTracks = kept.filter { track ->
-            val r = activeRoots[track.rootId] ?: return@filter false
-            !r.isExcluded(track.relativePath)
-        }
-        val finalIds = finalTracks.map { it.id }.toSet()
-        val finalRemoved = removed.filter { it !in finalIds }.toSet()
-
-        if (reread) rereadAll = false
-        if (pending.isEmpty() && finalRemoved.isEmpty() && !cloudTracksChanged && finalTracks.size == _state.value.tracks.size) {
+        val finalRemoved = removed.filter { it !in byId.keys }.toSet()
+        if (!hadStateChange && finalRemoved.isEmpty()) {
             if (reread || rootsChanged) saveLibrary()
             return
         }
 
-        publish(finalTracks)
+        saveLibrary()
         for (id in finalRemoved) {
             trackUris.remove(id)
             metadataOverrides.remove(id)
@@ -866,6 +1745,97 @@ class LibraryStore(
             metadataOverrides.values.mapNotNull { it.artworkKey }
         withContext(Dispatchers.IO) {
             artwork.prune(keysToKeep)
+        }
+    }
+
+    private fun publishWithProgressiveDrive(list: List<Track>, progressiveDriveRootIds: Set<String>) {
+        synchronized(stateLock) {
+            val current = _state.value
+            val liveDriveTracks = if (progressiveDriveRootIds.isEmpty()) {
+                emptyList()
+            } else {
+                current.tracks.filter { it.rootId in progressiveDriveRootIds }
+            }
+            val merged = list.filter { it.rootId !in progressiveDriveRootIds } + liveDriveTracks
+            val activeRoots = current.roots.associateBy { it.id }
+            val filtered = merged.filter { track ->
+                val r = activeRoots[track.rootId] ?: return@filter false
+                !r.isExcluded(track.relativePath)
+            }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+            val (albums, artists, idMap) = buildIndices(filtered)
+            byId = idMap
+            _state.value = current.copy(
+                tracks = filtered,
+                albums = albums,
+                artists = artists,
+            )
+        }
+        saveLibrary()
+    }
+
+    private fun discoverLocalCloudInfo(root: LibraryRoot): LocalCloudDiscovery? {
+        if (root.kind == RootKind.APP_FOLDER) {
+            return FolderScanner.discoverCloudInfo(appFolderDir)
+        }
+        val uriStr = root.treeUri ?: return null
+        fileFromUriString(uriStr)?.let { dir ->
+            return FolderScanner.discoverCloudInfo(dir)
+        }
+        val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return null
+        val ctx = context ?: return null
+        return FolderScanner.discoverCloudInfo(ctx, uri)
+    }
+
+    private fun reconcileLocalCloudTracking(
+        root: LibraryRoot,
+        scanned: List<ScannedFile>,
+        discovery: LocalCloudDiscovery,
+    ): LibraryRoot {
+        var nextRoot = migrateLegacySubfolderTracking(root)
+        val existingDirs = HashSet<String>(discovery.existingSubfolders)
+        for (file in scanned) {
+            var dir = LibraryRoot.normalizeFolderPath(file.relativePath.substringBeforeLast('/', ""))
+            while (dir.isNotEmpty()) {
+                existingDirs.add(dir)
+                dir = dir.substringBeforeLast('/', "")
+            }
+        }
+
+        val nextSubs = LinkedHashMap<String, CloudTrackingInfo>()
+        for ((subKey, info) in nextRoot.trackedSubfolders) {
+            val normKey = LibraryRoot.normalizeFolderPath(subKey)
+            if (normKey.isNotEmpty() && normKey in existingDirs) {
+                nextSubs[normKey] = info
+            }
+        }
+
+        for ((rawPath, manifest) in discovery.manifests) {
+            val normPath = LibraryRoot.normalizeFolderPath(rawPath)
+            val parsedKind = runCatching { RootKind.valueOf(manifest.cloudKind) }.getOrNull() ?: continue
+            val url = manifest.sourceURL.trim().takeIf { it.isNotEmpty() } ?: continue
+            if (normPath.isEmpty()) {
+                if (nextRoot.sourceUrl.isNullOrBlank() && nextSubs.isEmpty()) {
+                    nextRoot = nextRoot.copy(
+                        sourceUrl = url,
+                        remoteId = manifest.remoteID ?: nextRoot.remoteId,
+                        linkedCloudKind = parsedKind,
+                        lastSyncedEpochMs = manifest.lastSyncedEpochMs.takeIf { it > 0L } ?: nextRoot.lastSyncedEpochMs,
+                    )
+                }
+            } else if (!nextRoot.isExcluded(normPath) && !nextSubs.containsKey(normPath)) {
+                nextSubs[normPath] = CloudTrackingInfo(
+                    sourceUrl = url,
+                    remoteId = manifest.remoteID,
+                    cloudKind = parsedKind,
+                    lastSyncedEpochMs = manifest.lastSyncedEpochMs.takeIf { it > 0L },
+                )
+            }
+        }
+
+        return if (nextSubs != nextRoot.trackedSubfolders) {
+            nextRoot.copy(trackedSubfolders = nextSubs)
+        } else {
+            nextRoot
         }
     }
 
@@ -890,7 +1860,10 @@ class LibraryStore(
         }
 
         for ((index, meta) in items.withIndex()) {
-            val relPath = "$sourceSlug/${meta.remoteTrackId}"
+            val relPath = meta.relativePath
+                ?.let { LibraryRoot.normalizeFolderPath(it) }
+                ?.takeIf { it.isNotEmpty() }
+                ?: "$sourceSlug/${meta.remoteTrackId}"
             if (root.isExcluded(relPath)) continue
             if (!seenRel.add(relPath)) continue
             val old = existingByRel[relPath]
@@ -985,19 +1958,21 @@ class LibraryStore(
     }
 
     private fun publish(list: List<Track>) {
-        val current = _state.value
-        val activeRoots = current.roots.associateBy { it.id }
-        val filtered = list.filter { track ->
-            val r = activeRoots[track.rootId] ?: return@filter false
-            !r.isExcluded(track.relativePath)
-        }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
-        val (albums, artists, idMap) = buildIndices(filtered)
-        byId = idMap
-        _state.value = _state.value.copy(
-            tracks = filtered,
-            albums = albums,
-            artists = artists,
-        )
+        synchronized(stateLock) {
+            val current = _state.value
+            val activeRoots = current.roots.associateBy { it.id }
+            val filtered = list.filter { track ->
+                val r = activeRoots[track.rootId] ?: return@filter false
+                !r.isExcluded(track.relativePath)
+            }.sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+            val (albums, artists, idMap) = buildIndices(filtered)
+            byId = idMap
+            _state.value = _state.value.copy(
+                tracks = filtered,
+                albums = albums,
+                artists = artists,
+            )
+        }
         saveLibrary()
     }
 
@@ -1155,6 +2130,8 @@ class LibraryStore(
     fun rootFor(track: Track): LibraryRoot? =
         _state.value.roots.firstOrNull { it.id == track.rootId }
 
+    fun appFolderDirectory(): File = appFolderDir
+
     fun uriFor(track: Track): Uri? {
         if (track.isCloud) return null
         val current = _state.value
@@ -1178,21 +2155,22 @@ class LibraryStore(
     fun isAvailable(track: Track): Boolean = track.rootId in _state.value.availableRootIds
 
     /** Returns true if [uri] matches or resides inside an already-indexed local root. */
+    fun isDirectoryInsideIndexedRoot(dir: File): Boolean {
+        val candidate = runCatching { dir.canonicalPath }.getOrNull() ?: return false
+        return isPathInsideIndexedRoot(candidate)
+    }
+
+    private fun isPathInsideIndexedRoot(candidateCanonicalPath: String): Boolean =
+        _state.value.roots.any { root ->
+            val rootPath = fileCanonicalForRoot(root) ?: return@any false
+            candidateCanonicalPath == rootPath || candidateCanonicalPath.startsWith("$rootPath${File.separator}")
+        }
+
     fun isUriInsideIndexedRoot(uri: Uri): Boolean {
         if (uri.scheme == "file") {
             val candidate = uri.path?.let { runCatching { File(it).canonicalPath }.getOrNull() }
                 ?: return false
-            val appPath = runCatching { appFolderDir.canonicalPath }.getOrNull()
-            if (appPath != null && (candidate == appPath || candidate.startsWith("$appPath${File.separator}"))) {
-                return true
-            }
-            return _state.value.roots.any { root ->
-                if (root.kind != RootKind.PICKED) return@any false
-                val rUri = root.treeUri?.let { runCatching { Uri.parse(it) }.getOrNull() } ?: return@any false
-                if (rUri.scheme != "file" || rUri.path == null) return@any false
-                val rootPath = runCatching { File(rUri.path!!).canonicalPath }.getOrNull() ?: return@any false
-                candidate == rootPath || candidate.startsWith("$rootPath${File.separator}")
-            }
+            return isPathInsideIndexedRoot(candidate)
         }
         val candidateKey = canonicalUriKey(uri)
         val candidateDocId = runCatching { DocumentsContract.getTreeDocumentId(uri) }.getOrNull()
@@ -1357,12 +2335,21 @@ class LibraryStore(
         }
     }
 
+    private fun isFlatCloudRoot(root: LibraryRoot?): Boolean {
+        if (root == null || !root.kind.isCloud) return false
+        if (root.kind != RootKind.CLOUD_GOOGLE_DRIVE) return true
+        if (knownCloudSubfolders[root.id]?.isNotEmpty() == true) return false
+        val driveTracks = _state.value.tracks.filter { it.rootId == root.id }
+        if (driveTracks.isEmpty()) return false
+        return driveTracks.all { it.relativePath.startsWith("gdrive/", ignoreCase = true) }
+    }
+
     private fun canonicalFolderPath(rootId: String, path: String): String {
         val norm = LibraryRoot.normalizeFolderPath(path)
         val root = _state.value.roots.firstOrNull { it.id == rootId }
-        if (root != null && root.kind.isCloud) {
+        if (isFlatCloudRoot(root)) {
             if (norm.isEmpty() ||
-                norm.equals(root.kind.name, ignoreCase = true) ||
+                norm.equals(root!!.kind.name, ignoreCase = true) ||
                 norm.equals("cloud_youtube", ignoreCase = true) ||
                 norm.equals("cloud_bilibili", ignoreCase = true) ||
                 norm.equals("cloud_google_drive", ignoreCase = true) ||
@@ -1467,7 +2454,7 @@ class LibraryStore(
     ): Pair<List<String>, List<Track>> {
         val root = _state.value.roots.firstOrNull { it.id == rootId }
         val normPath = canonicalFolderPath(rootId, path)
-        if (root != null && root.kind.isCloud) {
+        if (isFlatCloudRoot(root)) {
             if (normPath.isNotEmpty()) {
                 return emptyList<String>() to emptyList()
             }
@@ -1488,6 +2475,16 @@ class LibraryStore(
                 direct.add(track)
             }
         }
+        if (root?.kind == RootKind.CLOUD_GOOGLE_DRIVE) {
+            for (knownPath in knownCloudSubfolders[rootId].orEmpty()) {
+                if (root.isExcluded(knownPath)) continue
+                if (!knownPath.startsWith(prefix)) continue
+                val rest = knownPath.substring(prefix.length)
+                if (rest.isNotEmpty()) {
+                    folders.add(rest.substringBefore('/'))
+                }
+            }
+        }
         return folders.sortedWith(String.CASE_INSENSITIVE_ORDER) to
             orderDirectTracks(rootId, normPath, direct, playCounts)
     }
@@ -1506,7 +2503,7 @@ class LibraryStore(
     ): List<Track> {
         val root = _state.value.roots.firstOrNull { it.id == rootId }
         val normPath = canonicalFolderPath(rootId, path)
-        if (root != null && root.kind.isCloud) {
+        if (isFlatCloudRoot(root)) {
             if (normPath.isNotEmpty()) return emptyList()
             return folderContents(rootId, "", playCounts).second
         }

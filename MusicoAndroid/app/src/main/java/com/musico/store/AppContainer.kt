@@ -69,4 +69,11 @@ class AppContainer(context: Context) {
         settingsFile = File(stateDir, "settings.json"),
         cloudResolver = cloudStreamResolver,
     )
+    val cloudDownloadManager: CloudDownloadManager = CloudDownloadManager(
+        libraryStore = libraryStore,
+        cloudExporter = cloudExporter,
+        onFolderSavedWithoutLibrary = { folderName ->
+            playerController.onFolderAdded(folderName, emptyList())
+        },
+    )
 }

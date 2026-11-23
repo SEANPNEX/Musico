@@ -240,7 +240,7 @@ struct QueuesView: View {
                 }
                 .buttonStyle(.borderless)
             }
-            Section(L10n.displayQueueName(queues.active.name)) {
+            Section {
                 let active = queues.active
                 if active.trackIDs.isEmpty {
                     Text(L10n.tr("This queue is empty. Tap a song in your library to fill it."))
@@ -287,7 +287,15 @@ struct QueuesView: View {
                     for index in offsets.sorted(by: >) { player.removeFromQueue(at: index) }
                 }
                 .onMove { player.moveInQueue(from: $0, to: $1) }
+            } header: {
+                MarqueeText(
+                    text: L10n.displayQueueName(queues.active.name),
+                    font: .footnote.weight(.semibold),
+                    alignment: .leading
+                )
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .textCase(nil)
         }
     }
 }
@@ -518,7 +526,7 @@ private struct QueueRowView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(L10n.displayQueueName(queue.name))
                         .foregroundStyle(isActive ? Color.accentColor : .primary)
-                        .lineLimit(1)
+                        .lineLimit(2)
                     QueueSummary(queue: queue, isActive: isActive)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)

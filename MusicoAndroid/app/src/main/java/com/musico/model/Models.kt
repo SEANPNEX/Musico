@@ -18,6 +18,15 @@ enum class RootKind {
 }
 
 @Serializable
+data class CloudTrackingInfo(
+    val sourceUrl: String,
+    val remoteId: String? = null,
+    val cloudKind: RootKind,
+    val cookie: String? = null,
+    val lastSyncedEpochMs: Long? = null,
+)
+
+@Serializable
 data class LibraryRoot(
     val id: String,
     val name: String,
@@ -31,12 +40,43 @@ data class LibraryRoot(
     val excludedPaths: List<String> = emptyList(),
     val linkedCloudKind: RootKind? = null,
     val trackedSubfolderName: String? = null,
+    val trackedSubfolders: Map<String, CloudTrackingInfo> = emptyMap(),
 ) {
     val isCloudTrackedLocal: Boolean
-        get() = !kind.isCloud && !sourceUrl.isNullOrBlank()
+        get() = !kind.isCloud && !sourceUrl.isNullOrBlank() && trackedSubfolderName.isNullOrBlank()
 
     val effectiveCloudKind: RootKind?
         get() = if (kind.isCloud) kind else linkedCloudKind
+
+    fun trackingFor(path: String): CloudTrackingInfo? {
+        val norm = normalizeFolderPath(path)
+        if (norm.isEmpty()) {
+            val url = sourceUrl?.takeIf { it.isNotBlank() } ?: return null
+            if (!kind.isCloud && !trackedSubfolderName.isNullOrBlank()) return null
+            val cloudKind = effectiveCloudKind ?: return null
+            return CloudTrackingInfo(
+                sourceUrl = url,
+                remoteId = remoteId,
+                cloudKind = cloudKind,
+                cookie = cookie,
+                lastSyncedEpochMs = lastSyncedEpochMs,
+            )
+        }
+        trackedSubfolders[norm]?.let { return it }
+        val legacySub = trackedSubfolderName?.let { normalizeFolderPath(it) }
+        if (legacySub == norm) {
+            val url = sourceUrl?.takeIf { it.isNotBlank() } ?: return null
+            val cloudKind = effectiveCloudKind ?: return null
+            return CloudTrackingInfo(
+                sourceUrl = url,
+                remoteId = remoteId,
+                cloudKind = cloudKind,
+                cookie = cookie,
+                lastSyncedEpochMs = lastSyncedEpochMs,
+            )
+        }
+        return null
+    }
     fun isExcluded(relativePath: String): Boolean {
         if (excludedPaths.isEmpty()) return false
         val normRel = normalizeFolderPath(relativePath)

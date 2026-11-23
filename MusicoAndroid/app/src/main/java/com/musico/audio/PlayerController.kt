@@ -469,7 +469,47 @@ class PlayerController(
         startCurrent(autoplay = true)
     }
 
+    fun syncNamedQueue(name: String, ids: List<String>) {
+        if (ids.isEmpty()) return
+        val active = queues.active
+        if (active.name == name) {
+            if (active.trackIds == ids) return
+            val currentId = active.currentTrackId
+            if (currentId != null && currentId in ids) {
+                val nextIndex = ids.indexOf(currentId)
+                queues.update(active.id) { queue ->
+                    queue.copy(
+                        trackIds = ids.toList(),
+                        currentIndex = nextIndex,
+                    ).withShuffle(queue.shuffle)
+                }
+                return
+            }
+        }
+        queues.createOrReplaceQueue(
+            name = name,
+            trackIds = ids,
+            startAt = 0,
+        )
+    }
+
     fun onFolderAdded(folderName: String, trackIds: List<String>) {
+        val active = queues.active
+        if (trackIds.isNotEmpty() && active.name == folderName) {
+            val currentId = active.currentTrackId
+            if (currentId != null && currentId in trackIds && (isLoaded || _state.value.isLoadingCloud || _state.value.isPlaying)) {
+                if (active.trackIds != trackIds) {
+                    val nextIndex = trackIds.indexOf(currentId)
+                    queues.update(active.id) { queue ->
+                        queue.copy(
+                            trackIds = trackIds.toList(),
+                            currentIndex = nextIndex,
+                        ).withShuffle(queue.shuffle)
+                    }
+                }
+                return
+            }
+        }
         val (_, wasActive) = queues.createOrReplaceQueue(
             name = folderName,
             trackIds = trackIds,

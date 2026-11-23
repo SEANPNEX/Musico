@@ -57,7 +57,7 @@ public partial class PlaylistDetailView : UserControl
         _ctx.Services.Library.PropertyChanged += OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged += OnPlayerChanged;
         LocalizationManager.LanguageChanged += OnLanguageChanged;
-        Refresh();
+        Refresh(syncNamedQueue: true);
     }
 
     private void OnUnloaded(object sender, RoutedEventArgs e) => Detach();
@@ -73,18 +73,21 @@ public partial class PlaylistDetailView : UserControl
     private void OnLanguageChanged(ResolvedLanguage _)
     {
         RebuildSortCombo();
-        Refresh();
+        Refresh(syncNamedQueue: false);
     }
 
-    private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
+    private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e) =>
+        Refresh(syncNamedQueue: e.PropertyName is nameof(LibraryStore.Playlists) or nameof(LibraryStore.Favourites));
 
     private void OnPlayerChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName is nameof(PlayerController.CurrentTrack) or nameof(PlayerController.IsPlaying))
-            Refresh();
+            Refresh(syncNamedQueue: false);
     }
 
-    public void Refresh()
+    public void Refresh() => Refresh(syncNamedQueue: false);
+
+    private void Refresh(bool syncNamedQueue)
     {
         if (_ctx is null) return;
         var lib = _ctx.Services.Library;
@@ -135,6 +138,11 @@ public partial class PlaylistDetailView : UserControl
         EmptyState.Visibility = Visibility.Collapsed;
 
         var ids = _tracks.Select(t => t.Id).ToList();
+        if (syncNamedQueue && ids.Count > 0)
+        {
+            _ctx.Services.Player.SyncNamedQueue(TitleText.Text, ids);
+        }
+
         bool isUser = _ref.Kind == PlaylistKind.User && _ref.Id.HasValue;
         Guid userPlaylistId = _ref.Id ?? Guid.Empty;
 
@@ -153,7 +161,7 @@ public partial class PlaylistDetailView : UserControl
                 isCurrent,
                 isPlaying,
                 lib.IsAvailable(track),
-                () => _ctx.Services.Player.Play(ids, idx),
+                () => _ctx.Services.Player.PlayInNamedQueue(TitleText.Text, ids, startAt: idx),
                 _ctx.OpenTextPrompt,
                 isUser ? menu =>
                 {
@@ -207,16 +215,14 @@ public partial class PlaylistDetailView : UserControl
     {
         if (_ctx is null || _tracks.Count == 0) return;
         var ids = _tracks.Select(t => t.Id).ToList();
-        if (_ctx.Services.Queues.Active.Shuffle) _ctx.Services.Player.ToggleShuffle();
-        _ctx.Services.Player.Play(ids, 0);
+        _ctx.Services.Player.PlayInNamedQueue(TitleText.Text, ids, startAt: 0, shuffle: false);
     }
 
     private void ShuffleAll_Click(object sender, RoutedEventArgs e)
     {
         if (_ctx is null || _tracks.Count == 0) return;
         var ids = _tracks.Select(t => t.Id).ToList();
-        if (!_ctx.Services.Queues.Active.Shuffle) _ctx.Services.Player.ToggleShuffle();
-        _ctx.Services.Player.Play(ids, Random.Shared.Next(ids.Count));
+        _ctx.Services.Player.PlayInNamedQueue(TitleText.Text, ids, startAt: Random.Shared.Next(ids.Count), shuffle: true);
     }
 
     private void More_Click(object sender, RoutedEventArgs e)

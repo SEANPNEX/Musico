@@ -1,6 +1,7 @@
 package com.musico.ui.components
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -16,6 +17,7 @@ import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -29,9 +31,12 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.musico.i18n.AppLanguage
 import com.musico.i18n.LocalStrings
+import com.musico.store.CloudDownloadJob
 
 @Composable
 fun TextInputDialog(
@@ -140,7 +145,13 @@ fun OptionPickerDialog(
             LazyColumn(modifier = Modifier.heightIn(max = 320.dp)) {
                 items(options, key = { it.id }) { option ->
                     ListItem(
-                        headlineContent = { Text(option.title) },
+                        headlineContent = {
+                            Text(
+                                text = option.title,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
                         supportingContent = option.subtitle?.let { sub -> { Text(sub) } },
                         modifier = Modifier.clickable {
                             onSelect(option.id)
@@ -225,4 +236,82 @@ fun LanguageDialog(
             }
         },
     )
+}
+
+@Composable
+fun CloudTransferProgressSection(
+    job: CloudDownloadJob,
+    statusLine: String? = null,
+    modifier: Modifier = Modifier,
+) {
+    val hasDeterminate = job.totalTracks > 0 || job.trackTotalBytes != null || job.overallFraction > 0f
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp),
+    ) {
+        if (hasDeterminate) {
+            LinearProgressIndicator(
+                progress = { job.overallFraction.coerceIn(0f, 1f) },
+                modifier = Modifier.fillMaxWidth(),
+            )
+        } else {
+            LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+        }
+
+        val bytesText = when {
+            job.trackTotalBytes != null ->
+                "${formatBytes(job.trackBytesDownloaded)} / ${formatBytes(job.trackTotalBytes)}"
+            job.trackBytesDownloaded > 0L -> formatBytes(job.trackBytesDownloaded)
+            else -> null
+        }
+
+        if (bytesText != null || job.bytesPerSecond > 0.0 || hasDeterminate) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = bytesText ?: statusLine.orEmpty(),
+                    style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (job.bytesPerSecond > 0.0) {
+                        Text(
+                            text = formatTransferSpeed(job.bytesPerSecond),
+                            style = MaterialTheme.typography.labelSmall.copy(fontFeatureSettings = "tnum"),
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                    if (hasDeterminate) {
+                        Text(
+                            text = formatPercentage(job.overallFraction),
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                fontFeatureSettings = "tnum",
+                            ),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+            }
+        }
+
+        if (statusLine != null && (bytesText != null || !hasDeterminate)) {
+            Text(
+                text = statusLine,
+                style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
 }

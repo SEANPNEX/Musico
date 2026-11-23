@@ -20,7 +20,6 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -34,6 +33,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.musico.audio.PlayerController
 import com.musico.cloud.CloudExporter
 import com.musico.i18n.LocalStrings
@@ -41,15 +41,19 @@ import com.musico.model.PlayQueue
 import com.musico.model.Playlist
 import com.musico.model.SearchField
 import com.musico.model.Track
+import com.musico.store.CloudDownloadJob
+import com.musico.store.CloudDownloadKind
+import com.musico.store.CloudDownloadManager
+import com.musico.store.CloudDownloadStatus
 import com.musico.store.LibraryStore
 import com.musico.store.PlayHistoryUiState
-import kotlinx.coroutines.CancellationException
 
 @Stable
 class TrackActionState(
     val libraryStore: LibraryStore,
     val playerController: PlayerController,
     val cloudExporter: CloudExporter,
+    val cloudDownloadManager: CloudDownloadManager,
     val onPickFolder: ((Uri) -> Unit) -> Unit,
     val onPickImage: ((Uri) -> Unit) -> Unit,
     val onQuickSearch: (String, SearchField) -> Unit,
@@ -66,12 +70,15 @@ fun rememberTrackActionState(
     libraryStore: LibraryStore,
     playerController: PlayerController,
     cloudExporter: CloudExporter,
+    cloudDownloadManager: CloudDownloadManager = remember(libraryStore, cloudExporter) {
+        CloudDownloadManager(libraryStore, cloudExporter)
+    },
     onPickFolder: ((Uri) -> Unit) -> Unit,
     onPickImage: ((Uri) -> Unit) -> Unit,
     onQuickSearch: (String, SearchField) -> Unit,
 ): TrackActionState {
-    return remember(libraryStore, playerController, cloudExporter, onPickFolder, onPickImage, onQuickSearch) {
-        TrackActionState(libraryStore, playerController, cloudExporter, onPickFolder, onPickImage, onQuickSearch)
+    return remember(libraryStore, playerController, cloudExporter, cloudDownloadManager, onPickFolder, onPickImage, onQuickSearch) {
+        TrackActionState(libraryStore, playerController, cloudExporter, cloudDownloadManager, onPickFolder, onPickImage, onQuickSearch)
     }
 }
 
@@ -255,7 +262,7 @@ fun TrackActionDialogs(
             track = saveTarget.first,
             targetUri = saveTarget.second,
             libraryStore = state.libraryStore,
-            cloudExporter = state.cloudExporter,
+            cloudDownloadManager = state.cloudDownloadManager,
             onDismiss = { state.savingCloudTrack = null },
         )
     }
@@ -279,48 +286,43 @@ private fun SaveSingleCloudTrackDialog(
     track: Track,
     targetUri: Uri,
     libraryStore: LibraryStore,
-    cloudExporter: CloudExporter,
+    cloudDownloadManager: CloudDownloadManager,
     onDismiss: () -> Unit,
 ) {
     val strings = LocalStrings.current
-    var isExporting by remember(track.id, targetUri) { mutableStateOf(true) }
-    var savedFileName by remember(track.id, targetUri) { mutableStateOf<String?>(null) }
-    var libraryUpdated by remember(track.id, targetUri) { mutableStateOf(false) }
-    var errorMessage by remember(track.id, targetUri) { mutableStateOf<String?>(null) }
+    val jobs by cloudDownloadManager.jobs.collectAsStateWithLifecycle()
+    var jobId by remember(track.id, targetUri) { mutableStateOf<String?>(null) }
 
     LaunchedEffect(track.id, targetUri) {
-        isExporting = true
-        savedFileName = null
-        libraryUpdated = false
-        errorMessage = null
-        try {
-            val fileName = cloudExporter.exportTrack(
-                track = track,
-                root = libraryStore.rootFor(track),
-                targetTreeUri = targetUri,
-            )
-            savedFileName = fileName
-            if (libraryStore.isUriInsideIndexedRoot(targetUri)) {
-                libraryStore.rescan()
-                libraryUpdated = true
-            }
-        } catch (cancel: CancellationException) {
-            throw cancel
-        } catch (err: Exception) {
-            errorMessage = err.message ?: strings.couldNotSaveSongFallback
-        } finally {
-            isExporting = false
-        }
+        jobId = cloudDownloadManager.startTrackExport(
+            track = track,
+            root = libraryStore.rootFor(track),
+            targetUri = targetUri,
+        )
     }
 
+    val activeJob = remember(jobs, jobId, track.title) {
+        jobs.firstOrNull { it.id == jobId } ?: CloudDownloadJob(
+            id = jobId.orEmpty(),
+            kind = CloudDownloadKind.TRACK_EXPORT,
+            title = track.title,
+            totalTracks = 1,
+            currentTrackTitle = track.title,
+        )
+    }
+    val isExporting = activeJob.isActive
+    val isFailed = activeJob.status == CloudDownloadStatus.FAILED
+    val isCancelled = activeJob.status == CloudDownloadStatus.CANCELLED
+
     AlertDialog(
-        onDismissRequest = { if (!isExporting) onDismiss() },
+        onDismissRequest = onDismiss,
         icon = { Icon(Icons.Rounded.Download, contentDescription = null) },
         title = {
             Text(
                 when {
                     isExporting -> strings.savingSongTitle
-                    errorMessage != null -> strings.saveFailedTitle
+                    isFailed -> strings.saveFailedTitle
+                    isCancelled -> strings.downloadStatusCancelled
                     else -> strings.songSavedTitle
                 }
             )
@@ -340,21 +342,28 @@ private fun SaveSingleCloudTrackDialog(
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                         )
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                        CloudTransferProgressSection(job = activeJob)
                     }
-                    errorMessage != null -> {
+                    isFailed -> {
                         Text(
-                            text = errorMessage ?: strings.unknownError,
+                            text = activeJob.errorMessage ?: strings.couldNotSaveSongFallback,
                             style = MaterialTheme.typography.bodyMedium,
                             color = MaterialTheme.colorScheme.error,
                         )
                     }
+                    isCancelled -> {
+                        Text(
+                            text = strings.downloadStatusCancelled,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
                     else -> {
                         Text(
-                            text = strings.savedAsFile(savedFileName.orEmpty()),
+                            text = strings.savedAsFile(activeJob.savedFileName.orEmpty()),
                             style = MaterialTheme.typography.bodyMedium,
                         )
-                        if (libraryUpdated) {
+                        if (activeJob.libraryUpdated) {
                             Text(
                                 text = strings.libraryUpdated,
                                 style = MaterialTheme.typography.bodySmall,
@@ -366,15 +375,24 @@ private fun SaveSingleCloudTrackDialog(
             }
         },
         confirmButton = {
-            if (!isExporting) {
+            if (isExporting) {
                 TextButton(onClick = onDismiss) {
-                    Text(if (errorMessage != null) strings.close else strings.ok)
+                    Text(strings.runInBackground)
+                }
+            } else {
+                TextButton(onClick = onDismiss) {
+                    Text(if (isFailed || isCancelled) strings.close else strings.ok)
                 }
             }
         },
         dismissButton = {
             if (isExporting) {
-                TextButton(onClick = onDismiss) {
+                TextButton(
+                    onClick = {
+                        jobId?.let(cloudDownloadManager::cancel)
+                        onDismiss()
+                    }
+                ) {
                     Text(strings.cancel)
                 }
             }

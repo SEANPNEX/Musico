@@ -128,6 +128,10 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(LyricsError.unreadable.errorDescription, "无法将该文件读取为歌词文本。")
         XCTAssertEqual(CloudSourceError.invalidURL.errorDescription, "请输入有效的 YouTube、Bilibili 或 Google Drive 链接。")
         XCTAssertEqual(L10n.tr("Google Drive · Local"), "Google Drive · 本地")
+        XCTAssertEqual(L10n.tr("Edit Cloud Source…"), "编辑云端来源…")
+        XCTAssertEqual(L10n.tr("Cloud Tracking Address"), "云端追踪地址")
+        XCTAssertEqual(L10n.tr("Loading %@ / %@ folders · %@ songs…", "2", "5", "42"), "正在加载第 2 / 5 个文件夹 · 42 首歌曲…")
+        XCTAssertEqual(L10n.tr("That folder is already inside an existing library folder."), "该文件夹已位于现有资料库文件夹内。")
         XCTAssertTrue(UpdateError.checksumMismatch(expected: "abcdef123456", actual: "123456abcdef").errorDescription?.contains("SHA-256") == true)
 
         LanguageManager.shared.setLanguage(.english)

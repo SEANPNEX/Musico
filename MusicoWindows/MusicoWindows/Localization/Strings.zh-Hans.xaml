@@ -189,6 +189,19 @@
     <sys:String x:Key="Str_SaveCloud_AddToLibrary">将保存的文件夹添加到音乐库</sys:String>
     <sys:String x:Key="Str_SaveCloud_SaveFolder">保存文件夹</sys:String>
     <sys:String x:Key="Str_SaveCloud_OpenFolder">打开文件夹</sys:String>
+    <sys:String x:Key="Str_SaveCloud_RunInBackground">后台运行</sys:String>
+    <sys:String x:Key="Str_SaveCloud_EditSource">编辑</sys:String>
+    <sys:String x:Key="Str_SaveCloud_EditSourceLabel">云端来源链接</sys:String>
+
+    <!-- Downloads -->
+    <sys:String x:Key="Str_Downloads_Header">下载任务</sys:String>
+    <sys:String x:Key="Str_Downloads_Title">下载</sys:String>
+    <sys:String x:Key="Str_Downloads_ClearFinished">清除已完成</sys:String>
+    <sys:String x:Key="Str_Downloads_NoItems">当前没有进行中或最近的下载任务。</sys:String>
+    <sys:String x:Key="Str_Downloads_ViewTooltip">查看下载任务</sys:String>
+
+    <!-- Folders Edit Cloud Source -->
+    <sys:String x:Key="Str_Folders_EditCloudSource">编辑云端来源...</sys:String>
 
     <!-- TrackRowControl -->
     <sys:String x:Key="Str_TrackRow_DragToReorder">拖动以重新排序</sys:String>

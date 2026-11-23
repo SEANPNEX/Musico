@@ -390,4 +390,99 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertEqual(slowJob.state, .cancelled)
         XCTAssertFalse(cancelManager.hasActiveDownloads)
     }
+
+    @MainActor
+    func testDownloadManagerExportsIntoExistingRootAsTrackedSubfolderAndUpdatesIt() async throws {
+        let state = makeTempDir()
+        let docs = makeTempDir()
+        let pickedParent = makeTempDir()
+
+        struct ExportStubFetcher: CloudPlaylistFetching {
+            let result: CloudPlaylistResult
+            func fetchPlaylist(sourceURL: String, cookie: String?, kindHint: LibraryRoot.Kind?) async throws -> CloudPlaylistResult {
+                result
+            }
+        }
+        let fetcher = ExportStubFetcher(result: CloudPlaylistResult(
+            kind: .cloudYouTube,
+            remoteID: "PLsub",
+            title: "Sub Mix",
+            tracks: [
+                CloudTrackInfo(remoteTrackID: "dm-1", relativePath: "dm-1", title: "Song One", artist: "A", album: "Al", trackNumber: 1, duration: 10, artworkURL: nil),
+                CloudTrackInfo(remoteTrackID: "dm-2", relativePath: "dm-2", title: "Song Two", artist: "A", album: "Al", trackNumber: 2, duration: 10, artworkURL: nil)
+            ]
+        ))
+
+        let library = LibraryStore(
+            directory: state,
+            documentsURL: docs,
+            reader: StubReader(),
+            artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
+            cloudFetcher: fetcher
+        )
+        try await library.addRoot(url: pickedParent)
+
+        let cloudRoot = LibraryRoot(
+            id: UUID(),
+            name: "Cloud Mix",
+            kind: .cloudYouTube,
+            bookmark: nil,
+            sourceURL: "https://music.youtube.com/playlist?list=PLsub",
+            remoteID: "PLsub"
+        )
+        let t1 = makeCloudTrack(id: "dm-1", title: "Song One")
+
+        let resolver = TestStreamResolver { track, _, _ in
+            CloudStreamResult(
+                url: URL(string: "https://cdn.example/\(track.id).m4a")!,
+                headers: [:],
+                fileExtension: "m4a",
+                expiresAt: Date().addingTimeInterval(600)
+            )
+        }
+        let cache = CloudAudioCache(
+            directory: makeTempDir(),
+            maxBytes: 10_000_000,
+            resolver: resolver,
+            downloader: { url, _ in
+                let tmp = makeTempDir().appendingPathComponent("dl.m4a")
+                try Data("audio-\(url.lastPathComponent)".utf8).write(to: tmp)
+                return (tmp, 200, "audio/mp4")
+            }
+        )
+
+        let manager = DownloadManager(cache: cache)
+        let exportJob = manager.startPlaylistExport(
+            root: cloudRoot,
+            tracks: [t1],
+            parentURL: pickedParent,
+            folderName: "SavedSub",
+            addToLibrary: true,
+            library: library
+        )
+        for _ in 0..<80 {
+            if exportJob.state != .running { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertEqual(exportJob.state, .completed)
+        XCTAssertEqual(library.roots.filter { $0.kind == .picked }.count, 1)
+        let parentRoot = try XCTUnwrap(library.roots.first { $0.kind == .picked })
+        let subTracking = try XCTUnwrap(library.cloudTracking(rootID: parentRoot.id, path: "SavedSub"))
+        XCTAssertEqual(subTracking.sourceURL, "https://music.youtube.com/playlist?list=PLsub")
+
+        let updateJob = manager.startTrackedFolderUpdate(
+            root: parentRoot,
+            subfolderPath: "SavedSub",
+            tracking: subTracking,
+            library: library
+        )
+        for _ in 0..<80 {
+            if updateJob.state != .running { break }
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        XCTAssertEqual(updateJob.state, .completed)
+        XCTAssertEqual(updateJob.updateSummary?.addedCount, 1)
+        XCTAssertEqual(updateJob.updateSummary?.skippedCount, 1)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: pickedParent.appendingPathComponent("SavedSub/Song Two.m4a").path))
+    }
 }

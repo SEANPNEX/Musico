@@ -45,6 +45,7 @@ public partial class MainWindow : Window
             OpenSaveCloudPlaylist = (root, tracks) => SaveCloudDialog.Show(_services, root, tracks),
             OpenSaveCloudTrack = StartSingleTrackExport,
             OpenUpdateTrackedFolder = root => SaveCloudDialog.ShowTrackedFolderUpdate(_services, root),
+            OpenUpdateTrackedSubfolder = (root, relPath) => SaveCloudDialog.ShowTrackedFolderUpdate(_services, root, relPath),
             OpenSongInfo = ShowSongInfo,
             OpenSearch = OpenSearchWithField
         };
@@ -68,6 +69,7 @@ public partial class MainWindow : Window
         _services.Library.PropertyChanged += OnLibraryChanged;
         _services.Player.PropertyChanged += OnPlayerChanged;
         _services.Update.UpdateStateChanged += OnUpdateStateChanged;
+        _services.Downloads.Changed += OnDownloadsChanged;
 
         ThemeManager.ThemeChanged += OnThemeChanged;
         LocalizationManager.LanguageChanged += OnLanguageChanged;
@@ -81,10 +83,12 @@ public partial class MainWindow : Window
             _services.Library.PropertyChanged -= OnLibraryChanged;
             _services.Player.PropertyChanged -= OnPlayerChanged;
             _services.Update.UpdateStateChanged -= OnUpdateStateChanged;
+            _services.Downloads.Changed -= OnDownloadsChanged;
         };
 
         UpdateThemeButton();
         RebuildDynamicPlaylists();
+        RefreshDownloadsFooter();
         NavigateTo("songs");
     }
 
@@ -99,6 +103,7 @@ public partial class MainWindow : Window
         UpdateThemeButton();
         UpdateMaximizedState();
         RebuildDynamicPlaylists();
+        RefreshDownloadsFooter();
     }
 
     private void UpdateThemeButton()
@@ -125,10 +130,11 @@ public partial class MainWindow : Window
 
     private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName == nameof(LibraryStore.Playlists))
+        if (e.PropertyName is nameof(LibraryStore.Playlists) or nameof(LibraryStore.Favourites) or nameof(LibraryStore.Tracks))
         {
             RebuildDynamicPlaylists();
-            if (_activeRoute == "user-playlist" &&
+            if (e.PropertyName == nameof(LibraryStore.Playlists) &&
+                _activeRoute == "user-playlist" &&
                 _activePlaylistId is Guid pid &&
                 _services.Library.Playlists.All(p => p.Id != pid))
             {
@@ -142,6 +148,84 @@ public partial class MainWindow : Window
         }
     }
 
+    private void OnDownloadsChanged()
+    {
+        Dispatcher.BeginInvoke(RefreshDownloadsFooter);
+    }
+
+    private void RefreshDownloadsFooter()
+    {
+        var jobs = _services.Downloads.Jobs;
+        if (jobs.Count == 0)
+        {
+            DownloadsFooterButton.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        DownloadsFooterButton.Visibility = Visibility.Visible;
+        var activeJobs = jobs.Where(j => j.IsActive).ToList();
+        var active = activeJobs.FirstOrDefault();
+
+        if (active is not null)
+        {
+            DownloadsFooterTitleText.Text = activeJobs.Count == 1
+                ? active.Title
+                : L.Format("Downloads_ActiveCount", activeJobs.Count);
+
+            if (active.OverallFraction is double frac)
+            {
+                DownloadsFooterProgressBar.IsIndeterminate = false;
+                DownloadsFooterProgressBar.Maximum = 1;
+                DownloadsFooterProgressBar.Value = frac;
+            }
+            else
+            {
+                DownloadsFooterProgressBar.IsIndeterminate = true;
+                DownloadsFooterProgressBar.Maximum = 1;
+                DownloadsFooterProgressBar.Value = 0;
+            }
+
+            string pct = DownloadManager.FormatPercentage(active.OverallFraction);
+            string speed = active.BytesPerSecond > 0 ? DownloadManager.FormatSpeed(active.BytesPerSecond) : string.Empty;
+            string bytes = active.TotalBytes is long tb && tb > 0
+                ? L.Format("SaveCloud_BytesOfTotal", DownloadManager.FormatBytes(active.BytesDownloaded), DownloadManager.FormatBytes(tb))
+                : active.BytesDownloaded > 0
+                    ? DownloadManager.FormatBytes(active.BytesDownloaded)
+                    : string.Empty;
+
+            var parts = new List<string>();
+            if (!string.IsNullOrEmpty(pct)) parts.Add(pct);
+            if (!string.IsNullOrEmpty(speed)) parts.Add(speed);
+            if (parts.Count == 0 && !string.IsNullOrEmpty(bytes)) parts.Add(bytes);
+            if (parts.Count == 0)
+            {
+                parts.Add(active.TotalItems > 1 ? $"{active.CompletedItems} / {active.TotalItems}" : L.Get("SaveCloud_Preparing"));
+            }
+
+            DownloadsFooterMetaText.Text = string.Join(" · ", parts);
+            DownloadsFooterCancelButton.Visibility = _navExpanded ? Visibility.Visible : Visibility.Collapsed;
+            DownloadsFooterCancelButton.Tag = active.Id;
+            DownloadsFooterBadgeDot.Visibility = _navExpanded ? Visibility.Collapsed : Visibility.Visible;
+        }
+        else
+        {
+            var latest = jobs[0];
+            DownloadsFooterTitleText.Text = latest.Title;
+            DownloadsFooterProgressBar.IsIndeterminate = false;
+            DownloadsFooterProgressBar.Maximum = 1;
+            DownloadsFooterProgressBar.Value = latest.Status == DownloadJobStatus.Completed ? 1 : 0;
+            DownloadsFooterMetaText.Text = latest.Status switch
+            {
+                DownloadJobStatus.Completed => L.Get("Downloads_AllComplete"),
+                DownloadJobStatus.Cancelled => L.Get("Downloads_StatusCancelled"),
+                _ => L.Get("Downloads_StatusFailed")
+            };
+            DownloadsFooterCancelButton.Visibility = Visibility.Collapsed;
+            DownloadsFooterCancelButton.Tag = null;
+            DownloadsFooterBadgeDot.Visibility = Visibility.Collapsed;
+        }
+    }
+
     private void OnPlayerChanged(object? sender, PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(PlayerController.ErrorMessage) &&
@@ -152,8 +236,36 @@ public partial class MainWindow : Window
         }
     }
 
+    private ContextMenu BuildSidebarPlaylistMenu(
+        string queueName,
+        IReadOnlyList<string> trackIds,
+        Action<ContextMenu>? appendExtra = null)
+    {
+        return TrackMenuHelper.BuildTrackMenu(
+            _services,
+            trackIds,
+            null,
+            ShowTextPrompt,
+            menu =>
+            {
+                if (trackIds.Count > 0)
+                {
+                    menu.Items.Insert(0, TrackMenuHelper.CreateItem(
+                        L.Get("Common_Play"),
+                        "\uE768",
+                        () => _services.Player.PlayInNamedQueue(queueName, trackIds)));
+                    menu.Items.Insert(1, new Separator());
+                }
+                appendExtra?.Invoke(menu);
+            },
+            _ctx.OpenSaveCloudTrack);
+    }
+
     private void RebuildDynamicPlaylists()
     {
+        var favIds = _services.Library.GetFavouriteTracks(_services.History).Select(t => t.Id).ToList();
+        NavFavourites.ContextMenu = BuildSidebarPlaylistMenu(L.Get("Nav_Favourites"), favIds);
+
         DynamicPlaylistsStack.Children.Clear();
         _dynamicPlaylistButtons.Clear();
 
@@ -195,11 +307,10 @@ public partial class MainWindow : Window
                 ShowPlaylistDetail(PlaylistRef.User(pid), showBack: false);
             };
 
-            rb.ContextMenu = TrackMenuHelper.BuildTrackMenu(
-                _services,
-                pl.TrackIds,
-                null,
-                ShowTextPrompt,
+            var plTrackIds = _services.Library.GetPlaylistTracks(pid, _services.History).Select(t => t.Id).ToList();
+            rb.ContextMenu = BuildSidebarPlaylistMenu(
+                pl.Name,
+                plTrackIds,
                 menu =>
                 {
                     menu.Items.Add(new Separator());
@@ -216,8 +327,7 @@ public partial class MainWindow : Window
                             () => _services.Library.DeletePlaylist(pid),
                             true);
                     }));
-                },
-                _ctx.OpenSaveCloudTrack);
+                });
 
             DynamicPlaylistsStack.Children.Add(rb);
             _dynamicPlaylistButtons.Add(rb);
@@ -433,6 +543,8 @@ public partial class MainWindow : Window
         LblLanguage.Visibility = labelVis;
         LblRescan.Visibility = labelVis;
         LblCheckUpdates.Visibility = labelVis;
+        DownloadsFooterDetails.Visibility = labelVis;
+        RefreshDownloadsFooter();
 
         foreach (var rb in _dynamicPlaylistButtons)
         {
@@ -525,6 +637,20 @@ public partial class MainWindow : Window
         UpdateDialog.Show(_services, () => Application.Current.Shutdown());
     }
 
+    private void DownloadsFooter_Click(object sender, RoutedEventArgs e)
+    {
+        DownloadsOverlay.Show(_services, jobId => SaveCloudDialog.ShowDownloadJob(_services, jobId));
+    }
+
+    private void DownloadsFooterCancel_Click(object sender, RoutedEventArgs e)
+    {
+        e.Handled = true;
+        if (DownloadsFooterCancelButton.Tag is Guid jobId)
+        {
+            _services.Downloads.Cancel(jobId);
+        }
+    }
+
     private void Minimize_Click(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
     private void MaxRestore_Click(object sender, RoutedEventArgs e)
@@ -539,11 +665,12 @@ public partial class MainWindow : Window
         if (e.Key == Key.Escape)
         {
             if (ConfirmOverlay.IsOpen) { ConfirmOverlay.Close(); e.Handled = true; return; }
+            if (PromptDialog.IsOpen) { PromptDialog.Close(); e.Handled = true; return; }
             if (SongInfoDialog.IsOpen) { SongInfoDialog.Close(); e.Handled = true; return; }
             if (UpdateDialog.IsOpen) { UpdateDialog.Close(); e.Handled = true; return; }
+            if (DownloadsOverlay.IsOpen) { DownloadsOverlay.Close(); e.Handled = true; return; }
             if (SaveCloudDialog.IsOpen) { SaveCloudDialog.Close(); e.Handled = true; return; }
             if (CloudDialog.IsOpen) { CloudDialog.Close(); e.Handled = true; return; }
-            if (PromptDialog.IsOpen) { PromptDialog.Close(); e.Handled = true; return; }
             if (EqDialog.IsOpen) { EqDialog.Close(); e.Handled = true; return; }
             if (SleepDialog.IsOpen) { SleepDialog.Close(); e.Handled = true; return; }
             if (FullPlayer.IsOpen) { FullPlayer.Close(); e.Handled = true; return; }
@@ -580,7 +707,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
         {
             if (Keyboard.FocusedElement is TextBoxBase) return;
-            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || SaveCloudDialog.IsOpen || UpdateDialog.IsOpen || SongInfoDialog.IsOpen) return;
+            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || SaveCloudDialog.IsOpen || DownloadsOverlay.IsOpen || UpdateDialog.IsOpen || SongInfoDialog.IsOpen) return;
             _services.Player.TogglePlayPause();
             e.Handled = true;
         }

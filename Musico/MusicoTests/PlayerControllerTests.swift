@@ -362,6 +362,40 @@ final class PlayerControllerTests: XCTestCase {
         XCTAssertFalse(player.isPlaying)
         XCTAssertNil(player.currentTrack)
     }
+
+    func testSyncNamedQueueCreatesAndReplacesWithoutInterruptingOtherActiveQueue() throws {
+        let aID = id("a.mp3")
+        let bID = id("b.mp3")
+        player.play([aID], startAt: 0)
+        let originalActiveID = queues.activeID
+
+        // Empty track list is ignored.
+        player.syncNamedQueue([], name: "Empty Mix")
+        XCTAssertFalse(queues.queues.contains { $0.name == "Empty Mix" })
+
+        // Syncing a named queue creates it without switching away from active queue.
+        player.syncNamedQueue([aID, bID], name: "Roadtrip")
+        XCTAssertEqual(queues.activeID, originalActiveID)
+        XCTAssertEqual(player.currentTrack?.id, aID)
+        let roadtripID = try XCTUnwrap(queues.queues.first { $0.name == "Roadtrip" }?.id)
+        XCTAssertEqual(queues.queues.first { $0.id == roadtripID }?.trackIDs, [aID, bID])
+
+        // Replacing inactive same-name queue updates tracks without changing active queue.
+        player.syncNamedQueue([bID], name: "Roadtrip")
+        XCTAssertEqual(queues.activeID, originalActiveID)
+        XCTAssertEqual(queues.queues.first { $0.id == roadtripID }?.trackIDs, [bID])
+
+        // When the named queue IS active, syncNamedQueue preserves current track playback if still present.
+        player.playInNamedQueue([aID, bID], name: "Roadtrip", startAt: 1, shuffle: false)
+        XCTAssertEqual(queues.activeID, roadtripID)
+        XCTAssertEqual(player.currentTrack?.id, bID)
+
+        player.syncNamedQueue([bID, aID], name: "Roadtrip")
+        XCTAssertEqual(queues.activeID, roadtripID)
+        XCTAssertEqual(queues.active.trackIDs, [bID, aID])
+        XCTAssertEqual(queues.active.currentTrackID, bID)
+        XCTAssertEqual(player.currentTrack?.id, bID)
+    }
 }
 
 private struct TestCloudFetcher: CloudPlaylistFetching {

@@ -156,6 +156,7 @@ private fun MusicoAppContent(
         libraryStore = libraryStore,
         playerController = playerController,
         cloudExporter = cloudExporter,
+        cloudDownloadManager = appContainer.cloudDownloadManager,
         onPickFolder = onPickFolder,
         onPickImage = onPickImage,
         onQuickSearch = { query, field ->
@@ -462,6 +463,7 @@ private fun DestinationContent(
                     trackActions = trackActions,
                     updateManager = appContainer.updateManager,
                     cloudExporter = appContainer.cloudExporter,
+                    cloudDownloadManager = appContainer.cloudDownloadManager,
                     languageStore = appContainer.languageStore,
                     onPickFolder = onPickFolder,
                     modifier = Modifier.fillMaxSize()

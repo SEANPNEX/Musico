@@ -22,6 +22,34 @@ public static class RootKindExtensions
         kind is RootKind.Picked or RootKind.AppFolder;
 }
 
+public sealed class CloudTrackingInfo
+{
+    public string SourceUrl { get; set; } = string.Empty;
+    public string? RemoteId { get; set; }
+    public RootKind CloudKind { get; set; }
+    public string? Cookie { get; set; }
+    public string? ProxyUrl { get; set; }
+    public DateTimeOffset? LastSynced { get; set; }
+
+    public CloudTrackingInfo() { }
+
+    public CloudTrackingInfo(
+        string sourceUrl,
+        string? remoteId,
+        RootKind cloudKind,
+        string? cookie = null,
+        string? proxyUrl = null,
+        DateTimeOffset? lastSynced = null)
+    {
+        SourceUrl = sourceUrl;
+        RemoteId = remoteId;
+        CloudKind = cloudKind;
+        Cookie = cookie;
+        ProxyUrl = proxyUrl;
+        LastSynced = lastSynced;
+    }
+}
+
 public sealed record LibraryRoot(
     Guid Id,
     string Name,
@@ -33,7 +61,8 @@ public sealed record LibraryRoot(
     string? ProxyUrl = null,
     DateTimeOffset? LastSyncedUtc = null,
     IReadOnlyList<string>? ExcludedPaths = null,
-    RootKind? LinkedCloudKind = null)
+    RootKind? LinkedCloudKind = null,
+    Dictionary<string, CloudTrackingInfo>? TrackedSubfolders = null)
 {
     public static readonly Guid AppFolderId = Guid.Parse("00000000-0000-0000-0000-00000000A990");
 

@@ -4,6 +4,9 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.background
+import androidx.compose.foundation.basicMarquee
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -18,10 +21,10 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Add
@@ -33,18 +36,22 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material3.AssistChip
+import androidx.compose.material.icons.rounded.UnfoldMore
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -58,12 +65,14 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.musico.audio.PlayerController
 import com.musico.audio.PlayerUiState
+import com.musico.i18n.AppStrings
 import com.musico.i18n.LocalStrings
 import com.musico.model.PlayQueue
 import com.musico.store.LibraryStore
@@ -243,131 +252,156 @@ fun QueuesContent(
     var renamingQueue by remember { mutableStateOf<PlayQueue?>(null) }
     var deletingQueue by remember { mutableStateOf<PlayQueue?>(null) }
     var queueActionsExpanded by remember { mutableStateOf(false) }
+    var showQueueSwitcher by remember { mutableStateOf(false) }
 
     val active = queueState.active
+    val activeSummary = queueSummaryText(
+        queue = active,
+        isActive = true,
+        activePositionSec = playerState.currentTimeSec,
+        libraryStore = libraryStore,
+        strings = strings,
+    )
 
     Column(modifier = modifier) {
-        LazyRow(
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-            verticalAlignment = Alignment.CenterVertically
+        ElevatedCard(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp),
+            colors = CardDefaults.elevatedCardColors(
+                containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ),
         ) {
-            items(queueState.queues, key = { it.id }) { queue ->
-                val isSelected = queue.id == queueState.activeId
-                FilterChip(
-                    selected = isSelected,
-                    onClick = { playerController.switchQueue(queue.id) },
-                    label = {
+            Column(modifier = Modifier.fillMaxWidth()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { showQueueSwitcher = true }
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .animateContentSize(),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
                         Text(
-                            text = strings.displayQueueName(queue.name),
+                            text = strings.displayQueueName(active.name),
+                            style = MaterialTheme.typography.titleMedium,
                             maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
+                            modifier = Modifier.basicMarquee(
+                                iterations = Int.MAX_VALUE,
+                                initialDelayMillis = 1500,
+                                repeatDelayMillis = 1500,
+                            ),
                         )
-                    },
-                    leadingIcon = if (isSelected) {
-                        {
-                            Icon(
-                                imageVector = Icons.Rounded.Check,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
-                    } else null
-                )
-            }
-            item(key = "add_queue") {
-                AssistChip(
-                    onClick = { queueStore.addQueue(name = null) },
-                    label = { Text(strings.newQueue) },
-                    leadingIcon = {
+                        Text(
+                            text = activeSummary,
+                            style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    Spacer(Modifier.width(10.dp))
+                    Surface(
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = CircleShape,
+                    ) {
+                        Text(
+                            text = "${queueState.queues.size}",
+                            style = MaterialTheme.typography.labelMedium.copy(
+                                fontWeight = FontWeight.SemiBold,
+                                fontFeatureSettings = "tnum",
+                            ),
+                            color = MaterialTheme.colorScheme.onSecondaryContainer,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 2.dp),
+                        )
+                    }
+                    Spacer(Modifier.width(4.dp))
+                    Icon(
+                        imageVector = Icons.Rounded.UnfoldMore,
+                        contentDescription = strings.switchQueue,
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f))
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(start = 6.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(onClick = { queueStore.addQueue(name = null) }) {
                         Icon(
                             imageVector = Icons.Rounded.Add,
                             contentDescription = null,
-                            modifier = Modifier.size(18.dp)
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Spacer(Modifier.width(4.dp))
+                        Text(
+                            text = strings.newQueue,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                     }
-                )
-            }
-        }
 
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .animateContentSize()
-                .padding(start = 16.dp, end = 8.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            val currentTrack = active.currentTrackId?.let { libraryStore.track(it) }
-            val summary = if (currentTrack != null) {
-                strings.queueSummary(active.trackIds.size, currentTrack.title, formatTime(playerState.currentTimeSec))
-            } else {
-                strings.emptyLabel
-            }
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = strings.displayQueueName(active.name),
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = summary,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
+                    Spacer(Modifier.weight(1f))
 
-            if (active.trackIds.isNotEmpty()) {
-                SortOrderMenuButton(
-                    current = active.sortOrder,
-                    onSelect = { order -> playerController.sortQueue(order) },
-                    contentDescription = strings.sortQueue,
-                )
-            }
-
-            Box {
-                IconButton(onClick = { queueActionsExpanded = true }) {
-                    Icon(Icons.Rounded.MoreVert, contentDescription = strings.queueActions)
-                }
-                DropdownMenu(
-                    expanded = queueActionsExpanded,
-                    onDismissRequest = { queueActionsExpanded = false }
-                ) {
-                    DropdownMenuItem(
-                        text = { Text(strings.renameQueueEllipsis) },
-                        leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
-                        onClick = {
-                            queueActionsExpanded = false
-                            renamingQueue = active
-                        }
-                    )
-                    if (queueState.queues.size > 1) {
-                        DropdownMenuItem(
-                            text = { Text(strings.deleteQueue) },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Rounded.Delete,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            },
-                            onClick = {
-                                queueActionsExpanded = false
-                                deletingQueue = active
-                            }
-                        )
-                    }
                     if (active.trackIds.isNotEmpty()) {
-                        DropdownMenuItem(
-                            text = { Text(strings.clearQueue) },
-                            leadingIcon = { Icon(Icons.Rounded.DeleteSweep, contentDescription = null) },
-                            onClick = {
-                                queueActionsExpanded = false
-                                playerController.clearQueue()
-                            }
+                        SortOrderMenuButton(
+                            current = active.sortOrder,
+                            onSelect = { order -> playerController.sortQueue(order) },
+                            contentDescription = strings.sortQueue,
                         )
+                    }
+
+                    Box {
+                        IconButton(onClick = { queueActionsExpanded = true }) {
+                            Icon(Icons.Rounded.MoreVert, contentDescription = strings.queueActions)
+                        }
+                        DropdownMenu(
+                            expanded = queueActionsExpanded,
+                            onDismissRequest = { queueActionsExpanded = false }
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(strings.renameQueueEllipsis) },
+                                leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                onClick = {
+                                    queueActionsExpanded = false
+                                    renamingQueue = active
+                                }
+                            )
+                            if (queueState.queues.size > 1) {
+                                DropdownMenuItem(
+                                    text = { Text(strings.deleteQueue) },
+                                    leadingIcon = {
+                                        Icon(
+                                            Icons.Rounded.Delete,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.error
+                                        )
+                                    },
+                                    onClick = {
+                                        queueActionsExpanded = false
+                                        deletingQueue = active
+                                    }
+                                )
+                            }
+                            if (active.trackIds.isNotEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text(strings.clearQueue) },
+                                    leadingIcon = { Icon(Icons.Rounded.DeleteSweep, contentDescription = null) },
+                                    onClick = {
+                                        queueActionsExpanded = false
+                                        playerController.clearQueue()
+                                    }
+                                )
+                            }
+                        }
                     }
                 }
             }
@@ -517,6 +551,22 @@ fun QueuesContent(
         }
     }
 
+    if (showQueueSwitcher) {
+        QueueSwitcherSheet(
+            queueState = queueState,
+            libraryStore = libraryStore,
+            playerState = playerState,
+            onSelectQueue = { queueId ->
+                playerController.switchQueue(queueId)
+                showQueueSwitcher = false
+            },
+            onCreateQueue = { queueStore.addQueue(name = null) },
+            onRenameQueue = { renamingQueue = it },
+            onDeleteQueue = { deletingQueue = it },
+            onDismiss = { showQueueSwitcher = false },
+        )
+    }
+
     val renaming = renamingQueue
     if (renaming != null) {
         TextInputDialog(
@@ -538,5 +588,182 @@ fun QueuesContent(
             onDismiss = { deletingQueue = null },
             onConfirm = { playerController.deleteQueue(deleting.id) }
         )
+    }
+}
+
+private fun queueSummaryText(
+    queue: PlayQueue,
+    isActive: Boolean,
+    activePositionSec: Double,
+    libraryStore: LibraryStore,
+    strings: AppStrings,
+): String {
+    if (queue.trackIds.isEmpty()) return strings.emptyLabel
+    val currentTrack = queue.currentTrackId?.let { libraryStore.track(it) }
+    return if (currentTrack != null) {
+        val posSec = if (isActive) activePositionSec else queue.positionSec
+        strings.queueSummary(queue.trackIds.size, currentTrack.title, formatTime(posSec))
+    } else {
+        strings.songCount(queue.trackIds.size)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun QueueSwitcherSheet(
+    queueState: QueueUiState,
+    libraryStore: LibraryStore,
+    playerState: PlayerUiState,
+    onSelectQueue: (String) -> Unit,
+    onCreateQueue: () -> Unit,
+    onRenameQueue: (PlayQueue) -> Unit,
+    onDeleteQueue: (PlayQueue) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val strings = LocalStrings.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding(),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 20.dp, end = 12.dp, bottom = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = strings.switchQueue,
+                        style = MaterialTheme.typography.titleLarge,
+                    )
+                    Text(
+                        text = strings.queueCountLabel(queueState.queues.size),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                FilledTonalButton(onClick = onCreateQueue) {
+                    Icon(
+                        imageVector = Icons.Rounded.Add,
+                        contentDescription = null,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(strings.newQueue)
+                }
+            }
+            HorizontalDivider()
+            LazyColumn(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f, fill = false),
+                contentPadding = PaddingValues(vertical = 8.dp),
+            ) {
+                items(queueState.queues, key = { it.id }) { queue ->
+                    val isSelected = queue.id == queueState.activeId
+                    var rowMenuExpanded by remember(queue.id) { mutableStateOf(false) }
+                    val summary = queueSummaryText(
+                        queue = queue,
+                        isActive = isSelected,
+                        activePositionSec = playerState.currentTimeSec,
+                        libraryStore = libraryStore,
+                        strings = strings,
+                    )
+                    val containerColor = if (isSelected) {
+                        MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
+                    } else {
+                        Color.Transparent
+                    }
+
+                    ListItem(
+                        colors = ListItemDefaults.colors(containerColor = containerColor),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .background(containerColor)
+                            .clickable { onSelectQueue(queue.id) },
+                        leadingContent = {
+                            if (isSelected) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            } else {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        },
+                        headlineContent = {
+                            Text(
+                                text = strings.displayQueueName(queue.name),
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (isSelected) {
+                                    MaterialTheme.colorScheme.primary
+                                } else {
+                                    MaterialTheme.colorScheme.onSurface
+                                },
+                            )
+                        },
+                        supportingContent = {
+                            Text(
+                                text = summary,
+                                style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        },
+                        trailingContent = {
+                            Box {
+                                IconButton(onClick = { rowMenuExpanded = true }) {
+                                    Icon(Icons.Rounded.MoreVert, contentDescription = strings.queueActions)
+                                }
+                                DropdownMenu(
+                                    expanded = rowMenuExpanded,
+                                    onDismissRequest = { rowMenuExpanded = false },
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text(strings.renameQueueEllipsis) },
+                                        leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                        onClick = {
+                                            rowMenuExpanded = false
+                                            onRenameQueue(queue)
+                                        },
+                                    )
+                                    if (queueState.queues.size > 1) {
+                                        DropdownMenuItem(
+                                            text = { Text(strings.deleteQueue) },
+                                            leadingIcon = {
+                                                Icon(
+                                                    Icons.Rounded.Delete,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.error,
+                                                )
+                                            },
+                                            onClick = {
+                                                rowMenuExpanded = false
+                                                onDeleteQueue(queue)
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                    )
+                }
+            }
+        }
     }
 }

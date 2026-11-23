@@ -17,6 +17,9 @@ import com.musico.model.TrackSortOrder
 import com.musico.store.LibraryStore
 import com.musico.store.PlayHistoryStore
 import com.musico.store.QueueStore
+import com.musico.ui.components.formatBytes
+import com.musico.ui.components.formatPercentage
+import com.musico.ui.components.formatTransferSpeed
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
@@ -425,5 +428,89 @@ class MusicoV115FeaturesTest {
         assertEquals(44100, wavInfo.sampleRateHz)
         assertEquals(2, wavInfo.channelCount)
         assertEquals(176400L * 8L, wavInfo.bitRateBps)
+    }
+
+    @Test
+    fun syncNamedQueueCreatesAndReplacesWithoutDisruptingOtherActivePlayback() = runBlocking {
+        touch("s1.mp3")
+        touch("s2.mp3")
+        touch("s3.mp3")
+        touch("s4.mp3")
+        libraryStore.rescan()
+        val ids = libraryStore.state.value.tracks.sortedBy { it.relativePath }.map { it.id }
+        val (t1, t2, t3, t4) = ids
+
+        val initialQueueId = queueStore.active.id
+        controller.play(listOf(t1), startAt = 0)
+        assertEquals(t1, controller.state.value.currentTrack?.id)
+        val initialLoadCalls = engine.loadCalls
+
+        // Empty list is a no-op
+        controller.syncNamedQueue("Workout Mix", emptyList())
+        assertEquals(1, queueStore.state.value.queues.size)
+
+        // Creating / replacing a named queue while another queue is playing keeps playback uninterrupted
+        controller.syncNamedQueue("Workout Mix", listOf(t2, t3))
+        assertEquals(2, queueStore.state.value.queues.size)
+        assertEquals(initialQueueId, queueStore.active.id)
+        assertEquals(t1, controller.state.value.currentTrack?.id)
+        assertEquals(initialLoadCalls, engine.loadCalls)
+        assertEquals(listOf(t2, t3), queueStore.state.value.queues.first { it.name == "Workout Mix" }.trackIds)
+
+        // Replacing same named queue in background updates tracks without switching away from active queue
+        controller.syncNamedQueue("Workout Mix", listOf(t2, t3, t4))
+        assertEquals(initialQueueId, queueStore.active.id)
+        assertEquals(listOf(t2, t3, t4), queueStore.state.value.queues.first { it.name == "Workout Mix" }.trackIds)
+
+        // When named queue IS active and playing t3, syncing preserves playing t3 at its new index
+        controller.playInNamedQueue(name = "Workout Mix", ids = listOf(t2, t3, t4), startAt = 1)
+        assertEquals("Workout Mix", queueStore.active.name)
+        assertEquals(t3, controller.state.value.currentTrack?.id)
+        val beforeSyncLoads = engine.loadCalls
+        controller.syncNamedQueue("Workout Mix", listOf(t4, t3))
+        assertEquals(listOf(t4, t3), queueStore.active.trackIds)
+        assertEquals(1, queueStore.active.currentIndex)
+        assertEquals(t3, controller.state.value.currentTrack?.id)
+        assertEquals(beforeSyncLoads, engine.loadCalls)
+    }
+
+    @Test
+    fun onFolderAddedDoesNotDisruptPlayingSameNameActiveQueue() = runBlocking {
+        touch("f1.mp3")
+        touch("f2.mp3")
+        libraryStore.rescan()
+        val ids = libraryStore.state.value.tracks.sortedBy { it.relativePath }.map { it.id }
+        val (f1, f2) = ids
+
+        controller.playInNamedQueue(name = "Drive Album", ids = listOf(f1), startAt = 0)
+        assertEquals(f1, controller.state.value.currentTrack?.id)
+        val loadsBefore = engine.loadCalls
+
+        controller.onFolderAdded("Drive Album", listOf(f1, f2))
+        assertEquals(listOf(f1, f2), queueStore.active.trackIds)
+        assertEquals(0, queueStore.active.currentIndex)
+        assertEquals(loadsBefore, engine.loadCalls)
+    }
+
+    @Test
+    fun transferFormattersProduceReadableBytesSpeedAndPercentages() {
+        assertEquals("0 B", formatBytes(0L))
+        assertEquals("512 B", formatBytes(512L))
+        assertEquals("1.5 KB", formatBytes(1536L))
+        assertEquals("14.2 MB", formatBytes((14.2 * 1024 * 1024).toLong()))
+        assertEquals("1.25 GB", formatBytes((1.25 * 1024 * 1024 * 1024).toLong()))
+
+        assertEquals("0 B/s", formatTransferSpeed(0.0))
+        assertEquals("0 B/s", formatTransferSpeed(Double.NaN))
+        assertEquals("420 KB/s", formatTransferSpeed(420.0 * 1024.0))
+        assertEquals("8.6 MB/s", formatTransferSpeed(8.6 * 1024.0 * 1024.0))
+        assertEquals("1.50 GB/s", formatTransferSpeed(1.5 * 1024.0 * 1024.0 * 1024.0))
+
+        assertEquals("0%", formatPercentage(0f))
+        assertEquals("25%", formatPercentage(0.25f))
+        assertEquals("100%", formatPercentage(1f))
+        assertEquals("0%", formatPercentage(-0.2f))
+        assertEquals("100%", formatPercentage(1.5f))
+        assertEquals("0%", formatPercentage(Float.NaN))
     }
 }

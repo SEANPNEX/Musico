@@ -1946,4 +1946,379 @@ public sealed class CloudClientsTests
         Assert.Equal(1, httpCalls);
         Assert.Equal(smallPayload, File.ReadAllBytes(completedPath));
     }
+
+    [Fact]
+    public void DownloadSpeedMeterComputesRollingWindowSpeedThrottlesAndRollsBackRetries()
+    {
+        double clock = 0.0;
+        var meter = new DownloadSpeedMeter(totalBytes: 1000, clockSeconds: () => clock, throttleSeconds: 0.12);
+
+        // First write at t=0.05s is throttled (< 0.12s since start).
+        clock = 0.05;
+        Assert.Null(meter.RecordBytes(200));
+
+        // At t=0.20s (>= 0.12s), emission triggers: 400 bytes over 0.20s window => 2000 B/s.
+        clock = 0.20;
+        var p1 = meter.RecordBytes(200);
+        Assert.NotNull(p1);
+        Assert.Equal(400, p1!.BytesDownloaded);
+        Assert.Equal(1000, p1.TotalBytes);
+        Assert.Equal(0.4, p1.FractionCompleted!.Value, precision: 3);
+        Assert.Equal(2000.0, p1.BytesPerSecond, precision: 1);
+
+        // Rollback retry bytes (e.g., failed chunk) subtracts both total & window bytes cleanly.
+        meter.RollbackBytes(200);
+        clock = 2.0; // Old sample at t=0.05s is outside 1.5s rolling window [0.5, 2.0]; sample at t=0.20s is also pruned!
+        var p2 = meter.RecordBytes(600, forceEmit: true);
+        Assert.NotNull(p2);
+        Assert.Equal(800, p2!.BytesDownloaded);
+        Assert.Equal(600.0 / 1.5, p2.BytesPerSecond, precision: 1);
+
+        var done = meter.Complete();
+        Assert.Equal(800, done.BytesDownloaded);
+        Assert.Equal(1000, done.TotalBytes);
+        Assert.Equal(0.8, done.FractionCompleted!.Value, precision: 3);
+
+        // Unknown-total meter populates TotalBytes upon Complete().
+        double clock2 = 0.0;
+        var unknownMeter = new DownloadSpeedMeter(totalBytes: null, clockSeconds: () => clock2, throttleSeconds: 0.12);
+        clock2 = 0.5;
+        unknownMeter.RecordBytes(512, forceEmit: true);
+        var unknownDone = unknownMeter.Complete();
+        Assert.Equal(512, unknownDone.TotalBytes);
+        Assert.Equal(1.0, unknownDone.FractionCompleted);
+    }
+
+    [Fact]
+    public async Task CloudAudioCacheEmitsLiveProgressAndMulticastsToCoalescedWaiters()
+    {
+        byte[] payload = new byte[200_000];
+        Array.Fill(payload, (byte)0x42);
+
+        var releaseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int singleRequests = 0;
+
+        var singleHandler = new AsyncStubHttpHandler(async (req, ct) =>
+        {
+            string uri = req.RequestUri!.AbsoluteUri;
+            if (uri == "https://cdn.example/progress.m4a")
+            {
+                Interlocked.Increment(ref singleRequests);
+                started.TrySetResult();
+                await releaseGate.Task.WaitAsync(ct).ConfigureAwait(false);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(payload)
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        string dir = TestHelpers.MakeTempDir();
+        var cache = new CloudAudioCache(dir, maxBytes: 32L * 1024 * 1024, handler: singleHandler);
+        var waiter1Events = new List<CloudDownloadProgress>();
+        var waiter2Events = new List<CloudDownloadProgress>();
+
+        var t1 = cache.GetOrDownloadAsync(
+            "yt_prog_single",
+            _ => Task.FromResult(new CloudAudioStream("https://cdn.example/progress.m4a", ".m4a")),
+            onProgress: p => { lock (waiter1Events) waiter1Events.Add(p); });
+        var t2 = cache.GetOrDownloadAsync(
+            "yt_prog_single",
+            _ => Task.FromResult(new CloudAudioStream("https://cdn.example/progress.m4a", ".m4a")),
+            onProgress: p => { lock (waiter2Events) waiter2Events.Add(p); });
+
+        await started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        releaseGate.TrySetResult();
+        var paths = await Task.WhenAll(t1, t2);
+
+        Assert.Equal(1, singleRequests);
+        Assert.Equal(paths[0], paths[1]);
+        Assert.NotEmpty(waiter1Events);
+        Assert.NotEmpty(waiter2Events);
+        Assert.Equal(payload.Length, waiter1Events[^1].BytesDownloaded);
+        Assert.Equal(payload.Length, waiter2Events[^1].BytesDownloaded);
+        Assert.Equal(1.0, waiter1Events[^1].FractionCompleted);
+        Assert.Equal(1.0, waiter2Events[^1].FractionCompleted);
+
+        // Chunked parallel download (>= 4 MB) also emits live byte progress up to full length.
+        byte[] largePayload = new byte[CloudAudioCache.ChunkSizeBytes + 32_768];
+        Array.Fill(largePayload, (byte)0x7C);
+        var chunkHandler = new StubHttpHandler(req =>
+        {
+            if (req.RequestUri!.AbsoluteUri == "https://cdn.example/large_chunks.m4a")
+            {
+                var range = req.Headers.Range?.Ranges.FirstOrDefault();
+                if (range is not null)
+                {
+                    long from = range.From ?? 0;
+                    long to = Math.Min(largePayload.Length - 1, range.To ?? (largePayload.Length - 1));
+                    int sliceLen = (int)(to - from + 1);
+                    var slice = new byte[sliceLen];
+                    Buffer.BlockCopy(largePayload, (int)from, slice, 0, sliceLen);
+                    var msg = new HttpResponseMessage(HttpStatusCode.PartialContent)
+                    {
+                        Content = new ByteArrayContent(slice)
+                    };
+                    msg.Content.Headers.ContentRange = new ContentRangeHeaderValue(from, to, largePayload.Length);
+                    return msg;
+                }
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        string chunkDir = TestHelpers.MakeTempDir();
+        var chunkCache = new CloudAudioCache(chunkDir, maxBytes: 64L * 1024 * 1024, handler: chunkHandler);
+        var chunkProgress = new List<CloudDownloadProgress>();
+        string chunkPath = await chunkCache.GetOrDownloadAsync(
+            "yt_prog_chunked",
+            _ => Task.FromResult(new CloudAudioStream("https://cdn.example/large_chunks.m4a", ".m4a", ContentLength: largePayload.Length)),
+            onProgress: p => { lock (chunkProgress) chunkProgress.Add(p); });
+
+        Assert.Equal(largePayload, File.ReadAllBytes(chunkPath));
+        Assert.NotEmpty(chunkProgress);
+        Assert.Equal(largePayload.Length, chunkProgress[^1].BytesDownloaded);
+        Assert.Equal(largePayload.Length, chunkProgress[^1].TotalBytes);
+        Assert.Equal(1.0, chunkProgress[^1].FractionCompleted);
+    }
+
+    [Fact]
+    public async Task GoogleDriveClientPaginatesDriveIvdApiKeyV2BetaWithV3FallbackAndRetry()
+    {
+        const string fakeApiKey = "AIzaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q";
+        int v2betaCalls = 0;
+
+        var handler = new StubHttpHandler(req =>
+        {
+            string url = req.RequestUri!.AbsoluteUri;
+            if (url.StartsWith("https://drive.google.com/drive/folders/gdPagedRoot", StringComparison.Ordinal))
+            {
+                string ivdJson = """[[["gd_p1_f1",["gdPagedRoot"],"01 Root Song.mp3","audio/mpeg"]],"tok_page_2"]""";
+                string html = $"<html><head><title>Large Mix - Google Drive</title></head><body><script>window['_DRIVE_ivd'] = '{ivdJson}'; var key = \"{fakeApiKey}\";</script></body></html>";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(html, Encoding.UTF8, "text/html")
+                };
+            }
+
+            if (url.Contains("clients6.google.com/drive/v2beta/files", StringComparison.Ordinal))
+            {
+                int call = Interlocked.Increment(ref v2betaCalls);
+                Assert.True(req.Headers.TryGetValues("X-Goog-Api-Key", out var apiKeys) && apiKeys.Contains(fakeApiKey));
+                Assert.True(req.Headers.TryGetValues("Origin", out var origins) && origins.Contains("https://drive.google.com"));
+
+                if (url.Contains("pageToken=tok_page_2", StringComparison.Ordinal))
+                {
+                    // Transient 503 then 429 before 200 OK on page 2.
+                    if (call == 1) return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+                    if (call == 2) return new HttpResponseMessage((HttpStatusCode)429);
+
+                    string v2Json = """
+                    {
+                      "nextPageToken": "tok_page_3",
+                      "items": [
+                        { "id": "gd_p2_f1", "title": "02 Second Page.flac", "mimeType": "audio/flac" }
+                      ]
+                    }
+                    """;
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(v2Json, Encoding.UTF8, "application/json")
+                    };
+                }
+
+                if (url.Contains("pageToken=tok_page_3", StringComparison.Ordinal))
+                {
+                    // Trigger fallback to drive/v3/files for page 3.
+                    return new HttpResponseMessage(HttpStatusCode.Forbidden);
+                }
+            }
+
+            if (url.Contains("googleapis.com/drive/v3/files", StringComparison.Ordinal) &&
+                url.Contains("pageToken=tok_page_3", StringComparison.Ordinal))
+            {
+                string v3Json = """
+                {
+                  "files": [
+                    { "id": "gd_p3_f1", "name": "03 Third Page.opus", "mimeType": "audio/opus" }
+                  ]
+                }
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(v3Json, Encoding.UTF8, "application/json")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var client = new GoogleDriveClient(handler);
+        var result = await client.FetchPlaylistAsync("https://drive.google.com/drive/folders/gdPagedRoot");
+
+        Assert.Equal("Large Mix", result.Title);
+        Assert.Equal(3, result.Items.Count);
+        Assert.Equal(["gd_p1_f1", "gd_p2_f1", "gd_p3_f1"], result.Items.Select(i => i.RemoteTrackId).ToArray());
+        Assert.DoesNotContain(handler.Requests, r => r.RequestUri!.AbsoluteUri.Contains("embeddedfolderview", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GoogleDriveClientSkipsRedundantEmbeddedFolderViewWhenDriveIvdValidlyEmpty()
+    {
+        var handler = new StubHttpHandler(req =>
+        {
+            string url = req.RequestUri!.AbsoluteUri;
+            if (url.StartsWith("https://drive.google.com/drive/folders/gdEmptyRoot", StringComparison.Ordinal))
+            {
+                string html = "<html><head><title>Empty Folder - Google Drive</title></head><body><script>window['_DRIVE_ivd'] = '[[], null]';</script></body></html>";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(html, Encoding.UTF8, "text/html")
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var client = new GoogleDriveClient(handler);
+        var single = await client.FetchSingleFolderAsync("gdEmptyRoot");
+
+        Assert.Empty(single.Entries);
+        Assert.Single(handler.Requests);
+        Assert.DoesNotContain(handler.Requests, r => r.RequestUri!.AbsoluteUri.Contains("embeddedfolderview", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task GoogleDriveClientPreservesHierarchyDisambiguatesDuplicatesAndExpandsAudioExtensions()
+    {
+        var handler = new StubHttpHandler(req =>
+        {
+            string url = req.RequestUri!.AbsoluteUri;
+            if (url.Contains("/drive/folders/gdHierRoot", StringComparison.Ordinal))
+            {
+                string ivd = """
+                [[
+                  ["gd_sub_albums",["gdHierRoot"],"Albums","application/vnd.google-apps.folder"],
+                  ["gd_ext_mp4",["gdHierRoot"],"Clip.mp4","video/mp4"],
+                  ["gd_ext_ogg",["gdHierRoot"],"Vorbis.ogg","application/ogg"],
+                  ["gd_ext_opus",["gdHierRoot"],"Opus.opus","audio/opus"],
+                  ["gd_ext_webm",["gdHierRoot"],"WebAudio.webm","audio/webm"],
+                  ["gd_ext_wma",["gdHierRoot"],"WinMedia.wma","audio/x-ms-wma"],
+                  ["gd_ext_alac",["gdHierRoot"],"Lossless.alac","audio/alac"],
+                  ["gd_ext_caf",["gdHierRoot"],"CoreAudio.caf","audio/x-caf"],
+                  ["gd_skip_txt",["gdHierRoot"],"readme.txt","text/plain"]
+                ]]
+                """;
+                string html = $"<html><head><title>Hierarchy Root - Google Drive</title></head><body><script>window['_DRIVE_ivd'] = {ivd};</script></body></html>";
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(html, Encoding.UTF8, "text/html") };
+            }
+
+            if (url.Contains("/drive/folders/gd_sub_albums", StringComparison.Ordinal))
+            {
+                string ivd = """[[["gd_sub_cd1",["gd_sub_albums"],"CD 1","application/vnd.google-apps.folder"]]]""";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent($"<html><body><script>window['_DRIVE_ivd'] = '{ivd}';</script></body></html>", Encoding.UTF8, "text/html")
+                };
+            }
+
+            if (url.Contains("/drive/folders/gd_sub_cd1", StringComparison.Ordinal))
+            {
+                string ivd = """[[["gd_dup_aaa11111",["gd_sub_cd1"],"Duplicate.mp3","audio/mpeg"],["gd_dup_bbb22222",["gd_sub_cd1"],"Duplicate.mp3","audio/mpeg"]]]""";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent($"<html><body><script>window['_DRIVE_ivd'] = '{ivd}';</script></body></html>", Encoding.UTF8, "text/html")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var client = new GoogleDriveClient(handler);
+        var result = await client.FetchPlaylistAsync("https://drive.google.com/drive/folders/gdHierRoot");
+
+        Assert.Equal(9, result.Items.Count);
+        Assert.DoesNotContain(result.Items, i => i.RemoteTrackId == "gd_skip_txt");
+        Assert.Equal(
+            [".mp4", ".ogg", ".opus", ".webm", ".wma", ".alac", ".caf"],
+            result.Items.Where(i => i.RelativePath is not null && !i.RelativePath.Contains('/'))
+                .Select(i => i.FileExtension ?? string.Empty)
+                .ToArray());
+
+        var dups = result.Items.Where(i => i.RemoteTrackId.StartsWith("gd_dup_", StringComparison.Ordinal)).ToList();
+        Assert.Equal(2, dups.Count);
+        Assert.Contains(dups, d => d.RelativePath == "Albums/CD 1/Duplicate.mp3");
+        Assert.Contains(dups, d => d.RelativePath == "Albums/CD 1/Duplicate (gd_dup_b).mp3");
+        Assert.All(dups, d => Assert.Equal("CD 1", d.Album));
+    }
+
+    [Fact]
+    public async Task GoogleDriveClientProgressiveTraversalPrioritizesRequestedSubfolder()
+    {
+        var subAGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var batches = new ConcurrentQueue<GoogleDriveFolderBatch>();
+
+        var handler = new AsyncStubHttpHandler(async (req, ct) =>
+        {
+            string url = req.RequestUri!.AbsoluteUri;
+            if (url.Contains("/drive/folders/gdProgRoot", StringComparison.Ordinal))
+            {
+                string ivd = """
+                [[
+                  ["gd_suba",["gdProgRoot"],"SubA","application/vnd.google-apps.folder"],
+                  ["gd_subb",["gdProgRoot"],"SubB","application/vnd.google-apps.folder"],
+                  ["gd_r1",["gdProgRoot"],"Intro.mp3","audio/mpeg"]
+                ]]
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent($"<html><head><title>Prog Root - Google Drive</title></head><body><script>window['_DRIVE_ivd'] = {ivd};</script></body></html>", Encoding.UTF8, "text/html")
+                };
+            }
+
+            if (url.Contains("/drive/folders/gd_suba", StringComparison.Ordinal))
+            {
+                await subAGate.Task.WaitAsync(ct).ConfigureAwait(false);
+                string ivd = """[[["gd_a1",["gd_suba"],"TrackA.mp3","audio/mpeg"]]]""";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent($"<html><body><script>window['_DRIVE_ivd'] = '{ivd}';</script></body></html>", Encoding.UTF8, "text/html")
+                };
+            }
+
+            if (url.Contains("/drive/folders/gd_subb", StringComparison.Ordinal))
+            {
+                string ivd = """[[["gd_b1",["gd_subb"],"TrackB.mp3","audio/mpeg"]]]""";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent($"<html><body><script>window['_DRIVE_ivd'] = '{ivd}';</script></body></html>", Encoding.UTF8, "text/html")
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var client = new GoogleDriveClient(handler);
+        using var session = await client.StartProgressiveFolderFetchAsync("https://drive.google.com/drive/folders/gdProgRoot");
+
+        Assert.True(session.HasMoreSubfolders);
+        Assert.Equal(["SubA", "SubB"], session.DiscoveredSubfolderPaths);
+        Assert.Single(session.RootResult.Items);
+        Assert.Equal("gd_r1", session.RootResult.Items[0].RemoteTrackId);
+
+        session.TraversalHandle.PrioritizeFolder("SubB");
+        var continueTask = session.ContinueRemainingAsync(b => batches.Enqueue(b));
+
+        for (int i = 0; i < 100 && !batches.Any(b => b.FolderRelativePath == "SubB"); i++)
+        {
+            await Task.Delay(20);
+        }
+        Assert.Contains(batches, b => b.FolderRelativePath == "SubB" && b.Items.Count == 1 && b.Items[0].RelativePath == "SubB/TrackB.mp3");
+
+        subAGate.TrySetResult();
+        var full = await continueTask.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.Equal(3, full.Items.Count);
+        Assert.Contains(full.Items, i => i.RelativePath == "SubA/TrackA.mp3");
+        Assert.Contains(full.Items, i => i.RelativePath == "SubB/TrackB.mp3");
+    }
 }

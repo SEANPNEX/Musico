@@ -1,6 +1,7 @@
 using System;
 using System.Buffers;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -11,6 +12,137 @@ using System.Threading.Tasks;
 using Microsoft.Win32.SafeHandles;
 
 namespace MusicoWindows.Cloud;
+
+public sealed record CloudDownloadProgress(
+    long BytesDownloaded,
+    long? TotalBytes,
+    double BytesPerSecond)
+{
+    public double? FractionCompleted =>
+        TotalBytes is long total && total > 0
+            ? Math.Clamp((double)BytesDownloaded / total, 0.0, 1.0)
+            : null;
+}
+
+/// <summary>
+/// Thread-safe rolling ~1.5s transfer speed meter with ~120ms emission throttling
+/// and byte rollback support when a chunk retries.
+/// </summary>
+public sealed class DownloadSpeedMeter
+{
+    public const double RollingWindowSeconds = 1.5;
+    public const double DefaultThrottleSeconds = 0.12;
+
+    private readonly object _lock = new();
+    private readonly LinkedList<(double TimeSeconds, long Bytes)> _samples = new();
+    private readonly Func<double> _clockSeconds;
+    private readonly double _throttleSeconds;
+    private readonly double _startTime;
+    private double _lastEmitTime;
+    private long _totalDownloaded;
+    private long? _totalBytes;
+    private long _windowBytes;
+
+    public DownloadSpeedMeter(
+        long? totalBytes = null,
+        Func<double>? clockSeconds = null,
+        double throttleSeconds = DefaultThrottleSeconds)
+    {
+        _totalBytes = totalBytes is > 0 ? totalBytes : null;
+        _clockSeconds = clockSeconds ?? DefaultClockSeconds;
+        _throttleSeconds = Math.Max(0, throttleSeconds);
+        _startTime = _clockSeconds();
+        _lastEmitTime = _startTime;
+    }
+
+    private static double DefaultClockSeconds() =>
+        (double)Stopwatch.GetTimestamp() / Stopwatch.Frequency;
+
+    public void SetTotalBytes(long? totalBytes)
+    {
+        if (totalBytes is not > 0) return;
+        lock (_lock)
+        {
+            _totalBytes = totalBytes;
+        }
+    }
+
+    public CloudDownloadProgress? RecordBytes(long bytes, bool forceEmit = false)
+    {
+        lock (_lock)
+        {
+            double now = _clockSeconds();
+            if (bytes > 0)
+            {
+                _totalDownloaded += bytes;
+                _windowBytes += bytes;
+                _samples.AddLast((now, bytes));
+            }
+
+            double windowStart = Math.Max(_startTime, now - RollingWindowSeconds);
+            while (_samples.First is { } first && first.Value.TimeSeconds < windowStart)
+            {
+                _windowBytes -= first.Value.Bytes;
+                _samples.RemoveFirst();
+            }
+            if (_windowBytes < 0)
+            {
+                _windowBytes = 0;
+            }
+
+            if (!forceEmit && (now - _lastEmitTime) < _throttleSeconds)
+            {
+                return null;
+            }
+
+            _lastEmitTime = now;
+            double span = Math.Max(now - windowStart, 0.05);
+            double speed = _windowBytes > 0 ? _windowBytes / span : 0.0;
+            return new CloudDownloadProgress(_totalDownloaded, _totalBytes, speed);
+        }
+    }
+
+    public void RollbackBytes(long bytes)
+    {
+        if (bytes <= 0) return;
+        lock (_lock)
+        {
+            _totalDownloaded = Math.Max(0, _totalDownloaded - bytes);
+            long remaining = bytes;
+            while (remaining > 0 && _samples.Last is { } last)
+            {
+                if (last.Value.Bytes <= remaining)
+                {
+                    remaining -= last.Value.Bytes;
+                    _windowBytes -= last.Value.Bytes;
+                    _samples.RemoveLast();
+                }
+                else
+                {
+                    last.Value = (last.Value.TimeSeconds, last.Value.Bytes - remaining);
+                    _windowBytes -= remaining;
+                    remaining = 0;
+                }
+            }
+            if (_windowBytes < 0)
+            {
+                _windowBytes = 0;
+            }
+        }
+    }
+
+    public CloudDownloadProgress Complete()
+    {
+        lock (_lock)
+        {
+            if (_totalBytes is null && _totalDownloaded > 0)
+            {
+                _totalBytes = _totalDownloaded;
+            }
+        }
+        return RecordBytes(0, forceEmit: true)!;
+    }
+}
 
 /// <summary>
 /// LRU disk cache for cloud audio streams, capped at 500 MB by default.
@@ -35,14 +167,17 @@ public sealed class CloudAudioCache
         private readonly CancellationTokenSource _cts = new();
         private readonly TaskCompletionSource<string> _tcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly object _lock = new();
+        private readonly List<Action<CloudDownloadProgress>> _progressCallbacks = new();
+        private CloudDownloadProgress? _latestProgress;
         private int _waiters;
         private bool _disposed;
 
         public CancellationToken Token => _cts.Token;
         public Task<string> Task => _tcs.Task;
 
-        public bool TryAddWaiter()
+        public bool TryAddWaiter(Action<CloudDownloadProgress>? onProgress = null)
         {
+            CloudDownloadProgress? replay = null;
             lock (_lock)
             {
                 if (_disposed || _cts.IsCancellationRequested || _tcs.Task.IsCompleted)
@@ -50,15 +185,55 @@ public sealed class CloudAudioCache
                     return false;
                 }
                 _waiters++;
-                return true;
+                if (onProgress is not null)
+                {
+                    _progressCallbacks.Add(onProgress);
+                    replay = _latestProgress;
+                }
+            }
+
+            if (replay is not null && onProgress is not null)
+            {
+                try { onProgress(replay); } catch { /* ignore observer errors */ }
+            }
+            return true;
+        }
+
+        public void RemoveProgressCallback(Action<CloudDownloadProgress>? onProgress)
+        {
+            if (onProgress is null) return;
+            lock (_lock)
+            {
+                _progressCallbacks.Remove(onProgress);
             }
         }
 
-        public bool ReleaseWaiter(bool cancelIfNoWaiters)
+        public void ReportProgress(CloudDownloadProgress progress)
+        {
+            Action<CloudDownloadProgress>[] snapshot;
+            lock (_lock)
+            {
+                if (_disposed) return;
+                _latestProgress = progress;
+                if (_progressCallbacks.Count == 0) return;
+                snapshot = _progressCallbacks.ToArray();
+            }
+
+            foreach (var cb in snapshot)
+            {
+                try { cb(progress); } catch { /* ignore observer errors */ }
+            }
+        }
+
+        public bool ReleaseWaiter(bool cancelIfNoWaiters, Action<CloudDownloadProgress>? onProgress = null)
         {
             bool shouldCancel = false;
             lock (_lock)
             {
+                if (onProgress is not null)
+                {
+                    _progressCallbacks.Remove(onProgress);
+                }
                 if (_waiters > 0)
                 {
                     _waiters--;
@@ -87,6 +262,7 @@ public sealed class CloudAudioCache
             {
                 if (_disposed) return;
                 _disposed = true;
+                _progressCallbacks.Clear();
             }
             _cts.Dispose();
         }
@@ -132,13 +308,26 @@ public sealed class CloudAudioCache
         string trackId,
         Func<CancellationToken, Task<CloudAudioStream>> resolver,
         string? proxyUrl = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        Action<CloudDownloadProgress>? onProgress = null)
     {
         ct.ThrowIfCancellationRequested();
 
         string? cached = TryGetCachedPath(trackId);
         if (cached is not null)
         {
+            if (onProgress is not null)
+            {
+                try
+                {
+                    long len = new FileInfo(cached).Length;
+                    onProgress(new CloudDownloadProgress(len, len, 0));
+                }
+                catch
+                {
+                    // Ignore stat failure on cache hit.
+                }
+            }
             return cached;
         }
 
@@ -148,14 +337,14 @@ public sealed class CloudAudioCache
         bool isOwner = false;
         lock (_inFlightLock)
         {
-            if (_inFlight.TryGetValue(trackId, out var existing) && existing.TryAddWaiter())
+            if (_inFlight.TryGetValue(trackId, out var existing) && existing.TryAddWaiter(onProgress))
             {
                 entry = existing;
             }
             else
             {
                 entry = new InFlightDownload();
-                entry.TryAddWaiter();
+                entry.TryAddWaiter(onProgress);
                 _inFlight[trackId] = entry;
                 isOwner = true;
             }
@@ -174,7 +363,7 @@ public sealed class CloudAudioCache
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             released = true;
-            if (entry.ReleaseWaiter(cancelIfNoWaiters: true))
+            if (entry.ReleaseWaiter(cancelIfNoWaiters: true, onProgress))
             {
                 lock (_inFlightLock)
                 {
@@ -190,7 +379,7 @@ public sealed class CloudAudioCache
         {
             if (!released)
             {
-                entry.ReleaseWaiter(cancelIfNoWaiters: false);
+                entry.ReleaseWaiter(cancelIfNoWaiters: false, onProgress);
             }
         }
     }
@@ -203,7 +392,12 @@ public sealed class CloudAudioCache
     {
         try
         {
-            string path = await DownloadCoreAsync(trackId, resolver, proxyUrl, entry.Token).ConfigureAwait(false);
+            string path = await DownloadCoreAsync(
+                trackId,
+                resolver,
+                proxyUrl,
+                entry.ReportProgress,
+                entry.Token).ConfigureAwait(false);
             entry.TrySetResult(path);
         }
         catch (OperationCanceledException oce) when (entry.Token.IsCancellationRequested)
@@ -231,6 +425,7 @@ public sealed class CloudAudioCache
         string trackId,
         Func<CancellationToken, Task<CloudAudioStream>> resolver,
         string? proxyUrl,
+        Action<CloudDownloadProgress> onProgress,
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
@@ -238,6 +433,15 @@ public sealed class CloudAudioCache
         string? cached = TryGetCachedPath(trackId);
         if (cached is not null)
         {
+            try
+            {
+                long len = new FileInfo(cached).Length;
+                onProgress(new CloudDownloadProgress(len, len, 0));
+            }
+            catch
+            {
+                // Ignore stat failure on cache hit.
+            }
             return cached;
         }
 
@@ -256,11 +460,11 @@ public sealed class CloudAudioCache
         {
             if (streamInfo.ContentLength is long totalBytes && totalBytes > ParallelChunkThresholdBytes)
             {
-                await DownloadChunkedAsync(http, streamInfo, totalBytes, tempPath, ct).ConfigureAwait(false);
+                await DownloadChunkedAsync(http, streamInfo, totalBytes, tempPath, onProgress, ct).ConfigureAwait(false);
             }
             else
             {
-                await DownloadSingleAsync(http, streamInfo, tempPath, ct).ConfigureAwait(false);
+                await DownloadSingleAsync(http, streamInfo, tempPath, onProgress, ct).ConfigureAwait(false);
             }
 
             var fi = new FileInfo(tempPath);
@@ -285,6 +489,7 @@ public sealed class CloudAudioCache
         HttpClient http,
         CloudAudioStream streamInfo,
         string tempPath,
+        Action<CloudDownloadProgress> onProgress,
         CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, streamInfo.Url);
@@ -305,10 +510,34 @@ public sealed class CloudAudioCache
 
         ValidateNonHtmlMediaType(resp);
 
+        long? totalBytes = streamInfo.ContentLength ?? resp.Content.Headers.ContentLength;
+        var meter = new DownloadSpeedMeter(totalBytes);
+
         await using var remote = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         await using var local = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None, 81920, useAsync: true);
-        await remote.CopyToAsync(local, ct).ConfigureAwait(false);
+
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(81920);
+        try
+        {
+            while (true)
+            {
+                int read = await remote.ReadAsync(buffer.AsMemory(0, buffer.Length), ct).ConfigureAwait(false);
+                if (read <= 0) break;
+
+                await local.WriteAsync(buffer.AsMemory(0, read), ct).ConfigureAwait(false);
+                if (meter.RecordBytes(read) is { } progress)
+                {
+                    onProgress(progress);
+                }
+            }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+
         await local.FlushAsync(ct).ConfigureAwait(false);
+        onProgress(meter.Complete());
     }
 
     private static async Task DownloadChunkedAsync(
@@ -316,6 +545,7 @@ public sealed class CloudAudioCache
         CloudAudioStream streamInfo,
         long totalBytes,
         string tempPath,
+        Action<CloudDownloadProgress> onProgress,
         CancellationToken ct)
     {
         var ranges = new List<(long Start, long End)>();
@@ -333,6 +563,7 @@ public sealed class CloudAudioCache
             FileOptions.Asynchronous);
         RandomAccess.SetLength(handle, totalBytes);
 
+        var meter = new DownloadSpeedMeter(totalBytes);
         var parallelOptions = new ParallelOptions
         {
             MaxDegreeOfParallelism = MaxParallelChunks,
@@ -341,9 +572,11 @@ public sealed class CloudAudioCache
 
         await Parallel.ForEachAsync(ranges, parallelOptions, async (range, chunkCt) =>
         {
-            await DownloadChunkWithRetryAsync(http, handle, streamInfo, range.Start, range.End, chunkCt)
+            await DownloadChunkWithRetryAsync(http, handle, streamInfo, range.Start, range.End, meter, onProgress, chunkCt)
                 .ConfigureAwait(false);
         }).ConfigureAwait(false);
+
+        onProgress(meter.Complete());
     }
 
     private static async Task DownloadChunkWithRetryAsync(
@@ -352,22 +585,47 @@ public sealed class CloudAudioCache
         CloudAudioStream streamInfo,
         long start,
         long end,
+        DownloadSpeedMeter meter,
+        Action<CloudDownloadProgress> onProgress,
         CancellationToken ct)
     {
         for (int attempt = 0; ; attempt++)
         {
             ct.ThrowIfCancellationRequested();
+            long attemptBytes = 0;
             try
             {
-                await DownloadChunkOnceAsync(http, handle, streamInfo, start, end, ct).ConfigureAwait(false);
+                await DownloadChunkOnceAsync(
+                    http,
+                    handle,
+                    streamInfo,
+                    start,
+                    end,
+                    read =>
+                    {
+                        attemptBytes += read;
+                        if (meter.RecordBytes(read) is { } progress)
+                        {
+                            onProgress(progress);
+                        }
+                    },
+                    ct).ConfigureAwait(false);
                 return;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
+                if (attemptBytes > 0)
+                {
+                    meter.RollbackBytes(attemptBytes);
+                }
                 throw;
             }
             catch (Exception ex) when (attempt == 0 && IsTransientChunkError(ex, ct))
             {
+                if (attemptBytes > 0)
+                {
+                    meter.RollbackBytes(attemptBytes);
+                }
                 await Task.Delay(50, ct).ConfigureAwait(false);
             }
         }
@@ -383,6 +641,7 @@ public sealed class CloudAudioCache
         CloudAudioStream streamInfo,
         long start,
         long end,
+        Action<long>? onBytesWritten,
         CancellationToken ct)
     {
         using var req = new HttpRequestMessage(HttpMethod.Get, streamInfo.Url);
@@ -443,6 +702,7 @@ public sealed class CloudAudioCache
                     .ConfigureAwait(false);
                 writeOffset += read;
                 bytesWritten += read;
+                onBytesWritten?.Invoke(read);
             }
         }
         finally

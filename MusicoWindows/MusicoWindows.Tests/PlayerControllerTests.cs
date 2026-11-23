@@ -318,4 +318,44 @@ public sealed class PlayerControllerTests : IDisposable
         }
         Assert.NotNull(cache.TryGetCachedPath(cloudTracks[2].Id));
     }
+
+    [Fact]
+    public void SyncNamedQueueAndPlayInNamedQueueManageQueuesNonDestructively()
+    {
+        string idA = Id("a.mp3");
+        string idB = Id("b.mp3");
+
+        // Start playback in default main queue.
+        _player.Play([idA], startAt: 0);
+        Guid initialActiveId = _queues.ActiveId;
+        Assert.True(_player.IsPlaying);
+        Assert.Equal(idA, _player.CurrentTrack?.Id);
+
+        // Non-empty guard: empty list does NOT create an empty named queue.
+        _player.SyncNamedQueue("Empty Playlist", Array.Empty<string>());
+        Assert.DoesNotContain(_queues.Queues, q => q.Name == "Empty Playlist");
+
+        // SyncNamedQueue creates/updates named queue without interrupting active playback or switching ActiveId.
+        _player.SyncNamedQueue("Road Mix", [idA, idB]);
+        var roadQueue = _queues.Queues.FirstOrDefault(q => q.Name == "Road Mix");
+        Assert.NotNull(roadQueue);
+        Assert.Equal([idA, idB], roadQueue!.TrackIds);
+        Assert.Equal(initialActiveId, _queues.ActiveId);
+        Assert.Equal(idA, _player.CurrentTrack?.Id);
+        Assert.True(_player.IsPlaying);
+
+        // Re-syncing existing named queue updates tracks in place without adding duplicate queues.
+        _player.SyncNamedQueue("Road Mix", [idB, idA]);
+        Assert.Equal(1, _queues.Queues.Count(q => q.Name == "Road Mix"));
+        roadQueue = _queues.Queues.First(q => q.Name == "Road Mix");
+        Assert.Equal([idB, idA], roadQueue.TrackIds);
+        Assert.Equal(initialActiveId, _queues.ActiveId);
+
+        // PlayInNamedQueue activates/updates the named queue and starts playback at requested index & shuffle mode.
+        _player.PlayInNamedQueue("Road Mix", [idA, idB], startAt: 1, shuffle: true);
+        Assert.Equal(roadQueue.Id, _queues.ActiveId);
+        Assert.Equal(idB, _player.CurrentTrack?.Id);
+        Assert.True(_queues.Active.Shuffle);
+        Assert.True(_player.IsPlaying);
+    }
 }

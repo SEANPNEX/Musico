@@ -27,6 +27,7 @@ import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.MoreVert
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -43,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -189,12 +191,26 @@ fun PlaylistsScreen(
                                     )
                                     if (playlist.trackIds.isNotEmpty()) {
                                         HorizontalDivider()
+                                        DropdownMenuItem(
+                                            text = { Text(strings.play) },
+                                            leadingIcon = { Icon(Icons.Rounded.PlayArrow, contentDescription = null) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                trackActions.playerController.playInNamedQueue(
+                                                    name = playlist.name,
+                                                    ids = playlist.trackIds,
+                                                    startAt = 0,
+                                                    shuffle = false,
+                                                )
+                                            }
+                                        )
                                         TrackMenuItems(
                                             ids = playlist.trackIds,
                                             queues = queues,
                                             activeQueueId = activeQueue.id,
                                             actionState = trackActions,
-                                            onDismiss = { menuExpanded = false }
+                                            onDismiss = { menuExpanded = false },
+                                            namedQueueTitle = playlist.name,
                                         )
                                     }
                                 }
@@ -291,6 +307,12 @@ fun PlaylistDetailScreen(
     }
     val trackIds = remember(tracks) { tracks.map { it.id } }
 
+    LaunchedEffect(ref, trackIds) {
+        if (trackIds.isNotEmpty()) {
+            trackActions.playerController.syncNamedQueue(title, trackIds)
+        }
+    }
+
     val listState = rememberLazyListState()
     val dragState = rememberDragReorderState(
         items = tracks,
@@ -370,14 +392,19 @@ fun PlaylistDetailScreen(
                     PlayShuffleButtons(
                         enabled = trackIds.isNotEmpty(),
                         onPlay = {
-                            if (activeQueue.shuffle) trackActions.playerController.toggleShuffle()
-                            trackActions.playerController.play(trackIds, startAt = 0)
+                            trackActions.playerController.playInNamedQueue(
+                                name = title,
+                                ids = trackIds,
+                                startAt = 0,
+                                shuffle = false,
+                            )
                         },
                         onShuffle = {
-                            if (!activeQueue.shuffle) trackActions.playerController.toggleShuffle()
-                            trackActions.playerController.play(
-                                trackIds,
-                                startAt = Random.nextInt(trackIds.size.coerceAtLeast(1))
+                            trackActions.playerController.playInNamedQueue(
+                                name = title,
+                                ids = trackIds,
+                                startAt = Random.nextInt(trackIds.size.coerceAtLeast(1)),
+                                shuffle = true,
                             )
                         }
                     )
@@ -427,9 +454,11 @@ fun PlaylistDetailScreen(
                         backgroundColor = rowBg,
                         onClick = {
                             val currentIds = dragState.items.map { it.value.id }
-                            trackActions.playerController.play(
-                                currentIds.ifEmpty { trackIds },
+                            trackActions.playerController.playInNamedQueue(
+                                name = title,
+                                ids = currentIds.ifEmpty { trackIds },
                                 startAt = index,
+                                shuffle = false,
                             )
                         },
                         modifier = rowModifier,

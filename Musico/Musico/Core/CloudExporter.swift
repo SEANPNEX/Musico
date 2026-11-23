@@ -263,6 +263,9 @@ enum CloudExporter {
         folderURL: URL,
         fetcher: any CloudPlaylistFetching = LiveCloudService.shared,
         cache: CloudAudioCache = .shared,
+        sourceURLOverride: String? = nil,
+        cookieOverride: String? = nil,
+        kindHintOverride: LibraryRoot.Kind? = nil,
         onProgress: (@MainActor @Sendable (Int, Int, String) -> Void)? = nil
     ) async throws -> CloudUpdateSummary {
         try await performUpdateLocalFolder(
@@ -270,6 +273,9 @@ enum CloudExporter {
             folderURL: folderURL,
             fetcher: fetcher,
             cache: cache,
+            sourceURLOverride: sourceURLOverride,
+            cookieOverride: cookieOverride,
+            kindHintOverride: kindHintOverride,
             onDetailedProgress: onProgress.map { callback in
                 { @MainActor progress in
                     callback(progress.completedTracks, progress.totalTracks, progress.currentTrackTitle)
@@ -283,6 +289,9 @@ enum CloudExporter {
         folderURL: URL,
         fetcher: any CloudPlaylistFetching = LiveCloudService.shared,
         cache: CloudAudioCache = .shared,
+        sourceURLOverride: String? = nil,
+        cookieOverride: String? = nil,
+        kindHintOverride: LibraryRoot.Kind? = nil,
         onDetailedProgress: @escaping @MainActor @Sendable (ExportProgress) -> Void
     ) async throws -> CloudUpdateSummary {
         try await performUpdateLocalFolder(
@@ -290,6 +299,9 @@ enum CloudExporter {
             folderURL: folderURL,
             fetcher: fetcher,
             cache: cache,
+            sourceURLOverride: sourceURLOverride,
+            cookieOverride: cookieOverride,
+            kindHintOverride: kindHintOverride,
             onDetailedProgress: onDetailedProgress
         )
     }
@@ -299,17 +311,28 @@ enum CloudExporter {
         folderURL: URL,
         fetcher: any CloudPlaylistFetching,
         cache: CloudAudioCache,
+        sourceURLOverride: String?,
+        cookieOverride: String?,
+        kindHintOverride: LibraryRoot.Kind?,
         onDetailedProgress: (@MainActor @Sendable (ExportProgress) -> Void)?
     ) async throws -> CloudUpdateSummary {
         try Task.checkCancellation()
         let existingManifest = loadManifest(in: folderURL)
-        let rawSource = (existingManifest?.sourceURL ?? root.sourceURL ?? root.remoteID ?? "")
+        let explicitSource = (sourceURLOverride ?? root.sourceURL)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawSource: String
+        if let explicitSource, !explicitSource.isEmpty {
+            rawSource = explicitSource
+        } else {
+            rawSource = (existingManifest?.sourceURL ?? root.remoteID ?? "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         guard !rawSource.isEmpty else {
             throw CloudSourceError.invalidURL
         }
-        let kindHint = root.effectiveCloudKind ?? existingManifest?.cloudKind
-        let fetched = try await fetcher.fetchPlaylist(sourceURL: rawSource, cookie: root.cookie, kindHint: kindHint)
+        let effectiveCookie = cookieOverride ?? root.cookie
+        let kindHint = kindHintOverride ?? root.effectiveCloudKind ?? existingManifest?.cloudKind
+        let fetched = try await fetcher.fetchPlaylist(sourceURL: rawSource, cookie: effectiveCookie, kindHint: kindHint)
         try Task.checkCancellation()
 
         try FileManager.default.createDirectory(at: folderURL, withIntermediateDirectories: true)
@@ -318,6 +341,7 @@ enum CloudExporter {
         cloudLookupRoot.kind = fetched.kind
         cloudLookupRoot.sourceURL = rawSource
         cloudLookupRoot.remoteID = fetched.remoteID
+        cloudLookupRoot.cookie = effectiveCookie
 
         let now = Date()
         let sourceSlug = fetched.kind.cloudSourceSlug ?? "bilibili"

@@ -461,6 +461,12 @@ enum L10n {
         "Saved songs, but couldn’t add folder to library: %@": "歌曲已保存，但无法将文件夹添加到资料库：%@",
         "Export cancelled.": "已取消导出。",
         "Cloud Source": "云端来源",
+        "Edit": "编辑",
+        "Edit Cloud Source": "编辑云端来源",
+        "Edit Cloud Source…": "编辑云端来源…",
+        "Cloud Tracking Address": "云端追踪地址",
+        "Updating the address links this local folder to the new cloud playlist or folder on future updates.": "更改地址后，下次从云端更新时将从此新歌单或文件夹同步歌曲。",
+        "Loading %@ / %@ folders · %@ songs…": "正在加载第 %@ / %@ 个文件夹 · %@ 首歌曲…",
         "Syncing": "正在同步",
         "Checking %@ of %@ songs…": "正在检查第 %@ / %@ 首歌曲…",
         "Fetching latest cloud playlist…": "正在获取最新云端歌单…",
@@ -681,6 +687,7 @@ enum L10n {
 
         // Errors (Library, CloudSources, Lyrics)
         "That location is already in your library.": "该位置已在你的资料库中。",
+        "That folder is already inside an existing library folder.": "该文件夹已位于现有资料库文件夹内。",
         "That location could not be opened as a folder.": "无法将该位置作为文件夹打开。",
         "Enter a valid YouTube, Bilibili, or Google Drive link.": "请输入有效的 YouTube、Bilibili 或 Google Drive 链接。",
         "That link isn’t a supported YouTube, Bilibili, or Google Drive link.": "该链接不是受支持的 YouTube、Bilibili 或 Google Drive 链接。",

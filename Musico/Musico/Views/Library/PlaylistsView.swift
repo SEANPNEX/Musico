@@ -138,21 +138,22 @@ struct PlaylistsView: View {
 
                 ForEach(library.playlists) { playlist in
                     let playlistTracks = library.tracks(playlist.trackIDs)
+                    let resolvedIDs = playlistTracks.map(\.id)
                     PlaylistGridCard(
                         ref: .user(playlist.id),
                         title: playlist.name,
                         tracks: playlistTracks,
                         isFavourites: false,
                         onPlay: {
-                            guard !playlist.trackIDs.isEmpty else { return }
-                            player.playInNamedQueue(playlist.trackIDs, name: playlist.name, startAt: 0, shuffle: false)
+                            guard !resolvedIDs.isEmpty else { return }
+                            player.playInNamedQueue(resolvedIDs, name: playlist.name, startAt: 0, shuffle: false)
                         },
                         onShuffle: {
-                            guard !playlist.trackIDs.isEmpty else { return }
+                            guard !resolvedIDs.isEmpty else { return }
                             player.playInNamedQueue(
-                                playlist.trackIDs,
+                                resolvedIDs,
                                 name: playlist.name,
-                                startAt: Int.random(in: 0..<playlist.trackIDs.count),
+                                startAt: Int.random(in: 0..<resolvedIDs.count),
                                 shuffle: true
                             )
                         },
@@ -491,6 +492,17 @@ struct PlaylistDetailView: View {
         .listStyle(.plain)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
+        .task(id: ref) {
+            let ids = tracks.map(\.id)
+            if !ids.isEmpty {
+                player.syncNamedQueue(ids, name: title)
+            }
+        }
+        .onChange(of: tracks.map(\.id)) { _, ids in
+            if !ids.isEmpty {
+                player.syncNamedQueue(ids, name: title)
+            }
+        }
         .onChange(of: ref) { _, _ in
             showAddSongs = false
             showRenameSheet = false

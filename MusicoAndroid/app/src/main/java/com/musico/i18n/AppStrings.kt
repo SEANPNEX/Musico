@@ -128,6 +128,21 @@ interface AppStrings {
     val relocate: String
     val noMusicHereTitle: String
     val noMusicHereDesc: String
+    val runInBackground: String
+    val downloadsTitle: String
+    val clearFinished: String
+    val dismiss: String
+    val noDownloadsTitle: String
+    val noDownloadsDesc: String
+    val downloadStatusCancelled: String
+    val downloadStatusFailed: String
+    val downloadStatusCompleted: String
+    val downloadKindPlaylistExport: String
+    val downloadKindTrackExport: String
+    val downloadKindFolderUpdate: String
+    val editCloudSourceEllipsis: String
+    val editCloudSourceTitle: String
+    val cloudSourceUpdated: String
 
     // Songs screen
     val searchPlaceholder: String
@@ -184,6 +199,7 @@ interface AppStrings {
     val missingSong: String
     val renameQueueTitle: String
     val deleteQueueConfirmMessage: String
+    val switchQueue: String
 
     // Stats
     val statsTitle: String
@@ -362,6 +378,8 @@ interface AppStrings {
     fun downloadingAsset(name: String): String
     fun playbackStoppedConsecutive(count: Int): String
     fun playbackFailedTrack(title: String): String
+    fun cloudSyncProgress(completedFolders: Int, totalFolders: Int, tracksFound: Int): String
+    fun queueCountLabel(count: Int): String
     fun formatListeningTime(totalSeconds: Double): String
     fun formatRelativeTime(epochMs: Long, nowMs: Long = System.currentTimeMillis()): String
 
@@ -528,6 +546,21 @@ object EnStrings : AppStrings {
     override val relocate = "Relocate"
     override val noMusicHereTitle = "No Music Here"
     override val noMusicHereDesc = "Songs you add to this folder appear after a rescan."
+    override val runInBackground = "Run in Background"
+    override val downloadsTitle = "Downloads"
+    override val clearFinished = "Clear Finished"
+    override val dismiss = "Dismiss"
+    override val noDownloadsTitle = "No Downloads"
+    override val noDownloadsDesc = "Cloud playlist saves, song downloads, and folder updates appear here."
+    override val downloadStatusCancelled = "Cancelled"
+    override val downloadStatusFailed = "Failed"
+    override val downloadStatusCompleted = "Completed"
+    override val downloadKindPlaylistExport = "Saving Playlist"
+    override val downloadKindTrackExport = "Saving Song"
+    override val downloadKindFolderUpdate = "Updating Folder"
+    override val editCloudSourceEllipsis = "Edit Cloud Source…"
+    override val editCloudSourceTitle = "Edit Cloud Source"
+    override val cloudSourceUpdated = "Cloud source updated."
 
     override val searchPlaceholder = "Songs, artists, albums, genres"
     override val clearSearch = "Clear search"
@@ -580,6 +613,7 @@ object EnStrings : AppStrings {
     override val missingSong = "Missing song"
     override val renameQueueTitle = "Rename Queue"
     override val deleteQueueConfirmMessage = "This queue will be deleted. Your songs remain in your library."
+    override val switchQueue = "Switch Queue"
 
     override val statsTitle = "Stats"
     override val statListenedLabel = "listened"
@@ -764,6 +798,9 @@ object EnStrings : AppStrings {
     override fun playbackStoppedConsecutive(count: Int) =
         "Playback stopped: $count songs in a row could not be played."
     override fun playbackFailedTrack(title: String) = "“$title” could not be played."
+    override fun cloudSyncProgress(completedFolders: Int, totalFolders: Int, tracksFound: Int) =
+        "Syncing folders ($completedFolders/$totalFolders · ${songCount(tracksFound)})…"
+    override fun queueCountLabel(count: Int) = if (count == 1) "1 queue" else "$count queues"
 
     override fun formatListeningTime(totalSeconds: Double): String {
         if (!totalSeconds.isFinite() || totalSeconds <= 0.0) return "0 min"
@@ -901,6 +938,21 @@ object ZhHansStrings : AppStrings {
     override val relocate = "重新定位"
     override val noMusicHereTitle = "暂无音乐"
     override val noMusicHereDesc = "添加到此文件夹的歌曲将在重新扫描后显示。"
+    override val runInBackground = "后台运行"
+    override val downloadsTitle = "下载管理"
+    override val clearFinished = "清除已完成"
+    override val dismiss = "移除"
+    override val noDownloadsTitle = "暂无下载任务"
+    override val noDownloadsDesc = "保存云端歌单、下载单曲或更新追踪文件夹时，任务会显示在这里。"
+    override val downloadStatusCancelled = "已取消"
+    override val downloadStatusFailed = "失败"
+    override val downloadStatusCompleted = "已完成"
+    override val downloadKindPlaylistExport = "保存歌单"
+    override val downloadKindTrackExport = "保存歌曲"
+    override val downloadKindFolderUpdate = "更新文件夹"
+    override val editCloudSourceEllipsis = "编辑云端来源…"
+    override val editCloudSourceTitle = "编辑云端来源"
+    override val cloudSourceUpdated = "云端来源已更新。"
 
     override val searchPlaceholder = "搜索歌曲、艺术家、专辑、流派"
     override val clearSearch = "清除搜索"
@@ -953,6 +1005,7 @@ object ZhHansStrings : AppStrings {
     override val missingSong = "歌曲缺失"
     override val renameQueueTitle = "重命名队列"
     override val deleteQueueConfirmMessage = "该队列将被删除，你的歌曲仍会保留在音乐库中。"
+    override val switchQueue = "切换队列"
 
     override val statsTitle = "统计"
     override val statListenedLabel = "累计收听"
@@ -1133,6 +1186,9 @@ object ZhHansStrings : AppStrings {
     override fun playbackStoppedConsecutive(count: Int) =
         "播放已停止：连续 $count 首歌曲无法播放。"
     override fun playbackFailedTrack(title: String) = "无法播放“$title”。"
+    override fun cloudSyncProgress(completedFolders: Int, totalFolders: Int, tracksFound: Int) =
+        "正在同步文件夹 ($completedFolders/$totalFolders · ${songCount(tracksFound)})…"
+    override fun queueCountLabel(count: Int) = "$count 个队列"
 
     private val defaultQueueRegex = Regex("^Queue (\\d+)$")
 

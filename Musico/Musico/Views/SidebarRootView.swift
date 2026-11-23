@@ -156,21 +156,32 @@ struct SidebarRootView: View {
                     .padding(.bottom, 2)
 
                     sidebarRow(.playlists, L10n.tr("All Playlists"), "square.grid.2x2")
+                    let favIDs = library.orderedFavourites(history: history).map(\.id)
                     sidebarRow(.favourites, L10n.tr("Favourites"), "heart", badgeCount: library.favourites.count)
+                        .contextMenu {
+                            if !favIDs.isEmpty {
+                                Button(L10n.tr("Play"), systemImage: "play.fill") {
+                                    player.playInNamedQueue(favIDs, name: L10n.tr("Favourites"), startAt: 0, shuffle: false)
+                                }
+                                Divider()
+                                TrackMenuItems(ids: favIDs)
+                            }
+                        }
                     ForEach(library.playlists) { playlist in
-                        sidebarRow(.playlist(playlist.id), playlist.name, "music.note.list", badgeCount: playlist.trackIDs.count)
+                        let resolvedIDs = library.tracks(playlist.trackIDs).map(\.id)
+                        sidebarRow(.playlist(playlist.id), playlist.name, "music.note.list", badgeCount: resolvedIDs.count)
                             .contextMenu {
-                                if !playlist.trackIDs.isEmpty {
+                                if !resolvedIDs.isEmpty {
                                     Button(L10n.tr("Play"), systemImage: "play.fill") {
-                                        player.playInNamedQueue(playlist.trackIDs, name: playlist.name, startAt: 0, shuffle: false)
+                                        player.playInNamedQueue(resolvedIDs, name: playlist.name, startAt: 0, shuffle: false)
                                     }
                                     Divider()
                                 }
                                 Button(L10n.tr("Rename…"), systemImage: "pencil") {
                                     renamingPlaylist = playlist
                                 }
-                                if !playlist.trackIDs.isEmpty {
-                                    TrackMenuItems(ids: playlist.trackIDs)
+                                if !resolvedIDs.isEmpty {
+                                    TrackMenuItems(ids: resolvedIDs)
                                 }
                                 Divider()
                                 Button(L10n.tr("Delete"), systemImage: "trash", role: .destructive) {

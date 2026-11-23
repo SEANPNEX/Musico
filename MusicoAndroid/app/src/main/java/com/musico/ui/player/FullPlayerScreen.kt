@@ -11,6 +11,7 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
@@ -503,16 +504,36 @@ private fun PlayerControlsPane(
                     strings.queuePosition(idx + 1, activeQueue.trackIds.size)
                 }.orEmpty()
                 val queueDisplayName = strings.displayQueueName(activeQueue.name)
-                val queueIndicator = if (positionText.isNotEmpty()) {
-                    "$queueDisplayName · $positionText"
-                } else {
-                    queueDisplayName
+                val indicatorStyle = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum")
+                val indicatorColor = MaterialTheme.colorScheme.onSurfaceVariant
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.Center,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = queueDisplayName,
+                        style = indicatorStyle,
+                        color = indicatorColor,
+                        maxLines = 1,
+                        modifier = Modifier
+                            .weight(1f, fill = false)
+                            .basicMarquee(
+                                iterations = Int.MAX_VALUE,
+                                initialDelayMillis = 1500,
+                                repeatDelayMillis = 1500,
+                            ),
+                    )
+                    if (positionText.isNotEmpty()) {
+                        Text(
+                            text = " · $positionText",
+                            style = indicatorStyle,
+                            color = indicatorColor,
+                            maxLines = 1,
+                            softWrap = false,
+                        )
+                    }
                 }
-                Text(
-                    text = queueIndicator,
-                    style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant
-                )
 
                 Row(
                     modifier = Modifier.fillMaxWidth(),

@@ -2,6 +2,8 @@ package com.musico.store
 
 import android.net.Uri
 import com.musico.cloud.BilibiliClient
+import com.musico.cloud.CloudExporter
+import com.musico.cloud.CloudFolderManifest
 import com.musico.cloud.CloudHttpClient
 import com.musico.cloud.CloudHttpResponse
 import com.musico.cloud.CloudSource
@@ -10,17 +12,22 @@ import com.musico.cloud.YouTubeClient
 import com.musico.core.ArtworkCache
 import com.musico.core.MetadataReading
 import com.musico.core.TrackMetadata
+import com.musico.model.CloudTrackingInfo
 import com.musico.model.LibraryRoot
 import com.musico.model.RootKind
 import com.musico.model.SearchField
+import com.musico.model.Track
 import com.musico.model.TrackSortOrder
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
@@ -804,23 +811,32 @@ class LibraryStoreTest {
     }
 
     @Test
-    fun googleDriveCloudFolderFlattensAndPreservesDragReorderAndSync() = runBlocking {
+    fun googleDriveCloudFolderPreservesHierarchyDragReorderAndSync() = runBlocking {
         var includeFourth = false
         val fakeHttp = object : CloudHttpClient {
             override suspend fun get(url: String, headers: Map<String, String>, followRedirects: Boolean): CloudHttpResponse {
-                if (!url.contains("drive.google.com/drive/folders/1DriveMix")) {
-                    return CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+                if (url.contains("drive.google.com/drive/folders/1DriveMix")) {
+                    val fourth = if (includeFourth) {
+                        """,["g_id_4",["1DriveMix"],"04 Delta.mp3","audio/mpeg"]"""
+                    } else ""
+                    val ivd = """[[["g_id_1",["1DriveMix"],"01 Alpha.flac","audio/flac"],["g_id_2",["1DriveMix"],"02 Beta.mp3","audio/mpeg"],["g_id_3",["1DriveMix"],"03 Gamma.m4a","audio/mp4"]$fourth,["1Disc2",["1DriveMix"],"Disc 2","application/vnd.google-apps.folder"]]]"""
+                    val html = """
+                        <html><head><title>Drive Mix - Google Drive</title></head><body>
+                        <script>window['_DRIVE_ivd'] = '${ivd.replace("\"", "\\x22").replace("[", "\\x5b").replace("]", "\\x5d")}';</script>
+                        </body></html>
+                    """.trimIndent()
+                    return CloudHttpResponse(200, url, emptyMap(), html.toByteArray())
                 }
-                val fourth = if (includeFourth) {
-                    """,["g_id_4",["1DriveMix"],"04 Delta.mp3","audio/mpeg"]"""
-                } else ""
-                val ivd = """[[["g_id_1",["1DriveMix"],"01 Alpha.flac","audio/flac"],["g_id_2",["1DriveMix"],"02 Beta.mp3","audio/mpeg"],["g_id_3",["1DriveMix"],"03 Gamma.m4a","audio/mp4"]$fourth]]"""
-                val html = """
-                    <html><head><title>Drive Mix - Google Drive</title></head><body>
-                    <script>window['_DRIVE_ivd'] = '${ivd.replace("\"", "\\x22").replace("[", "\\x5b").replace("]", "\\x5d")}';</script>
-                    </body></html>
-                """.trimIndent()
-                return CloudHttpResponse(200, url, emptyMap(), html.toByteArray())
+                if (url.contains("drive.google.com/drive/folders/1Disc2")) {
+                    val ivd = """[[["g_sub_1",["1Disc2"],"05 Sub.flac","audio/flac"]]]"""
+                    val html = """
+                        <html><head><title>Disc 2 - Google Drive</title></head><body>
+                        <script>window['_DRIVE_ivd'] = '${ivd.replace("\"", "\\x22").replace("[", "\\x5b").replace("]", "\\x5d")}';</script>
+                        </body></html>
+                    """.trimIndent()
+                    return CloudHttpResponse(200, url, emptyMap(), html.toByteArray())
+                }
+                return CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
             }
 
             override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse =
@@ -844,42 +860,364 @@ class LibraryStoreTest {
         val store = makeDriveStore()
         val addRes = store.addCloudRoot("Shared Drive: https://drive.google.com/drive/folders/1DriveMix?usp=sharing。")
         assertTrue(addRes.isSuccess)
+        store.awaitCloudSync()
 
         val driveRoot = store.state.value.roots.first { it.kind == RootKind.CLOUD_GOOGLE_DRIVE }
         assertTrue(driveRoot.kind.isCloud)
         assertEquals("Drive Mix", driveRoot.name)
-        assertEquals(listOf("gdrive/g_id_1.flac", "gdrive/g_id_2.mp3", "gdrive/g_id_3.m4a"), store.state.value.tracks.map { it.relativePath }.sorted())
+        assertEquals(
+            listOf("01 Alpha.flac", "02 Beta.mp3", "03 Gamma.m4a", "Disc 2/05 Sub.flac"),
+            store.state.value.tracks.map { it.relativePath }.sorted(),
+        )
 
-        // Drag-reorder at root "" flattens gdrive/<id>.<ext> tracks cleanly without disappearing.
         val (folders, initial) = store.folderContents(driveRoot.id, "")
-        assertTrue(folders.isEmpty())
+        assertEquals(listOf("Disc 2"), folders)
         assertEquals(listOf("01 Alpha", "02 Beta", "03 Gamma"), initial.map { it.title })
+        val (subFolders, subTracks) = store.folderContents(driveRoot.id, "Disc 2")
+        assertTrue(subFolders.isEmpty())
+        assertEquals(listOf("05 Sub"), subTracks.map { it.title })
 
         store.moveFolderTrack(driveRoot.id, "", fromIndex = 2, toIndex = 0, currentOrderedIds = initial.map { it.id })
         assertEquals(TrackSortOrder.CUSTOM, store.folderSortOrder(driveRoot.id, ""))
         assertEquals(listOf("03 Gamma", "01 Alpha", "02 Beta"), store.folderContents(driveRoot.id, "").second.map { it.title })
-        assertEquals(listOf("03 Gamma", "01 Alpha", "02 Beta"), store.tracksUnder(driveRoot.id, "").map { it.title })
-        // Canonicalization also normalizes "gdrive" path to root "".
-        assertEquals(TrackSortOrder.CUSTOM, store.folderSortOrder(driveRoot.id, "gdrive"))
+        assertEquals(
+            listOf("03 Gamma", "01 Alpha", "02 Beta", "05 Sub"),
+            store.tracksUnder(driveRoot.id, "").map { it.title },
+        )
 
-        // Sync appends new track while preserving custom order.
+        // Sync appends new root track while preserving custom order and subfolder tracks.
         includeFourth = true
         store.rescan()
+        store.awaitCloudSync()
         assertEquals(
             listOf("03 Gamma", "01 Alpha", "02 Beta", "04 Delta"),
             store.folderContents(driveRoot.id, "").second.map { it.title },
         )
 
-        // Reloading from disk preserves all tracks and custom order.
+        // Reloading from disk preserves hierarchy and custom order.
         val reloaded = makeDriveStore()
         assertEquals(
             listOf("03 Gamma", "01 Alpha", "02 Beta", "04 Delta"),
             reloaded.folderContents(driveRoot.id, "").second.map { it.title },
         )
         assertEquals(
-            listOf("03 Gamma", "01 Alpha", "02 Beta", "04 Delta"),
+            listOf("03 Gamma", "01 Alpha", "02 Beta", "04 Delta", "05 Sub"),
             reloaded.tracksUnder(driveRoot.id, "").map { it.title },
         )
+    }
+
+    @Test
+    fun legacyFlatGoogleDriveRootKeepsFlattenedBrowsingCompatibility() = runBlocking {
+        val rootId = "legacy-gdrive-root"
+        val legacyJson = """
+            {
+              "roots": [
+                {
+                  "id": "$rootId",
+                  "name": "Legacy Drive",
+                  "kind": "CLOUD_GOOGLE_DRIVE",
+                  "sourceUrl": "https://drive.google.com/drive/folders/1Legacy",
+                  "remoteId": "1Legacy"
+                }
+              ],
+              "tracks": [
+                {
+                  "id": "legacy_1",
+                  "rootId": "$rootId",
+                  "relativePath": "gdrive/fid1.mp3",
+                  "title": "01 Legacy Alpha",
+                  "artist": "Artist",
+                  "album": "Legacy Drive",
+                  "albumArtist": "Artist",
+                  "durationSec": 120.0,
+                  "fileSize": 0,
+                  "modifiedEpochMs": 0,
+                  "dateAddedEpochMs": 1000,
+                  "cloudSource": "google_drive",
+                  "remoteTrackId": "fid1.mp3"
+                },
+                {
+                  "id": "legacy_2",
+                  "rootId": "$rootId",
+                  "relativePath": "gdrive/fid2.flac",
+                  "title": "02 Legacy Beta",
+                  "artist": "Artist",
+                  "album": "Legacy Drive",
+                  "albumArtist": "Artist",
+                  "durationSec": 140.0,
+                  "fileSize": 0,
+                  "modifiedEpochMs": 0,
+                  "dateAddedEpochMs": 1000,
+                  "cloudSource": "google_drive",
+                  "remoteTrackId": "fid2.flac"
+                }
+              ],
+              "readerVersion": 3
+            }
+        """.trimIndent()
+        File(stateDir, "library.json").writeText(legacyJson, Charsets.UTF_8)
+
+        val store = makeStore()
+        val root = store.state.value.roots.first { it.id == rootId }
+        assertTrue(root.trackedSubfolders.isEmpty())
+        val (folders, tracks) = store.folderContents(rootId, "")
+        assertTrue(folders.isEmpty())
+        assertEquals(listOf("01 Legacy Alpha", "02 Legacy Beta"), tracks.map { it.title })
+
+        store.setFolderSortOrder(rootId, "gdrive", TrackSortOrder.NAME_DESC)
+        assertEquals(TrackSortOrder.NAME_DESC, store.folderSortOrder(rootId, ""))
+        assertEquals(listOf("02 Legacy Beta", "01 Legacy Alpha"), store.folderContents(rootId, "").second.map { it.title })
+    }
+
+    @Test
+    fun googleDriveProgressiveSyncStreamsBatchesPrioritizesAndCancelsOnRemove() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        val folderReached = CompletableDeferred<Unit>()
+        var failPartial = false
+
+        val fakeHttp = object : CloudHttpClient {
+            override suspend fun get(url: String, headers: Map<String, String>, followRedirects: Boolean): CloudHttpResponse {
+                fun page(ivd: String, title: String) = CloudHttpResponse(
+                    200,
+                    url,
+                    emptyMap(),
+                    """<html><head><title>$title - Google Drive</title></head><body><script>window['_DRIVE_ivd'] = '${ivd.replace("\"", "\\x22").replace("[", "\\x5b").replace("]", "\\x5d")}';</script></body></html>""".toByteArray(),
+                )
+                return when {
+                    url.contains("drive/folders/1ProgRoot") -> page(
+                        """[[["g_root",["1ProgRoot"],"01 Root.mp3","audio/mpeg"],["1SubA",["1ProgRoot"],"Sub A","application/vnd.google-apps.folder"],["1SubTarget",["1ProgRoot"],"Sub Target","application/vnd.google-apps.folder"]]]""",
+                        "Prog Drive",
+                    )
+                    url.contains("drive/folders/1SubA") -> {
+                        folderReached.complete(Unit)
+                        gate.await()
+                        if (failPartial) {
+                            CloudHttpResponse(500, url, emptyMap(), ByteArray(0))
+                        } else {
+                            page("""[[["g_suba",["1SubA"],"02 SubA.mp3","audio/mpeg"]]]""", "Sub A")
+                        }
+                    }
+                    url.contains("drive/folders/1SubTarget") -> page(
+                        """[[["g_target",["1SubTarget"],"03 Target.mp3","audio/mpeg"]]]""",
+                        "Sub Target",
+                    )
+                    else -> CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+                }
+            }
+
+            override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse =
+                CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+
+            override suspend fun probeRange(url: String, headers: Map<String, String>): Int = 206
+        }
+
+        val store = LibraryStore(
+            directory = stateDir,
+            appFolderDir = docsDir,
+            reader = reader,
+            artwork = ArtworkCache(File(stateDir, "artwork")),
+            context = null,
+            cloudHttpClient = fakeHttp,
+            youTubeClient = YouTubeClient(fakeHttp),
+            bilibiliClient = BilibiliClient(fakeHttp),
+            googleDriveClient = GoogleDriveClient(fakeHttp),
+        )
+        val completedFolderSyncs = mutableListOf<Pair<String, List<String>>>()
+        store.onFolderAdded = { name, ids -> completedFolderSyncs.add(name to ids) }
+
+        val res = store.addCloudRoot("https://drive.google.com/drive/folders/1ProgRoot")
+        assertTrue(res.isSuccess)
+        val root = store.state.value.roots.first { it.kind == RootKind.CLOUD_GOOGLE_DRIVE }
+        assertTrue(completedFolderSyncs.isEmpty())
+        assertTrue(store.state.value.tracks.any { it.relativePath == "01 Root.mp3" })
+        // Subfolders known immediately even while lazy/background sync is still pending.
+        val (initialSubfolders, _) = store.folderContents(root.id, "")
+        assertEquals(listOf("Sub A", "Sub Target"), initialSubfolders)
+
+        folderReached.await()
+        store.prioritizeCloudFolder(root.id, "Sub Target")
+        gate.complete(Unit)
+        store.awaitCloudSync(root.id)
+
+        assertFalse(root.id in store.state.value.cloudSyncProgress)
+        assertEquals(
+            listOf("01 Root.mp3", "Sub A/02 SubA.mp3", "Sub Target/03 Target.mp3"),
+            store.state.value.tracks.map { it.relativePath }.sorted(),
+        )
+        assertEquals(1, completedFolderSyncs.size)
+        assertEquals("Prog Drive", completedFolderSyncs.first().first)
+
+        // Removing root while a sync is running cancels it cleanly without re-adding tracks.
+        val gate2 = CompletableDeferred<Unit>()
+        val reached2 = CompletableDeferred<Unit>()
+        val slowHttp = object : CloudHttpClient {
+            override suspend fun get(url: String, headers: Map<String, String>, followRedirects: Boolean): CloudHttpResponse {
+                if (url.contains("drive/folders/1CancelRoot")) {
+                    val ivd = """[[["g_c0",["1CancelRoot"],"01 CRoot.mp3","audio/mpeg"],["1SlowChild",["1CancelRoot"],"SlowChild","application/vnd.google-apps.folder"]]]"""
+                    return CloudHttpResponse(
+                        200,
+                        url,
+                        emptyMap(),
+                        """<html><head><title>Cancel Drive - Google Drive</title></head><body><script>window['_DRIVE_ivd'] = '${ivd.replace("\"", "\\x22").replace("[", "\\x5b").replace("]", "\\x5d")}';</script></body></html>""".toByteArray(),
+                    )
+                }
+                if (url.contains("drive/folders/1SlowChild")) {
+                    reached2.complete(Unit)
+                    gate2.await()
+                }
+                return CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+            }
+
+            override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse =
+                CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+
+            override suspend fun probeRange(url: String, headers: Map<String, String>): Int = 206
+        }
+        val cancelStore = LibraryStore(
+            directory = tempFolder.newFolder("cancelState"),
+            appFolderDir = tempFolder.newFolder("cancelDocs"),
+            reader = reader,
+            artwork = ArtworkCache(File(stateDir, "artwork2")),
+            context = null,
+            cloudHttpClient = slowHttp,
+            youTubeClient = YouTubeClient(slowHttp),
+            bilibiliClient = BilibiliClient(slowHttp),
+            googleDriveClient = GoogleDriveClient(slowHttp),
+        )
+        assertTrue(cancelStore.addCloudRoot("https://drive.google.com/drive/folders/1CancelRoot").isSuccess)
+        val cancelRoot = cancelStore.state.value.roots.first { it.kind == RootKind.CLOUD_GOOGLE_DRIVE }
+        reached2.await()
+        cancelStore.removeRoot(cancelRoot.id)
+        gate2.complete(Unit)
+        cancelStore.awaitCloudSync()
+        assertFalse(cancelStore.state.value.roots.any { it.id == cancelRoot.id })
+        assertFalse(cancelRoot.id in cancelStore.state.value.cloudSyncProgress)
+        assertTrue(cancelStore.state.value.tracks.isEmpty())
+    }
+
+    @Test
+    fun addLocalFolderNonOverlappingTracksSubfoldersWithoutDuplicatesAndMigratesChildRoots() = runBlocking {
+        val store = makeStore()
+        // 1. Add cloud subfolder inside APP_FOLDER: must attach trackedSubfolders instead of creating duplicate root or overwriting APP_FOLDER root sourceUrl.
+        val appSub = File(docsDir, "Cloud Mix").apply { mkdirs() }
+        touch("Cloud Mix/01.mp3")
+        val sourceRoot = LibraryRoot(
+            id = "cloud-src",
+            name = "Cloud Mix",
+            kind = RootKind.CLOUD_YOUTUBE,
+            sourceUrl = "https://www.youtube.com/playlist?list=PL_APP",
+            remoteId = "PL_APP",
+        )
+        store.removeSubfolder(LibraryRoot.APP_FOLDER_ID, "Cloud Mix")
+        val addInsideApp = store.addLocalFolder(appSub, cloudSourceRoot = sourceRoot)
+        assertTrue(addInsideApp.isSuccess)
+        assertEquals(1, store.state.value.roots.size)
+        val appRoot = store.state.value.roots.first { it.id == LibraryRoot.APP_FOLDER_ID }
+        assertNull(appRoot.sourceUrl)
+        assertFalse("Cloud Mix" in appRoot.excludedPaths)
+        assertEquals("https://www.youtube.com/playlist?list=PL_APP", appRoot.trackedSubfolders["Cloud Mix"]?.sourceUrl)
+
+        // 2. Adding an external parent containing child subfolder must not duplicate roots; adding nested subfolder inside PICKED root attaches trackedSubfolders.
+        val parentDir = tempFolder.newFolder("MusicLibrary")
+        val childA = File(parentDir, "SubA").apply { mkdirs() }
+        val childB = File(parentDir, "SubB").apply { mkdirs() }
+        touch("a.mp3", root = childA)
+        touch("b.mp3", root = childB)
+        assertTrue(
+            store.addLocalFolder(
+                childA,
+                cloudSourceRoot = sourceRoot.copy(
+                    sourceUrl = "https://www.youtube.com/playlist?list=PL_SUBA",
+                    remoteId = "PL_SUBA",
+                ),
+            ).isSuccess
+        )
+        assertEquals(2, store.state.value.roots.size)
+
+        // Now add parentDir: existing SubA picked root should migrate cleanly into parentDir.trackedSubfolders["SubA"]!
+        assertTrue(store.addLocalFolder(parentDir).isSuccess)
+        assertEquals(2, store.state.value.roots.size)
+        val pickedParent = store.state.value.roots.first { it.kind == RootKind.PICKED }
+        assertEquals("MusicLibrary", pickedParent.name)
+        assertEquals("https://www.youtube.com/playlist?list=PL_SUBA", pickedParent.trackedSubfolders["SubA"]?.sourceUrl)
+
+        // Adding SubB inside pickedParent attaches SubB tracking cleanly without adding a duplicate root.
+        assertTrue(
+            store.addLocalFolder(
+                childB,
+                cloudSourceRoot = LibraryRoot(
+                    id = "cloud-bili",
+                    name = "SubB",
+                    kind = RootKind.CLOUD_BILIBILI,
+                    sourceUrl = "https://www.bilibili.com/video/BV1xx411c7mD",
+                    remoteId = "BV1xx411c7mD",
+                ),
+            ).isSuccess
+        )
+        assertEquals(2, store.state.value.roots.size)
+        val refreshedParent = store.state.value.roots.first { it.id == pickedParent.id }
+        assertEquals(
+            CloudTrackingInfo(
+                sourceUrl = "https://www.bilibili.com/video/BV1xx411c7mD",
+                remoteId = "BV1xx411c7mD",
+                cloudKind = RootKind.CLOUD_BILIBILI,
+                lastSyncedEpochMs = refreshedParent.trackedSubfolders["SubB"]?.lastSyncedEpochMs,
+            ),
+            refreshedParent.trackedSubfolders["SubB"],
+        )
+        assertEquals("https://www.youtube.com/playlist?list=PL_SUBA", refreshedParent.trackedSubfolders["SubA"]?.sourceUrl)
+    }
+
+    @Test
+    fun manifestDiscoveryPrunesMissingFoldersAndUpdatesTrackingAddress() = runBlocking {
+        val store = makeStore()
+        val subDir = File(docsDir, "Nested/Album").apply { mkdirs() }
+        touch("Nested/Album/song.mp3")
+        val manifest = CloudFolderManifest(
+            sourceURL = "https://music.youtube.com/playlist?list=PL_OLD",
+            remoteID = "PL_OLD",
+            cloudKind = RootKind.CLOUD_YOUTUBE.name,
+            lastSyncedEpochMs = 1234L,
+            tracks = mapOf("vid1" to "song.mp3"),
+        )
+        val manifestFile = File(subDir, CloudExporter.MANIFEST_FILE_NAME)
+        val json = Json { encodeDefaults = true; ignoreUnknownKeys = true }
+        manifestFile.writeText(json.encodeToString(manifest), Charsets.UTF_8)
+
+        store.rescan()
+        val discovered = store.cloudTracking(LibraryRoot.APP_FOLDER_ID, "Nested/Album")
+        assertNotNull(discovered)
+        assertEquals("https://music.youtube.com/playlist?list=PL_OLD", discovered?.sourceUrl)
+        assertEquals(RootKind.CLOUD_YOUTUBE, discovered?.cloudKind)
+
+        // Updating cloud tracking address validates URL, updates store, persists library.json, and rewrites manifest on disk.
+        val badResult = store.updateCloudTrackingAddress(
+            rootId = LibraryRoot.APP_FOLDER_ID,
+            path = "Nested/Album",
+            newSourceUrl = "https://example.com/not-supported",
+        )
+        assertTrue(badResult.isFailure)
+
+        val okResult = store.updateCloudTrackingAddress(
+            rootId = LibraryRoot.APP_FOLDER_ID,
+            path = "Nested/Album",
+            newSourceUrl = "https://www.bilibili.com/video/BV1newTest01",
+            cookie = "SESSDATA=xyz",
+        )
+        assertTrue(okResult.isSuccess)
+        val updated = store.cloudTracking(LibraryRoot.APP_FOLDER_ID, "Nested/Album")
+        assertEquals("https://www.bilibili.com/video/BV1newTest01", updated?.sourceUrl)
+        assertEquals(RootKind.CLOUD_BILIBILI, updated?.cloudKind)
+        assertEquals("SESSDATA=xyz", updated?.cookie)
+
+        val rewritten = json.decodeFromString<CloudFolderManifest>(manifestFile.readText(Charsets.UTF_8))
+        assertEquals("https://www.bilibili.com/video/BV1newTest01", rewritten.sourceURL)
+        assertEquals(RootKind.CLOUD_BILIBILI.name, rewritten.cloudKind)
+
+        // Deleting the folder on disk prunes stale trackedSubfolders entry during next scan.
+        subDir.deleteRecursively()
+        store.rescan()
+        assertNull(store.cloudTracking(LibraryRoot.APP_FOLDER_ID, "Nested/Album"))
     }
 
     private fun createValidPngBytes(): ByteArray = byteArrayOf(

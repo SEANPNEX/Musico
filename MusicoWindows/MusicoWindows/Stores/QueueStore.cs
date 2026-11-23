@@ -232,4 +232,22 @@ public sealed class QueueStore : ObservableStore
         OnPropertyChanged(nameof(Queues));
         OnPropertyChanged(nameof(Active));
     }
+
+    /// <summary>Updates track IDs across all queues when legacy track paths/IDs migrate.</summary>
+    public void MigrateTracks(IReadOnlyDictionary<string, string> idMigrations)
+    {
+        if (idMigrations.Count == 0) return;
+        bool changed = false;
+        foreach (var q in _queues)
+        {
+            if (q.MigrateTrackIds(idMigrations))
+            {
+                changed = true;
+            }
+        }
+        if (!changed) return;
+        Save();
+        OnPropertyChanged(nameof(Queues));
+        OnPropertyChanged(nameof(Active));
+    }
 }

@@ -4,7 +4,13 @@ import com.musico.core.Persistence
 import com.musico.model.LibraryRoot
 import com.musico.model.RootKind
 import com.musico.model.Track
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
+import java.util.Collections
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -1207,5 +1213,232 @@ class CloudClientsTest {
         assertEquals(9_437_184L, client.resolveStream("strLen00001").contentLength)
         assertEquals(5_242_880L, client.resolveStream("numLen00002").contentLength)
         assertNull(client.resolveStream("noLen000003").contentLength)
+    }
+
+    @Test
+    fun googleDrivePaginationExtractsApiKeyClients6FallbackToV3AndRetries429() = runBlocking {
+        val fakeKey = "AIzaSyABCDEFGHIJKLMNOPQRSTUVWXYZ1234567"
+        val http = FakeCloudHttpClient()
+        var clients6Page2Calls = 0
+
+        val page1Entries = (1..5).joinToString(",") { i ->
+            """["f_p1_$i",["1BigFolder"],"0$i Part1.mp3","audio/mpeg"]"""
+        }
+        val ivd = """[[$page1Entries],"tok_p2"]"""
+        val escaped = ivd.replace("\"", "\\x22").replace("[", "\\x5b").replace("]", "\\x5d")
+
+        http.getHandlers.add { url, headers ->
+            when {
+                url.startsWith("https://drive.google.com/drive/folders/1BigFolder") -> http.jsonResponse(
+                    """
+                    <html><head><title>Large Mix - Google Drive</title></head><body>
+                    <script>var key="$fakeKey"; window['_DRIVE_ivd'] = '$escaped';</script>
+                    </body></html>
+                    """.trimIndent()
+                )
+                url.startsWith("https://clients6.google.com/drive/v2beta/files") && url.contains("pageToken=tok_p2") -> {
+                    assertEquals(fakeKey, headers["X-Goog-Api-Key"])
+                    assertEquals("1BigFolder/0-bigRk", headers["X-Goog-Drive-Resource-Keys"])
+                    clients6Page2Calls += 1
+                    if (clients6Page2Calls == 1) {
+                        CloudHttpResponse(
+                            statusCode = 429,
+                            finalUrl = url,
+                            headers = mapOf("Retry-After" to listOf("0")),
+                            bodyBytes = ByteArray(0),
+                        )
+                    } else {
+                        http.jsonResponse(
+                            """
+                            {
+                              "nextPageToken": "tok_p3",
+                              "items": [
+                                {"id": "f_p2_1", "title": "06 Part2.flac", "mimeType": "audio/flac"},
+                                {"id": "f_p2_2", "title": "07 Part2.opus", "mimeType": "audio/opus"}
+                              ]
+                            }
+                            """.trimIndent()
+                        )
+                    }
+                }
+                url.startsWith("https://clients6.google.com/drive/v2beta/files") && url.contains("pageToken=tok_p3") ->
+                    http.jsonResponse("""{"error":{"code":403}}""", statusCode = 403)
+                url.startsWith("https://www.googleapis.com/drive/v3/files") && url.contains("pageToken=tok_p3") -> {
+                    assertEquals(fakeKey, headers["X-Goog-Api-Key"])
+                    http.jsonResponse(
+                        """
+                        {
+                          "files": [
+                            {"id": "f_p3_1", "name": "08 Part3.m4a", "mimeType": "audio/mp4"}
+                          ]
+                        }
+                        """.trimIndent()
+                    )
+                }
+                else -> null
+            }
+        }
+
+        val client = GoogleDriveClient(http)
+        assertEquals(fakeKey, GoogleDriveClient.extractApiKey("""foo="$fakeKey""""))
+        val res = client.fetchPlaylist("https://drive.google.com/drive/folders/1BigFolder?resourcekey=0-bigRk")
+        assertEquals(8, res.tracks.size)
+        assertEquals(2, clients6Page2Calls)
+        assertTrue(res.tracks.any { it.title == "06 Part2" && it.relativePath == "06 Part2.flac" })
+        assertTrue(res.tracks.any { it.title == "07 Part2" && it.relativePath == "07 Part2.opus" })
+        assertTrue(res.tracks.any { it.title == "08 Part3" && it.relativePath == "08 Part3.m4a" })
+    }
+
+    @Test
+    fun googleDriveDeepHierarchyResourceKeyInheritanceExtensionsEmptyFolderAndDisambiguation() = runBlocking {
+        val http = FakeCloudHttpClient()
+        fun ivdHtml(title: String, rawIvd: String): CloudHttpResponse {
+            val esc = rawIvd
+                .replace("\\", "\\\\")
+                .replace("\"", "\\x22")
+                .replace("[", "\\x5b")
+                .replace("]", "\\x5d")
+            return http.jsonResponse(
+                """<html><head><title>$title - Google Drive</title></head><body><script>window['_DRIVE_ivd']='$esc';</script></body></html>"""
+            )
+        }
+        http.getHandlers.add { url, _ ->
+            when {
+                url.startsWith("https://drive.google.com/drive/folders/fld0") -> {
+                    assertTrue(url.contains("resourcekey=0-rootInherited"))
+                    ivdHtml(
+                        "Deep Root",
+                        """[[
+                            ["f_opus",["fld0"],"01 Track.opus","audio/opus"],
+                            ["f_wma",["fld0"],"02 Old.wma","audio/x-ms-wma"],
+                            ["f_webm",["fld0"],"03 Stream.webm","audio/webm"],
+                            ["f_dup1",["fld0"],"Dup.mp3","audio/mpeg"],
+                            ["f_dup2",["fld0"],"Dup.mp3","audio/mpeg"],
+                            ["f_slash",["fld0"],"AC/DC \\ Live.mp4","video/mp4"],
+                            ["d_empty",["fld0"],"EmptyDir","application/vnd.google-apps.folder"],
+                            ["fld1",["fld0"],"L1","application/vnd.google-apps.folder"]
+                        ]]""",
+                    )
+                }
+                url.startsWith("https://drive.google.com/drive/folders/d_empty") ->
+                    ivdHtml("EmptyDir", "[[],null]")
+                url.startsWith("https://drive.google.com/drive/folders/fld1") -> {
+                    // Inherited resourcekey from fld0 when child entry omitted resourceKey
+                    assertTrue(url.contains("resourcekey=0-rootInherited"))
+                    ivdHtml("L1", """[[["fld2",["fld1"],"L2","application/vnd.google-apps.folder"]]]""")
+                }
+                url.startsWith("https://drive.google.com/drive/folders/fld2") ->
+                    ivdHtml("L2", """[[["fld3",["fld2"],"L3","application/vnd.google-apps.folder"]]]""")
+                url.startsWith("https://drive.google.com/drive/folders/fld3") ->
+                    ivdHtml("L3", """[[["fld4",["fld3"],"L4","application/vnd.google-apps.folder"]]]""")
+                url.startsWith("https://drive.google.com/drive/folders/fld4") ->
+                    ivdHtml("L4", """[[["fld5",["fld4"],"L5","application/vnd.google-apps.folder"]]]""")
+                url.startsWith("https://drive.google.com/drive/folders/fld5") ->
+                    ivdHtml("L5", """[[["fld6",["fld5"],"L6","application/vnd.google-apps.folder"]]]""")
+                url.startsWith("https://drive.google.com/drive/folders/fld6") ->
+                    ivdHtml("L6", """[[["f_deep",["fld6"],"Deep Song.ogg","audio/ogg"]]]""")
+                else -> null
+            }
+        }
+
+        val res = GoogleDriveClient(http).fetchPlaylist("https://drive.google.com/drive/folders/fld0?resourcekey=0-rootInherited")
+        assertFalse(http.recordedGets.any { it.first.contains("embeddedfolderview") })
+
+        val paths = res.tracks.mapNotNull { it.relativePath }.sorted()
+        assertEquals(
+            listOf(
+                "01 Track.opus",
+                "02 Old.wma",
+                "03 Stream.webm",
+                "AC_DC _ Live.mp4",
+                "Dup (2).mp3",
+                "Dup.mp3",
+                "L1/L2/L3/L4/L5/L6/Deep Song.ogg",
+            ),
+            paths,
+        )
+        assertEquals("f_deep~rk~0-rootInherited.ogg", res.tracks.first { it.relativePath?.startsWith("L1/") == true }.remoteTrackId)
+    }
+
+    @Test
+    fun googleDriveCrawlProgressivePriorityBumpEmitsBatchesAndCompletes() = runBlocking(Dispatchers.IO) {
+        val http = FakeCloudHttpClient()
+        val albumAGate = CountDownLatch(1)
+        val albumAReached = CountDownLatch(1)
+        val priorityRef = AtomicReference<String?>(null)
+        val visited = Collections.synchronizedList(mutableListOf<String>())
+
+        fun ivdHtml(title: String, rawIvd: String): CloudHttpResponse {
+            val esc = rawIvd
+                .replace("\\", "\\\\")
+                .replace("\"", "\\x22")
+                .replace("[", "\\x5b")
+                .replace("]", "\\x5d")
+            return http.jsonResponse(
+                """<html><head><title>$title - Google Drive</title></head><body><script>window['_DRIVE_ivd']='$esc';</script></body></html>"""
+            )
+        }
+
+        http.getHandlers.add { url, _ ->
+            when {
+                url.contains("/folders/p_root") -> ivdHtml(
+                    "Prog Album",
+                    """[[
+                        ["t_r",["p_root"],"00 Intro.mp3","audio/mpeg"],
+                        ["p_a",["p_root"],"Album A","application/vnd.google-apps.folder"],
+                        ["p_b",["p_root"],"Album B","application/vnd.google-apps.folder"],
+                        ["p_c",["p_root"],"Album C","application/vnd.google-apps.folder"],
+                        ["p_d",["p_root"],"Album D","application/vnd.google-apps.folder"],
+                        ["p_e",["p_root"],"Album E","application/vnd.google-apps.folder"]
+                    ]]""",
+                )
+                url.contains("/folders/p_a") -> {
+                    visited.add("p_a")
+                    albumAReached.countDown()
+                    albumAGate.await(5, TimeUnit.SECONDS)
+                    ivdHtml("Album A", """[[["t_a",["p_a"],"01 A.mp3","audio/mpeg"]]]""")
+                }
+                url.contains("/folders/p_b") -> {
+                    visited.add("p_b")
+                    ivdHtml("Album B", """[[["t_b",["p_b"],"02 B.mp3","audio/mpeg"]]]""")
+                }
+                url.contains("/folders/p_c") -> {
+                    visited.add("p_c")
+                    ivdHtml("Album C", """[[["t_c",["p_c"],"03 C.mp3","audio/mpeg"]]]""")
+                }
+                url.contains("/folders/p_d") -> {
+                    visited.add("p_d")
+                    ivdHtml("Album D", """[[["t_d",["p_d"],"04 D.mp3","audio/mpeg"]]]""")
+                }
+                url.contains("/folders/p_e") -> {
+                    visited.add("p_e")
+                    ivdHtml("Album E", """[[["t_e",["p_e"],"05 E.mp3","audio/mpeg"]]]""")
+                }
+                else -> null
+            }
+        }
+
+        val batches = Collections.synchronizedList(mutableListOf<DriveCrawlBatch>())
+        val result = GoogleDriveClient(http).crawlProgressive(
+            sourceUrl = "https://drive.google.com/drive/folders/p_root",
+            priorityPathProvider = { priorityRef.get() },
+        ) { batch ->
+            batches.add(batch)
+            if (batch.progress.completedFolders == 1) {
+                priorityRef.set("Album E")
+            }
+            if ("p_e" in visited) {
+                albumAGate.countDown()
+            }
+        }
+
+        // Fallback safety release if p_e wasn't reached yet when batch arrived
+        albumAGate.countDown()
+
+        assertTrue(batches.isNotEmpty())
+        assertTrue(batches.first().knownFolderPaths.containsAll(listOf("Album A", "Album B", "Album C", "Album D", "Album E")))
+        assertTrue(batches.last().progress.isComplete)
+        assertEquals(6, batches.last().progress.tracksSoFar)
+        assertEquals(6, result.tracks.size)
     }
 }

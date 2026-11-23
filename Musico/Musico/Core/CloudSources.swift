@@ -115,6 +115,76 @@ protocol CloudPlaylistFetching: Sendable {
     func fetchPlaylist(sourceURL: String, cookie: String?, kindHint: LibraryRoot.Kind?) async throws -> CloudPlaylistResult
 }
 
+struct DriveSubfolderRef: Equatable, Hashable, Sendable {
+    var id: String
+    var resourceKey: String?
+    var pathSegments: [String]
+    var depth: Int
+
+    var relativePath: String { pathSegments.joined(separator: "/") }
+    var name: String { pathSegments.last ?? id }
+}
+
+struct DriveFolderBatch: Equatable, Sendable {
+    var folderID: String
+    var folderPath: String
+    var depth: Int
+    var rootTitle: String?
+    var tracks: [CloudTrackInfo]
+    var discoveredSubfolders: [DriveSubfolderRef]
+    var hadError: Bool
+}
+
+struct DriveFolderDiscovery: Equatable, Sendable {
+    var rootID: String
+    var resourceKey: String?
+    var rootTitle: String
+    var initialBatch: DriveFolderBatch
+    var singleFileResult: CloudPlaylistResult?
+}
+
+struct DriveCrawlSummary: Equatable, Sendable {
+    var foldersVisited: Int
+    var hadErrors: Bool
+    var wasTruncated: Bool
+}
+
+final class DriveCrawlPriorityState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var orderedTargets: [String] = []
+
+    func prioritize(_ folderPath: String) {
+        let norm = LibraryRoot.normalizeFolderPath(folderPath)
+        guard !norm.isEmpty else { return }
+        lock.withLock {
+            orderedTargets.removeAll { $0 == norm }
+            orderedTargets.insert(norm, at: 0)
+        }
+    }
+
+    func prioritizedPaths() -> [String] {
+        lock.withLock { orderedTargets }
+    }
+}
+
+protocol GoogleDriveProgressiveFetching: CloudPlaylistFetching {
+    func discoverGoogleDriveRoot(sourceURL: String, cookie: String?) async throws -> DriveFolderDiscovery
+    func crawlGoogleDriveTree(
+        discovery: DriveFolderDiscovery,
+        cookie: String?,
+        priorityState: DriveCrawlPriorityState?,
+        onBatch: @escaping @Sendable (DriveFolderBatch) async -> Void
+    ) async throws -> DriveCrawlSummary
+    func fetchGoogleDriveSingleFolder(
+        folderID: String,
+        resourceKey: String?,
+        pathSegments: [String],
+        depth: Int,
+        rootTitle: String?,
+        cookie: String?
+    ) async throws -> DriveFolderBatch
+}
+
 protocol CloudStreamResolving: Sendable {
     func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult
 }
@@ -189,17 +259,55 @@ enum CloudSourceInput {
 
 // MARK: - Live Service Facade
 
-final class LiveCloudService: CloudPlaylistFetching, CloudStreamResolving, @unchecked Sendable {
+final class LiveCloudService: CloudPlaylistFetching, GoogleDriveProgressiveFetching, CloudStreamResolving, @unchecked Sendable {
     static let shared = LiveCloudService()
 
     let youtube: YouTubeClient
     let bilibili: BilibiliClient
     let googleDrive: GoogleDriveClient
 
-    init(transport: any CloudHTTPTransport = URLSessionCloudTransport()) {
+    init(
+        transport: any CloudHTTPTransport = URLSessionCloudTransport(),
+        driveRetryDelaysNanoseconds: [UInt64] = [500_000_000, 1_500_000_000]
+    ) {
         self.youtube = YouTubeClient(transport: transport)
         self.bilibili = BilibiliClient(transport: transport)
-        self.googleDrive = GoogleDriveClient(transport: transport)
+        self.googleDrive = GoogleDriveClient(transport: transport, retryDelaysNanoseconds: driveRetryDelaysNanoseconds)
+    }
+
+    nonisolated static func classifySource(
+        _ sourceURL: String,
+        fallbackKind: LibraryRoot.Kind? = nil
+    ) throws -> (extracted: String, kind: LibraryRoot.Kind, remoteID: String?) {
+        let extracted = CloudSourceInput.extract(from: sourceURL)
+        guard !extracted.isEmpty else { throw LibraryError.invalidCloudURL }
+        if let target = YouTubeClient.parseExtracted(extracted) {
+            let rid: String? = switch target {
+            case .playlist(let id, _): id
+            case .video(let id): id
+            }
+            return (extracted, .cloudYouTube, rid)
+        }
+        if let target = BilibiliClient.parseExtracted(extracted) {
+            let rid: String? = switch target {
+            case .video(let bvid, let aid): bvid ?? aid
+            case .favlist(let id): "fid_\(id)"
+            case .season(let id, _): "season_\(id)"
+            case .series(let id, _): "series_\(id)"
+            case .shortLink: nil
+            }
+            return (extracted, .cloudBilibili, rid)
+        }
+        if let target = GoogleDriveClient.parseExtracted(extracted) {
+            let rid: String? = switch target {
+            case .folder(let id, _), .file(let id, _), .open(let id, _): id
+            }
+            return (extracted, .cloudGoogleDrive, rid)
+        }
+        if fallbackKind == .cloudGoogleDrive, GoogleDriveClient.isValidDriveID(extracted) {
+            return (extracted, .cloudGoogleDrive, extracted)
+        }
+        throw LibraryError.invalidCloudURL
     }
 
     func fetchPlaylist(sourceURL: String, cookie: String?, kindHint: LibraryRoot.Kind? = nil) async throws -> CloudPlaylistResult {
@@ -215,6 +323,45 @@ final class LiveCloudService: CloudPlaylistFetching, CloudStreamResolving, @unch
             return try await googleDrive.fetchPlaylist(sourceURL: extracted, cookie: cookie, allowBareID: kindHint == .cloudGoogleDrive)
         }
         throw CloudSourceError.unsupportedSource
+    }
+
+    func discoverGoogleDriveRoot(sourceURL: String, cookie: String?) async throws -> DriveFolderDiscovery {
+        let extracted = CloudSourceInput.extract(from: sourceURL)
+        guard !extracted.isEmpty else { throw CloudSourceError.invalidURL }
+        return try await googleDrive.discoverRoot(sourceURL: extracted, cookie: cookie, allowBareID: false)
+    }
+
+    func crawlGoogleDriveTree(
+        discovery: DriveFolderDiscovery,
+        cookie: String?,
+        priorityState: DriveCrawlPriorityState?,
+        onBatch: @escaping @Sendable (DriveFolderBatch) async -> Void
+    ) async throws -> DriveCrawlSummary {
+        try await googleDrive.crawlFolderTree(
+            discovery: discovery,
+            cookie: cookie,
+            priorityState: priorityState,
+            maxWorkers: 4,
+            onBatch: onBatch
+        )
+    }
+
+    func fetchGoogleDriveSingleFolder(
+        folderID: String,
+        resourceKey: String?,
+        pathSegments: [String],
+        depth: Int,
+        rootTitle: String?,
+        cookie: String?
+    ) async throws -> DriveFolderBatch {
+        try await googleDrive.fetchSingleFolder(
+            folderID: folderID,
+            resourceKey: resourceKey,
+            pathSegments: pathSegments,
+            depth: depth,
+            rootTitle: rootTitle,
+            cookie: cookie
+        )
     }
 
     func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool = false) async throws -> CloudStreamResult {
@@ -2141,12 +2288,18 @@ actor GoogleDriveClient {
     }
 
     private let transport: any CloudHTTPTransport
+    private let retryDelaysNanoseconds: [UInt64]
     private var streamCache: [String: CachedStream] = [:]
 
     static let userAgent = YouTubeClient.webUserAgent
-    private static let maxDepth = 4
-    private static let maxFolders = 30
-    static let supportedAudioExtensions: Set<String> = FolderScanner.audioExtensions.union(["mp4", "ogg"])
+    static let maxDepth = 12
+    static let maxFolders = 2000
+    static let supportedAudioExtensions: Set<String> = FolderScanner.audioExtensions.union(["mp4", "ogg", "opus", "webm", "wma"])
+
+    struct IVDParseResult: Equatable, Sendable {
+        var items: [DriveItem]
+        var nextPageToken: String?
+    }
 
     private static let mimeToExtension: [String: String] = [
         "audio/mpeg": "mp3",
@@ -2167,11 +2320,18 @@ actor GoogleDriveClient {
         "audio/x-caf": "caf",
         "audio/alac": "alac",
         "audio/ogg": "ogg",
-        "application/ogg": "ogg"
+        "application/ogg": "ogg",
+        "audio/opus": "opus",
+        "audio/webm": "webm",
+        "audio/x-ms-wma": "wma"
     ]
 
-    init(transport: any CloudHTTPTransport = URLSessionCloudTransport()) {
+    init(
+        transport: any CloudHTTPTransport = URLSessionCloudTransport(),
+        retryDelaysNanoseconds: [UInt64] = [500_000_000, 1_500_000_000]
+    ) {
         self.transport = transport
+        self.retryDelaysNanoseconds = retryDelaysNanoseconds
     }
 
     // MARK: URL & ID Parsing
@@ -2282,6 +2442,37 @@ actor GoogleDriveClient {
     // MARK: Playlist / Folder Fetching
 
     func fetchPlaylist(sourceURL: String, cookie: String?, allowBareID: Bool = false) async throws -> CloudPlaylistResult {
+        let discovery = try await discoverRoot(sourceURL: sourceURL, cookie: cookie, allowBareID: allowBareID)
+        if let single = discovery.singleFileResult {
+            return single
+        }
+
+        let collector = DriveTrackCollector(initialTracks: discovery.initialBatch.tracks)
+        if !discovery.initialBatch.discoveredSubfolders.isEmpty {
+            _ = try await crawlFolderTree(
+                discovery: discovery,
+                cookie: cookie,
+                priorityState: nil,
+                maxWorkers: 4
+            ) { batch in
+                await collector.append(batch.tracks)
+            }
+        }
+
+        let tracks = await collector.allTracks()
+        guard !tracks.isEmpty else {
+            throw CloudSourceError.apiError(L10n.trNonisolated("No supported audio files were found in this Google Drive folder."))
+        }
+
+        return CloudPlaylistResult(
+            kind: .cloudGoogleDrive,
+            remoteID: discovery.rootID,
+            title: discovery.rootTitle,
+            tracks: tracks
+        )
+    }
+
+    func discoverRoot(sourceURL: String, cookie: String?, allowBareID: Bool = false) async throws -> DriveFolderDiscovery {
         var target = Self.parse(sourceURL)
         if target == nil && allowBareID {
             let trimmed = sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -2295,17 +2486,32 @@ actor GoogleDriveClient {
 
         switch target {
         case .folder(let id, let rk):
-            return try await fetchFolderTree(rootID: id, resourceKey: rk, cookie: cookie, prefetchedRootHTML: nil)
+            return try await discoverFolder(rootID: id, resourceKey: rk, cookie: cookie, prefetchedRootHTML: nil)
 
         case .file(let id, let rk):
-            return try await fetchSingleFile(fileID: id, resourceKey: rk, cookie: cookie)
+            let single = try await fetchSingleFile(fileID: id, resourceKey: rk, cookie: cookie)
+            return DriveFolderDiscovery(
+                rootID: id,
+                resourceKey: rk,
+                rootTitle: single.title,
+                initialBatch: DriveFolderBatch(
+                    folderID: id,
+                    folderPath: "",
+                    depth: 0,
+                    rootTitle: single.title,
+                    tracks: single.tracks,
+                    discoveredSubfolders: [],
+                    hadError: false
+                ),
+                singleFileResult: single
+            )
 
         case .open(let id, let rk):
             return try await resolveOpenTarget(id: id, resourceKey: rk, cookie: cookie)
         }
     }
 
-    private func resolveOpenTarget(id: String, resourceKey: String?, cookie: String?) async throws -> CloudPlaylistResult {
+    private func resolveOpenTarget(id: String, resourceKey: String?, cookie: String?) async throws -> DriveFolderDiscovery {
         let openURL = Self.driveURL(path: "/open", queryItems: [
             ("id", id),
             ("resourcekey", resourceKey)
@@ -2329,101 +2535,185 @@ actor GoogleDriveClient {
                 resolvedFolderID = id
             }
             let prefetched = (html.contains("_DRIVE_ivd") || html.contains("flip-entry")) ? html : nil
-            return try await fetchFolderTree(
+            return try await discoverFolder(
                 rootID: resolvedFolderID,
                 resourceKey: resourceKey,
                 cookie: cookie,
                 prefetchedRootHTML: prefetched
             )
         }
-        return try await fetchSingleFile(fileID: id, resourceKey: resourceKey, cookie: cookie)
+        let single = try await fetchSingleFile(fileID: id, resourceKey: resourceKey, cookie: cookie)
+        return DriveFolderDiscovery(
+            rootID: id,
+            resourceKey: resourceKey,
+            rootTitle: single.title,
+            initialBatch: DriveFolderBatch(
+                folderID: id,
+                folderPath: "",
+                depth: 0,
+                rootTitle: single.title,
+                tracks: single.tracks,
+                discoveredSubfolders: [],
+                hadError: false
+            ),
+            singleFileResult: single
+        )
     }
 
-    private func fetchFolderTree(
+    private func discoverFolder(
         rootID: String,
         resourceKey: String?,
         cookie: String?,
         prefetchedRootHTML: String?
-    ) async throws -> CloudPlaylistResult {
-        var visitedFolders = Set<String>()
-        var foldersScanned = 0
-        var seenFileIDs = Set<String>()
+    ) async throws -> DriveFolderDiscovery {
+        let batch = try await fetchSingleFolder(
+            folderID: rootID,
+            resourceKey: resourceKey,
+            pathSegments: [],
+            depth: 0,
+            rootTitle: nil,
+            cookie: cookie,
+            prefetchedHTML: prefetchedRootHTML
+        )
+        let title = (batch.rootTitle?.isEmpty == false) ? batch.rootTitle! : "Google Drive"
+        return DriveFolderDiscovery(
+            rootID: rootID,
+            resourceKey: resourceKey,
+            rootTitle: title,
+            initialBatch: batch,
+            singleFileResult: nil
+        )
+    }
+
+    func fetchSingleFolder(
+        folderID: String,
+        resourceKey: String? = nil,
+        pathSegments: [String] = [],
+        depth: Int = 0,
+        rootTitle: String? = nil,
+        cookie: String? = nil,
+        prefetchedHTML: String? = nil
+    ) async throws -> DriveFolderBatch {
+        let folderResult = try await fetchSingleFolderEntries(
+            folderID: folderID,
+            resourceKey: resourceKey,
+            cookie: cookie,
+            prefetchedHTML: prefetchedHTML
+        )
+        let resolvedRootTitle = (depth == 0) ? (folderResult.title ?? rootTitle) : rootTitle
+        let effectiveAlbum = pathSegments.last ?? resolvedRootTitle ?? folderResult.title ?? "Google Drive"
+        let folderPrefix = pathSegments.isEmpty ? "" : pathSegments.joined(separator: "/") + "/"
+
         var tracks: [CloudTrackInfo] = []
-        var rootTitle: String?
+        var subfolders: [DriveSubfolderRef] = []
+        var usedTrackNames: Set<String> = []
+        var usedFolderSegments: Set<String> = []
 
-        struct FolderNode {
-            let id: String
-            let resourceKey: String?
-            let depth: Int
-            let albumName: String?
-        }
-
-        var queue: [FolderNode] = [FolderNode(id: rootID, resourceKey: resourceKey, depth: 0, albumName: nil)]
-        var cursor = 0
-
-        while cursor < queue.count, foldersScanned < Self.maxFolders {
-            let node = queue[cursor]
-            cursor += 1
-            guard visitedFolders.insert(node.id).inserted else { continue }
-            foldersScanned += 1
-
-            let folderResult: (title: String?, items: [DriveItem])
-            do {
-                folderResult = try await fetchSingleFolderEntries(
-                    folderID: node.id,
-                    resourceKey: node.resourceKey,
-                    cookie: cookie,
-                    prefetchedHTML: node.depth == 0 ? prefetchedRootHTML : nil
-                )
-            } catch {
-                if node.depth == 0 { throw error }
-                continue
-            }
-
-            if node.depth == 0, let parsedTitle = folderResult.title, !parsedTitle.isEmpty {
-                rootTitle = parsedTitle
-            }
-
-            let effectiveAlbum = node.albumName ?? rootTitle ?? "Google Drive"
-            for item in folderResult.items {
-                if item.isFolder {
-                    if node.depth < Self.maxDepth, !visitedFolders.contains(item.id) {
-                        queue.append(FolderNode(
-                            id: item.id,
-                            resourceKey: item.resourceKey ?? node.resourceKey,
-                            depth: node.depth + 1,
-                            albumName: item.name
-                        ))
+        for item in folderResult.items {
+            if item.isFolder {
+                if item.id != folderID, depth < Self.maxDepth {
+                    var seg = Self.sanitizeRelativeComponent(item.name, fallback: item.id)
+                    if !usedFolderSegments.insert(seg.lowercased()).inserted {
+                        seg = Self.disambiguateComponent(seg, id: item.id, used: &usedFolderSegments)
                     }
-                } else if Self.isSupportedAudio(name: item.name, mimeType: item.mimeType) {
-                    guard seenFileIDs.insert(item.id).inserted else { continue }
-                    let ext = Self.resolvedAudioExtension(name: item.name, mimeType: item.mimeType)
-                    let title = Self.stripAudioExtensionIfPresent(item.name)
-                    let remoteTrackID = Self.encodeTrackID(fileID: item.id, resourceKey: item.resourceKey)
-                    tracks.append(CloudTrackInfo(
-                        remoteTrackID: remoteTrackID,
-                        relativePath: "gdrive/\(item.id).\(ext)",
-                        title: title,
-                        artist: "Google Drive",
-                        album: effectiveAlbum,
-                        trackNumber: nil,
-                        duration: 0,
-                        artworkURL: nil
+                    subfolders.append(DriveSubfolderRef(
+                        id: item.id,
+                        resourceKey: item.resourceKey ?? resourceKey,
+                        pathSegments: pathSegments + [seg],
+                        depth: depth + 1
                     ))
                 }
+            } else if Self.isSupportedAudio(name: item.name, mimeType: item.mimeType) {
+                var fileName = Self.sanitizedAudioFileName(name: item.name, mimeType: item.mimeType, fallbackID: item.id)
+                if !usedTrackNames.insert(fileName.lowercased()).inserted {
+                    fileName = Self.disambiguateFileName(fileName, id: item.id, used: &usedTrackNames)
+                }
+                let title = Self.stripAudioExtensionIfPresent(Self.sanitizeRelativeComponent(item.name, fallback: item.id))
+                let remoteTrackID = Self.encodeTrackID(fileID: item.id, resourceKey: item.resourceKey)
+                tracks.append(CloudTrackInfo(
+                    remoteTrackID: remoteTrackID,
+                    relativePath: folderPrefix + fileName,
+                    title: title,
+                    artist: "Google Drive",
+                    album: effectiveAlbum,
+                    trackNumber: nil,
+                    duration: 0,
+                    artworkURL: nil
+                ))
             }
         }
 
-        guard !tracks.isEmpty else {
-            throw CloudSourceError.apiError(L10n.trNonisolated("No supported audio files were found in this Google Drive folder."))
+        return DriveFolderBatch(
+            folderID: folderID,
+            folderPath: pathSegments.joined(separator: "/"),
+            depth: depth,
+            rootTitle: depth == 0 ? folderResult.title : nil,
+            tracks: tracks,
+            discoveredSubfolders: subfolders,
+            hadError: false
+        )
+    }
+
+    func crawlFolderTree(
+        discovery: DriveFolderDiscovery,
+        cookie: String?,
+        priorityState: DriveCrawlPriorityState? = nil,
+        maxWorkers: Int = 4,
+        onBatch: @escaping @Sendable (DriveFolderBatch) async -> Void
+    ) async throws -> DriveCrawlSummary {
+        let queue = DriveCrawlQueue(
+            rootID: discovery.rootID,
+            initialSubfolders: discovery.initialBatch.discoveredSubfolders,
+            maxFolders: Self.maxFolders,
+            priorityState: priorityState
+        )
+        let workerCount = max(1, min(maxWorkers, 4))
+        let rootTitle = discovery.rootTitle
+
+        try await withTaskCancellationHandler {
+            try await withThrowingTaskGroup(of: Void.self) { group in
+                for _ in 0..<workerCount {
+                    group.addTask {
+                        while let node = await queue.takeNext() {
+                            try Task.checkCancellation()
+                            do {
+                                var batch = try await self.fetchSingleFolder(
+                                    folderID: node.id,
+                                    resourceKey: node.resourceKey,
+                                    pathSegments: node.pathSegments,
+                                    depth: node.depth,
+                                    rootTitle: rootTitle,
+                                    cookie: cookie,
+                                    prefetchedHTML: nil
+                                )
+                                let accepted = await queue.complete(discovered: batch.discoveredSubfolders, hadError: false)
+                                batch.discoveredSubfolders = accepted
+                                await onBatch(batch)
+                            } catch is CancellationError {
+                                throw CancellationError()
+                            } catch {
+                                let failedBatch = DriveFolderBatch(
+                                    folderID: node.id,
+                                    folderPath: node.relativePath,
+                                    depth: node.depth,
+                                    rootTitle: nil,
+                                    tracks: [],
+                                    discoveredSubfolders: [],
+                                    hadError: true
+                                )
+                                await onBatch(failedBatch)
+                                await queue.complete(discovered: [], hadError: true)
+                            }
+                        }
+                    }
+                }
+                try await group.waitForAll()
+            }
+        } onCancel: {
+            Task { await queue.cancelAll() }
         }
 
-        return CloudPlaylistResult(
-            kind: .cloudGoogleDrive,
-            remoteID: rootID,
-            title: rootTitle ?? "Google Drive",
-            tracks: tracks
-        )
+        return await queue.summary()
     }
 
     private func fetchSingleFolderEntries(
@@ -2445,12 +2735,108 @@ actor GoogleDriveClient {
         }
 
         var title = Self.extractTitle(from: html)
-        let ivdItems = Self.parseDriveIVD(from: html)
-        if !ivdItems.isEmpty {
-            return (title, ivdItems)
+        guard let ivdResult = Self.parseDriveIVDWithPagination(from: html) else {
+            // Fallback: embeddedfolderview#list when _DRIVE_ivd is absent or unparseable
+            return try await fetchEmbeddedFolderView(
+                folderID: folderID,
+                resourceKey: resourceKey,
+                cookie: cookie,
+                existingTitle: title
+            )
         }
 
-        // Fallback: embeddedfolderview#list
+        var items = ivdResult.items
+        var seenIDs = Set(items.map(\.id))
+
+        guard var pageToken = ivdResult.nextPageToken, !pageToken.isEmpty else {
+            // _DRIVE_ivd was validly present (including [[], null]) with no nextPageToken.
+            return (title, items)
+        }
+
+        let apiKey = Self.extractDriveApiKey(from: html)
+        var needsEmbeddedFallback = (apiKey == nil)
+
+        if let apiKey {
+            var seenTokens = Set<String>()
+            var pageCount = 0
+            let maxPages = 100
+
+            while pageCount < maxPages, seenTokens.insert(pageToken).inserted {
+                try Task.checkCancellation()
+                pageCount += 1
+
+                let pageResult: (items: [DriveItem], nextPageToken: String?)?
+                do {
+                    pageResult = try await fetchDriveV2BetaPage(
+                        folderID: folderID,
+                        resourceKey: resourceKey,
+                        pageToken: pageToken,
+                        apiKey: apiKey,
+                        cookie: cookie
+                    )
+                } catch is CancellationError {
+                    throw CancellationError()
+                } catch {
+                    do {
+                        pageResult = try await fetchDriveV3Page(
+                            folderID: folderID,
+                            resourceKey: resourceKey,
+                            pageToken: pageToken,
+                            apiKey: apiKey,
+                            cookie: cookie
+                        )
+                    } catch is CancellationError {
+                        throw CancellationError()
+                    } catch {
+                        pageResult = nil
+                    }
+                }
+
+                guard let pageResult else {
+                    needsEmbeddedFallback = true
+                    break
+                }
+
+                for item in pageResult.items where seenIDs.insert(item.id).inserted {
+                    items.append(item)
+                }
+
+                if let next = pageResult.nextPageToken, !next.isEmpty {
+                    pageToken = next
+                } else {
+                    break
+                }
+            }
+        }
+
+        if needsEmbeddedFallback {
+            do {
+                let embedded = try await fetchEmbeddedFolderView(
+                    folderID: folderID,
+                    resourceKey: resourceKey,
+                    cookie: cookie,
+                    existingTitle: title
+                )
+                if title == nil { title = embedded.title }
+                for item in embedded.items where seenIDs.insert(item.id).inserted {
+                    items.append(item)
+                }
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                if items.isEmpty { throw error }
+            }
+        }
+
+        return (title, items)
+    }
+
+    private func fetchEmbeddedFolderView(
+        folderID: String,
+        resourceKey: String?,
+        cookie: String?,
+        existingTitle: String?
+    ) async throws -> (title: String?, items: [DriveItem]) {
         let fallbackURL = Self.driveURL(path: "/embeddedfolderview", queryItems: [
             ("id", folderID),
             ("resourcekey", resourceKey)
@@ -2458,11 +2844,78 @@ actor GoogleDriveClient {
         let fallbackResponse = try await sendGET(url: fallbackURL, cookie: cookie)
         try Self.validateAccess(response: fallbackResponse)
         let fallbackHTML = String(data: fallbackResponse.data, encoding: .utf8) ?? ""
-        if title == nil {
-            title = Self.extractTitle(from: fallbackHTML)
-        }
+        let resolvedTitle = existingTitle ?? Self.extractTitle(from: fallbackHTML)
         let embeddedItems = Self.parseEmbeddedFolderView(from: fallbackHTML)
-        return (title, embeddedItems)
+        return (resolvedTitle, embeddedItems)
+    }
+
+    private func fetchDriveV2BetaPage(
+        folderID: String,
+        resourceKey: String?,
+        pageToken: String,
+        apiKey: String,
+        cookie: String?
+    ) async throws -> (items: [DriveItem], nextPageToken: String?) {
+        var components = URLComponents(string: "https://clients6.google.com/drive/v2beta/files")!
+        components.queryItems = [
+            URLQueryItem(name: "openDrive", value: "true"),
+            URLQueryItem(name: "reason", value: "102"),
+            URLQueryItem(name: "syncType", value: "0"),
+            URLQueryItem(name: "errorRecovery", value: "false"),
+            URLQueryItem(name: "q", value: "'\(folderID)' in parents and trashed = false"),
+            URLQueryItem(name: "fields", value: "kind,nextPageToken,items(id,title,mimeType,resourceKey,fileSize,labels(trashed))"),
+            URLQueryItem(name: "orderBy", value: "folder,title_natural asc"),
+            URLQueryItem(name: "maxResults", value: "100"),
+            URLQueryItem(name: "supportsTeamDrives", value: "true"),
+            URLQueryItem(name: "includeItemsFromAllDrives", value: "true"),
+            URLQueryItem(name: "pageToken", value: pageToken),
+            URLQueryItem(name: "key", value: apiKey)
+        ]
+        let req = Self.driveAPIRequest(
+            url: components.url!,
+            folderID: folderID,
+            resourceKey: resourceKey,
+            apiKey: apiKey,
+            cookie: cookie
+        )
+        let response = try await sendRequestWithRetry(req)
+        try Self.validateAccess(response: response)
+        guard let parsed = Self.parseDriveAPIListResponse(data: response.data, itemsKey: "items", preferredNameKey: "title") else {
+            throw CloudSourceError.networkError(L10n.trNonisolated("Invalid server response."))
+        }
+        return parsed
+    }
+
+    private func fetchDriveV3Page(
+        folderID: String,
+        resourceKey: String?,
+        pageToken: String,
+        apiKey: String,
+        cookie: String?
+    ) async throws -> (items: [DriveItem], nextPageToken: String?) {
+        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
+        components.queryItems = [
+            URLQueryItem(name: "q", value: "'\(folderID)' in parents and trashed = false"),
+            URLQueryItem(name: "pageSize", value: "1000"),
+            URLQueryItem(name: "fields", value: "nextPageToken,files(id,name,mimeType,resourceKey,size)"),
+            URLQueryItem(name: "supportsAllDrives", value: "true"),
+            URLQueryItem(name: "includeItemsFromAllDrives", value: "true"),
+            URLQueryItem(name: "pageToken", value: pageToken),
+            URLQueryItem(name: "key", value: apiKey)
+        ]
+        let req = Self.driveAPIRequest(
+            url: components.url!,
+            folderID: folderID,
+            resourceKey: resourceKey,
+            apiKey: apiKey,
+            cookie: cookie
+        )
+        let response = try await sendRequestWithRetry(req)
+        try Self.validateAccess(response: response)
+        guard let parsed = Self.parseDriveAPIListResponse(data: response.data, itemsKey: "files", preferredNameKey: "name") else {
+            throw CloudSourceError.networkError(L10n.trNonisolated("Invalid server response."))
+        }
+        return parsed
     }
 
     private func fetchSingleFile(fileID: String, resourceKey: String?, cookie: String?) async throws -> CloudPlaylistResult {
@@ -2504,11 +2957,17 @@ actor GoogleDriveClient {
             throw CloudSourceError.apiError(L10n.trNonisolated("This Google Drive file is not a supported audio format."))
         }
 
-        let ext = Self.resolvedAudioExtension(name: resolvedName ?? "", mimeType: mimeType ?? "")
-        let title = Self.stripAudioExtensionIfPresent(resolvedName?.isEmpty == false ? resolvedName! : fileID)
+        let relativeFileName = Self.sanitizedAudioFileName(
+            name: resolvedName ?? "",
+            mimeType: mimeType ?? "",
+            fallbackID: fileID
+        )
+        let title = Self.stripAudioExtensionIfPresent(
+            Self.sanitizeRelativeComponent(resolvedName?.isEmpty == false ? resolvedName! : fileID, fallback: fileID)
+        )
         let track = CloudTrackInfo(
             remoteTrackID: Self.encodeTrackID(fileID: fileID, resourceKey: resourceKey),
-            relativePath: "gdrive/\(fileID).\(ext)",
+            relativePath: relativeFileName,
             title: title,
             artist: "Google Drive",
             album: title,
@@ -2637,7 +3096,81 @@ actor GoogleDriveClient {
         if let cleanCookie = Self.normalizedCookie(cookie) {
             req.setValue(cleanCookie, forHTTPHeaderField: "Cookie")
         }
-        return try await transport.send(req)
+        return try await sendRequestWithRetry(req)
+    }
+
+    private func sendRequestWithRetry(_ request: URLRequest) async throws -> HTTPResponseData {
+        var attempt = 0
+        while true {
+            try Task.checkCancellation()
+            let response = try await transport.send(request)
+            let isRetryable = response.statusCode == 429 || (500..<600).contains(response.statusCode)
+            if isRetryable, attempt < retryDelaysNanoseconds.count {
+                let delay = retryDelaysNanoseconds[attempt]
+                attempt += 1
+                if delay > 0 {
+                    try await Task.sleep(nanoseconds: delay)
+                }
+                continue
+            }
+            return response
+        }
+    }
+
+    nonisolated private static func driveAPIRequest(
+        url: URL,
+        folderID: String,
+        resourceKey: String?,
+        apiKey: String,
+        cookie: String?
+    ) -> URLRequest {
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+        req.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
+        req.setValue("application/json", forHTTPHeaderField: "Accept")
+        req.setValue("https://drive.google.com/", forHTTPHeaderField: "Referer")
+        req.setValue("https://drive.google.com", forHTTPHeaderField: "Origin")
+        req.setValue(apiKey, forHTTPHeaderField: "X-Goog-Api-Key")
+        if let rk = normalizedCookie(resourceKey) {
+            req.setValue("\(folderID)/\(rk)", forHTTPHeaderField: "X-Goog-Drive-Resource-Keys")
+        }
+        if let cleanCookie = normalizedCookie(cookie) {
+            req.setValue(cleanCookie, forHTTPHeaderField: "Cookie")
+        }
+        return req
+    }
+
+    nonisolated static func parseDriveAPIListResponse(
+        data: Data,
+        itemsKey: String,
+        preferredNameKey: String
+    ) -> (items: [DriveItem], nextPageToken: String?)? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawItems = root[itemsKey] as? [[String: Any]] else {
+            return nil
+        }
+        var items: [DriveItem] = []
+        var seen = Set<String>()
+        for dict in rawItems {
+            if let trashed = dict["trashed"] as? Bool, trashed { continue }
+            if let labels = dict["labels"] as? [String: Any], let trashed = labels["trashed"] as? Bool, trashed { continue }
+            guard let id = dict["id"] as? String, isValidDriveID(id) else { continue }
+            let rawName = (dict[preferredNameKey] as? String)
+                ?? (dict["title"] as? String)
+                ?? (dict["name"] as? String)
+            guard let name = rawName, !name.isEmpty,
+                  let mime = dict["mimeType"] as? String, mime.contains("/") else {
+                continue
+            }
+            if seen.insert(id).inserted {
+                let rk = (dict["resourceKey"] as? String) ?? (dict["resourcekey"] as? String)
+                items.append(DriveItem(id: id, name: name, mimeType: mime, resourceKey: rk))
+            }
+        }
+        let rawToken = (root["nextPageToken"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let nextToken = (rawToken?.isEmpty == false) ? rawToken : nil
+        return (items, nextToken)
     }
 
     nonisolated static var accessDeniedMessage: String {
@@ -2780,11 +3313,39 @@ actor GoogleDriveClient {
         return String(html[r])
     }
 
+    nonisolated static func extractDriveApiKey(from html: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: #"AIzaSy[0-9A-Za-z_-]{33}"#, options: []) else {
+            return nil
+        }
+        let range = NSRange(html.startIndex..<html.endIndex, in: html)
+        guard let match = regex.firstMatch(in: html, range: range),
+              let r = Range(match.range, in: html) else {
+            return nil
+        }
+        return String(html[r])
+    }
+
     nonisolated static func parseDriveIVD(from html: String) -> [DriveItem] {
+        parseDriveIVDWithPagination(from: html)?.items ?? []
+    }
+
+    nonisolated static func parseDriveIVDWithPagination(from html: String) -> IVDParseResult? {
         guard let jsonString = extractDriveIVDJSONString(from: html),
               let data = jsonString.data(using: .utf8),
               let json = try? JSONSerialization.jsonObject(with: data) else {
-            return []
+            return nil
+        }
+
+        var nextPageToken: String?
+        if let rootArray = json as? [Any], rootArray.count > 1 {
+            let isSingleItemTuple = rootArray.count >= 4
+                && (rootArray[0] as? String).map(isValidDriveID) == true
+                && ((rootArray[3] as? String)?.contains("/") == true)
+            if !isSingleItemTuple,
+               let rawToken = (rootArray[1] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !rawToken.isEmpty {
+                nextPageToken = rawToken
+            }
         }
 
         var items: [DriveItem] = []
@@ -2794,8 +3355,10 @@ actor GoogleDriveClient {
             guard depth <= 4 else { return }
             if let dict = node as? [String: Any],
                let id = dict["id"] as? String, isValidDriveID(id),
-               let name = dict["name"] as? String, !name.isEmpty,
+               let name = (dict["name"] as? String) ?? (dict["title"] as? String), !name.isEmpty,
                let mime = dict["mimeType"] as? String, mime.contains("/") {
+                if let trashed = dict["trashed"] as? Bool, trashed { return }
+                if let labels = dict["labels"] as? [String: Any], let trashed = labels["trashed"] as? Bool, trashed { return }
                 if seen.insert(id).inserted {
                     let rk = (dict["resourceKey"] as? String) ?? (dict["resourcekey"] as? String)
                     items.append(DriveItem(id: id, name: name, mimeType: mime, resourceKey: rk))
@@ -2819,7 +3382,7 @@ actor GoogleDriveClient {
         }
 
         collect(json, depth: 0)
-        return items
+        return IVDParseResult(items: items, nextPageToken: nextPageToken)
     }
 
     nonisolated private static func extractResourceKey(fromItemArray array: [Any]) -> String? {
@@ -3215,6 +3778,73 @@ actor GoogleDriveClient {
         return name
     }
 
+    nonisolated static func sanitizeRelativeComponent(_ raw: String, fallback: String) -> String {
+        let cleaned = raw
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: "\\", with: "-")
+            .replacingOccurrences(of: "\0", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if !cleaned.isEmpty, cleaned != ".", cleaned != ".." {
+            return cleaned
+        }
+        let cleanFallback = fallback
+            .replacingOccurrences(of: "/", with: "-")
+            .replacingOccurrences(of: "\\", with: "-")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return cleanFallback.isEmpty ? "Untitled" : cleanFallback
+    }
+
+    nonisolated private static func sanitizedAudioFileName(name: String, mimeType: String, fallbackID: String) -> String {
+        let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let baseComponent = sanitizeRelativeComponent(trimmedName.isEmpty ? fallbackID : trimmedName, fallback: fallbackID)
+        if supportedAudioExtension(fromFilename: baseComponent) != nil {
+            return baseComponent
+        }
+        let ext = resolvedAudioExtension(name: trimmedName, mimeType: mimeType)
+        return "\(baseComponent).\(ext)"
+    }
+
+    nonisolated private static func disambiguateComponent(_ segment: String, id: String, used: inout Set<String>) -> String {
+        let shortId = String(id.prefix(6))
+        let candidate = "\(segment) (\(shortId))"
+        if used.insert(candidate.lowercased()).inserted {
+            return candidate
+        }
+        let fullCandidate = "\(segment) (\(id))"
+        if used.insert(fullCandidate.lowercased()).inserted {
+            return fullCandidate
+        }
+        var n = 2
+        while true {
+            let indexed = "\(segment) (\(shortId)-\(n))"
+            if used.insert(indexed.lowercased()).inserted { return indexed }
+            n += 1
+        }
+    }
+
+    nonisolated private static func disambiguateFileName(_ fileName: String, id: String, used: inout Set<String>) -> String {
+        let shortId = String(id.prefix(6))
+        let ext = (fileName as NSString).pathExtension
+        let base = ext.isEmpty ? fileName : (fileName as NSString).deletingPathExtension
+        func format(_ tag: String) -> String {
+            ext.isEmpty ? "\(base) (\(tag))" : "\(base) (\(tag)).\(ext)"
+        }
+        let candidate = format(shortId)
+        if used.insert(candidate.lowercased()).inserted {
+            return candidate
+        }
+        let fullCandidate = format(id)
+        if used.insert(fullCandidate.lowercased()).inserted {
+            return fullCandidate
+        }
+        var n = 2
+        while true {
+            let indexed = format("\(shortId)-\(n)")
+            if used.insert(indexed.lowercased()).inserted { return indexed }
+            n += 1
+        }
+    }
+
     nonisolated private static func mimeTypeForExtension(_ ext: String) -> String? {
         switch ext.lowercased() {
         case "mp3": "audio/mpeg"
@@ -3226,6 +3856,9 @@ actor GoogleDriveClient {
         case "alac": "audio/alac"
         case "caf": "audio/x-caf"
         case "ogg": "audio/ogg"
+        case "opus": "audio/opus"
+        case "webm": "audio/webm"
+        case "wma": "audio/x-ms-wma"
         default: nil
         }
     }
@@ -3282,5 +3915,180 @@ actor GoogleDriveClient {
             return fallbackExtension.lowercased()
         }
         return "m4a"
+    }
+}
+
+private actor DriveTrackCollector {
+    private var tracks: [CloudTrackInfo] = []
+    private var seenFileIDs: Set<String> = []
+
+    init(initialTracks: [CloudTrackInfo]) {
+        for track in initialTracks {
+            let fileID = GoogleDriveClient.decodeTrackID(track.remoteTrackID).fileID
+            if seenFileIDs.insert(fileID).inserted {
+                tracks.append(track)
+            }
+        }
+    }
+
+    func append(_ newTracks: [CloudTrackInfo]) {
+        for track in newTracks {
+            let fileID = GoogleDriveClient.decodeTrackID(track.remoteTrackID).fileID
+            if seenFileIDs.insert(fileID).inserted {
+                tracks.append(track)
+            }
+        }
+    }
+
+    func allTracks() -> [CloudTrackInfo] {
+        tracks
+    }
+}
+
+private actor DriveCrawlQueue {
+    private let maxFolders: Int
+    private let priorityState: DriveCrawlPriorityState?
+    private var visitedIDs: Set<String>
+    private var foldersVisited: Int
+    private var pending: [DriveSubfolderRef]
+    private var inFlightCount = 0
+    private var hadErrors = false
+    private var wasTruncated = false
+    private var waiters: [CheckedContinuation<DriveSubfolderRef?, Never>] = []
+    private var cancelled = false
+
+    init(
+        rootID: String,
+        initialSubfolders: [DriveSubfolderRef],
+        maxFolders: Int,
+        priorityState: DriveCrawlPriorityState?
+    ) {
+        self.maxFolders = maxFolders
+        self.priorityState = priorityState
+        self.visitedIDs = [rootID]
+        self.foldersVisited = 1
+        self.pending = []
+        for sub in initialSubfolders where visitedIDs.insert(sub.id).inserted {
+            pending.append(sub)
+        }
+    }
+
+    func takeNext() async -> DriveSubfolderRef? {
+        if cancelled || Task.isCancelled { return nil }
+        let targets = priorityState?.prioritizedPaths() ?? []
+        if let next = popNextIfAvailable(priorityTargets: targets) {
+            return next
+        }
+        if inFlightCount == 0 || foldersVisited >= maxFolders {
+            if !pending.isEmpty && foldersVisited >= maxFolders {
+                wasTruncated = true
+            }
+            finishWaiters()
+            return nil
+        }
+        return await withCheckedContinuation { continuation in
+            if cancelled {
+                continuation.resume(returning: nil)
+                return
+            }
+            waiters.append(continuation)
+        }
+    }
+
+    @discardableResult
+    func complete(discovered: [DriveSubfolderRef], hadError: Bool) -> [DriveSubfolderRef] {
+        inFlightCount = max(inFlightCount - 1, 0)
+        if hadError { hadErrors = true }
+        var accepted: [DriveSubfolderRef] = []
+        for sub in discovered where visitedIDs.insert(sub.id).inserted {
+            pending.append(sub)
+            accepted.append(sub)
+        }
+        if cancelled {
+            finishWaiters()
+            return accepted
+        }
+        let targets = priorityState?.prioritizedPaths() ?? []
+        while !waiters.isEmpty, foldersVisited < maxFolders, let node = popNextIfAvailable(priorityTargets: targets) {
+            let waiter = waiters.removeFirst()
+            waiter.resume(returning: node)
+        }
+        if (pending.isEmpty && inFlightCount == 0) || foldersVisited >= maxFolders {
+            if !pending.isEmpty && foldersVisited >= maxFolders {
+                wasTruncated = true
+            }
+            finishWaiters()
+        }
+        return accepted
+    }
+
+    func cancelAll() {
+        cancelled = true
+        finishWaiters()
+    }
+
+    func summary() -> DriveCrawlSummary {
+        DriveCrawlSummary(foldersVisited: foldersVisited, hadErrors: hadErrors, wasTruncated: wasTruncated)
+    }
+
+    private func popNextIfAvailable(priorityTargets: [String]) -> DriveSubfolderRef? {
+        guard !pending.isEmpty else { return nil }
+        guard foldersVisited < maxFolders else {
+            wasTruncated = true
+            return nil
+        }
+        let index = bestCandidateIndex(priorityTargets: priorityTargets)
+        let node = pending.remove(at: index)
+        foldersVisited += 1
+        inFlightCount += 1
+        return node
+    }
+
+    private func bestCandidateIndex(priorityTargets: [String]) -> Int {
+        guard !priorityTargets.isEmpty else {
+            // Breadth-first order (shallowest depth first, preserving discovery order).
+            var bestIdx = 0
+            var bestDepth = pending[0].depth
+            for i in pending.indices where pending[i].depth < bestDepth {
+                bestDepth = pending[i].depth
+                bestIdx = i
+            }
+            return bestIdx
+        }
+
+        func score(for node: DriveSubfolderRef) -> (tier: Int, targetOrder: Int, depth: Int) {
+            let path = node.relativePath
+            for (tIdx, target) in priorityTargets.enumerated() {
+                if path == target {
+                    return (0, tIdx, node.depth)
+                }
+                if target.hasPrefix(path + "/") {
+                    return (1, tIdx, node.depth)
+                }
+                if path.hasPrefix(target + "/") {
+                    return (2, tIdx, node.depth)
+                }
+            }
+            return (3, Int.max, node.depth)
+        }
+
+        var bestIdx = 0
+        var bestScore = score(for: pending[0])
+        for i in 1..<pending.count {
+            let candidateScore = score(for: pending[i])
+            if candidateScore < bestScore {
+                bestScore = candidateScore
+                bestIdx = i
+            }
+        }
+        return bestIdx
+    }
+
+    private func finishWaiters() {
+        let current = waiters
+        waiters.removeAll()
+        for waiter in current {
+            waiter.resume(returning: nil)
+        }
     }
 }

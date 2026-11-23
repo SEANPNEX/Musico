@@ -33,23 +33,105 @@ public sealed record GoogleDriveEntry(
     bool IsFolder,
     string? ResourceKey = null);
 
+public sealed record GoogleDriveSingleFolderResult(
+    string FolderId,
+    string? Title,
+    string CanonicalUrl,
+    IReadOnlyList<GoogleDriveEntry> Entries);
+
+public sealed record GoogleDriveFolderBatch(
+    string FolderRelativePath,
+    string FolderId,
+    IReadOnlyList<CloudPlaylistItem> Items,
+    IReadOnlyList<string> DiscoveredSubfolderPaths,
+    int FoldersVisited,
+    int KnownFoldersTotal,
+    bool IsComplete);
+
+public sealed class GoogleDriveTraversalHandle
+{
+    private readonly Action<string> _prioritize;
+
+    internal GoogleDriveTraversalHandle(Action<string> prioritize) => _prioritize = prioritize;
+
+    public void PrioritizeFolder(string relativeFolderPath) => _prioritize(relativeFolderPath);
+}
+
+public sealed class GoogleDriveInitialSession : IDisposable
+{
+    private readonly Func<Action<GoogleDriveFolderBatch>, CancellationToken, Task<CloudPlaylistResult>> _continueRemaining;
+    private readonly Action? _disposeAction;
+    private int _disposed;
+
+    internal GoogleDriveInitialSession(
+        CloudPlaylistResult rootResult,
+        IReadOnlyList<string> discoveredSubfolderPaths,
+        bool hasMoreSubfolders,
+        GoogleDriveTraversalHandle traversalHandle,
+        Func<Action<GoogleDriveFolderBatch>, CancellationToken, Task<CloudPlaylistResult>> continueRemaining,
+        Action? disposeAction = null)
+    {
+        RootResult = rootResult;
+        DiscoveredSubfolderPaths = discoveredSubfolderPaths;
+        HasMoreSubfolders = hasMoreSubfolders;
+        TraversalHandle = traversalHandle;
+        _continueRemaining = continueRemaining;
+        _disposeAction = disposeAction;
+    }
+
+    public CloudPlaylistResult RootResult { get; }
+    public IReadOnlyList<string> DiscoveredSubfolderPaths { get; }
+    public bool HasMoreSubfolders { get; }
+    public GoogleDriveTraversalHandle TraversalHandle { get; }
+
+    public async Task<CloudPlaylistResult> ContinueRemainingAsync(
+        Action<GoogleDriveFolderBatch>? onBatch = null,
+        CancellationToken ct = default)
+    {
+        try
+        {
+            return await _continueRemaining(onBatch ?? (_ => { }), ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            Dispose();
+        }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            _disposeAction?.Invoke();
+        }
+    }
+}
+
 public sealed class GoogleDriveClient
 {
     public const string DefaultUserAgent =
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
     public const string FolderMimeType = "application/vnd.google-apps.folder";
-    public const int MaxFolderDepth = 4;
-    public const int MaxFolders = 30;
+    public const int MaxFolderDepth = 12;
+    public const int MaxFolders = 2000;
+    public const int MaxPagesPerFolder = 100;
+    public const int FolderWorkerConcurrency = 4;
 
-    private static readonly HashSet<string> SupportedAudioExtensions = new(StringComparer.OrdinalIgnoreCase)
+    public static readonly HashSet<string> AudioExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        ".mp3", ".m4a", ".aac", ".flac", ".wav", ".aif", ".aiff", ".wma", ".ogg", ".opus"
+        ".mp3", ".m4a", ".mp4", ".aac", ".flac", ".wav", ".aif", ".aiff", ".wma", ".ogg", ".opus", ".webm", ".alac", ".caf"
     };
+
+    private static readonly HashSet<string> SupportedAudioExtensions = AudioExtensions;
 
     private static readonly Regex DriveIvdAssignRegex = new(
         @"window\s*(?:\[\s*['""]_DRIVE_ivd['""]\s*\]|\._DRIVE_ivd)\s*=\s*",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex ApiKeyRegex = new(
+        @"AIzaSy[0-9A-Za-z_-]{33}",
+        RegexOptions.Compiled);
 
     private static readonly Regex OgTitleRegex1 = new(
         @"<meta\b[^>]*property\s*=\s*[""']og:title[""'][^>]*content\s*=\s*[""']([^""']*)[""'][^>]*>",
@@ -260,31 +342,117 @@ public sealed class GoogleDriveClient
         string? proxyUrl = null,
         CancellationToken ct = default)
     {
-        var target = ParseInput(sourceUrl);
-        using var http = CloudHttpHelper.CreateClient(proxyUrl, _handler);
-
-        if (target.Kind == GoogleDriveTargetKind.File)
+        using var session = await StartProgressiveFolderFetchAsync(sourceUrl, cookie, proxyUrl, ct)
+            .ConfigureAwait(false);
+        if (!session.HasMoreSubfolders)
         {
-            return await FetchSingleFileAsync(http, target, cookie, ct).ConfigureAwait(false);
+            return session.RootResult;
         }
-
-        if (target.Kind == GoogleDriveTargetKind.Open)
-        {
-            return await FetchOpenTargetAsync(http, target, cookie, ct).ConfigureAwait(false);
-        }
-
-        return await FetchFolderTreeAsync(http, target, cookie, ct).ConfigureAwait(false);
+        return await session.ContinueRemainingAsync(null, ct).ConfigureAwait(false);
     }
 
-    private async Task<CloudPlaylistResult> FetchOpenTargetAsync(
+    public async Task<GoogleDriveSingleFolderResult> FetchSingleFolderAsync(
+        string sourceUrlOrFolderId,
+        string? cookie = null,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(sourceUrlOrFolderId))
+        {
+            throw new ArgumentException("Enter a Google Drive folder link or ID.", nameof(sourceUrlOrFolderId));
+        }
+
+        string trimmed = sourceUrlOrFolderId.Trim();
+        GoogleDriveTarget target;
+        if (trimmed.Contains("drive.google.com", StringComparison.OrdinalIgnoreCase) ||
+            trimmed.Contains("drive.usercontent.google.com", StringComparison.OrdinalIgnoreCase))
+        {
+            target = ParseInput(trimmed);
+            if (target.Kind == GoogleDriveTargetKind.File)
+            {
+                throw new ArgumentException("Expected a Google Drive folder link or ID.", nameof(sourceUrlOrFolderId));
+            }
+        }
+        else
+        {
+            target = new GoogleDriveTarget(GoogleDriveTargetKind.Folder, trimmed, null);
+        }
+
+        using var http = CloudHttpHelper.CreateClient(proxyUrl, _handler);
+        var (title, entries) = await FetchSingleFolderCoreAsync(
+            http,
+            target.Id,
+            target.ResourceKey,
+            cookie,
+            isRoot: true,
+            ct).ConfigureAwait(false);
+
+        return new GoogleDriveSingleFolderResult(
+            FolderId: target.Id,
+            Title: title,
+            CanonicalUrl: BuildFolderUrl(target.Id, target.ResourceKey),
+            Entries: entries);
+    }
+
+    public async Task<GoogleDriveInitialSession> StartProgressiveFolderFetchAsync(
+        string sourceUrl,
+        string? cookie = null,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        var target = ParseInput(sourceUrl);
+        var http = CloudHttpHelper.CreateClient(proxyUrl, _handler);
+        bool keepHttpAlive = false;
+
+        try
+        {
+            if (target.Kind == GoogleDriveTargetKind.File)
+            {
+                var single = await FetchSingleFileAsync(http, target, cookie, ct).ConfigureAwait(false);
+                return CreateCompletedSession(single);
+            }
+
+            if (target.Kind == GoogleDriveTargetKind.Open)
+            {
+                var resolvedTarget = await ResolveOpenTargetAsync(http, target, cookie, ct).ConfigureAwait(false);
+                if (resolvedTarget.Kind == GoogleDriveTargetKind.File)
+                {
+                    var single = await FetchSingleFileAsync(http, resolvedTarget, cookie, ct).ConfigureAwait(false);
+                    return CreateCompletedSession(single);
+                }
+                target = resolvedTarget;
+            }
+
+            var session = await StartFolderTreeSessionAsync(http, target, cookie, ct).ConfigureAwait(false);
+            keepHttpAlive = session.HasMoreSubfolders;
+            return session;
+        }
+        finally
+        {
+            if (!keepHttpAlive)
+            {
+                http.Dispose();
+            }
+        }
+    }
+
+    private static GoogleDriveInitialSession CreateCompletedSession(CloudPlaylistResult result) =>
+        new(
+            rootResult: result,
+            discoveredSubfolderPaths: Array.Empty<string>(),
+            hasMoreSubfolders: false,
+            traversalHandle: new GoogleDriveTraversalHandle(_ => { }),
+            continueRemaining: (_, _) => Task.FromResult(result));
+
+    private async Task<GoogleDriveTarget> ResolveOpenTargetAsync(
         HttpClient http,
         GoogleDriveTarget openTarget,
         string? cookie,
         CancellationToken ct)
     {
         string openUrl = BuildOpenUrl(openTarget.Id, openTarget.ResourceKey);
-        using var req = CreateRequest(HttpMethod.Get, openUrl, cookie);
-        using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+        using var resp = await SendWithRetryAsync(http, () => CreateRequest(HttpMethod.Get, openUrl, cookie), ct)
+            .ConfigureAwait(false);
         string body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         ThrowIfAccessDeniedOrNotFound(resp, body);
@@ -302,13 +470,11 @@ public sealed class GoogleDriveClient
                 var parsed = ParseInput(candidateUri.AbsoluteUri);
                 if (parsed.Kind == GoogleDriveTargetKind.Folder)
                 {
-                    var folderTarget = parsed with { ResourceKey = parsed.ResourceKey ?? openTarget.ResourceKey };
-                    return await FetchFolderTreeAsync(http, folderTarget, cookie, ct).ConfigureAwait(false);
+                    return parsed with { ResourceKey = parsed.ResourceKey ?? openTarget.ResourceKey };
                 }
                 if (parsed.Kind == GoogleDriveTargetKind.File)
                 {
-                    var fileTarget = parsed with { ResourceKey = parsed.ResourceKey ?? openTarget.ResourceKey };
-                    return await FetchSingleFileAsync(http, fileTarget, cookie, ct).ConfigureAwait(false);
+                    return parsed with { ResourceKey = parsed.ResourceKey ?? openTarget.ResourceKey };
                 }
             }
             catch
@@ -318,121 +484,497 @@ public sealed class GoogleDriveClient
         }
 
         if (resp.IsSuccessStatusCode &&
-            (HasDriveIvdPayload(body) || ParseEmbeddedFolderViewEntries(body).Count > 0))
+            (ParseDriveIvdPage(body).HasValidPayload || ParseEmbeddedFolderViewEntries(body).Count > 0))
         {
-            return await FetchFolderTreeAsync(
-                http,
-                new GoogleDriveTarget(GoogleDriveTargetKind.Folder, openTarget.Id, openTarget.ResourceKey),
-                cookie,
-                ct).ConfigureAwait(false);
+            return new GoogleDriveTarget(GoogleDriveTargetKind.Folder, openTarget.Id, openTarget.ResourceKey);
         }
 
-        return await FetchSingleFileAsync(
-            http,
-            new GoogleDriveTarget(GoogleDriveTargetKind.File, openTarget.Id, openTarget.ResourceKey),
-            cookie,
-            ct).ConfigureAwait(false);
+        return new GoogleDriveTarget(GoogleDriveTargetKind.File, openTarget.Id, openTarget.ResourceKey);
     }
 
-    private async Task<CloudPlaylistResult> FetchFolderTreeAsync(
+    private sealed record FolderWorkItem(
+        string Id,
+        string? ResourceKey,
+        string? Name,
+        string RelativeFolderPath,
+        int Depth,
+        long Sequence);
+
+    private sealed record CollectedFolderTrack(
+        int Depth,
+        long FolderSequence,
+        int ItemOrder,
+        CloudPlaylistItem Item);
+
+    private async Task<GoogleDriveInitialSession> StartFolderTreeSessionAsync(
         HttpClient http,
         GoogleDriveTarget rootTarget,
         string? cookie,
         CancellationToken ct)
     {
-        var queue = new Queue<(string Id, string? ResourceKey, string? Name, int Depth)>();
-        var visitedFolders = new HashSet<string>(StringComparer.Ordinal);
+        var gate = new object();
+        var pendingQueue = new LinkedList<FolderWorkItem>();
+        var visitedFolders = new HashSet<string>(StringComparer.Ordinal) { rootTarget.Id };
         var seenFileIds = new HashSet<string>(StringComparer.Ordinal);
-        var items = new List<CloudPlaylistItem>();
+        var usedFolderPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var usedFilePaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var priorityPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var collected = new List<CollectedFolderTrack>();
+        long nextSeq = 1;
 
-        visitedFolders.Add(rootTarget.Id);
-        queue.Enqueue((rootTarget.Id, rootTarget.ResourceKey, null, 0));
+        var rootFolderResult = await FetchSingleFolderCoreAsync(
+            http,
+            rootTarget.Id,
+            rootTarget.ResourceKey,
+            cookie,
+            isRoot: true,
+            ct).ConfigureAwait(false);
 
-        string? rootTitle = null;
-        int foldersVisited = 0;
+        string rootTitle = !string.IsNullOrWhiteSpace(rootFolderResult.Title)
+            ? rootFolderResult.Title!
+            : $"Google Drive ({rootTarget.Id})";
+        string canonicalUrl = BuildFolderUrl(rootTarget.Id, rootTarget.ResourceKey);
 
-        while (queue.Count > 0 && foldersVisited < MaxFolders)
+        var rootItems = new List<CloudPlaylistItem>();
+        var rootSubfolders = new List<string>();
+        int foldersVisited = 1;
+        int knownFoldersTotal = 1;
+
+        ProcessFolderEntries(
+            entries: rootFolderResult.Entries,
+            parentFolderRelPath: string.Empty,
+            parentResourceKey: rootTarget.ResourceKey,
+            albumName: rootTitle,
+            depth: 0,
+            folderSequence: 0,
+            pendingQueue: pendingQueue,
+            visitedFolders: visitedFolders,
+            seenFileIds: seenFileIds,
+            usedFolderPaths: usedFolderPaths,
+            usedFilePaths: usedFilePaths,
+            outFolderItems: rootItems,
+            outNewSubfolders: rootSubfolders,
+            collected: collected,
+            ref nextSeq);
+
+        knownFoldersTotal += rootSubfolders.Count;
+        bool hasMore = pendingQueue.Count > 0 && foldersVisited < MaxFolders;
+
+        var rootPlaylist = new CloudPlaylistResult(
+            Kind: RootKind.CloudGoogleDrive,
+            RemoteId: rootTarget.Id,
+            Title: rootTitle,
+            SourceUrl: canonicalUrl,
+            Items: rootItems);
+
+        var handle = new GoogleDriveTraversalHandle(path =>
         {
-            ct.ThrowIfCancellationRequested();
-            var (folderId, resourceKey, folderName, depth) = queue.Dequeue();
-            foldersVisited++;
+            string norm = NormalizeRelativeFolderPath(path);
+            if (norm.Length == 0) return;
+            lock (gate)
+            {
+                priorityPaths.Add(norm);
+            }
+        });
 
-            (string? fetchedTitle, List<GoogleDriveEntry> entries) folderResult;
+        if (!hasMore)
+        {
+            return new GoogleDriveInitialSession(
+                rootResult: rootPlaylist,
+                discoveredSubfolderPaths: rootSubfolders,
+                hasMoreSubfolders: false,
+                traversalHandle: handle,
+                continueRemaining: (_, _) => Task.FromResult(rootPlaylist));
+        }
+
+        async Task<CloudPlaylistResult> ContinueRemainingAsync(Action<GoogleDriveFolderBatch> onBatch, CancellationToken continueCt)
+        {
+            var batchEmitLock = new SemaphoreSlim(1, 1);
+            int workerCount = Math.Min(FolderWorkerConcurrency, Math.Max(1, MaxFolders - foldersVisited));
+
+            async Task WorkerLoopAsync()
+            {
+                while (true)
+                {
+                    continueCt.ThrowIfCancellationRequested();
+                    FolderWorkItem? work = null;
+                    lock (gate)
+                    {
+                        if (foldersVisited >= MaxFolders || pendingQueue.Count == 0)
+                        {
+                            return;
+                        }
+                        work = DequeueNextFolderLocked(pendingQueue, priorityPaths);
+                        if (work is null)
+                        {
+                            return;
+                        }
+                        foldersVisited++;
+                    }
+
+                    (string? Title, List<GoogleDriveEntry> Entries) subResult;
+                    try
+                    {
+                        subResult = await FetchSingleFolderCoreAsync(
+                            http,
+                            work.Id,
+                            work.ResourceKey,
+                            cookie,
+                            isRoot: false,
+                            continueCt).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        throw;
+                    }
+                    catch
+                    {
+                        // Skip restricted or transient errors on nested subfolders while preserving remaining results.
+                        continue;
+                    }
+
+                    string albumName = !string.IsNullOrWhiteSpace(work.Name)
+                        ? work.Name!
+                        : (!string.IsNullOrWhiteSpace(subResult.Title) ? subResult.Title! : rootTitle);
+
+                    var newItems = new List<CloudPlaylistItem>();
+                    var newSubfolders = new List<string>();
+                    int visitedSnap;
+                    int totalSnap;
+
+                    lock (gate)
+                    {
+                        ProcessFolderEntries(
+                            entries: subResult.Entries,
+                            parentFolderRelPath: work.RelativeFolderPath,
+                            parentResourceKey: work.ResourceKey,
+                            albumName: albumName,
+                            depth: work.Depth,
+                            folderSequence: work.Sequence,
+                            pendingQueue: pendingQueue,
+                            visitedFolders: visitedFolders,
+                            seenFileIds: seenFileIds,
+                            usedFolderPaths: usedFolderPaths,
+                            usedFilePaths: usedFilePaths,
+                            outFolderItems: newItems,
+                            outNewSubfolders: newSubfolders,
+                            collected: collected,
+                            ref nextSeq);
+
+                        knownFoldersTotal += newSubfolders.Count;
+                        visitedSnap = foldersVisited;
+                        totalSnap = knownFoldersTotal;
+                    }
+
+                    if (newItems.Count > 0 || newSubfolders.Count > 0)
+                    {
+                        await batchEmitLock.WaitAsync(continueCt).ConfigureAwait(false);
+                        try
+                        {
+                            onBatch(new GoogleDriveFolderBatch(
+                                FolderRelativePath: work.RelativeFolderPath,
+                                FolderId: work.Id,
+                                Items: newItems,
+                                DiscoveredSubfolderPaths: newSubfolders,
+                                FoldersVisited: visitedSnap,
+                                KnownFoldersTotal: totalSnap,
+                                IsComplete: false));
+                        }
+                        finally
+                        {
+                            batchEmitLock.Release();
+                        }
+                    }
+                }
+            }
+
+            // Use a coordinator loop that spawns up to FolderWorkerConcurrency workers and refills
+            // whenever deeper subfolders get discovered while fewer than 4 workers were running.
+            while (true)
+            {
+                continueCt.ThrowIfCancellationRequested();
+                int remainingBudget;
+                int queuedCount;
+                lock (gate)
+                {
+                    remainingBudget = MaxFolders - foldersVisited;
+                    queuedCount = pendingQueue.Count;
+                }
+                if (remainingBudget <= 0 || queuedCount <= 0)
+                {
+                    break;
+                }
+
+                int launchCount = Math.Min(FolderWorkerConcurrency, Math.Min(remainingBudget, queuedCount));
+                var workers = new Task[launchCount];
+                for (int i = 0; i < launchCount; i++)
+                {
+                    workers[i] = Task.Run(WorkerLoopAsync, continueCt);
+                }
+                await Task.WhenAll(workers).ConfigureAwait(false);
+            }
+
+            List<CloudPlaylistItem> orderedItems;
+            int finalVisited;
+            int finalTotal;
+            lock (gate)
+            {
+                orderedItems = collected
+                    .OrderBy(c => c.Depth)
+                    .ThenBy(c => c.FolderSequence)
+                    .ThenBy(c => c.ItemOrder)
+                    .Select((c, idx) => c.Item with { TrackNumber = idx + 1 })
+                    .ToList();
+                finalVisited = foldersVisited;
+                finalTotal = knownFoldersTotal;
+            }
+
+            await batchEmitLock.WaitAsync(continueCt).ConfigureAwait(false);
             try
             {
-                folderResult = await FetchSingleFolderAsync(http, folderId, resourceKey, cookie, isRoot: depth == 0, ct)
-                    .ConfigureAwait(false);
+                onBatch(new GoogleDriveFolderBatch(
+                    FolderRelativePath: string.Empty,
+                    FolderId: rootTarget.Id,
+                    Items: Array.Empty<CloudPlaylistItem>(),
+                    DiscoveredSubfolderPaths: Array.Empty<string>(),
+                    FoldersVisited: finalVisited,
+                    KnownFoldersTotal: finalTotal,
+                    IsComplete: true));
             }
-            catch (OperationCanceledException)
+            finally
             {
-                throw;
-            }
-            catch when (depth > 0)
-            {
-                // Skip restricted or transient errors on nested subfolders while preserving root results.
-                continue;
-            }
-
-            if (depth == 0)
-            {
-                rootTitle = !string.IsNullOrWhiteSpace(folderResult.fetchedTitle)
-                    ? folderResult.fetchedTitle
-                    : $"Google Drive ({folderId})";
+                batchEmitLock.Release();
             }
 
-            string albumName = depth == 0
-                ? rootTitle!
-                : (!string.IsNullOrWhiteSpace(folderName)
-                    ? folderName
-                    : (!string.IsNullOrWhiteSpace(folderResult.fetchedTitle) ? folderResult.fetchedTitle : rootTitle!));
+            return new CloudPlaylistResult(
+                Kind: RootKind.CloudGoogleDrive,
+                RemoteId: rootTarget.Id,
+                Title: rootTitle,
+                SourceUrl: canonicalUrl,
+                Items: orderedItems);
+        }
 
-            foreach (var entry in folderResult.entries)
+        return new GoogleDriveInitialSession(
+            rootResult: rootPlaylist,
+            discoveredSubfolderPaths: rootSubfolders,
+            hasMoreSubfolders: true,
+            traversalHandle: handle,
+            continueRemaining: ContinueRemainingAsync,
+            disposeAction: http.Dispose);
+    }
+
+    private static FolderWorkItem? DequeueNextFolderLocked(
+        LinkedList<FolderWorkItem> pendingQueue,
+        HashSet<string> priorityPaths)
+    {
+        if (pendingQueue.Count == 0) return null;
+
+        if (priorityPaths.Count > 0)
+        {
+            LinkedListNode<FolderWorkItem>? exactMatch = null;
+            LinkedListNode<FolderWorkItem>? childMatch = null;
+            LinkedListNode<FolderWorkItem>? ancestorMatch = null;
+
+            for (var node = pendingQueue.First; node is not null; node = node.Next)
             {
-                if (entry.IsFolder)
+                string folderPath = node.Value.RelativeFolderPath;
+                if (string.IsNullOrEmpty(folderPath)) continue;
+
+                foreach (string target in priorityPaths)
                 {
-                    if (depth < MaxFolderDepth && visitedFolders.Add(entry.Id))
+                    if (string.Equals(folderPath, target, StringComparison.OrdinalIgnoreCase))
                     {
-                        queue.Enqueue((entry.Id, entry.ResourceKey ?? resourceKey, entry.Name, depth + 1));
+                        exactMatch ??= node;
+                        break;
                     }
-                    continue;
+                    if (folderPath.StartsWith(target + "/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        childMatch ??= node;
+                    }
+                    else if (target.StartsWith(folderPath + "/", StringComparison.OrdinalIgnoreCase))
+                    {
+                        ancestorMatch ??= node;
+                    }
                 }
 
-                if (!IsAudioEntry(entry.Name, entry.MimeType))
-                {
-                    continue;
-                }
+                if (exactMatch is not null) break;
+            }
 
-                if (!seenFileIds.Add(entry.Id))
-                {
-                    continue;
-                }
-
-                string? ext = ExtractAudioExtension(entry.Name, entry.MimeType);
-                string title = StripAudioExtension(entry.Name);
-                string remoteTrackId = EncodeRemoteTrackId(entry.Id, entry.ResourceKey);
-
-                items.Add(new CloudPlaylistItem(
-                    RemoteTrackId: remoteTrackId,
-                    Title: title,
-                    Artist: "Google Drive",
-                    Album: albumName,
-                    DurationSeconds: 0,
-                    ArtworkUrl: null,
-                    TrackNumber: items.Count + 1,
-                    FileExtension: ext));
+            var chosen = exactMatch ?? childMatch ?? ancestorMatch;
+            if (chosen is not null)
+            {
+                pendingQueue.Remove(chosen);
+                return chosen.Value;
             }
         }
 
-        string canonicalUrl = BuildFolderUrl(rootTarget.Id, rootTarget.ResourceKey);
-        return new CloudPlaylistResult(
-            Kind: RootKind.CloudGoogleDrive,
-            RemoteId: rootTarget.Id,
-            Title: rootTitle ?? $"Google Drive ({rootTarget.Id})",
-            SourceUrl: canonicalUrl,
-            Items: items);
+        var first = pendingQueue.First!;
+        pendingQueue.RemoveFirst();
+        return first.Value;
     }
 
-    private async Task<(string? Title, List<GoogleDriveEntry> Entries)> FetchSingleFolderAsync(
+    private static void ProcessFolderEntries(
+        IReadOnlyList<GoogleDriveEntry> entries,
+        string parentFolderRelPath,
+        string? parentResourceKey,
+        string albumName,
+        int depth,
+        long folderSequence,
+        LinkedList<FolderWorkItem> pendingQueue,
+        HashSet<string> visitedFolders,
+        HashSet<string> seenFileIds,
+        HashSet<string> usedFolderPaths,
+        HashSet<string> usedFilePaths,
+        List<CloudPlaylistItem> outFolderItems,
+        List<string> outNewSubfolders,
+        List<CollectedFolderTrack> collected,
+        ref long nextSeq)
+    {
+        int localItemOrder = 0;
+        foreach (var entry in entries)
+        {
+            if (entry.IsFolder)
+            {
+                if (depth < MaxFolderDepth && visitedFolders.Add(entry.Id))
+                {
+                    string subName = SanitizePathSegment(entry.Name, entry.Id);
+                    string childRelPath = string.IsNullOrEmpty(parentFolderRelPath)
+                        ? subName
+                        : $"{parentFolderRelPath}/{subName}";
+                    if (!usedFolderPaths.Add(childRelPath))
+                    {
+                        string shortId = SanitizeShortId(entry.Id);
+                        childRelPath = string.IsNullOrEmpty(parentFolderRelPath)
+                            ? $"{subName} ({shortId})"
+                            : $"{parentFolderRelPath}/{subName} ({shortId})";
+                        usedFolderPaths.Add(childRelPath);
+                    }
+
+                    pendingQueue.AddLast(new FolderWorkItem(
+                        Id: entry.Id,
+                        ResourceKey: entry.ResourceKey ?? parentResourceKey,
+                        Name: entry.Name,
+                        RelativeFolderPath: childRelPath,
+                        Depth: depth + 1,
+                        Sequence: nextSeq++));
+                    outNewSubfolders.Add(childRelPath);
+                }
+                continue;
+            }
+
+            if (!IsAudioEntry(entry.Name, entry.MimeType))
+            {
+                continue;
+            }
+
+            if (!seenFileIds.Add(entry.Id))
+            {
+                continue;
+            }
+
+            string? ext = ExtractAudioExtension(entry.Name, entry.MimeType);
+            string effectiveExt = ext ?? ".m4a";
+            string title = StripAudioExtension(entry.Name);
+            string safeStem = SanitizePathSegment(title, entry.Id);
+            string relPath = MakeUniqueFileRelativePath(parentFolderRelPath, safeStem, effectiveExt, entry.Id, usedFilePaths);
+            string remoteTrackId = EncodeRemoteTrackId(entry.Id, entry.ResourceKey);
+
+            var item = new CloudPlaylistItem(
+                RemoteTrackId: remoteTrackId,
+                Title: title,
+                Artist: "Google Drive",
+                Album: albumName,
+                DurationSeconds: 0,
+                ArtworkUrl: null,
+                TrackNumber: collected.Count + 1,
+                FileExtension: ext,
+                RelativePath: relPath);
+
+            outFolderItems.Add(item);
+            collected.Add(new CollectedFolderTrack(depth, folderSequence, localItemOrder++, item));
+        }
+    }
+
+    private static string MakeUniqueFileRelativePath(
+        string folderRelPath,
+        string safeStem,
+        string effectiveExt,
+        string entryId,
+        HashSet<string> usedFilePaths)
+    {
+        string prefix = string.IsNullOrEmpty(folderRelPath) ? string.Empty : folderRelPath + "/";
+        string candidate = $"{prefix}{safeStem}{effectiveExt}";
+        if (usedFilePaths.Add(candidate))
+        {
+            return candidate;
+        }
+
+        string shortId = SanitizeShortId(entryId);
+        candidate = $"{prefix}{safeStem} ({shortId}){effectiveExt}";
+        if (usedFilePaths.Add(candidate))
+        {
+            return candidate;
+        }
+
+        string fullId = SanitizePathSegment(entryId, "dup");
+        candidate = $"{prefix}{safeStem} ({fullId}){effectiveExt}";
+        if (usedFilePaths.Add(candidate))
+        {
+            return candidate;
+        }
+
+        for (int n = 2; ; n++)
+        {
+            candidate = $"{prefix}{safeStem} ({shortId}-{n}){effectiveExt}";
+            if (usedFilePaths.Add(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    private static string SanitizeShortId(string id)
+    {
+        string raw = string.IsNullOrWhiteSpace(id) ? "id" : id.Trim();
+        string slice = raw.Length > 8 ? raw[..8] : raw;
+        return SanitizePathSegment(slice, "id");
+    }
+
+    internal static string SanitizePathSegment(string? raw, string fallback)
+    {
+        string? cleaned = SanitizeSegmentCore(raw);
+        if (cleaned is not null) return cleaned;
+        return SanitizeSegmentCore(fallback) ?? "Item";
+    }
+
+    private static string? SanitizeSegmentCore(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        var sb = new StringBuilder(raw.Length);
+        foreach (char c in raw)
+        {
+            if (c is '/' or '\\' or ':' or '*' or '?' or '"' or '<' or '>' or '|' || char.IsControl(c))
+            {
+                sb.Append('_');
+            }
+            else
+            {
+                sb.Append(c);
+            }
+        }
+
+        string cleaned = sb.ToString().Trim().TrimEnd('.', ' ');
+        if (cleaned.Length == 0 || cleaned is "." or "..")
+        {
+            return null;
+        }
+        return cleaned;
+    }
+
+    private static string NormalizeRelativeFolderPath(string path) =>
+        path.Replace('\\', '/').Trim().Trim('/');
+
+    private async Task<(string? Title, List<GoogleDriveEntry> Entries)> FetchSingleFolderCoreAsync(
         HttpClient http,
         string folderId,
         string? resourceKey,
@@ -447,8 +989,8 @@ public sealed class GoogleDriveClient
 
         try
         {
-            using var req = CreateRequest(HttpMethod.Get, primaryUrl, cookie);
-            using var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+            using var resp = await SendWithRetryAsync(http, () => CreateRequest(HttpMethod.Get, primaryUrl, cookie), ct)
+                .ConfigureAwait(false);
             string body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
             ThrowIfAccessDeniedOrNotFound(resp, body);
@@ -456,10 +998,49 @@ public sealed class GoogleDriveClient
             if (resp.IsSuccessStatusCode)
             {
                 title = ExtractTitle(body);
-                var ivdEntries = ParseDriveIvdEntries(body);
-                if (ivdEntries.Count > 0 || HasDriveIvdPayload(body))
+                var (hasValidIvd, ivdEntries, nextPageToken) = ParseDriveIvdPage(body);
+                if (hasValidIvd)
                 {
-                    return (title, ivdEntries);
+                    var allEntries = new List<GoogleDriveEntry>(ivdEntries.Count);
+                    var seenIds = new HashSet<string>(StringComparer.Ordinal);
+                    foreach (var entry in ivdEntries)
+                    {
+                        if (seenIds.Add(entry.Id))
+                        {
+                            allEntries.Add(entry);
+                        }
+                    }
+
+                    bool paginationIncomplete = false;
+                    if (!string.IsNullOrWhiteSpace(nextPageToken))
+                    {
+                        string? apiKey = ExtractApiKey(body);
+                        if (!string.IsNullOrWhiteSpace(apiKey))
+                        {
+                            paginationIncomplete = !await PaginateDriveFolderApiAsync(
+                                http,
+                                folderId,
+                                resourceKey,
+                                cookie,
+                                apiKey,
+                                nextPageToken,
+                                allEntries,
+                                seenIds,
+                                ct).ConfigureAwait(false);
+                        }
+                        else
+                        {
+                            paginationIncomplete = true;
+                        }
+                    }
+
+                    if (paginationIncomplete)
+                    {
+                        await SupplementFromEmbeddedFolderViewAsync(
+                            http, folderId, resourceKey, cookie, allEntries, seenIds, ct).ConfigureAwait(false);
+                    }
+
+                    return (title, allEntries);
                 }
             }
         }
@@ -484,8 +1065,8 @@ public sealed class GoogleDriveClient
 
         // Fallback: embeddedfolderview
         string fallbackUrl = BuildEmbeddedFolderViewUrl(folderId, resourceKey);
-        using var fallbackReq = CreateRequest(HttpMethod.Get, fallbackUrl, cookie);
-        using var fallbackResp = await http.SendAsync(fallbackReq, ct).ConfigureAwait(false);
+        using var fallbackResp = await SendWithRetryAsync(http, () => CreateRequest(HttpMethod.Get, fallbackUrl, cookie), ct)
+            .ConfigureAwait(false);
         string fallbackBody = await fallbackResp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
 
         ThrowIfAccessDeniedOrNotFound(fallbackResp, fallbackBody);
@@ -503,6 +1084,206 @@ public sealed class GoogleDriveClient
         title ??= ExtractTitle(fallbackBody);
         var fallbackEntries = ParseEmbeddedFolderViewEntries(fallbackBody);
         return (title, fallbackEntries);
+    }
+
+    private async Task<bool> PaginateDriveFolderApiAsync(
+        HttpClient http,
+        string folderId,
+        string? resourceKey,
+        string? cookie,
+        string apiKey,
+        string initialPageToken,
+        List<GoogleDriveEntry> allEntries,
+        HashSet<string> seenIds,
+        CancellationToken ct)
+    {
+        string? pageToken = initialPageToken;
+        var seenTokens = new HashSet<string>(StringComparer.Ordinal);
+        bool preferV3 = false;
+
+        for (int page = 1; page < MaxPagesPerFolder && !string.IsNullOrWhiteSpace(pageToken); page++)
+        {
+            if (!seenTokens.Add(pageToken))
+            {
+                return true;
+            }
+
+            (bool Success, List<GoogleDriveEntry> Entries, string? NextToken) pageResult;
+            if (!preferV3)
+            {
+                pageResult = await TryFetchDriveApiPageAsync(
+                    http, folderId, resourceKey, cookie, apiKey, pageToken, useV3: false, ct).ConfigureAwait(false);
+                if (!pageResult.Success)
+                {
+                    var v3Result = await TryFetchDriveApiPageAsync(
+                        http, folderId, resourceKey, cookie, apiKey, pageToken, useV3: true, ct).ConfigureAwait(false);
+                    if (v3Result.Success)
+                    {
+                        preferV3 = true;
+                        pageResult = v3Result;
+                    }
+                }
+            }
+            else
+            {
+                pageResult = await TryFetchDriveApiPageAsync(
+                    http, folderId, resourceKey, cookie, apiKey, pageToken, useV3: true, ct).ConfigureAwait(false);
+            }
+
+            if (!pageResult.Success)
+            {
+                return false;
+            }
+
+            foreach (var entry in pageResult.Entries)
+            {
+                if (seenIds.Add(entry.Id))
+                {
+                    allEntries.Add(entry);
+                }
+            }
+
+            pageToken = pageResult.NextToken;
+        }
+
+        return true;
+    }
+
+    private async Task<(bool Success, List<GoogleDriveEntry> Entries, string? NextToken)> TryFetchDriveApiPageAsync(
+        HttpClient http,
+        string folderId,
+        string? resourceKey,
+        string? cookie,
+        string apiKey,
+        string pageToken,
+        bool useV3,
+        CancellationToken ct)
+    {
+        string query = Uri.EscapeDataString($"'{folderId}' in parents and trashed = false");
+        string escapedToken = Uri.EscapeDataString(pageToken);
+        string escapedKey = Uri.EscapeDataString(apiKey);
+        string url = useV3
+            ? $"https://www.googleapis.com/drive/v3/files?q={query}&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&fields={Uri.EscapeDataString("nextPageToken,files(id,name,mimeType,resourceKey)")}&pageToken={escapedToken}&key={escapedKey}"
+            : $"https://clients6.google.com/drive/v2beta/files?openDrive=true&reason=102&q={query}&maxResults=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&pageToken={escapedToken}&key={escapedKey}";
+
+        try
+        {
+            using var resp = await SendWithRetryAsync(http, () =>
+            {
+                var req = CreateRequest(HttpMethod.Get, url, cookie);
+                req.Headers.TryAddWithoutValidation("Referer", "https://drive.google.com/");
+                req.Headers.TryAddWithoutValidation("Origin", "https://drive.google.com");
+                req.Headers.TryAddWithoutValidation("X-Goog-Api-Key", apiKey);
+                if (!string.IsNullOrWhiteSpace(resourceKey))
+                {
+                    req.Headers.TryAddWithoutValidation("X-Goog-Drive-Resource-Keys", $"{folderId}/{resourceKey}");
+                }
+                return req;
+            }, ct).ConfigureAwait(false);
+
+            if (!resp.IsSuccessStatusCode)
+            {
+                return (false, new List<GoogleDriveEntry>(), null);
+            }
+
+            string json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if (string.IsNullOrWhiteSpace(json))
+            {
+                return (false, new List<GoogleDriveEntry>(), null);
+            }
+
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            if (root.ValueKind != JsonValueKind.Object)
+            {
+                return (false, new List<GoogleDriveEntry>(), null);
+            }
+
+            string? nextToken = ReadStringProp(root, "nextPageToken");
+            var entries = new List<GoogleDriveEntry>();
+
+            if (root.TryGetProperty("items", out var itemsEl) && itemsEl.ValueKind == JsonValueKind.Array)
+            {
+                WalkDriveIvdElement(itemsEl, entries);
+            }
+            if (root.TryGetProperty("files", out var filesEl) && filesEl.ValueKind == JsonValueKind.Array)
+            {
+                WalkDriveIvdElement(filesEl, entries);
+            }
+
+            return (true, entries, string.IsNullOrWhiteSpace(nextToken) ? null : nextToken.Trim());
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            return (false, new List<GoogleDriveEntry>(), null);
+        }
+    }
+
+    private async Task SupplementFromEmbeddedFolderViewAsync(
+        HttpClient http,
+        string folderId,
+        string? resourceKey,
+        string? cookie,
+        List<GoogleDriveEntry> allEntries,
+        HashSet<string> seenIds,
+        CancellationToken ct)
+    {
+        try
+        {
+            string fallbackUrl = BuildEmbeddedFolderViewUrl(folderId, resourceKey);
+            using var resp = await SendWithRetryAsync(http, () => CreateRequest(HttpMethod.Get, fallbackUrl, cookie), ct)
+                .ConfigureAwait(false);
+            if (!resp.IsSuccessStatusCode) return;
+
+            string body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            foreach (var entry in ParseEmbeddedFolderViewEntries(body))
+            {
+                if (seenIds.Add(entry.Id))
+                {
+                    allEntries.Add(entry);
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch
+        {
+            // Best-effort supplement only.
+        }
+    }
+
+    private static async Task<HttpResponseMessage> SendWithRetryAsync(
+        HttpClient http,
+        Func<HttpRequestMessage> requestFactory,
+        CancellationToken ct)
+    {
+        const int maxAttempts = 3;
+        for (int attempt = 0; ; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            using var req = requestFactory();
+            var resp = await http.SendAsync(req, ct).ConfigureAwait(false);
+            int code = (int)resp.StatusCode;
+            if (attempt < maxAttempts - 1 && (resp.StatusCode == HttpStatusCode.TooManyRequests || code >= 500))
+            {
+                TimeSpan delay = TimeSpan.FromMilliseconds(80 * (1 << attempt));
+                if (resp.Headers.RetryAfter?.Delta is TimeSpan retryDelta)
+                {
+                    long ms = Math.Clamp((long)retryDelta.TotalMilliseconds, 10, 1500);
+                    delay = TimeSpan.FromMilliseconds(ms);
+                }
+                resp.Dispose();
+                await Task.Delay(delay, ct).ConfigureAwait(false);
+                continue;
+            }
+            return resp;
+        }
     }
 
     private async Task<CloudPlaylistResult> FetchSingleFileAsync(
@@ -856,30 +1637,57 @@ public sealed class GoogleDriveClient
         return cleaned;
     }
 
-    public static List<GoogleDriveEntry> ParseDriveIvdEntries(string html)
+    public static string? ExtractApiKey(string html)
+    {
+        if (string.IsNullOrWhiteSpace(html)) return null;
+        var match = ApiKeyRegex.Match(html);
+        return match.Success ? match.Value : null;
+    }
+
+    public static List<GoogleDriveEntry> ParseDriveIvdEntries(string html) =>
+        ParseDriveIvdPage(html).Entries;
+
+    public static (bool HasValidPayload, List<GoogleDriveEntry> Entries, string? NextPageToken) ParseDriveIvdPage(string html)
     {
         var entries = new List<GoogleDriveEntry>();
         string? jsonPayload = ExtractDriveIvdJson(html);
         if (string.IsNullOrWhiteSpace(jsonPayload))
         {
-            return entries;
+            return (false, entries, null);
         }
 
         try
         {
             using var doc = JsonDocument.Parse(jsonPayload);
+            if (doc.RootElement.ValueKind is not (JsonValueKind.Array or JsonValueKind.Object))
+            {
+                return (false, entries, null);
+            }
+
+            string? nextPageToken = null;
+            if (doc.RootElement.ValueKind == JsonValueKind.Array &&
+                doc.RootElement.GetArrayLength() >= 2 &&
+                doc.RootElement[1].ValueKind == JsonValueKind.String)
+            {
+                string? tok = doc.RootElement[1].GetString();
+                if (!string.IsNullOrWhiteSpace(tok))
+                {
+                    nextPageToken = tok.Trim();
+                }
+            }
+
             WalkDriveIvdElement(doc.RootElement, entries);
+            return (true, entries, nextPageToken);
         }
         catch
         {
             // Malformed or partial _DRIVE_ivd falls back to embeddedfolderview.
+            return (false, new List<GoogleDriveEntry>(), null);
         }
-
-        return entries;
     }
 
     private static bool HasDriveIvdPayload(string html) =>
-        !string.IsNullOrWhiteSpace(ExtractDriveIvdJson(html));
+        ParseDriveIvdPage(html).HasValidPayload;
 
     private static string? ExtractDriveIvdJson(string html)
     {
@@ -1368,6 +2176,9 @@ public sealed class GoogleDriveClient
             "audio/x-ms-wma" => ".wma",
             "audio/ogg" or "application/ogg" => ".ogg",
             "audio/opus" => ".opus",
+            "audio/webm" => ".webm",
+            "audio/alac" or "audio/x-alac" => ".alac",
+            "audio/caf" or "audio/x-caf" => ".caf",
             _ => lower.StartsWith("audio/", StringComparison.Ordinal) ? ".m4a" : null
         };
     }
@@ -1379,6 +2190,7 @@ public sealed class GoogleDriveClient
         {
             ".mp3" => "audio/mpeg",
             ".m4a" => "audio/mp4",
+            ".mp4" => "audio/mp4",
             ".aac" => "audio/aac",
             ".flac" => "audio/flac",
             ".wav" => "audio/wav",
@@ -1386,6 +2198,9 @@ public sealed class GoogleDriveClient
             ".wma" => "audio/x-ms-wma",
             ".ogg" => "audio/ogg",
             ".opus" => "audio/opus",
+            ".webm" => "audio/webm",
+            ".alac" => "audio/alac",
+            ".caf" => "audio/x-caf",
             _ => null
         };
     }

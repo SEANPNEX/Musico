@@ -314,9 +314,16 @@ public sealed class CloudExporterTests
         Assert.False(File.Exists(Path.Combine(expectedFolder, "Broken Track.m4a")));
         Assert.Empty(Directory.GetFiles(expectedFolder, "*.tmp"));
 
-        Assert.Equal(4, progressEvents.Count);
+        Assert.True(progressEvents.Count >= 4);
         Assert.Equal((0, 3), (progressEvents[0].Completed, progressEvents[0].Total));
         Assert.Equal((3, 3), (progressEvents[^1].Completed, progressEvents[^1].Total));
+        Assert.Contains(progressEvents, p => p.Completed == 1 && p.Total == 3);
+        Assert.Contains(progressEvents, p => p.Completed == 2 && p.Total == 3);
+        Assert.Contains(progressEvents, p => p.BytesDownloaded > 0);
+        for (int i = 1; i < progressEvents.Count; i++)
+        {
+            Assert.True(progressEvents[i].Completed >= progressEvents[i - 1].Completed);
+        }
     }
 
     [Fact]
@@ -625,6 +632,161 @@ public sealed class CloudExporterTests
         Assert.True(File.Exists(Path.Combine(exportResult.DestinationFolder, "Blue Note.mp3")));
         Assert.True(File.Exists(Path.Combine(exportResult.DestinationFolder, "Autumn Leaves.mp3")));
         Assert.True(File.Exists(Path.Combine(exportResult.DestinationFolder, "Night Train.mp3")));
+    }
+
+    [Fact]
+    public async Task ExportTrackAsyncReportsByteProgressAndSpeed()
+    {
+        string cacheDir = TestHelpers.MakeTempDir();
+        string destDir = TestHelpers.MakeTempDir();
+        var rootId = Guid.NewGuid();
+        var track = MakeCloudTrack(rootId, "vidbyteprog1", "Large Bitstream");
+
+        byte[] payload = new byte[200_000];
+        Array.Fill(payload, (byte)0x5A);
+
+        var handler = new StubHttpHandler(req =>
+        {
+            string uri = req.RequestUri!.AbsoluteUri;
+            if (uri.Contains("youtubei/v1/player", StringComparison.Ordinal))
+            {
+                string json = """
+                {
+                  "streamingData": {
+                    "adaptiveFormats": [
+                      { "itag": 140, "url": "https://cdn.example/large.m4a", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 128000 }
+                    ]
+                  }
+                }
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
+                };
+            }
+
+            if (uri.StartsWith("https://cdn.example/large.m4a", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(payload)
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var exporter = new CloudExporter(
+            new CloudAudioCache(cacheDir, handler: handler),
+            new YouTubeClient(handler),
+            new BilibiliClient(handler));
+
+        var progressEvents = new List<CloudExportProgress>();
+        var progress = new SynchronousProgress<CloudExportProgress>(p => progressEvents.Add(p));
+
+        string exported = await exporter.ExportTrackAsync(track, root: null, destDir, progress);
+        Assert.Equal(payload, File.ReadAllBytes(exported));
+        Assert.NotEmpty(progressEvents);
+        Assert.Equal(1, progressEvents[^1].Completed);
+        Assert.Equal(1, progressEvents[^1].Total);
+        Assert.Equal(200_000, progressEvents[^1].BytesDownloaded);
+        Assert.Equal(200_000, progressEvents[^1].TotalBytes);
+        Assert.Equal(1.0, progressEvents[^1].OverallFraction);
+        Assert.Contains(progressEvents, p => p.BytesDownloaded > 0 && p.BytesPerSecond >= 0);
+    }
+
+    [Fact]
+    public async Task UpdateLocalFolderAsyncSubfolderWithTrackingOverrideUpdatesManifestSourceUrl()
+    {
+        string cacheDir = TestHelpers.MakeTempDir();
+        string parentDir = TestHelpers.MakeTempDir();
+        string subDir = Path.Combine(parentDir, "SubAlbum");
+        Directory.CreateDirectory(subDir);
+
+        byte[] mp3Bytes = MakeMinimalMp3Bytes();
+        CloudExporter.SaveManifest(subDir, new CloudFolderManifest(
+            SourceUrl: "https://www.youtube.com/playlist?list=PL_STALE_OLD",
+            RemoteId: "PL_STALE_OLD",
+            CloudKind: RootKind.CloudYouTube.ToString(),
+            LastSyncedUtc: DateTimeOffset.UtcNow.AddDays(-1),
+            Tracks: new Dictionary<string, string>(StringComparer.Ordinal)));
+
+        var requestedUrls = new List<string>();
+        var handler = new StubHttpHandler(req =>
+        {
+            string uri = req.RequestUri!.AbsoluteUri;
+            requestedUrls.Add(uri);
+
+            if (uri.Contains("list=PL_OVERRIDE_NEW", StringComparison.Ordinal))
+            {
+                string browseHtml = """
+                    <html><head><title>Updated SubAlbum - YouTube</title></head><body>
+                    <script>var ytInitialData = {"metadata":{"playlistMetadataRenderer":{"title":"Updated SubAlbum"}},"contents":{"twoColumnBrowseResultsRenderer":{"tabs":[{"tabRenderer":{"content":{"sectionListRenderer":{"contents":[{"itemSectionRenderer":{"contents":[{"playlistVideoListRenderer":{"contents":[{"playlistVideoRenderer":{"videoId":"vidnew00001","title":{"runs":[{"text":"Fresh Air"}]},"shortBylineText":{"runs":[{"text":"Cloud Band"}]},"lengthSeconds":"180"}}]}}]}}]}}}}]}}};</script>
+                    </body></html>
+                    """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(browseHtml, Encoding.UTF8, "text/html")
+                };
+            }
+
+            if (uri.Contains("youtubei/v1/player", StringComparison.Ordinal))
+            {
+                string json = """
+                {
+                  "streamingData": {
+                    "adaptiveFormats": [
+                      { "itag": 140, "url": "https://cdn.example/fresh.m4a", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 128000 }
+                    ]
+                  }
+                }
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
+                };
+            }
+
+            if (uri.StartsWith("https://cdn.example/fresh.m4a", StringComparison.Ordinal))
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(mp3Bytes)
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var exporter = new CloudExporter(
+            new CloudAudioCache(cacheDir, handler: handler),
+            new YouTubeClient(handler),
+            new BilibiliClient(handler));
+
+        var localParentRoot = new LibraryRoot(Guid.NewGuid(), "Music Parent", RootKind.Picked, parentDir);
+        var overrideTracking = new CloudTrackingInfo(
+            sourceUrl: "https://www.youtube.com/playlist?list=PL_OVERRIDE_NEW",
+            remoteId: "PL_OVERRIDE_NEW",
+            cloudKind: RootKind.CloudYouTube);
+
+        var progressEvents = new List<CloudExportProgress>();
+        var result = await exporter.UpdateLocalFolderAsync(
+            localParentRoot,
+            progress: new SynchronousProgress<CloudExportProgress>(p => progressEvents.Add(p)),
+            targetFolderPath: subDir,
+            trackingOverride: overrideTracking);
+
+        Assert.Equal(1, result.AddedCount);
+        Assert.Equal(0, result.FailedCount);
+        Assert.True(File.Exists(Path.Combine(subDir, "Fresh Air.m4a")));
+        Assert.Contains(requestedUrls, u => u.Contains("list=PL_OVERRIDE_NEW", StringComparison.Ordinal));
+        Assert.DoesNotContain(requestedUrls, u => u.Contains("list=PL_STALE_OLD", StringComparison.Ordinal));
+
+        var reloadedManifest = CloudExporter.LoadManifest(subDir);
+        Assert.NotNull(reloadedManifest);
+        Assert.Equal("https://www.youtube.com/playlist?list=PL_OVERRIDE_NEW", reloadedManifest!.SourceUrl);
+        Assert.Equal("PL_OVERRIDE_NEW", reloadedManifest.RemoteId);
+        Assert.Contains(progressEvents, p => p.BytesDownloaded > 0);
     }
 
     private sealed class SynchronousProgress<T> : IProgress<T>

@@ -189,6 +189,19 @@
     <sys:String x:Key="Str_SaveCloud_AddToLibrary">Add saved folder to Library</sys:String>
     <sys:String x:Key="Str_SaveCloud_SaveFolder">Save Folder</sys:String>
     <sys:String x:Key="Str_SaveCloud_OpenFolder">Open Folder</sys:String>
+    <sys:String x:Key="Str_SaveCloud_RunInBackground">Run in Background</sys:String>
+    <sys:String x:Key="Str_SaveCloud_EditSource">Edit</sys:String>
+    <sys:String x:Key="Str_SaveCloud_EditSourceLabel">Cloud Source URL</sys:String>
+
+    <!-- Downloads -->
+    <sys:String x:Key="Str_Downloads_Header">DOWNLOADS</sys:String>
+    <sys:String x:Key="Str_Downloads_Title">Downloads</sys:String>
+    <sys:String x:Key="Str_Downloads_ClearFinished">Clear Finished</sys:String>
+    <sys:String x:Key="Str_Downloads_NoItems">No active or recent downloads.</sys:String>
+    <sys:String x:Key="Str_Downloads_ViewTooltip">View downloads</sys:String>
+
+    <!-- Folders Edit Cloud Source -->
+    <sys:String x:Key="Str_Folders_EditCloudSource">Edit Cloud Source...</sys:String>
 
     <!-- TrackRowControl -->
     <sys:String x:Key="Str_TrackRow_DragToReorder">Drag to reorder</sys:String>
