@@ -188,8 +188,22 @@ interface AppStrings {
     val capabilityCookie: String
     val capabilityProxy: String
     val capabilityLyrics: String
+    val capabilitySearch: String
+    val capabilityPlaylistDesc: String
+    val capabilityTreeDesc: String
+    val capabilityStreamDesc: String
+    val capabilityCookieDesc: String
+    val capabilityProxyDesc: String
+    val capabilityLyricsDesc: String
+    val capabilitySearchDesc: String
+    val extensionCookieLabel: String
+    val extensionCookiePlaceholder: String
+    val extensionCookieSupportingText: String
+    val showCookie: String
+    val hideCookie: String
+    val clearCookie: String
 
-    // Songs screen
+    // Songs screen & cloud search
     val searchPlaceholder: String
     val clearSearch: String
     val sortSongs: String
@@ -205,6 +219,32 @@ interface AppStrings {
     val searchFieldArtist: String
     val searchFieldAlbum: String
     val searchFieldGenre: String
+    val searchSourceLocal: String
+    val cloudSearchKindAll: String
+    val cloudSearchKindTracks: String
+    val cloudSearchKindAlbums: String
+    val cloudSearchKindPlaylists: String
+    val cloudSearchKindAlbumBadge: String
+    val cloudSearchKindPlaylistBadge: String
+    val cloudSearchIdleDesc: String
+    val noCloudSearchResultsDesc: String
+    val loadMore: String
+    val loadingMore: String
+    val cloudSearchErrorTitle: String
+    val cloudSearchAuthRequiredHint: String
+    val cloudSearchRateLimitedHint: String
+    val cloudSearchPermissionDeniedHint: String
+    val cloudSearchNetworkErrorHint: String
+    val openPreview: String
+    val addAsCloudFolder: String
+    val addedToFolders: String
+    val collectionPreviewEmptyTitle: String
+    val collectionPreviewEmptyDesc: String
+    val collectionPreviewLoadFailedTitle: String
+    val collectionPreviewUnsupported: String
+    val saveToMusicoFolder: String
+    val chooseFolderEllipsis: String
+    val saveTrackDestinationMessage: String
 
     // Albums & Artists
     val noAlbumsYetTitle: String
@@ -456,6 +496,9 @@ interface AppStrings {
     fun uninstallExtensionConfirmTitle(name: String): String
     fun detectedProviderHint(name: String): String
     fun extensionLogsCountLabel(count: Int): String
+    fun cloudSearchPlaceholder(sourceName: String): String
+    fun cloudSearchIdleTitle(sourceName: String): String
+    fun addedFolderNotice(name: String): String
     fun formatListeningTime(totalSeconds: Double): String
     fun formatRelativeTime(epochMs: Long, nowMs: Long = System.currentTimeMillis()): String
 
@@ -683,6 +726,20 @@ object EnStrings : AppStrings {
     override val capabilityCookie = "Cookie Auth"
     override val capabilityProxy = "Proxy"
     override val capabilityLyrics = "Lyrics Search"
+    override val capabilitySearch = "Cloud Search"
+    override val capabilityPlaylistDesc = "Load playlists or albums from links"
+    override val capabilityTreeDesc = "Browse nested cloud folders"
+    override val capabilityStreamDesc = "Resolve playable audio streams"
+    override val capabilityCookieDesc = "Use an optional cookie for account access"
+    override val capabilityProxyDesc = "Route extension network requests through proxy"
+    override val capabilityLyricsDesc = "Search online lyrics"
+    override val capabilitySearchDesc = "Search tracks, albums, and playlists from this source"
+    override val extensionCookieLabel = "Extension Cookie"
+    override val extensionCookiePlaceholder = "Paste cookie header (optional)"
+    override val extensionCookieSupportingText = "Stored locally and sent only to this extension for search, preview, and streaming."
+    override val showCookie = "Show cookie"
+    override val hideCookie = "Hide cookie"
+    override val clearCookie = "Clear cookie"
 
     override val searchPlaceholder = "Songs, artists, albums, genres"
     override val clearSearch = "Clear search"
@@ -699,6 +756,32 @@ object EnStrings : AppStrings {
     override val searchFieldArtist = "Artist"
     override val searchFieldAlbum = "Album"
     override val searchFieldGenre = "Genre"
+    override val searchSourceLocal = "Local"
+    override val cloudSearchKindAll = "All"
+    override val cloudSearchKindTracks = "Songs"
+    override val cloudSearchKindAlbums = "Albums"
+    override val cloudSearchKindPlaylists = "Playlists"
+    override val cloudSearchKindAlbumBadge = "Album"
+    override val cloudSearchKindPlaylistBadge = "Playlist"
+    override val cloudSearchIdleDesc = "Enter keywords and tap Search to query this extension."
+    override val noCloudSearchResultsDesc = "Try another query or switch category."
+    override val loadMore = "Load More"
+    override val loadingMore = "Loading more…"
+    override val cloudSearchErrorTitle = "Search Failed"
+    override val cloudSearchAuthRequiredHint = "Authentication required. Configure this extension’s cookie in Folders → Extensions → Settings."
+    override val cloudSearchRateLimitedHint = "Rate limited by this source. Please wait a moment and try again."
+    override val cloudSearchPermissionDeniedHint = "Blocked by the extension’s host allowlist."
+    override val cloudSearchNetworkErrorHint = "Network error while contacting this source."
+    override val openPreview = "Open Preview"
+    override val addAsCloudFolder = "Add as Cloud Folder"
+    override val addedToFolders = "Added to Folders"
+    override val collectionPreviewEmptyTitle = "No Songs Found"
+    override val collectionPreviewEmptyDesc = "This collection does not contain any playable items."
+    override val collectionPreviewLoadFailedTitle = "Couldn’t Load Collection"
+    override val collectionPreviewUnsupported = "This extension does not support loading collection previews."
+    override val saveToMusicoFolder = "Save to Musico Folder"
+    override val chooseFolderEllipsis = "Choose Folder…"
+    override val saveTrackDestinationMessage = "Choose where to save this song locally. Saved songs join your local library without cloud sync tracking."
 
     override val noAlbumsYetTitle = "No Albums Yet"
     override val noAlbumsYetDesc = "Albums appear once your library has songs."
@@ -956,6 +1039,9 @@ object EnStrings : AppStrings {
     override fun uninstallExtensionConfirmTitle(name: String): String = "Uninstall “$name”?"
     override fun detectedProviderHint(name: String): String = "Detected: $name"
     override fun extensionLogsCountLabel(count: Int): String = "Logs ($count)"
+    override fun cloudSearchPlaceholder(sourceName: String): String = "Search $sourceName"
+    override fun cloudSearchIdleTitle(sourceName: String): String = "Search $sourceName"
+    override fun addedFolderNotice(name: String): String = "Added “$name” to Folders."
 
     override fun formatListeningTime(totalSeconds: Double): String {
         if (!totalSeconds.isFinite() || totalSeconds <= 0.0) return "0 min"
@@ -1152,6 +1238,20 @@ object ZhHansStrings : AppStrings {
     override val capabilityCookie = "Cookie 登录态"
     override val capabilityProxy = "代理"
     override val capabilityLyrics = "歌词搜索"
+    override val capabilitySearch = "云端搜索"
+    override val capabilityPlaylistDesc = "从链接加载歌单或专辑"
+    override val capabilityTreeDesc = "浏览多层云端文件夹"
+    override val capabilityStreamDesc = "解析可播放的音频流"
+    override val capabilityCookieDesc = "使用可选 Cookie 访问受限内容"
+    override val capabilityProxyDesc = "通过代理发送扩展网络请求"
+    override val capabilityLyricsDesc = "在线搜索歌词"
+    override val capabilitySearchDesc = "在此来源中搜索歌曲、专辑和歌单"
+    override val extensionCookieLabel = "扩展 Cookie"
+    override val extensionCookiePlaceholder = "粘贴 Cookie 请求头（可选）"
+    override val extensionCookieSupportingText = "仅保存在本地，并仅发送给此扩展用于搜索、预览和播放。"
+    override val showCookie = "显示 Cookie"
+    override val hideCookie = "隐藏 Cookie"
+    override val clearCookie = "清除 Cookie"
 
     override val searchPlaceholder = "搜索歌曲、艺术家、专辑、流派"
     override val clearSearch = "清除搜索"
@@ -1168,6 +1268,32 @@ object ZhHansStrings : AppStrings {
     override val searchFieldArtist = "艺术家"
     override val searchFieldAlbum = "专辑"
     override val searchFieldGenre = "流派"
+    override val searchSourceLocal = "本地"
+    override val cloudSearchKindAll = "全部"
+    override val cloudSearchKindTracks = "歌曲"
+    override val cloudSearchKindAlbums = "专辑"
+    override val cloudSearchKindPlaylists = "歌单"
+    override val cloudSearchKindAlbumBadge = "专辑"
+    override val cloudSearchKindPlaylistBadge = "歌单"
+    override val cloudSearchIdleDesc = "输入关键词并点击搜索以查询此扩展来源。"
+    override val noCloudSearchResultsDesc = "请尝试其他关键词或切换分类。"
+    override val loadMore = "加载更多"
+    override val loadingMore = "正在加载更多…"
+    override val cloudSearchErrorTitle = "搜索失败"
+    override val cloudSearchAuthRequiredHint = "需要登录验证。请在“文件夹 → 扩展管理 → 设置”中配置此扩展的 Cookie。"
+    override val cloudSearchRateLimitedHint = "请求过于频繁，请稍后再试。"
+    override val cloudSearchPermissionDeniedHint = "请求被扩展的主机白名单拦截。"
+    override val cloudSearchNetworkErrorHint = "连接此来源时发生网络错误。"
+    override val openPreview = "打开预览"
+    override val addAsCloudFolder = "添加为云端文件夹"
+    override val addedToFolders = "已添加到文件夹"
+    override val collectionPreviewEmptyTitle = "未找到歌曲"
+    override val collectionPreviewEmptyDesc = "该合集中没有可播放的曲目。"
+    override val collectionPreviewLoadFailedTitle = "无法加载合集"
+    override val collectionPreviewUnsupported = "该扩展不支持加载合集预览。"
+    override val saveToMusicoFolder = "保存到 Musico 文件夹"
+    override val chooseFolderEllipsis = "选择文件夹…"
+    override val saveTrackDestinationMessage = "选择将此歌曲保存到本地的位置。保存的歌曲将直接加入本地音乐库，不启用云端同步追踪。"
 
     override val noAlbumsYetTitle = "暂无专辑"
     override val noAlbumsYetDesc = "音乐库中有歌曲后，专辑将显示在此处。"
@@ -1421,6 +1547,9 @@ object ZhHansStrings : AppStrings {
     override fun uninstallExtensionConfirmTitle(name: String): String = "确定卸载“$name”吗？"
     override fun detectedProviderHint(name: String): String = "已识别来源：$name"
     override fun extensionLogsCountLabel(count: Int): String = "日志 ($count)"
+    override fun cloudSearchPlaceholder(sourceName: String): String = "搜索 $sourceName"
+    override fun cloudSearchIdleTitle(sourceName: String): String = "搜索 $sourceName"
+    override fun addedFolderNotice(name: String): String = "已将“$name”添加到文件夹。"
 
     private val defaultQueueRegex = Regex("^Queue (\\d+)$")
 

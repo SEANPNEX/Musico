@@ -32,6 +32,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
     private readonly BilibiliClient _bilibili;
     private readonly GoogleDriveClient _googleDrive;
     private readonly CloudProviderRegistry _providerRegistry;
+    private readonly ExtensionStore? _extensions;
     private readonly Timer _ticker;
 
     private Track? _currentTrack;
@@ -69,7 +70,8 @@ public sealed class PlayerController : ObservableStore, IDisposable
         YouTubeClient? youtubeClient = null,
         BilibiliClient? bilibiliClient = null,
         GoogleDriveClient? googleDriveClient = null,
-        CloudProviderRegistry? providerRegistry = null)
+        CloudProviderRegistry? providerRegistry = null,
+        ExtensionStore? extensions = null)
     {
         Library = library;
         Queues = queues;
@@ -84,6 +86,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
         _bilibili = bilibiliClient ?? new BilibiliClient();
         _googleDrive = googleDriveClient ?? new GoogleDriveClient();
         _providerRegistry = providerRegistry ?? library.CloudProviders;
+        _extensions = extensions;
 
         _eq = Persistence.Load<EqSettings>(_settingsPath) ?? new EqSettings();
         _engine.ApplyEq(_eq);
@@ -101,6 +104,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
         Library.OnTracksMigrated = OnLibraryTracksMigrated;
         Library.OnFolderAdded = OnLibraryFolderAdded;
         Library.TrackUpdated += OnLibraryTrackUpdated;
+        Queues.QueuesChanged += OnQueuesChanged;
 
         if (_smtc is not null)
         {
@@ -307,6 +311,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
     {
         int failures = 0;
         double pos = position;
+        CloudServiceException? lastCloudError = null;
 
         while (true)
         {
@@ -344,6 +349,11 @@ public sealed class PlayerController : ObservableStore, IDisposable
             {
                 return;
             }
+            catch (CloudServiceException cse)
+            {
+                lastCloudError = cse;
+                filePath = null;
+            }
             catch
             {
                 filePath = null;
@@ -372,11 +382,12 @@ public sealed class PlayerController : ObservableStore, IDisposable
 
             pos = 0;
             failures++;
+            bool stopImmediate = lastCloudError?.Code == CloudErrorCode.ExtensionUnavailable;
             bool shouldContinue = await RunOnUiAsync(() =>
             {
                 if (ct.IsCancellationRequested || gen != _loadGeneration || _disposed) return false;
                 string? advanced = null;
-                if (failures < MaxConsecutiveFailures)
+                if (!stopImmediate && failures < MaxConsecutiveFailures)
                 {
                     Queues.UpdateActive(q => advanced = q.Next(auto: false));
                 }
@@ -385,9 +396,13 @@ public sealed class PlayerController : ObservableStore, IDisposable
                 _engine.Unload();
                 IsPlaying = false;
                 IsLoadingCloud = false;
-                ErrorMessage = failures > 1
-                    ? L.Format("Player_StoppedMultipleError", failures)
-                    : L.Format("Player_CouldNotPlaySong", track.Title);
+                ErrorMessage = lastCloudError is not null &&
+                               (failures == 1 || lastCloudError.Code == CloudErrorCode.ExtensionUnavailable) &&
+                               !string.IsNullOrWhiteSpace(lastCloudError.Message)
+                    ? lastCloudError.Message
+                    : failures > 1
+                        ? L.Format("Player_StoppedMultipleError", failures)
+                        : L.Format("Player_CouldNotPlaySong", track.Title);
                 UpdateSmtc(trackChanged: true);
                 return false;
             }).ConfigureAwait(false);
@@ -396,26 +411,8 @@ public sealed class PlayerController : ObservableStore, IDisposable
         }
     }
 
-    private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct)
-    {
-        string remoteId = track.RemoteTrackId ?? throw new InvalidOperationException("Missing remote track ID.");
-        ICloudSourceProvider? provider = _providerRegistry.GetBySourceOrProviderId(track.CloudSource)
-            ?? (root is not null ? _providerRegistry.GetProvider(root) : null);
-        if (provider is null || !provider.IsAvailable)
-        {
-            throw new CloudServiceException(
-                CloudErrorCode.ExtensionUnavailable,
-                $"Cloud provider '{track.CloudSource ?? root?.EffectiveProviderId ?? "unknown"}' is disabled or not installed.");
-        }
-
-        return provider.ResolveAudioStreamAsync(
-            remoteId,
-            track.RelativePath,
-            root?.Cookie,
-            root?.ProxyUrl,
-            forceRefresh: false,
-            ct: ct);
-    }
+    private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct) =>
+        CloudStreamResolver.ResolveAsync(_providerRegistry, track, root, _extensions, forceRefresh: false, ct: ct);
 
     private void PrefetchNextCloudTrack()
     {
@@ -499,8 +496,9 @@ public sealed class PlayerController : ObservableStore, IDisposable
     {
         if (ids.Count == 0) return;
         PersistPosition();
-        Queues.SetActive(Queues.AddQueue(queueName));
-        Play(ids, startAt);
+        ErrorMessage = null;
+        Queues.AddQueue(queueName, ids, startAt, activate: true);
+        StartCurrent(autoplay: true);
     }
 
     public void SyncNamedQueue(string queueName, IReadOnlyList<string> ids)
@@ -678,12 +676,13 @@ public sealed class PlayerController : ObservableStore, IDisposable
     public void NoteListening(double seconds)
     {
         if (!_isLoaded || CurrentTrack is not { } track) return;
+        if (track.IsEphemeral || Track.HasEphemeralIdPrefix(track.Id)) return;
         _listenedSeconds += seconds;
-        History.AddListening(seconds);
+        History.AddListening(seconds, track);
         if (!_markedRecent && _listenedSeconds >= RecentAfterSeconds)
         {
             _markedRecent = true;
-            History.MarkStarted(track.Id);
+            History.MarkStarted(track);
         }
         if (!_playCounted && DurationSeconds > 0 && _listenedSeconds >= DurationSeconds / 2.0)
         {
@@ -693,9 +692,10 @@ public sealed class PlayerController : ObservableStore, IDisposable
 
     private void CountPlay(Track track)
     {
+        if (track.IsEphemeral || Track.HasEphemeralIdPrefix(track.Id)) return;
         _playCounted = true;
         _markedRecent = true;
-        History.RecordPlay(track.Id);
+        History.RecordPlay(track);
     }
 
     public void TrackDidEnd()
@@ -811,6 +811,11 @@ public sealed class PlayerController : ObservableStore, IDisposable
             if (_disposed) return;
             CreateOrReplaceFolderQueue(folderName, trackIds, startPlayback: false);
         });
+    }
+
+    private void OnQueuesChanged()
+    {
+        Library.PruneEphemeralTracks(Queues.GetAllReferencedTrackIds());
     }
 
     private void CreateOrReplaceFolderQueue(
@@ -981,6 +986,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
 
         _engine.TrackEnded -= OnEngineTrackEnded;
         Library.TrackUpdated -= OnLibraryTrackUpdated;
+        Queues.QueuesChanged -= OnQueuesChanged;
         if (_smtc is not null)
         {
             _smtc.PlayRequested -= OnSmtcPlay;

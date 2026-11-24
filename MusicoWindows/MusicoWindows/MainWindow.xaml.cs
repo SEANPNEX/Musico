@@ -53,6 +53,8 @@ public partial class MainWindow : Window
             OpenUpdateTrackedSubfolder = (root, relPath) => SaveCloudDialog.ShowTrackedFolderUpdate(_services, root, relPath),
             OpenSongInfo = ShowSongInfo,
             OpenSearch = OpenSearchWithField,
+            OpenCollectionPreview = (extId, extName, item, canImport) =>
+                ShowCollectionPreview(extId, extName, item, canImport),
             OpenExtensions = () =>
             {
                 NavExtensions.IsChecked = true;
@@ -511,6 +513,15 @@ public partial class MainWindow : Window
         SongInfoDialog.Show(_ctx, track);
     }
 
+    internal void ShowCollectionPreview(
+        string extensionId,
+        string extensionName,
+        MusicoWindows.Extensions.ExtSearchResultItem item,
+        bool supportsCollectionImport)
+    {
+        CollectionPreviewOverlay.Show(_ctx, extensionId, extensionName, item, supportsCollectionImport);
+    }
+
     private void OpenSearchWithField(string query, SearchField field)
     {
         if (FullPlayer.IsOpen) FullPlayer.Close();
@@ -784,6 +795,7 @@ public partial class MainWindow : Window
             if (DownloadsOverlay.IsOpen) { DownloadsOverlay.Close(); e.Handled = true; return; }
             if (SaveCloudDialog.IsOpen) { SaveCloudDialog.Close(); e.Handled = true; return; }
             if (CloudDialog.IsOpen) { CloudDialog.Close(); e.Handled = true; return; }
+            if (CollectionPreviewOverlay.IsOpen) { CollectionPreviewOverlay.Close(); e.Handled = true; return; }
             if (CloudLyricsOverlay.IsOpen) { CloudLyricsOverlay.Close(); e.Handled = true; return; }
             if (EqDialog.IsOpen) { EqDialog.Close(); e.Handled = true; return; }
             if (SleepDialog.IsOpen) { SleepDialog.Close(); e.Handled = true; return; }
@@ -797,7 +809,10 @@ public partial class MainWindow : Window
             {
                 if (FullPlayer.IsOpen) FullPlayer.Close();
                 NavSongs.IsChecked = true;
-                NavigateTo("songs");
+                if (ContentHost.Content is not SongsView)
+                {
+                    NavigateTo("songs");
+                }
                 if (ContentHost.Content is SongsView sv)
                 {
                     Dispatcher.BeginInvoke(sv.FocusSearch);
@@ -821,8 +836,8 @@ public partial class MainWindow : Window
 
         if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
         {
-            if (Keyboard.FocusedElement is TextBoxBase) return;
-            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || SaveCloudDialog.IsOpen || CloudLyricsOverlay.IsOpen || DownloadsOverlay.IsOpen || UpdateDialog.IsOpen || SongInfoDialog.IsOpen) return;
+            if (Keyboard.FocusedElement is TextBoxBase or PasswordBox) return;
+            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || SaveCloudDialog.IsOpen || CollectionPreviewOverlay.IsOpen || CloudLyricsOverlay.IsOpen || DownloadsOverlay.IsOpen || UpdateDialog.IsOpen || SongInfoDialog.IsOpen) return;
             _services.Player.TogglePlayPause();
             e.Handled = true;
         }

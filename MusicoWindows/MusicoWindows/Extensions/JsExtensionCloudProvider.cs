@@ -48,7 +48,7 @@ public sealed class JsExtensionCloudProvider : ICloudSourceProvider
         _store = store ?? throw new ArgumentNullException(nameof(store));
         _runtime = runtime ?? store.Runtime;
 
-        _urlRegexes = _extension.Manifest.UrlPatterns
+        _urlRegexes = (_extension.Manifest.UrlPatterns ?? [])
             .Select(pat => new Regex(pat, RegexOptions.IgnoreCase | RegexOptions.CultureInvariant, TimeSpan.FromSeconds(1)))
             .ToList();
     }
@@ -61,6 +61,9 @@ public sealed class JsExtensionCloudProvider : ICloudSourceProvider
     public string CloudSourceKey => _extension.ProviderId;
     public bool SupportsCookies => _extension.Manifest.HasCapability(ExtensionCapability.Cookie);
     public bool SupportsProxy => _extension.Manifest.HasCapability(ExtensionCapability.Proxy);
+    public bool SupportsCollectionImport =>
+        _extension.Manifest.HasCapability(ExtensionCapability.Playlist) ||
+        _extension.Manifest.HasCapability(ExtensionCapability.Tree);
     public bool UsesFlatCloudListing => !_extension.Manifest.HasCapability(ExtensionCapability.Tree);
     public bool SupportsProgressiveTree => _extension.Manifest.HasCapability(ExtensionCapability.Tree);
     public bool IsAvailable => _store.GetById(_extension.Id)?.IsEnabled == true;
@@ -148,10 +151,11 @@ public sealed class JsExtensionCloudProvider : ICloudSourceProvider
         }
 
         string scriptSource = _store.ReadScriptSource(_extension);
+        string? effectiveCookie = ResolveEffectiveCookie(cookie);
         var (remoteId, title, items, _) = await FetchRootCollectionPagesAsync(
             scriptSource,
             sourceUrl,
-            SupportsCookies ? cookie : null,
+            effectiveCookie,
             effectiveProxy,
             ct).ConfigureAwait(false);
 
@@ -162,6 +166,13 @@ public sealed class JsExtensionCloudProvider : ICloudSourceProvider
             SourceUrl: sourceUrl,
             Items: items,
             ProviderId: ProviderId);
+    }
+
+    private string? ResolveEffectiveCookie(string? rootOrCallerCookie)
+    {
+        if (!SupportsCookies) return null;
+        if (!string.IsNullOrWhiteSpace(rootOrCallerCookie)) return rootOrCallerCookie;
+        return _store.GetCookie(_extension.Id);
     }
 
     public async Task<CloudTreeSession?> StartProgressiveFetchAsync(
@@ -177,7 +188,7 @@ public sealed class JsExtensionCloudProvider : ICloudSourceProvider
         }
 
         string scriptSource = _store.ReadScriptSource(_extension);
-        string? effectiveCookie = SupportsCookies ? cookie : null;
+        string? effectiveCookie = ResolveEffectiveCookie(cookie);
         string? effectiveProxy = SupportsProxy ? proxyUrl : null;
 
         var (remoteId, rootTitle, rootItems, rootSubfolders) = await FetchRootCollectionPagesAsync(
@@ -431,6 +442,7 @@ public sealed class JsExtensionCloudProvider : ICloudSourceProvider
                 $"Extension '{Manifest.Name}' does not declare the 'stream' capability.");
         }
 
+        string? effectiveCookie = ResolveEffectiveCookie(cookie);
         string scriptSource = _store.ReadScriptSource(_extension);
         var res = await _runtime.ResolveStreamAsync(
             Manifest,
@@ -439,7 +451,7 @@ public sealed class JsExtensionCloudProvider : ICloudSourceProvider
             {
                 RemoteTrackId = remoteTrackId,
                 RelativePath = relativePath,
-                Cookie = SupportsCookies ? cookie : null,
+                Cookie = effectiveCookie,
                 ForceRefresh = forceRefresh
             },
             SupportsProxy ? proxyUrl : null,

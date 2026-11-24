@@ -476,6 +476,7 @@
 
             <!-- Windows 10 ContentDialog Modal Overlays -->
             <controls:CloudLyricsDialog x:Name="CloudLyricsOverlay" />
+            <controls:CloudCollectionPreviewDialog x:Name="CollectionPreviewOverlay" />
             <controls:EqualizerDialog x:Name="EqDialog" />
             <controls:SleepTimerDialog x:Name="SleepDialog" />
             <controls:AddCloudFolderDialog x:Name="CloudDialog" />

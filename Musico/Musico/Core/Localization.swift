@@ -298,6 +298,11 @@ enum L10n {
         if name.hasPrefix("Keyword: ") {
             return "关键词：\(name.dropFirst(9))"
         }
+        if name.hasPrefix("Search ("), let sepRange = name.range(of: "): ") {
+            let extName = name[name.index(name.startIndex, offsetBy: 8)..<sepRange.lowerBound]
+            let query = name[sepRange.upperBound...]
+            return "搜索 (\(extName))：\(query)"
+        }
         return name
     }
 
@@ -828,5 +833,35 @@ enum L10n {
         "Lyrics service rate limited. Please try again shortly.": "歌词服务请求过于频繁，请稍后再试。",
         "Lyrics provider “%@” is unavailable.": "歌词提供方“%@”当前不可用。",
         "Some sources could not be reached.": "部分来源暂时无法访问。",
+
+        // Extension-Only Cloud Search & Auth (v1.2.4)
+        "Cloud Search": "云端搜索",
+        "Search songs, albums, and playlists online.": "在线搜索歌曲、专辑和歌单。",
+        "Clear Cookie": "清除 Cookie",
+        "Saved locally for search and playback with this extension. Folder-specific cookies still take precedence.": "仅保存在本地，用于此扩展的搜索与播放。已添加文件夹的独立 Cookie 仍会优先使用。",
+        "Search Kinds": "搜索类型",
+        "Local": "本地",
+        "All": "全部",
+        "Search %@": "搜索 %@",
+        "Search %@…": "搜索 %@…",
+        "Enter a query and press Search to search %@.": "输入关键词并点击“搜索”，即可在 %@ 中搜索。",
+        "No Results Found": "未找到结果",
+        "Try another keyword or switch search filter.": "请尝试其他关键词或切换筛选类型。",
+        "Loading more…": "正在加载更多…",
+        "Load More": "加载更多",
+        "Authentication Required": "需要身份验证",
+        "Search Failed": "搜索失败",
+        "Configure a Cookie for “%@” in Extension Manager, then retry.": "请在扩展管理中为“%@”配置 Cookie 后重试。",
+        "Open Extension Manager": "打开扩展管理",
+        "Configure Cookie…": "配置 Cookie…",
+        "Open Preview": "打开预览",
+        "Add as Cloud Folder": "添加为云端文件夹",
+        "Added to Folders": "已添加到文件夹",
+        "Couldn’t Add Cloud Folder": "无法添加云端文件夹",
+        "Collection Preview": "合集预览",
+        "Loading collection…": "正在加载合集…",
+        "Couldn’t Load Collection": "无法加载合集",
+        "No playable tracks found in this collection.": "此合集中未找到可播放的歌曲。",
+        "Adding…": "正在添加…",
     ]
 }

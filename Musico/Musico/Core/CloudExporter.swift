@@ -486,6 +486,8 @@ enum CloudExporter {
         root: LibraryRoot?,
         toFolder folderURL: URL,
         cache: CloudAudioCache = .shared,
+        artworkData: Data? = nil,
+        thumbnailCache: CloudThumbnailCache = .shared,
         onProgress: (@MainActor @Sendable (CloudDownloadProgress) -> Void)? = nil
     ) async throws -> URL {
         try Task.checkCancellation()
@@ -505,6 +507,23 @@ enum CloudExporter {
         let ext = cachedURL.pathExtension.isEmpty ? "m4a" : cachedURL.pathExtension
         let targetURL = uniqueFileURL(in: folderURL, baseName: track.title, fileExtension: ext)
         try FileManager.default.copyItem(at: cachedURL, to: targetURL)
+
+        if track.isEphemeral || artworkData != nil {
+            let resolvedArtwork: Data?
+            if let artworkData {
+                resolvedArtwork = artworkData
+            } else {
+                resolvedArtwork = await thumbnailCache.loadImageData(from: track.remoteArtworkURL)
+            }
+            let payload = AudioTagWriter.Payload(
+                title: track.title,
+                artist: track.artist,
+                album: track.album,
+                genre: track.displayGenre,
+                artworkData: resolvedArtwork
+            )
+            _ = await AudioTagWriter.write(payload, to: targetURL)
+        }
         return targetURL
     }
 }

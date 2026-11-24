@@ -48,6 +48,11 @@ import com.musico.store.CloudDownloadStatus
 import com.musico.store.LibraryStore
 import com.musico.store.PlayHistoryUiState
 
+sealed interface SingleTrackSaveTarget {
+    data class FolderUri(val uri: Uri) : SingleTrackSaveTarget
+    data object AppFolder : SingleTrackSaveTarget
+}
+
 @Stable
 class TrackActionState(
     val libraryStore: LibraryStore,
@@ -61,8 +66,13 @@ class TrackActionState(
     var queuePickerIds: List<String>? by mutableStateOf(null)
     var playlistPickerIds: List<String>? by mutableStateOf(null)
     var newPlaylistIds: List<String>? by mutableStateOf(null)
-    var savingCloudTrack: Pair<Track, Uri>? by mutableStateOf(null)
+    var pendingSaveTrackDestination: Track? by mutableStateOf(null)
+    var savingCloudTrack: Pair<Track, SingleTrackSaveTarget>? by mutableStateOf(null)
     var songInfoTrackId: String? by mutableStateOf(null)
+
+    fun requestSaveCloudTrack(track: Track) {
+        pendingSaveTrackDestination = track
+    }
 }
 
 @Composable
@@ -94,7 +104,11 @@ fun TrackMenuItems(
     namedQueueTitle: String? = null,
 ) {
     val strings = LocalStrings.current
-    if (ids.size == 1) {
+    val singleResolved = if (ids.size == 1) actionState.libraryStore.track(ids[0]) else null
+    val hasEphemeral = ids.any { id ->
+        Track.isEphemeralId(id) || actionState.libraryStore.track(id)?.isEphemeral == true
+    }
+    if (ids.size == 1 && !hasEphemeral) {
         DropdownMenuItem(
             text = { Text(strings.songInfo) },
             leadingIcon = { Icon(Icons.Rounded.Info, contentDescription = null) },
@@ -147,45 +161,51 @@ fun TrackMenuItems(
             onDismiss()
         }
     )
-    HorizontalDivider()
-    DropdownMenuItem(
-        text = { Text(strings.addToPlaylistEllipsis) },
-        leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, contentDescription = null) },
-        enabled = ids.isNotEmpty(),
-        onClick = {
-            actionState.playlistPickerIds = ids
-            onDismiss()
-        }
-    )
-    if (favouriteId != null) {
+    if (!hasEphemeral) {
+        HorizontalDivider()
         DropdownMenuItem(
-            text = { Text(if (isFavourite) strings.removeFromFavourites else strings.addToFavourites) },
-            leadingIcon = {
-                Icon(
-                    imageVector = if (isFavourite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                    contentDescription = null
-                )
-            },
+            text = { Text(strings.addToPlaylistEllipsis) },
+            leadingIcon = { Icon(Icons.AutoMirrored.Rounded.PlaylistAdd, contentDescription = null) },
+            enabled = ids.isNotEmpty(),
             onClick = {
-                actionState.libraryStore.toggleFavourite(favouriteId)
+                actionState.playlistPickerIds = ids
                 onDismiss()
             }
         )
+        if (favouriteId != null) {
+            DropdownMenuItem(
+                text = { Text(if (isFavourite) strings.removeFromFavourites else strings.addToFavourites) },
+                leadingIcon = {
+                    Icon(
+                        imageVector = if (isFavourite) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                        contentDescription = null
+                    )
+                },
+                onClick = {
+                    actionState.libraryStore.toggleFavourite(favouriteId)
+                    onDismiss()
+                }
+            )
+        }
     }
-    val singleCloudTrack = if (ids.size == 1) {
-        actionState.libraryStore.track(ids[0])?.takeIf { it.isCloud }
-    } else {
-        null
-    }
-    if (singleCloudTrack != null) {
+    val singleCloudTrack = singleResolved?.takeIf { it.isCloud }
+    val supportsStream = singleCloudTrack?.let { cloudTrack ->
+        val provider = actionState.libraryStore.providerRegistry.providerForTrack(
+            cloudTrack,
+            actionState.libraryStore.rootFor(cloudTrack),
+        )
+        provider?.supportsStream ?: !cloudTrack.isEphemeral
+    } ?: false
+    if (singleCloudTrack != null && supportsStream) {
+        if (hasEphemeral) {
+            HorizontalDivider()
+        }
         DropdownMenuItem(
             text = { Text(strings.saveToLocalFolderEllipsis) },
             leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) },
             onClick = {
                 onDismiss()
-                actionState.onPickFolder { uri ->
-                    actionState.savingCloudTrack = singleCloudTrack to uri
-                }
+                actionState.requestSaveCloudTrack(singleCloudTrack)
             }
         )
     }
@@ -256,11 +276,57 @@ fun TrackActionDialogs(
         )
     }
 
+    val pendingDestinationTrack = state.pendingSaveTrackDestination
+    if (pendingDestinationTrack != null) {
+        AlertDialog(
+            onDismissRequest = { state.pendingSaveTrackDestination = null },
+            icon = { Icon(Icons.Rounded.Download, contentDescription = null) },
+            title = { Text(strings.saveToLocalFolderTitle) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = pendingDestinationTrack.title,
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Text(
+                        text = strings.saveTrackDestinationMessage,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        state.pendingSaveTrackDestination = null
+                        state.savingCloudTrack = pendingDestinationTrack to SingleTrackSaveTarget.AppFolder
+                    }
+                ) {
+                    Text(strings.saveToMusicoFolder)
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        state.pendingSaveTrackDestination = null
+                        state.onPickFolder { uri ->
+                            state.savingCloudTrack = pendingDestinationTrack to SingleTrackSaveTarget.FolderUri(uri)
+                        }
+                    }
+                ) {
+                    Text(strings.chooseFolderEllipsis)
+                }
+            },
+        )
+    }
+
     val saveTarget = state.savingCloudTrack
     if (saveTarget != null) {
         SaveSingleCloudTrackDialog(
             track = saveTarget.first,
-            targetUri = saveTarget.second,
+            target = saveTarget.second,
             libraryStore = state.libraryStore,
             cloudDownloadManager = state.cloudDownloadManager,
             onDismiss = { state.savingCloudTrack = null },
@@ -284,21 +350,27 @@ fun TrackActionDialogs(
 @Composable
 private fun SaveSingleCloudTrackDialog(
     track: Track,
-    targetUri: Uri,
+    target: SingleTrackSaveTarget,
     libraryStore: LibraryStore,
     cloudDownloadManager: CloudDownloadManager,
     onDismiss: () -> Unit,
 ) {
     val strings = LocalStrings.current
     val jobs by cloudDownloadManager.jobs.collectAsStateWithLifecycle()
-    var jobId by remember(track.id, targetUri) { mutableStateOf<String?>(null) }
+    var jobId by remember(track.id, target) { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(track.id, targetUri) {
-        jobId = cloudDownloadManager.startTrackExport(
-            track = track,
-            root = libraryStore.rootFor(track),
-            targetUri = targetUri,
-        )
+    LaunchedEffect(track.id, target) {
+        jobId = when (target) {
+            is SingleTrackSaveTarget.FolderUri -> cloudDownloadManager.startTrackExport(
+                track = track,
+                root = libraryStore.rootFor(track),
+                targetUri = target.uri,
+            )
+            SingleTrackSaveTarget.AppFolder -> cloudDownloadManager.startTrackExportToAppFolder(
+                track = track,
+                root = libraryStore.rootFor(track),
+            )
+        }
     }
 
     val activeJob = remember(jobs, jobId, track.title) {

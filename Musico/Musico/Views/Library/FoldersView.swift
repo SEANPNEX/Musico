@@ -481,7 +481,7 @@ struct AddCloudFolderSheet: View {
     private var extensionStore: ExtensionStore { explicitExtensionStore ?? envExtensionStore }
 
     private var availableProviders: [any CloudSourceProvider] {
-        extensionStore.registry.allProviders()
+        extensionStore.registry.allProviders().filter(\.supportsCollection)
     }
 
     private var selectedProvider: (any CloudSourceProvider)? {

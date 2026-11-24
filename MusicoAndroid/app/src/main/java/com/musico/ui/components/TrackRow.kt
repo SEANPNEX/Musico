@@ -69,7 +69,8 @@ fun TrackRow(
             artworkKey = track.artworkKey,
             artworkCache = artworkCache,
             size = 46.dp,
-            cornerRadius = 8.dp
+            cornerRadius = 8.dp,
+            remoteArtworkUrl = track.remoteArtworkUrl,
         )
         Spacer(Modifier.width(12.dp))
         Column(modifier = Modifier.weight(1f)) {

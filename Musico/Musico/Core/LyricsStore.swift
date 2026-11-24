@@ -27,7 +27,8 @@ struct LyricsStore: Sendable {
     init(directory: URL) { self.directory = directory }
 
     private func importedURL(_ trackID: String) -> URL {
-        directory.appendingPathComponent("\(trackID).lrc")
+        let stem = Track.safeCacheStem(for: trackID)
+        return directory.appendingPathComponent("\(stem).lrc")
     }
 
     func lyrics(

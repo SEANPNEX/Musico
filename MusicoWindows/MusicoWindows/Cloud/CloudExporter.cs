@@ -85,6 +85,8 @@ public sealed class CloudExporter
     private readonly GoogleDriveClient _googleDrive;
     private readonly CloudProviderRegistry _providerRegistry;
     private readonly ArtworkCache? _artworkCache;
+    private readonly ExtensionStore? _extensions;
+    private readonly CloudThumbnailCache? _thumbnailCache;
 
     public CloudExporter(
         CloudAudioCache cloudCache,
@@ -92,7 +94,9 @@ public sealed class CloudExporter
         BilibiliClient bilibiliClient,
         ArtworkCache? artworkCache = null,
         GoogleDriveClient? googleDriveClient = null,
-        CloudProviderRegistry? providerRegistry = null)
+        CloudProviderRegistry? providerRegistry = null,
+        ExtensionStore? extensions = null,
+        CloudThumbnailCache? thumbnailCache = null)
     {
         _cloudCache = cloudCache ?? throw new ArgumentNullException(nameof(cloudCache));
         _youtube = youtubeClient ?? throw new ArgumentNullException(nameof(youtubeClient));
@@ -100,12 +104,16 @@ public sealed class CloudExporter
         _artworkCache = artworkCache;
         _googleDrive = googleDriveClient ?? new GoogleDriveClient();
         _providerRegistry = providerRegistry ?? new CloudProviderRegistry(_youtube, _bilibili, _googleDrive);
+        _extensions = extensions;
+        _thumbnailCache = thumbnailCache;
     }
 
     public CloudExporter(
         CloudAudioCache cloudCache,
         CloudProviderRegistry providerRegistry,
-        ArtworkCache? artworkCache = null)
+        ArtworkCache? artworkCache = null,
+        ExtensionStore? extensions = null,
+        CloudThumbnailCache? thumbnailCache = null)
     {
         _cloudCache = cloudCache ?? throw new ArgumentNullException(nameof(cloudCache));
         _providerRegistry = providerRegistry ?? throw new ArgumentNullException(nameof(providerRegistry));
@@ -113,6 +121,8 @@ public sealed class CloudExporter
         _bilibili = _providerRegistry.Bilibili;
         _googleDrive = _providerRegistry.GoogleDrive;
         _artworkCache = artworkCache;
+        _extensions = extensions;
+        _thumbnailCache = thumbnailCache;
     }
 
     public static string SanitizeFileName(string? raw, string fallback = "Untitled")
@@ -607,7 +617,14 @@ public sealed class CloudExporter
             throw;
         }
 
-        TryWriteTags(destPath, track);
+        byte[]? fallbackArtBytes = null;
+        if (string.IsNullOrEmpty(_artworkCache?.GetImagePath(track.ArtworkKey)) &&
+            CloudThumbnailCache.IsAllowedHttpsUrl(track.RemoteArtworkUrl))
+        {
+            fallbackArtBytes = await TryFetchRemoteArtworkBytesAsync(track.RemoteArtworkUrl!, ct).ConfigureAwait(false);
+        }
+
+        TryWriteTags(destPath, track, fallbackArtBytes);
 
         if (progress is not null)
         {
@@ -627,6 +644,19 @@ public sealed class CloudExporter
         }
 
         return destPath;
+    }
+
+    private async Task<byte[]?> TryFetchRemoteArtworkBytesAsync(string artworkUrl, CancellationToken ct)
+    {
+        try
+        {
+            var cache = _thumbnailCache ?? new CloudThumbnailCache(maxEntries: 4);
+            return await cache.GetBytesAsync(artworkUrl, ct).ConfigureAwait(false);
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private static IProgress<CloudExportProgress>? CreateChildProgressAdapter(
@@ -656,28 +686,10 @@ public sealed class CloudExporter
         public void Report(T value) => handler(value);
     }
 
-    private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct)
-    {
-        string remoteId = track.RemoteTrackId ?? throw new InvalidOperationException("Missing remote track ID.");
-        ICloudSourceProvider? provider = _providerRegistry.GetBySourceOrProviderId(track.CloudSource)
-            ?? (root is not null ? _providerRegistry.GetProvider(root) : null);
-        if (provider is null || !provider.IsAvailable)
-        {
-            throw new CloudServiceException(
-                CloudErrorCode.ExtensionUnavailable,
-                $"Cloud provider '{track.CloudSource ?? root?.EffectiveProviderId ?? "unknown"}' is disabled or not installed.");
-        }
+    private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct) =>
+        CloudStreamResolver.ResolveAsync(_providerRegistry, track, root, _extensions, forceRefresh: false, ct: ct);
 
-        return provider.ResolveAudioStreamAsync(
-            remoteId,
-            track.RelativePath,
-            root?.Cookie,
-            root?.ProxyUrl,
-            forceRefresh: false,
-            ct: ct);
-    }
-
-    private void TryWriteTags(string destPath, Track track)
+    private void TryWriteTags(string destPath, Track track, byte[]? fallbackArtBytes = null)
     {
         try
         {
@@ -707,20 +719,26 @@ public sealed class CloudExporter
                 file.Tag.Disc = (uint)dn;
             }
 
+            byte[]? artBytes = null;
             string? artPath = _artworkCache?.GetImagePath(track.ArtworkKey);
             if (!string.IsNullOrEmpty(artPath) && File.Exists(artPath))
             {
-                byte[] artBytes = File.ReadAllBytes(artPath);
-                if (artBytes.Length > 0)
+                artBytes = File.ReadAllBytes(artPath);
+            }
+            else if (fallbackArtBytes is { Length: > 0 })
+            {
+                artBytes = fallbackArtBytes;
+            }
+
+            if (artBytes is { Length: > 0 })
+            {
+                var picture = new TagLib.Picture(new TagLib.ByteVector(artBytes))
                 {
-                    var picture = new TagLib.Picture(new TagLib.ByteVector(artBytes))
-                    {
-                        Type = TagLib.PictureType.FrontCover,
-                        MimeType = "image/jpeg",
-                        Description = "Cover"
-                    };
-                    file.Tag.Pictures = [picture];
-                }
+                    Type = TagLib.PictureType.FrontCover,
+                    MimeType = "image/jpeg",
+                    Description = "Cover"
+                };
+                file.Tag.Pictures = [picture];
             }
 
             file.Save();

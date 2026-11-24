@@ -19,6 +19,9 @@ public static class CloudSources
     public const string YouTube = "youtube";
     public const string Bilibili = "bilibili";
     public const string GoogleDrive = "gdrive";
+
+    public static string Extension(string extensionId) =>
+        $"ext.{(extensionId ?? string.Empty).Trim()}";
 }
 
 public enum CloudErrorCode

@@ -15,7 +15,16 @@ public enum ExtensionCapability
     Stream,
     Cookie,
     Proxy,
-    Lyrics
+    Lyrics,
+    Search
+}
+
+[JsonConverter(typeof(ExtensionSearchKindJsonConverter))]
+public enum ExtensionSearchKind
+{
+    Track,
+    Playlist,
+    Album
 }
 
 [JsonConverter(typeof(ExtensionSettingTypeJsonConverter))]
@@ -39,6 +48,7 @@ public sealed class ExtensionCapabilityJsonConverter : JsonConverter<ExtensionCa
             "cookie" => ExtensionCapability.Cookie,
             "proxy" => ExtensionCapability.Proxy,
             "lyrics" => ExtensionCapability.Lyrics,
+            "search" => ExtensionCapability.Search,
             _ => throw new JsonException($"Unsupported extension capability: '{raw}'.")
         };
     }
@@ -53,8 +63,40 @@ public sealed class ExtensionCapabilityJsonConverter : JsonConverter<ExtensionCa
             ExtensionCapability.Cookie => "cookie",
             ExtensionCapability.Proxy => "proxy",
             ExtensionCapability.Lyrics => "lyrics",
+            ExtensionCapability.Search => "search",
             _ => value.ToString().ToLowerInvariant()
         });
+    }
+}
+
+public static class ExtensionSearchKindExtensions
+{
+    public static string ToWireString(this ExtensionSearchKind kind) => kind switch
+    {
+        ExtensionSearchKind.Track => "track",
+        ExtensionSearchKind.Playlist => "playlist",
+        ExtensionSearchKind.Album => "album",
+        _ => "track"
+    };
+}
+
+public sealed class ExtensionSearchKindJsonConverter : JsonConverter<ExtensionSearchKind>
+{
+    public override ExtensionSearchKind Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+    {
+        string? raw = reader.GetString();
+        return raw?.Trim().ToLowerInvariant() switch
+        {
+            "track" => ExtensionSearchKind.Track,
+            "playlist" => ExtensionSearchKind.Playlist,
+            "album" => ExtensionSearchKind.Album,
+            _ => throw new JsonException($"Unsupported extension searchKind: '{raw}'.")
+        };
+    }
+
+    public override void Write(Utf8JsonWriter writer, ExtensionSearchKind value, JsonSerializerOptions options)
+    {
+        writer.WriteStringValue(value.ToWireString());
     }
 }
 
@@ -212,9 +254,16 @@ public sealed class ExtensionManifest
     public string? BadgeLabel { get; set; }
     public string? Entry { get; set; }
     public List<ExtensionCapability> Capabilities { get; set; } = new();
+    public List<ExtensionSearchKind>? SearchKinds { get; set; }
     public List<string> UrlPatterns { get; set; } = new();
     public ExtensionPermissions Permissions { get; set; } = new();
     public List<ExtensionSettingSpec>? Settings { get; set; }
+
+    [JsonIgnore]
+    public IReadOnlyList<ExtensionSearchKind> EffectiveSearchKinds =>
+        SearchKinds is { Count: > 0 }
+            ? SearchKinds.Distinct().ToList()
+            : [ExtensionSearchKind.Track, ExtensionSearchKind.Playlist, ExtensionSearchKind.Album];
 
     [JsonIgnore]
     public string ProviderId => $"ext.{Id}";
@@ -399,18 +448,17 @@ public static class ExtensionManifestValidator
             throw new InvalidDataException("Extension manifest.capabilities must declare at least one capability.");
         }
 
-        bool hasSourceCap = manifest.HasCapability(ExtensionCapability.Playlist) ||
-                            manifest.HasCapability(ExtensionCapability.Tree) ||
-                            manifest.HasCapability(ExtensionCapability.Stream);
+        bool hasCollectionCap = manifest.HasCapability(ExtensionCapability.Playlist) ||
+                                manifest.HasCapability(ExtensionCapability.Tree);
 
-        if (!manifest.HasCapability(ExtensionCapability.Playlist) &&
-            !manifest.HasCapability(ExtensionCapability.Tree) &&
-            !manifest.HasCapability(ExtensionCapability.Lyrics))
+        if (!hasCollectionCap &&
+            !manifest.HasCapability(ExtensionCapability.Lyrics) &&
+            !manifest.HasCapability(ExtensionCapability.Search))
         {
-            throw new InvalidDataException("Extension manifest.capabilities must include 'playlist', 'tree', or 'lyrics'.");
+            throw new InvalidDataException("Extension manifest.capabilities must include 'playlist', 'tree', 'lyrics', or 'search'.");
         }
 
-        if (hasSourceCap && (manifest.UrlPatterns is null || manifest.UrlPatterns.Count == 0))
+        if (hasCollectionCap && (manifest.UrlPatterns is null || manifest.UrlPatterns.Count == 0))
         {
             throw new InvalidDataException("Extension manifest.urlPatterns must include at least one regex pattern.");
         }
@@ -482,6 +530,7 @@ public sealed class ExtensionStateRecord
     public ExtensionPackageFormat Format { get; set; }
     public string? SourceLocation { get; set; }
     public DateTimeOffset InstalledUtc { get; set; }
+    public string? Cookie { get; set; }
     public Dictionary<string, JsonElement> Settings { get; set; } = new(StringComparer.Ordinal);
 }
 
@@ -612,3 +661,68 @@ public sealed class ExtStreamResult
     public List<string>? FallbackUrls { get; set; }
     public long? ContentLength { get; set; }
 }
+
+public sealed class ExtSearchRequest
+{
+    public string Query { get; set; } = string.Empty;
+    public string? Kind { get; set; }
+    public string? Cursor { get; set; }
+    public int Limit { get; set; } = 30;
+    public string? Cookie { get; set; }
+}
+
+public sealed class ExtSearchItemDto
+{
+    public string? Kind { get; set; }
+    public JsonElement? RemoteTrackId { get; set; }
+    public JsonElement? RemoteId { get; set; }
+    public JsonElement? Id { get; set; }
+    public string? Title { get; set; }
+    public string? Artist { get; set; }
+    public string? Album { get; set; }
+    public double? DurationSec { get; set; }
+    public string? ArtworkUrl { get; set; }
+    public string? SourceUrl { get; set; }
+    public string? Url { get; set; }
+    public string? RelativePath { get; set; }
+    public string? StreamHint { get; set; }
+    public int? TrackCount { get; set; }
+    public int? Year { get; set; }
+    public JsonElement? TrackNumber { get; set; }
+}
+
+public sealed class ExtSearchResultDto
+{
+    public List<ExtSearchItemDto>? Items { get; set; }
+    public JsonElement? NextCursor { get; set; }
+    public bool? HasMore { get; set; }
+    public int? TotalCount { get; set; }
+}
+
+public sealed record ExtSearchResultItem(
+    ExtensionSearchKind Kind,
+    string Id,
+    string Title,
+    string? Artist = null,
+    string? Album = null,
+    double DurationSec = 0,
+    string? ArtworkUrl = null,
+    string? RelativePath = null,
+    string? SourceUrl = null,
+    int? TrackCount = null,
+    int? Year = null,
+    int? TrackNumber = null);
+
+public sealed record ExtSearchPage(
+    IReadOnlyList<ExtSearchResultItem> Items,
+    string? NextCursor,
+    bool HasMore,
+    int? TotalCount = null);
+
+public sealed record CloudSearchExtensionDescriptor(
+    string ExtensionId,
+    string DisplayName,
+    IReadOnlyList<ExtensionSearchKind> SearchKinds,
+    bool SupportsStream,
+    bool SupportsCookie,
+    bool SupportsCollectionImport);

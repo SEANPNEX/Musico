@@ -91,7 +91,7 @@ public partial class PlayerBar : UserControl
         var player = _services.Player;
         var track = player.CurrentTrack;
 
-        CoverArt.SetSource(_services.Library.Artwork, track?.ArtworkKey, 96);
+        CoverArt.SetSource(_services.Library.Artwork, track?.ArtworkKey, 96, track?.RemoteArtworkUrl, _services.Thumbnails);
         TrackTitleText.Text = track?.Title ?? L.Get("PlayerBar_NotPlaying");
         TrackArtistText.Text = track != null ? L.DisplayArtist(track.Artist) : L.Get("PlayerBar_PickSong");
 
@@ -163,11 +163,12 @@ public partial class PlayerBar : UserControl
         var menu = TrackMenuHelper.BuildTrackMenu(
             _services,
             [track.Id],
-            track.Id,
+            track.IsEphemeral ? null : track.Id,
             _ctx?.OpenTextPrompt ?? ((_, _, _, _, _) => { }),
             null,
             _ctx?.OpenSaveCloudTrack,
-            _ctx?.OpenSongInfo);
+            _ctx?.OpenSongInfo,
+            explicitTrack: track);
         menu.PlacementTarget = NowPlayingButton;
         menu.IsOpen = true;
         e.Handled = true;

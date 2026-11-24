@@ -426,6 +426,180 @@ public sealed class JintExtensionRuntime
         public List<ExtLyricsCandidateSpec>? Results { get; set; }
     }
 
+    public async Task<ExtSearchPage> SearchAsync(
+        ExtensionManifest manifest,
+        string scriptSource,
+        ExtSearchRequest request,
+        string? proxyUrl = null,
+        IExtensionHostServices? host = null,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(manifest);
+        ArgumentNullException.ThrowIfNull(request);
+
+        var reqObj = new Dictionary<string, object?>
+        {
+            ["query"] = (request.Query ?? string.Empty).Trim(),
+            ["kind"] = string.IsNullOrWhiteSpace(request.Kind) ? "all" : request.Kind.Trim().ToLowerInvariant(),
+            ["limit"] = request.Limit > 0 ? request.Limit : 30
+        };
+        if (!string.IsNullOrWhiteSpace(request.Cursor))
+        {
+            reqObj["cursor"] = request.Cursor.Trim();
+        }
+        if (!string.IsNullOrWhiteSpace(request.Cookie))
+        {
+            reqObj["cookie"] = request.Cookie.Trim();
+        }
+
+        JsonElement payload = await InvokeHookAsync<JsonElement>(
+            manifest,
+            scriptSource,
+            hookName: "search",
+            requestPayload: reqObj,
+            includeCtx: true,
+            timeout: _shortHookTimeout,
+            proxyUrl: proxyUrl,
+            host: host,
+            ct: ct,
+            allowNullResult: true).ConfigureAwait(false);
+
+        if (payload.ValueKind is JsonValueKind.Undefined or JsonValueKind.Null)
+        {
+            return new ExtSearchPage(Array.Empty<ExtSearchResultItem>(), null, false, null);
+        }
+
+        List<ExtSearchItemDto>? rawItems;
+        string? nextCursor = null;
+        bool? explicitHasMore = null;
+        int? totalCount = null;
+
+        try
+        {
+            if (payload.ValueKind == JsonValueKind.Array)
+            {
+                rawItems = JsonSerializer.Deserialize<List<ExtSearchItemDto>>(payload.GetRawText(), ExtensionJson.Options);
+            }
+            else if (payload.ValueKind == JsonValueKind.Object)
+            {
+                var dto = JsonSerializer.Deserialize<ExtSearchResultDto>(payload.GetRawText(), ExtensionJson.Options);
+                rawItems = dto?.Items;
+                nextCursor = ReadLossyScalarString(dto?.NextCursor);
+                explicitHasMore = dto?.HasMore;
+                totalCount = dto?.TotalCount;
+            }
+            else
+            {
+                throw new CloudServiceException(
+                    CloudErrorCode.ExtensionRuntimeError,
+                    "Extension search must return an array or result object.");
+            }
+        }
+        catch (CloudServiceException)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionRuntimeError,
+                $"Invalid extension search schema: {ex.Message}",
+                ex);
+        }
+
+        var items = new List<ExtSearchResultItem>();
+        if (rawItems is not null)
+        {
+            foreach (var dto in rawItems)
+            {
+                if (dto is null) continue;
+
+                string? rawKind = !string.IsNullOrWhiteSpace(dto.Kind)
+                    ? dto.Kind
+                    : (string.Equals(request.Kind, "all", StringComparison.OrdinalIgnoreCase) ? null : request.Kind);
+                ExtensionSearchKind kind;
+                switch (rawKind?.Trim().ToLowerInvariant())
+                {
+                    case "track":
+                    case null:
+                    case "":
+                        kind = ExtensionSearchKind.Track;
+                        break;
+                    case "playlist":
+                        kind = ExtensionSearchKind.Playlist;
+                        break;
+                    case "album":
+                        kind = ExtensionSearchKind.Album;
+                        break;
+                    default:
+                        continue;
+                }
+
+                string? title = string.IsNullOrWhiteSpace(dto.Title) ? null : dto.Title.Trim();
+                if (title is null) continue;
+
+                string? id = kind == ExtensionSearchKind.Track
+                    ? ReadLossyScalarString(dto.RemoteTrackId) ?? ReadLossyScalarString(dto.Id)
+                    : ReadLossyScalarString(dto.RemoteId) ?? ReadLossyScalarString(dto.Id);
+                if (id is null) continue;
+
+                double dur = dto.DurationSec is double d && !double.IsNaN(d) && !double.IsInfinity(d) && d > 0 ? d : 0;
+                int? trackNo = null;
+                if (dto.TrackNumber is JsonElement tnEl)
+                {
+                    if (tnEl.ValueKind == JsonValueKind.Number && tnEl.TryGetDouble(out double tnd) && tnd > 0)
+                    {
+                        trackNo = (int)Math.Round(tnd);
+                    }
+                    else if (tnEl.ValueKind == JsonValueKind.String && int.TryParse(tnEl.GetString(), out int tni) && tni > 0)
+                    {
+                        trackNo = tni;
+                    }
+                }
+
+                string? relativePath = !string.IsNullOrWhiteSpace(dto.RelativePath)
+                    ? dto.RelativePath.Trim()
+                    : (string.IsNullOrWhiteSpace(dto.StreamHint) ? null : dto.StreamHint.Trim());
+                string? sourceUrl = !string.IsNullOrWhiteSpace(dto.SourceUrl)
+                    ? dto.SourceUrl.Trim()
+                    : (string.IsNullOrWhiteSpace(dto.Url) ? null : dto.Url.Trim());
+
+                items.Add(new ExtSearchResultItem(
+                    Kind: kind,
+                    Id: id,
+                    Title: title,
+                    Artist: string.IsNullOrWhiteSpace(dto.Artist) ? null : dto.Artist.Trim(),
+                    Album: string.IsNullOrWhiteSpace(dto.Album) ? null : dto.Album.Trim(),
+                    DurationSec: dur,
+                    ArtworkUrl: string.IsNullOrWhiteSpace(dto.ArtworkUrl) ? null : dto.ArtworkUrl.Trim(),
+                    RelativePath: relativePath,
+                    SourceUrl: sourceUrl,
+                    TrackCount: dto.TrackCount is > 0 ? dto.TrackCount : null,
+                    Year: dto.Year is > 0 ? dto.Year : null,
+                    TrackNumber: trackNo));
+            }
+        }
+
+        bool hasMore = !string.IsNullOrEmpty(nextCursor) && (explicitHasMore ?? true);
+        if (!hasMore)
+        {
+            nextCursor = null;
+        }
+
+        return new ExtSearchPage(items, nextCursor, hasMore, totalCount);
+    }
+
+    private static string? ReadLossyScalarString(JsonElement? el)
+    {
+        if (el is not JsonElement val) return null;
+        return val.ValueKind switch
+        {
+            JsonValueKind.String => string.IsNullOrWhiteSpace(val.GetString()) ? null : val.GetString()!.Trim(),
+            JsonValueKind.Number => val.GetRawText(),
+            _ => null
+        };
+    }
+
     private Task<TResult> InvokeHookAsync<TResult>(
         ExtensionManifest manifest,
         string scriptSource,
@@ -606,6 +780,11 @@ public sealed class JintExtensionRuntime
         TimeSpan timeout,
         CancellationToken callerCt)
     {
+        if (callerCt.IsCancellationRequested)
+        {
+            throw new OperationCanceledException(callerCt);
+        }
+
         if (ex is PromiseRejectedException pre)
         {
             return MapJsErrorValue(pre.RejectedValue, pre.Message);

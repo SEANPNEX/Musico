@@ -9,6 +9,7 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
     let manifest: ExtensionManifest
     let runtime: JSExtensionRuntime
     private let compiledURLRegexes: [NSRegularExpression]
+    private let extensionCookieProvider: (@Sendable () -> String?)?
 
     var id: String { manifest.providerID }
     var displayName: String { manifest.name }
@@ -17,16 +18,23 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
     var trackCloudSource: String { manifest.providerID }
     var supportsTree: Bool { manifest.capabilities.contains(.tree) }
     var supportsCookie: Bool { manifest.capabilities.contains(.cookie) }
+    var supportsCollection: Bool { manifest.capabilities.contains(.playlist) || manifest.capabilities.contains(.tree) }
 
-    init(manifest: ExtensionManifest, runtime: JSExtensionRuntime) {
+    init(
+        manifest: ExtensionManifest,
+        runtime: JSExtensionRuntime,
+        extensionCookieProvider: (@Sendable () -> String?)? = nil
+    ) {
         self.manifest = manifest
         self.runtime = runtime
+        self.extensionCookieProvider = extensionCookieProvider
         self.compiledURLRegexes = manifest.urlPatterns.compactMap {
             try? NSRegularExpression(pattern: $0, options: [.caseInsensitive])
         }
     }
 
     func canHandle(rawText: String, extractedURL: String) -> CloudMatchResult? {
+        guard supportsCollection else { return nil }
         let candidates = [extractedURL, rawText]
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -242,7 +250,18 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
         guard manifest.capabilities.contains(.stream) else {
             throw CloudSourceError.noPlayableStream
         }
-        let effectiveCookie = supportsCookie ? root?.cookie : nil
+        let effectiveCookie: String? = {
+            guard supportsCookie else { return nil }
+            if let root {
+                let rootCookie = root.cookie?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (rootCookie?.isEmpty == false) ? rootCookie : nil
+            }
+            if track.isEphemeral || track.id.hasPrefix(Track.ephemeralIDPrefix) {
+                let extCookie = extensionCookieProvider?()?.trimmingCharacters(in: .whitespacesAndNewlines)
+                return (extCookie?.isEmpty == false) ? extCookie : nil
+            }
+            return nil
+        }()
         let remoteTrackID = track.remoteTrackID ?? track.relativePath
         let resolution = try await runtime.resolveStream(
             remoteTrackID: remoteTrackID,

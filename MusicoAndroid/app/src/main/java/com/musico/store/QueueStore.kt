@@ -30,6 +30,9 @@ class QueueStore(
     private val _state: MutableStateFlow<QueueUiState>
     val state: StateFlow<QueueUiState>
 
+    @Volatile
+    var onReferencedTrackIdsChanged: ((Set<String>) -> Unit)? = null
+
     init {
         val loaded = Persistence.load<QueueFile>(file)
         val initialState = if (loaded != null && loaded.queues.isNotEmpty()) {
@@ -50,11 +53,15 @@ class QueueStore(
     val active: PlayQueue
         get() = _state.value.active
 
+    fun allReferencedTrackIds(): Set<String> =
+        _state.value.queues.flatMapTo(HashSet()) { it.trackIds }
+
     fun save() {
         val current = _state.value
         runCatching {
             Persistence.save(QueueFile(queues = current.queues, activeId = current.activeId), file)
         }
+        onReferencedTrackIdsChanged?.invoke(current.queues.flatMapTo(HashSet()) { it.trackIds })
     }
 
     fun update(id: String, block: (PlayQueue) -> PlayQueue) {

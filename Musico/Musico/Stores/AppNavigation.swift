@@ -17,6 +17,8 @@ final class AppNavigation {
     var searchQuery = ""
     var searchField: SearchField = .keyword
     var isSearchPresented = false
+    var searchSource: SongsSearchSource = .local
+    let cloudSearch = CloudSearchController()
 
     nonisolated init() {}
 
@@ -47,6 +49,8 @@ final class AppNavigation {
     func openSearch(query: String, field: SearchField) {
         let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
+        searchSource = .local
+        cloudSearch.cancelAndClear()
         searchField = field
         searchQuery = trimmed
         selectedTab = .library

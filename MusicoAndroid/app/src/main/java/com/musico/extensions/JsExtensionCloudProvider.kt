@@ -44,6 +44,10 @@ class JsExtensionCloudProvider(
     override val supportsTree: Boolean = ExtensionCapability.TREE in extension.manifest.capabilities
     override val supportsCookie: Boolean = ExtensionCapability.COOKIE in extension.manifest.capabilities
     override val usesFlatCloudListing: Boolean = !supportsTree
+    override val supportsCollections: Boolean =
+        ExtensionCapability.PLAYLIST in extension.manifest.capabilities ||
+            ExtensionCapability.TREE in extension.manifest.capabilities
+    override val supportsStream: Boolean = ExtensionCapability.STREAM in extension.manifest.capabilities
 
     override fun matchesUrlPatternFast(rawInput: String): Boolean {
         val extracted = extractCloudSourceInput(rawInput)

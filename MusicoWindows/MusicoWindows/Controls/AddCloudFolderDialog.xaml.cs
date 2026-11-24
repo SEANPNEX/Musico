@@ -64,14 +64,14 @@ public partial class AddCloudFolderDialog : UserControl
             {
                 new(null, L.Get("AddCloud_AutoDetect"), true, true)
             };
-            foreach (var p in _services.CloudProviders.AvailableProviders)
+            foreach (var p in _services.CloudProviders.AvailableProviders.Where(p => p.SupportsCollectionImport))
             {
                 options.Add(new ProviderOption(p.ProviderId, p.DisplayName, p.SupportsCookies, p.SupportsProxy));
             }
             ProviderCombo.ItemsSource = options;
             ProviderCombo.SelectedIndex = 0;
 
-            bool hasExtensions = _services.CloudProviders.ExtensionProviders.Any(e => e.IsAvailable);
+            bool hasExtensions = _services.CloudProviders.ExtensionProviders.Any(e => e.IsAvailable && e.SupportsCollectionImport);
             UrlHintText.Text = hasExtensions ? L.Get("AddCloud_UrlHintDynamic") : L.Get("AddCloud_UrlHint");
         }
         finally

@@ -174,6 +174,9 @@ class LocalizationTest {
             EnStrings.uninstallExtensionConfirmTitle("Demo Ext") to ZhHansStrings.uninstallExtensionConfirmTitle("Demo Ext"),
             EnStrings.detectedProviderHint("Demo Ext") to ZhHansStrings.detectedProviderHint("Demo Ext"),
             EnStrings.extensionLogsCountLabel(12) to ZhHansStrings.extensionLogsCountLabel(12),
+            EnStrings.cloudSearchPlaceholder("NetEase") to ZhHansStrings.cloudSearchPlaceholder("NetEase"),
+            EnStrings.cloudSearchIdleTitle("NetEase") to ZhHansStrings.cloudSearchIdleTitle("NetEase"),
+            EnStrings.addedFolderNotice("Mix") to ZhHansStrings.addedFolderNotice("Mix"),
         )
         formattedPairs.forEach { (en, zh) ->
             assertTrue("EN formatted string blank: $en", en.isNotBlank())

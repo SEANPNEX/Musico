@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Concurrent;
 using System.IO;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Imaging;
+using MusicoWindows.Cloud;
 using MusicoWindows.Core;
 
 namespace MusicoWindows.Controls;
@@ -11,6 +13,7 @@ namespace MusicoWindows.Controls;
 public partial class ArtworkImage : UserControl
 {
     private static readonly ConcurrentDictionary<string, BitmapImage> ImageCache = new(StringComparer.Ordinal);
+    private CancellationTokenSource? _remoteCts;
 
     public static readonly DependencyProperty ArtworkKeyProperty =
         DependencyProperty.Register(nameof(ArtworkKey), typeof(string), typeof(ArtworkImage),
@@ -18,6 +21,14 @@ public partial class ArtworkImage : UserControl
 
     public static readonly DependencyProperty ArtworkCacheProperty =
         DependencyProperty.Register(nameof(ArtworkCache), typeof(ArtworkCache), typeof(ArtworkImage),
+            new PropertyMetadata(null, OnArtworkChanged));
+
+    public static readonly DependencyProperty RemoteArtworkUrlProperty =
+        DependencyProperty.Register(nameof(RemoteArtworkUrl), typeof(string), typeof(ArtworkImage),
+            new PropertyMetadata(null, OnArtworkChanged));
+
+    public static readonly DependencyProperty ThumbnailCacheProperty =
+        DependencyProperty.Register(nameof(ThumbnailCache), typeof(CloudThumbnailCache), typeof(ArtworkImage),
             new PropertyMetadata(null, OnArtworkChanged));
 
     public static readonly DependencyProperty DecodeSizeProperty =
@@ -31,6 +42,7 @@ public partial class ArtworkImage : UserControl
     public ArtworkImage()
     {
         InitializeComponent();
+        Unloaded += (_, _) => CancelRemoteLoad();
     }
 
     public string? ArtworkKey
@@ -43,6 +55,18 @@ public partial class ArtworkImage : UserControl
     {
         get => (ArtworkCache?)GetValue(ArtworkCacheProperty);
         set => SetValue(ArtworkCacheProperty, value);
+    }
+
+    public string? RemoteArtworkUrl
+    {
+        get => (string?)GetValue(RemoteArtworkUrlProperty);
+        set => SetValue(RemoteArtworkUrlProperty, value);
+    }
+
+    public CloudThumbnailCache? ThumbnailCache
+    {
+        get => (CloudThumbnailCache?)GetValue(ThumbnailCacheProperty);
+        set => SetValue(ThumbnailCacheProperty, value);
     }
 
     public int DecodeSize
@@ -73,69 +97,126 @@ public partial class ArtworkImage : UserControl
         }
     }
 
-    public void SetSource(ArtworkCache? cache, string? artworkKey, int decodeSize = 160)
+    public void SetSource(
+        ArtworkCache? cache,
+        string? artworkKey,
+        int decodeSize = 160,
+        string? remoteArtworkUrl = null,
+        CloudThumbnailCache? thumbnailCache = null)
     {
         ArtworkCache = cache;
         DecodeSize = decodeSize;
+        RemoteArtworkUrl = remoteArtworkUrl;
+        ThumbnailCache = thumbnailCache;
         ArtworkKey = artworkKey;
         Refresh();
     }
 
+    private void CancelRemoteLoad()
+    {
+        var cts = _remoteCts;
+        _remoteCts = null;
+        if (cts is not null)
+        {
+            try { cts.Cancel(); } catch { /* ignore */ }
+            cts.Dispose();
+        }
+    }
+
     private void Refresh()
     {
-        if (string.IsNullOrWhiteSpace(ArtworkKey) || ArtworkCache is null)
-        {
-            CoverImage.Source = null;
-            CoverImage.Visibility = Visibility.Collapsed;
-            PlaceholderGlyph.Visibility = Visibility.Visible;
-            return;
-        }
-
+        CancelRemoteLoad();
         int bucket = DecodeSize <= 96 ? 96 : DecodeSize <= 240 ? 240 : 600;
-        string cacheKey = $"{ArtworkKey}:{bucket}";
 
-        if (ImageCache.TryGetValue(cacheKey, out var cached))
+        if (!string.IsNullOrWhiteSpace(ArtworkKey) && ArtworkCache is not null)
         {
-            CoverImage.Source = cached;
-            CoverImage.Visibility = Visibility.Visible;
-            PlaceholderGlyph.Visibility = Visibility.Collapsed;
+            string cacheKey = $"{ArtworkKey}:{bucket}";
+            if (ImageCache.TryGetValue(cacheKey, out var cached))
+            {
+                ShowBitmap(cached);
+                return;
+            }
+
+            string? path = ArtworkCache.GetImagePath(ArtworkKey);
+            if (!string.IsNullOrEmpty(path) && File.Exists(path))
+            {
+                try
+                {
+                    var bitmap = new BitmapImage();
+                    bitmap.BeginInit();
+                    bitmap.UriSource = new Uri(path, UriKind.Absolute);
+                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                    bitmap.DecodePixelWidth = bucket;
+                    bitmap.EndInit();
+                    bitmap.Freeze();
+
+                    if (ImageCache.Count > 500)
+                    {
+                        ImageCache.Clear();
+                    }
+                    ImageCache.TryAdd(cacheKey, bitmap);
+
+                    ShowBitmap(bitmap);
+                    return;
+                }
+                catch
+                {
+                    // Fall through to remote or placeholder.
+                }
+            }
+        }
+
+        if (CloudThumbnailCache.IsAllowedHttpsUrl(RemoteArtworkUrl) && ThumbnailCache is { } thumbCache)
+        {
+            string remoteUrl = RemoteArtworkUrl!.Trim();
+            if (thumbCache.TryGetBitmap(remoteUrl, bucket, out var cachedRemote) && cachedRemote is not null)
+            {
+                ShowBitmap(cachedRemote);
+                return;
+            }
+
+            ShowPlaceholder();
+            var cts = new CancellationTokenSource();
+            _remoteCts = cts;
+            _ = LoadRemoteThumbnailAsync(thumbCache, remoteUrl, bucket, cts.Token);
             return;
         }
 
-        string? path = ArtworkCache.GetImagePath(ArtworkKey);
-        if (string.IsNullOrEmpty(path) || !File.Exists(path))
-        {
-            CoverImage.Source = null;
-            CoverImage.Visibility = Visibility.Collapsed;
-            PlaceholderGlyph.Visibility = Visibility.Visible;
-            return;
-        }
+        ShowPlaceholder();
+    }
 
+    private async System.Threading.Tasks.Task LoadRemoteThumbnailAsync(
+        CloudThumbnailCache cache,
+        string url,
+        int bucket,
+        CancellationToken ct)
+    {
         try
         {
-            var bitmap = new BitmapImage();
-            bitmap.BeginInit();
-            bitmap.UriSource = new Uri(path, UriKind.Absolute);
-            bitmap.CacheOption = BitmapCacheOption.OnLoad;
-            bitmap.DecodePixelWidth = bucket;
-            bitmap.EndInit();
-            bitmap.Freeze();
+            var bmp = await cache.GetBitmapAsync(url, bucket, ct);
+            if (ct.IsCancellationRequested || bmp is null) return;
+            if (!string.Equals(RemoteArtworkUrl?.Trim(), url, StringComparison.Ordinal)) return;
+            if (!string.IsNullOrWhiteSpace(ArtworkKey) && ArtworkCache?.GetImagePath(ArtworkKey) is not null) return;
 
-            if (ImageCache.Count > 500)
-            {
-                ImageCache.Clear();
-            }
-            ImageCache.TryAdd(cacheKey, bitmap);
-
-            CoverImage.Source = bitmap;
-            CoverImage.Visibility = Visibility.Visible;
-            PlaceholderGlyph.Visibility = Visibility.Collapsed;
+            ShowBitmap(bmp);
         }
         catch
         {
-            CoverImage.Source = null;
-            CoverImage.Visibility = Visibility.Collapsed;
-            PlaceholderGlyph.Visibility = Visibility.Visible;
+            // Keep placeholder on cancelled/failed thumbnail fetch.
         }
+    }
+
+    private void ShowBitmap(BitmapImage bitmap)
+    {
+        CoverImage.Source = bitmap;
+        CoverImage.Visibility = Visibility.Visible;
+        PlaceholderGlyph.Visibility = Visibility.Collapsed;
+    }
+
+    private void ShowPlaceholder()
+    {
+        CoverImage.Source = null;
+        CoverImage.Visibility = Visibility.Collapsed;
+        PlaceholderGlyph.Visibility = Visibility.Visible;
     }
 }

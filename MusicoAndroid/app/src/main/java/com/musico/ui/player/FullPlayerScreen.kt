@@ -375,6 +375,7 @@ private fun PlayerControlsPane(
                     ArtworkImage(
                         artworkKey = currentTrack.artworkKey,
                         artworkCache = libraryStore.artwork,
+                        remoteArtworkUrl = currentTrack.remoteArtworkUrl,
                         cornerRadius = 20.dp,
                         modifier = Modifier
                             .fillMaxSize()
@@ -434,13 +435,15 @@ private fun PlayerControlsPane(
                             )
                         }
                     }
-                    val isFav = track.id in libraryState.favourites
-                    IconButton(onClick = { libraryStore.toggleFavourite(track.id) }) {
-                        Icon(
-                            imageVector = if (isFav) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                            contentDescription = if (isFav) strings.removeFromFavourites else strings.addToFavourites,
-                            tint = if (isFav) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    if (!track.isEphemeral) {
+                        val isFav = track.id in libraryState.favourites
+                        IconButton(onClick = { libraryStore.toggleFavourite(track.id) }) {
+                            Icon(
+                                imageVector = if (isFav) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                contentDescription = if (isFav) strings.removeFromFavourites else strings.addToFavourites,
+                                tint = if (isFav) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 

@@ -127,6 +127,51 @@ private struct JSLyricsSearchEnvelope: Codable {
     var results: [JSLyricsCandidateSpec]?
 }
 
+private struct JSLossyString: Codable, Equatable, Sendable {
+    var value: String
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let str = try? container.decode(String.self) {
+            value = str
+        } else if let intVal = try? container.decode(Int64.self) {
+            value = String(intVal)
+        } else if let dblVal = try? container.decode(Double.self), dblVal.isFinite {
+            if dblVal.rounded() == dblVal, let i = Int64(exactly: dblVal) {
+                value = String(i)
+            } else {
+                value = String(dblVal)
+            }
+        } else {
+            throw DecodingError.typeMismatch(String.self, .init(codingPath: decoder.codingPath, debugDescription: "Expected string or number"))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(value)
+    }
+}
+
+private struct JSSearchItemSpec: Codable {
+    var kind: String?
+    var remoteTrackId: JSLossyString?
+    var remoteId: JSLossyString?
+    var title: String?
+    var artist: String?
+    var album: String?
+    var durationSec: Double?
+    var artworkUrl: String?
+    var sourceUrl: String?
+    var relativePath: String?
+    var trackCount: Int?
+}
+
+private struct JSSearchEnvelope: Codable {
+    var items: [JSSearchItemSpec]?
+    var nextCursor: JSLossyString?
+}
+
 protocol ExtensionRuntimeHostDelegate: AnyObject, Sendable {
     func kvGet(extensionID: String, key: String) -> String?
     func kvSet(extensionID: String, key: String, value: String, ttlSeconds: Double?)
@@ -332,7 +377,8 @@ final class JSExtensionRuntime: @unchecked Sendable {
                 fetchCollection: typeof exp.fetchCollection === 'function',
                 fetchFolder: typeof exp.fetchFolder === 'function',
                 resolveStream: typeof exp.resolveStream === 'function',
-                searchLyrics: typeof exp.searchLyrics === 'function'
+                searchLyrics: typeof exp.searchLyrics === 'function',
+                search: typeof exp.search === 'function'
               });
             })()
         """
@@ -340,7 +386,7 @@ final class JSExtensionRuntime: @unchecked Sendable {
               let flags = try? JSONDecoder().decode([String: Bool].self, from: Data(jsonStr.utf8)) else {
             throw ExtensionImportError.invalidPackage("Could not inspect exported extension hooks.")
         }
-        let requiresSourceHooks = manifest.capabilities.contains(where: { $0 == .playlist || $0 == .tree || $0 == .stream })
+        let requiresSourceHooks = manifest.capabilities.contains(where: { $0 == .playlist || $0 == .tree })
         if requiresSourceHooks && flags["canHandle"] != true {
             throw ExtensionImportError.invalidPackage("Extension must export canHandle(input).")
         }
@@ -356,6 +402,9 @@ final class JSExtensionRuntime: @unchecked Sendable {
         }
         if manifest.capabilities.contains(.lyrics), flags["searchLyrics"] != true {
             throw ExtensionImportError.invalidPackage("Lyrics-capable extension must export searchLyrics(ctx, req).")
+        }
+        if manifest.capabilities.contains(.search), flags["search"] != true {
+            throw ExtensionImportError.invalidPackage("Search-capable extension must export search(ctx, req).")
         }
     }
 
@@ -535,6 +584,76 @@ final class JSExtensionRuntime: @unchecked Sendable {
         }
         let envelope = try JSONDecoder().decode(JSLyricsSearchEnvelope.self, from: data)
         return envelope.candidates ?? envelope.results ?? []
+    }
+
+    func search(
+        query: String,
+        kind: String = "all",
+        limit: Int = 20,
+        cursor: String? = nil,
+        cookie: String? = nil
+    ) async throws -> CloudSearchPage {
+        var req: [String: Any] = [
+            "query": query,
+            "kind": kind,
+            "limit": max(1, limit)
+        ]
+        if let cursor, !cursor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            req["cursor"] = cursor
+        }
+        if let cookie, !cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            req["cookie"] = cookie
+        }
+
+        let json = try await invokeAsyncHook(name: "search", requestObject: req, timeoutMs: shortTimeoutMs)
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "null" {
+            return CloudSearchPage(items: [], nextCursor: nil)
+        }
+        let data = Data(trimmed.utf8)
+        let envelope = try JSONDecoder().decode(JSSearchEnvelope.self, from: data)
+        let extID = manifest.id
+        let items: [CloudSearchResult] = (envelope.items ?? []).compactMap { spec in
+            guard let kindStr = spec.kind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                  let kind = ExtensionSearchKind(rawValue: kindStr) else {
+                return nil
+            }
+            let title = (spec.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { return nil }
+
+            let cleanTrackID = Self.trimmedNonEmpty(spec.remoteTrackId?.value)
+            let cleanRemoteID = Self.trimmedNonEmpty(spec.remoteId?.value)
+            switch kind {
+            case .track:
+                guard cleanTrackID != nil else { return nil }
+            case .playlist, .album:
+                guard cleanRemoteID != nil else { return nil }
+            }
+
+            return CloudSearchResult(
+                extensionID: extID,
+                kind: kind,
+                remoteTrackID: cleanTrackID,
+                remoteId: cleanRemoteID,
+                title: title,
+                artist: Self.trimmedNonEmpty(spec.artist),
+                album: Self.trimmedNonEmpty(spec.album),
+                durationSec: spec.durationSec.flatMap { ($0.isFinite && $0 > 0) ? $0 : nil },
+                artworkUrl: Self.trimmedNonEmpty(spec.artworkUrl),
+                sourceUrl: Self.trimmedNonEmpty(spec.sourceUrl),
+                relativePath: Self.trimmedNonEmpty(spec.relativePath),
+                trackCount: spec.trackCount.flatMap { $0 >= 0 ? $0 : nil }
+            )
+        }
+        let nextCursor = Self.trimmedNonEmpty(envelope.nextCursor?.value)
+        return CloudSearchPage(items: items, nextCursor: nextCursor)
+    }
+
+    private static func trimmedNonEmpty(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     // MARK: - Async Hook Execution Engine

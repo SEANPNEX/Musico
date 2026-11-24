@@ -8,6 +8,7 @@ enum ExtensionCapability: String, Codable, Hashable, CaseIterable, Sendable {
     case cookie
     case proxy
     case lyrics
+    case search
 
     @MainActor
     var localizedTitle: String {
@@ -18,6 +19,7 @@ enum ExtensionCapability: String, Codable, Hashable, CaseIterable, Sendable {
         case .cookie: L10n.tr("Cookie Authentication")
         case .proxy: L10n.tr("Proxy Support")
         case .lyrics: L10n.tr("Lyrics Search")
+        case .search: L10n.tr("Cloud Search")
         }
     }
 
@@ -30,8 +32,141 @@ enum ExtensionCapability: String, Codable, Hashable, CaseIterable, Sendable {
         case .cookie: L10n.tr("Accept an optional per-folder authentication cookie.")
         case .proxy: L10n.tr("Use system proxy configuration for requests.")
         case .lyrics: L10n.tr("Search online lyrics for playing songs.")
+        case .search: L10n.tr("Search songs, albums, and playlists online.")
         }
     }
+}
+
+/// Entity types an extension declares support for in `manifest.searchKinds`.
+enum ExtensionSearchKind: String, Codable, Hashable, CaseIterable, Sendable, Identifiable {
+    case track
+    case playlist
+    case album
+
+    var id: String { rawValue }
+
+    @MainActor
+    var localizedTitle: String {
+        switch self {
+        case .track: L10n.tr("Songs")
+        case .playlist: L10n.tr("Playlists")
+        case .album: L10n.tr("Albums")
+        }
+    }
+}
+
+enum CloudSearchKindFilter: String, Codable, Hashable, CaseIterable, Sendable, Identifiable {
+    case all
+    case track
+    case playlist
+    case album
+
+    var id: String { rawValue }
+
+    init(searchKind: ExtensionSearchKind) {
+        switch searchKind {
+        case .track: self = .track
+        case .playlist: self = .playlist
+        case .album: self = .album
+        }
+    }
+
+    @MainActor
+    var localizedTitle: String {
+        switch self {
+        case .all: L10n.tr("All")
+        case .track: L10n.tr("Songs")
+        case .playlist: L10n.tr("Playlists")
+        case .album: L10n.tr("Albums")
+        }
+    }
+}
+
+struct CloudSearchExtensionDescriptor: Identifiable, Equatable, Hashable, Sendable {
+    let id: String
+    let providerID: String
+    let name: String
+    let badgeLabel: String
+    let searchKinds: [ExtensionSearchKind]
+    let supportsStream: Bool
+    let supportsCollection: Bool
+    let supportsCookie: Bool
+}
+
+struct CloudSearchResult: Identifiable, Hashable, Sendable {
+    struct DedupKey: Hashable, Sendable {
+        var kind: ExtensionSearchKind
+        var itemID: String
+    }
+
+    var extensionID: String
+    var kind: ExtensionSearchKind
+    var remoteTrackID: String?
+    var remoteId: String?
+    var title: String
+    var artist: String?
+    var album: String?
+    var durationSec: Double?
+    var artworkUrl: String?
+    var sourceUrl: String?
+    var relativePath: String?
+    var trackCount: Int?
+
+    var itemID: String {
+        switch kind {
+        case .track: remoteTrackID ?? ""
+        case .playlist, .album: remoteId ?? ""
+        }
+    }
+
+    var dedupKey: DedupKey {
+        DedupKey(kind: kind, itemID: itemID)
+    }
+
+    var id: String {
+        "\(extensionID):\(kind.rawValue):\(itemID)"
+    }
+
+    func makeEphemeralTrack(now: Date = Date()) -> Track? {
+        guard kind == .track,
+              let rTrackID = remoteTrackID?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !rTrackID.isEmpty else {
+            return nil
+        }
+        let cleanArtist = (artist?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false)
+            ? artist!.trimmingCharacters(in: .whitespacesAndNewlines)
+            : "Unknown Artist"
+        let cleanAlbum = album?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let cleanRel = relativePath?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let duration = (durationSec ?? 0).isFinite ? max(0, durationSec ?? 0) : 0
+        return Track(
+            id: Track.makeEphemeralID(extensionID: extensionID, remoteTrackID: rTrackID),
+            rootID: Track.ephemeralRootID,
+            relativePath: (cleanRel?.isEmpty == false) ? cleanRel! : rTrackID,
+            title: title,
+            artist: cleanArtist,
+            album: cleanAlbum,
+            albumArtist: cleanArtist,
+            trackNumber: nil,
+            discNumber: nil,
+            duration: duration,
+            fileSize: 0,
+            modified: now,
+            hasEmbeddedLyrics: false,
+            dateAdded: now,
+            artworkKey: nil,
+            genre: nil,
+            cloudSource: "ext.\(extensionID)",
+            remoteTrackID: rTrackID,
+            remoteArtworkURL: artworkUrl,
+            isEphemeral: true
+        )
+    }
+}
+
+struct CloudSearchPage: Equatable, Sendable {
+    var items: [CloudSearchResult]
+    var nextCursor: String?
 }
 
 /// Typed value stored for an extension setting or manifest default.
@@ -275,12 +410,22 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
     var urlPatterns: [String] = []
     var permissions: ExtensionPermissions
     var settings: [ExtensionSettingSpec]? = nil
+    var searchKinds: [ExtensionSearchKind]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case apiVersion, id, name, version, author, description, badgeLabel, entry, capabilities, urlPatterns, permissions, settings
+        case apiVersion, id, name, version, author, description, badgeLabel, entry, capabilities, urlPatterns, permissions, settings, searchKinds
     }
 
     var providerID: String { "ext.\(id)" }
+
+    var effectiveSearchKinds: [ExtensionSearchKind] {
+        let raw = searchKinds ?? []
+        if raw.isEmpty {
+            return ExtensionSearchKind.allCases
+        }
+        var seen = Set<ExtensionSearchKind>()
+        return raw.filter { seen.insert($0).inserted }
+    }
 
     var effectiveEntry: String {
         let trimmed = (entry ?? "index.js").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -315,7 +460,7 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
         guard !capabilities.isEmpty else {
             throw ExtensionManifestError.missingRequiredField("capabilities")
         }
-        let requiresSourcePatterns = capabilities.contains(where: { $0 == .playlist || $0 == .tree || $0 == .stream })
+        let requiresSourcePatterns = capabilities.contains(where: { $0 == .playlist || $0 == .tree })
         if requiresSourcePatterns && urlPatterns.isEmpty {
             throw ExtensionManifestError.missingRequiredField("urlPatterns")
         }
@@ -372,6 +517,7 @@ extension ExtensionManifest {
         self.urlPatterns = try c.decodeIfPresent([String].self, forKey: .urlPatterns) ?? []
         self.permissions = try c.decode(ExtensionPermissions.self, forKey: .permissions)
         self.settings = try c.decodeIfPresent([ExtensionSettingSpec].self, forKey: .settings)
+        self.searchKinds = try c.decodeIfPresent([ExtensionSearchKind].self, forKey: .searchKinds)
     }
 }
 
@@ -383,6 +529,7 @@ struct ExtensionState: Codable, Equatable, Sendable {
     var installedAt: Date = Date()
     var updatedAt: Date = Date()
     var sourceURL: String? = nil
+    var cookie: String? = nil
 
     var isActive: Bool {
         isEnabled && permissionApproved

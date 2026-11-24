@@ -8,6 +8,7 @@ final class ExtensionHostStorage: ExtensionRuntimeHostDelegate, @unchecked Senda
     private let baseDirectory: URL
     private var kvByExt: [String: [String: ExtensionKVEntry]] = [:]
     private var settingsByExt: [String: [String: ExtensionSettingValue]] = [:]
+    private var cookiesByExt: [String: String] = [:]
     private var logsByExt: [String: [ExtensionLogEntry]] = [:]
     var onLogsChanged: (@Sendable (String) -> Void)?
 
@@ -15,13 +16,19 @@ final class ExtensionHostStorage: ExtensionRuntimeHostDelegate, @unchecked Senda
         self.baseDirectory = baseDirectory
     }
 
-    func loadExtension(id: String, settings: [String: ExtensionSettingValue]) {
+    func loadExtension(id: String, settings: [String: ExtensionSettingValue], cookie: String? = nil) {
         let extDir = baseDirectory.appendingPathComponent(id, isDirectory: true)
         let kv = Persistence.load([String: ExtensionKVEntry].self, from: extDir.appendingPathComponent("kv.json")) ?? [:]
         let logs = Persistence.load([ExtensionLogEntry].self, from: extDir.appendingPathComponent("logs.json")) ?? []
+        let cleanCookie = cookie?.trimmingCharacters(in: .whitespacesAndNewlines)
         lock.withLock {
             kvByExt[id] = kv
             settingsByExt[id] = settings
+            if let cleanCookie, !cleanCookie.isEmpty {
+                cookiesByExt[id] = cleanCookie
+            } else {
+                cookiesByExt.removeValue(forKey: id)
+            }
             logsByExt[id] = Array(logs.suffix(200))
         }
     }
@@ -32,10 +39,26 @@ final class ExtensionHostStorage: ExtensionRuntimeHostDelegate, @unchecked Senda
         }
     }
 
+    func setCookie(_ cookie: String?, for extensionID: String) {
+        let cleanCookie = cookie?.trimmingCharacters(in: .whitespacesAndNewlines)
+        lock.withLock {
+            if let cleanCookie, !cleanCookie.isEmpty {
+                cookiesByExt[extensionID] = cleanCookie
+            } else {
+                cookiesByExt.removeValue(forKey: extensionID)
+            }
+        }
+    }
+
+    func cookie(for extensionID: String) -> String? {
+        lock.withLock { cookiesByExt[extensionID] }
+    }
+
     func removeExtension(id: String) {
         lock.withLock {
             kvByExt.removeValue(forKey: id)
             settingsByExt.removeValue(forKey: id)
+            cookiesByExt.removeValue(forKey: id)
             logsByExt.removeValue(forKey: id)
         }
     }
@@ -152,6 +175,7 @@ final class ExtensionStore {
     @ObservationIgnored private let lookupLock = NSLock()
     @ObservationIgnored private nonisolated(unsafe) var installedNamesByProviderID: [String: String] = [:]
     @ObservationIgnored private nonisolated(unsafe) var lyricsRuntimesByID: [String: (badgeLabel: String, runtime: JSExtensionRuntime)] = [:]
+    @ObservationIgnored private nonisolated(unsafe) var searchRuntimesByID: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)] = [:]
 
     nonisolated init(
         baseDirectory: URL = ExtensionStore.defaultBaseDirectory,
@@ -172,7 +196,7 @@ final class ExtensionStore {
         self.installedNamesByProviderID = Dictionary(
             uniqueKeysWithValues: loaded.map { ($0.providerID, $0.manifest.name) }
         )
-        self.lyricsRuntimesByID = Self.syncRegistry(
+        let synced = Self.syncRegistry(
             extensions: loaded,
             registry: registry,
             transport: transport,
@@ -180,6 +204,8 @@ final class ExtensionStore {
             shortTimeoutMs: shortTimeoutMs,
             longTimeoutMs: longTimeoutMs
         )
+        self.lyricsRuntimesByID = synced.lyrics
+        self.searchRuntimesByID = synced.search
 
         self.hostStorage.onLogsChanged = { [weak self] extID in
             Task { @MainActor [weak self] in
@@ -210,6 +236,15 @@ final class ExtensionStore {
             return .disabled(name: installedName)
         }
         return .missing(providerID: providerID)
+    }
+
+    nonisolated func installedName(forProviderID providerID: String?) -> String? {
+        guard let providerID, !providerID.isEmpty else { return nil }
+        return lookupLock.withLock { installedNamesByProviderID[providerID] }
+    }
+
+    nonisolated func cookie(forExtensionID id: String) -> String? {
+        hostStorage.cookie(for: id)
     }
 
     // MARK: - Import
@@ -309,6 +344,7 @@ final class ExtensionStore {
 
         let existingState = extensions.first { $0.id == manifest.id }?.state
         let mergedSettings = filterCompatibleSettings(existingState?.settings ?? [:], manifest: manifest)
+        let preservedCookie = manifest.capabilities.contains(.cookie) ? existingState?.cookie : nil
         // Newly imported or updated packages always require Permission Review before enabling.
         let newState = ExtensionState(
             isEnabled: false,
@@ -316,7 +352,8 @@ final class ExtensionStore {
             settings: mergedSettings,
             installedAt: existingState?.installedAt ?? Date(),
             updatedAt: Date(),
-            sourceURL: sourceURL ?? existingState?.sourceURL
+            sourceURL: sourceURL ?? existingState?.sourceURL,
+            cookie: preservedCookie
         )
 
         var storedManifest = manifest
@@ -330,7 +367,7 @@ final class ExtensionStore {
         }
         try Persistence.save(newState, to: extDir.appendingPathComponent("state.json"))
 
-        hostStorage.loadExtension(id: storedManifest.id, settings: mergedSettings)
+        hostStorage.loadExtension(id: storedManifest.id, settings: mergedSettings, cookie: preservedCookie)
         let installed = InstalledExtension(
             manifest: storedManifest,
             state: newState,
@@ -390,6 +427,16 @@ final class ExtensionStore {
         saveState(for: extensions[idx])
     }
 
+    func updateCookie(extensionID: String, cookie: String?) {
+        guard let idx = extensions.firstIndex(where: { $0.id == extensionID }) else { return }
+        let trimmed = cookie?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalized = (trimmed?.isEmpty == false) ? trimmed : nil
+        extensions[idx].state.cookie = normalized
+        extensions[idx].state.updatedAt = Date()
+        hostStorage.setCookie(normalized, for: extensionID)
+        saveState(for: extensions[idx])
+    }
+
     func clearLogs(for extensionID: String) {
         hostStorage.clearLogs(for: extensionID)
         if let idx = extensions.firstIndex(where: { $0.id == extensionID }) {
@@ -420,6 +467,73 @@ final class ExtensionStore {
         extensions
             .filter { $0.isActive && $0.manifest.capabilities.contains(.lyrics) }
             .map { CloudLyricsExtensionDescriptor(id: $0.id, name: $0.manifest.effectiveBadgeLabel) }
+    }
+
+    var activeSearchExtensions: [CloudSearchExtensionDescriptor] {
+        extensions
+            .filter { $0.isActive && $0.manifest.capabilities.contains(.search) }
+            .map {
+                CloudSearchExtensionDescriptor(
+                    id: $0.id,
+                    providerID: $0.providerID,
+                    name: $0.manifest.name,
+                    badgeLabel: $0.manifest.effectiveBadgeLabel,
+                    searchKinds: $0.manifest.effectiveSearchKinds,
+                    supportsStream: $0.manifest.capabilities.contains(.stream),
+                    supportsCollection: $0.manifest.capabilities.contains(.playlist) || $0.manifest.capabilities.contains(.tree),
+                    supportsCookie: $0.manifest.capabilities.contains(.cookie)
+                )
+            }
+    }
+
+    nonisolated func search(
+        extensionID: String,
+        query: String,
+        kind: CloudSearchKindFilter = .all,
+        limit: Int = 20,
+        cursor: String? = nil
+    ) async throws -> CloudSearchPage {
+        let entry: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)? = lookupLock.withLock {
+            searchRuntimesByID[extensionID]
+        }
+        guard let entry else {
+            let name = installedName(forProviderID: "ext.\(extensionID)") ?? extensionID
+            throw CloudSourceError.extensionUnavailable(name: name)
+        }
+        let cookie = entry.manifest.capabilities.contains(.cookie) ? hostStorage.cookie(for: extensionID) : nil
+        return try await entry.runtime.search(
+            query: query,
+            kind: kind.rawValue,
+            limit: limit,
+            cursor: cursor,
+            cookie: cookie
+        )
+    }
+
+    nonisolated func previewCollection(extensionID: String, sourceURL: String) async throws -> CloudPlaylistResult {
+        let cleanURL = sourceURL.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanURL.isEmpty else {
+            throw CloudSourceError.invalidURL
+        }
+        let providerID = "ext.\(extensionID)"
+        if let provider = registry.provider(forID: providerID) {
+            let cookie = provider.supportsCookie ? hostStorage.cookie(for: extensionID) : nil
+            return try await provider.fetchCollection(sourceURL: cleanURL, cookie: cookie)
+        }
+        let searchEntry: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)? = lookupLock.withLock {
+            searchRuntimesByID[extensionID]
+        }
+        guard let searchEntry else {
+            let name = installedName(forProviderID: providerID) ?? extensionID
+            throw CloudSourceError.extensionUnavailable(name: name)
+        }
+        let provider = JSExtensionCloudProvider(
+            manifest: searchEntry.manifest,
+            runtime: searchEntry.runtime,
+            extensionCookieProvider: { [weak hostStorage] in hostStorage?.cookie(for: extensionID) }
+        )
+        let cookie = searchEntry.manifest.capabilities.contains(.cookie) ? hostStorage.cookie(for: extensionID) : nil
+        return try await provider.fetchCollection(sourceURL: cleanURL, cookie: cookie)
     }
 
     nonisolated func makeCloudLyricsService() -> CloudLyricsService {
@@ -469,7 +583,7 @@ final class ExtensionStore {
 
     private func syncAll() {
         let map = Dictionary(uniqueKeysWithValues: extensions.map { ($0.providerID, $0.manifest.name) })
-        let lyricsMap = Self.syncRegistry(
+        let synced = Self.syncRegistry(
             extensions: extensions,
             registry: registry,
             transport: transport,
@@ -479,7 +593,8 @@ final class ExtensionStore {
         )
         lookupLock.withLock {
             installedNamesByProviderID = map
-            lyricsRuntimesByID = lyricsMap
+            lyricsRuntimesByID = synced.lyrics
+            searchRuntimesByID = synced.search
         }
     }
 
@@ -500,9 +615,13 @@ final class ExtensionStore {
         hostStorage: ExtensionHostStorage,
         shortTimeoutMs: Int,
         longTimeoutMs: Int
-    ) -> [String: (badgeLabel: String, runtime: JSExtensionRuntime)] {
+    ) -> (
+        lyrics: [String: (badgeLabel: String, runtime: JSExtensionRuntime)],
+        search: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)]
+    ) {
         var providers: [any CloudSourceProvider] = []
         var lyricsRuntimes: [String: (badgeLabel: String, runtime: JSExtensionRuntime)] = [:]
+        var searchRuntimes: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)] = [:]
         for ext in extensions where ext.isActive {
             let scriptURL = ext.directoryURL.appendingPathComponent(ext.manifest.effectiveEntry)
             let fallbackURL = ext.directoryURL.appendingPathComponent("index.js")
@@ -522,14 +641,22 @@ final class ExtensionStore {
                 $0 == .playlist || $0 == .tree || $0 == .stream
             }
             if hasCloudSourceCap {
-                providers.append(JSExtensionCloudProvider(manifest: ext.manifest, runtime: runtime))
+                let extID = ext.manifest.id
+                providers.append(JSExtensionCloudProvider(
+                    manifest: ext.manifest,
+                    runtime: runtime,
+                    extensionCookieProvider: { [weak hostStorage] in hostStorage?.cookie(for: extID) }
+                ))
             }
             if ext.manifest.capabilities.contains(.lyrics) {
                 lyricsRuntimes[ext.manifest.id] = (badgeLabel: ext.manifest.effectiveBadgeLabel, runtime: runtime)
             }
+            if ext.manifest.capabilities.contains(.search) {
+                searchRuntimes[ext.manifest.id] = (manifest: ext.manifest, runtime: runtime)
+            }
         }
         registry.replaceExtensions(providers)
-        return lyricsRuntimes
+        return (lyricsRuntimes, searchRuntimes)
     }
 
     private nonisolated static func loadAllFromDisk(
@@ -560,7 +687,11 @@ final class ExtensionStore {
             }
             let state = Persistence.load(ExtensionState.self, from: dir.appendingPathComponent("state.json")) ?? ExtensionState()
             let iconData = try? Data(contentsOf: dir.appendingPathComponent("icon.png"))
-            hostStorage.loadExtension(id: manifest.id, settings: state.settings)
+            hostStorage.loadExtension(
+                id: manifest.id,
+                settings: state.settings,
+                cookie: manifest.capabilities.contains(.cookie) ? state.cookie : nil
+            )
             loaded.append(InstalledExtension(
                 manifest: manifest,
                 state: state,

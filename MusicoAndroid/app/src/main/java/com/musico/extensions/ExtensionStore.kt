@@ -7,6 +7,7 @@ import com.musico.BuildConfig
 import com.musico.cloud.CloudErrorCode
 import com.musico.cloud.CloudHttpClient
 import com.musico.cloud.CloudHttpRequest
+import com.musico.cloud.CloudPlaylistResult
 import com.musico.cloud.CloudSourceException
 import com.musico.core.Persistence
 import kotlinx.coroutines.CancellationException
@@ -26,6 +27,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import java.io.File
 import java.io.IOException
 import java.net.URL
+import java.net.URLEncoder
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 
@@ -72,6 +74,7 @@ class ExtensionStore(
 
     init {
         providerRegistry.extensionStatusLookup = { providerId -> availabilityForProvider(providerId) }
+        providerRegistry.extensionCookieLookup = { providerId -> cookieForProvider(providerId) }
         loadFromDisk()
         syncProviderRegistry()
     }
@@ -131,11 +134,80 @@ class ExtensionStore(
         val active = _extensions.value
             .filter { ext ->
                 ext.enabled && ext.manifest.capabilities.any {
-                    it == ExtensionCapability.PLAYLIST || it == ExtensionCapability.TREE || it == ExtensionCapability.STREAM
+                    it == ExtensionCapability.PLAYLIST ||
+                        it == ExtensionCapability.TREE ||
+                        it == ExtensionCapability.STREAM ||
+                        it == ExtensionCapability.SEARCH
                 }
             }
             .map { ext -> JsExtensionCloudProvider(ext, runtime) }
         providerRegistry.setExtensionProviders(active)
+    }
+
+    fun activeSearchExtensions(): List<SearchExtensionDescriptor> =
+        _extensions.value
+            .filter { it.enabled && ExtensionCapability.SEARCH in it.manifest.capabilities }
+            .map { ext ->
+                SearchExtensionDescriptor(
+                    id = ext.id,
+                    providerId = ext.providerId,
+                    name = ext.manifest.name,
+                    badgeLabel = ext.manifest.effectiveBadgeLabel,
+                    searchKinds = ext.manifest.effectiveSearchKinds,
+                    supportsStream = ExtensionCapability.STREAM in ext.manifest.capabilities,
+                    supportsCollection = ExtensionCapability.PLAYLIST in ext.manifest.capabilities ||
+                        ExtensionCapability.TREE in ext.manifest.capabilities,
+                    supportsCookie = ExtensionCapability.COOKIE in ext.manifest.capabilities,
+                )
+            }
+
+    suspend fun search(
+        extensionId: String,
+        query: String,
+        kind: CloudSearchFilterKind = CloudSearchFilterKind.ALL,
+        limit: Int = QuickJsExtensionRuntime.DEFAULT_SEARCH_LIMIT,
+        cursor: String? = null,
+    ): ExtSearchPage {
+        val ext = _extensions.value.firstOrNull {
+            it.id == extensionId && it.enabled && ExtensionCapability.SEARCH in it.manifest.capabilities
+        } ?: throw CloudSourceException(
+            CloudErrorCode.EXTENSION_UNAVAILABLE,
+            "Search extension unavailable: $extensionId",
+        )
+        return runtime.search(
+            extension = ext,
+            query = query,
+            kind = kind,
+            limit = limit,
+            cursor = cursor,
+            cookie = cookieForExtension(extensionId),
+        )
+    }
+
+    suspend fun fetchCollectionPreview(
+        extensionId: String,
+        sourceUrl: String,
+    ): CloudPlaylistResult {
+        val ext = _extensions.value.firstOrNull {
+            it.id == extensionId && it.enabled
+        } ?: throw CloudSourceException(
+            CloudErrorCode.EXTENSION_UNAVAILABLE,
+            "Extension unavailable: $extensionId",
+        )
+        val provider = providerRegistry.providerForId(ext.providerId)
+            ?: JsExtensionCloudProvider(ext, runtime)
+        return provider.fetchCollection(sourceUrl, cookieForExtension(extensionId))
+    }
+
+    fun cookieForExtension(extensionId: String): String? {
+        val ext = findById(extensionId) ?: return null
+        if (ExtensionCapability.COOKIE !in ext.manifest.capabilities) return null
+        return ext.state.cookie?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    fun cookieForProvider(providerId: String?): String? {
+        val extId = CloudProviderIds.extensionIdFromProviderId(providerId) ?: return null
+        return cookieForExtension(extId)
     }
 
     fun activeLyricsExtensions(): List<CloudLyricsExtensionDescriptor> =
@@ -277,6 +349,11 @@ class ExtensionStore(
             val preservedSettings = existing?.state?.settings
                 ?.filterKeys { it in validKeys }
                 ?: emptyMap()
+            val preservedCookie = if (ExtensionCapability.COOKIE in manifest.capabilities) {
+                existing?.state?.cookie?.trim()?.takeIf { it.isNotEmpty() }
+            } else {
+                null
+            }
 
             val manifestJsonText = json.encodeToString(manifest)
             File(extDir, MANIFEST_FILE).writeText(manifestJsonText, Charsets.UTF_8)
@@ -300,6 +377,7 @@ class ExtensionStore(
                 sourceUrl = staged.sourceUrl ?: existing?.state?.sourceUrl,
                 hasIcon = hasIcon,
                 settings = preservedSettings,
+                cookie = preservedCookie,
             )
             Persistence.save(nextState, File(extDir, STATE_FILE))
 
@@ -342,6 +420,25 @@ class ExtensionStore(
             syncProviderRegistry()
             onAvailabilityChanged?.invoke()
         }
+    }
+
+    fun updateCookie(extensionId: String, cookie: String?) {
+        val normalized = cookie?.trim()?.takeIf { it.isNotEmpty() }
+        synchronized(storeLock) {
+            val cur = _extensions.value
+            val idx = cur.indexOfFirst { it.id == extensionId }
+            if (idx < 0) return
+            val existing = cur[idx]
+            if (ExtensionCapability.COOKIE !in existing.manifest.capabilities) return
+            if (existing.state.cookie == normalized) return
+            val nextState = existing.state.copy(cookie = normalized, updatedAtMs = clockMs())
+            Persistence.save(nextState, File(File(extensionsDir, extensionId), STATE_FILE))
+            val updated = existing.copy(state = nextState)
+            val list = cur.toMutableList()
+            list[idx] = updated
+            _extensions.value = list
+        }
+        syncProviderRegistry()
     }
 
     fun updateSetting(extensionId: String, key: String, value: JsonPrimitive) {
@@ -442,10 +539,22 @@ class ExtensionStore(
             "error" -> "error"
             else -> "info"
         }
+        val activeCookie = cookieForExtension(extensionId)
+        var sanitizedMessage = message
+        if (!activeCookie.isNullOrBlank()) {
+            sanitizedMessage = sanitizedMessage.replace(activeCookie, "[REDACTED]")
+            if (activeCookie.length >= 3) {
+                runCatching { URLEncoder.encode(activeCookie, "UTF-8") }.getOrNull()?.let { encodedPlus ->
+                    sanitizedMessage = sanitizedMessage
+                        .replace(encodedPlus, "[REDACTED]")
+                        .replace(encodedPlus.replace("+", "%20"), "[REDACTED]")
+                }
+            }
+        }
         val entry = ExtensionLogEntry(
             timestampMs = clockMs(),
             level = cleanLevel,
-            message = message,
+            message = sanitizedMessage,
         )
         synchronized(storeLock) {
             val deque = logsMap.getOrPut(extensionId) { ArrayDeque(MAX_LOG_ENTRIES) }

@@ -35,9 +35,34 @@ public sealed class QueueStore : ObservableStore
         }
     }
 
+    public event Action? QueuesChanged;
+
     public IReadOnlyList<PlayQueue> Queues => _queues;
     public Guid ActiveId => _activeId;
     public PlayQueue Active => _queues.FirstOrDefault(q => q.Id == _activeId) ?? _queues[0];
+
+    public HashSet<string> GetAllReferencedTrackIds()
+    {
+        var ids = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var q in _queues)
+        {
+            foreach (string id in q.TrackIds)
+            {
+                if (!string.IsNullOrWhiteSpace(id))
+                {
+                    ids.Add(id);
+                }
+            }
+        }
+        return ids;
+    }
+
+    public static string FormatCloudSearchQueueName(string sourceName, string query)
+    {
+        string ext = string.IsNullOrWhiteSpace(sourceName) ? "Cloud" : sourceName.Trim();
+        string q = (query ?? string.Empty).Trim();
+        return q.Length > 0 ? $"Search ({ext}): {q}" : $"Search ({ext})";
+    }
 
     public void Save()
     {
@@ -66,6 +91,7 @@ public sealed class QueueStore : ObservableStore
         {
             OnPropertyChanged(nameof(Active));
         }
+        QueuesChanged?.Invoke();
     }
 
     public void UpdateActive(Action<PlayQueue> action) => Update(_activeId, action);
@@ -124,6 +150,7 @@ public sealed class QueueStore : ObservableStore
             {
                 OnPropertyChanged(nameof(Active));
             }
+            QueuesChanged?.Invoke();
             return (existing.Id, wasActive);
         }
 
@@ -144,6 +171,7 @@ public sealed class QueueStore : ObservableStore
 
         Save();
         OnPropertyChanged(nameof(Queues));
+        QueuesChanged?.Invoke();
         return (queue.Id, false);
     }
 
@@ -155,7 +183,10 @@ public sealed class QueueStore : ObservableStore
     public void SortActive(TrackSortMode mode, LibraryStore library, PlayHistoryStore history) =>
         SortQueue(_activeId, mode, library, history);
 
-    public Guid AddQueue(string? name = null)
+    public Guid AddQueue(string? name = null) =>
+        AddQueue(name, Array.Empty<string>(), 0, activate: false);
+
+    public Guid AddQueue(string? name, IReadOnlyList<string> trackIds, int startAt = 0, bool activate = false)
     {
         string title = name?.Trim() ?? string.Empty;
         if (title.Length == 0)
@@ -173,9 +204,20 @@ public sealed class QueueStore : ObservableStore
         }
 
         var queue = new PlayQueue(title);
+        if (trackIds.Count > 0)
+        {
+            queue.Replace(trackIds, startAt);
+        }
         _queues = [.. _queues, queue];
+        if (activate)
+        {
+            _activeId = queue.Id;
+            OnPropertyChanged(nameof(ActiveId));
+            OnPropertyChanged(nameof(Active));
+        }
         Save();
         OnPropertyChanged(nameof(Queues));
+        QueuesChanged?.Invoke();
         return queue.Id;
     }
 
@@ -206,6 +248,7 @@ public sealed class QueueStore : ObservableStore
 
         Save();
         OnPropertyChanged(nameof(Queues));
+        QueuesChanged?.Invoke();
     }
 
     public void SetActive(Guid id)
@@ -231,6 +274,7 @@ public sealed class QueueStore : ObservableStore
         Save();
         OnPropertyChanged(nameof(Queues));
         OnPropertyChanged(nameof(Active));
+        QueuesChanged?.Invoke();
     }
 
     /// <summary>Updates track IDs across all queues when legacy track paths/IDs migrate.</summary>
@@ -249,5 +293,6 @@ public sealed class QueueStore : ObservableStore
         Save();
         OnPropertyChanged(nameof(Queues));
         OnPropertyChanged(nameof(Active));
+        QueuesChanged?.Invoke();
     }
 }

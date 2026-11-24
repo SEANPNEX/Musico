@@ -10,6 +10,7 @@ using System.Net.Http.Headers;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Win32.SafeHandles;
+using MusicoWindows.Core;
 
 namespace MusicoWindows.Cloud;
 
@@ -284,7 +285,7 @@ public sealed class CloudAudioCache
             return null;
         }
 
-        foreach (string file in Directory.EnumerateFiles(DirectoryPath, $"{trackId}.*"))
+        foreach (string file in Directory.EnumerateFiles(DirectoryPath, $"{Persistence.SafeTrackFileKey(trackId)}.*"))
         {
             if (file.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;
             var info = new FileInfo(file);
@@ -451,7 +452,7 @@ public sealed class CloudAudioCache
             : streamInfo.Extension.StartsWith('.') ? streamInfo.Extension : "." + streamInfo.Extension;
 
         Directory.CreateDirectory(DirectoryPath);
-        string targetPath = Path.Combine(DirectoryPath, $"{trackId}{ext}");
+        string targetPath = Path.Combine(DirectoryPath, $"{Persistence.SafeTrackFileKey(trackId)}{ext}");
         string tempPath = $"{targetPath}.{Guid.NewGuid():N}.tmp";
 
         using var http = CloudHttpHelper.CreateClient(proxyUrl, _handler, TimeSpan.FromMinutes(3));
@@ -778,7 +779,8 @@ public sealed class CloudAudioCache
         foreach (string id in trackIds)
         {
             if (string.IsNullOrWhiteSpace(id)) continue;
-            foreach (string file in Directory.EnumerateFiles(DirectoryPath, $"{id}.*"))
+            string fileKey = Persistence.SafeTrackFileKey(id);
+            foreach (string file in Directory.EnumerateFiles(DirectoryPath, $"{fileKey}.*"))
             {
                 try { File.Delete(file); } catch { /* ignore locked */ }
             }

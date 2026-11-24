@@ -19,6 +19,7 @@ import com.musico.cloud.UrlConnectionCloudHttpClient
 import com.musico.cloud.YouTubeClient
 import com.musico.cloud.extractCloudSourceInput
 import com.musico.core.ArtworkCache
+import com.musico.core.CloudThumbnailCache
 import com.musico.core.FolderScanner
 import com.musico.core.LocalCloudDiscovery
 import com.musico.core.LrcParser
@@ -119,6 +120,7 @@ class LibraryStore(
         val metadataOverrides: Map<String, TrackMetadataOverride> = emptyMap(),
         val folderSortOrders: Map<String, TrackSortOrder> = emptyMap(),
         val folderTrackOrders: Map<String, List<String>> = emptyMap(),
+        val ephemeralTracks: Map<String, Track> = emptyMap(),
     )
 
     @Serializable
@@ -131,6 +133,7 @@ class LibraryStore(
     var onTracksRemoved: ((Set<String>) -> Unit)? = null
     var onFolderAdded: ((folderName: String, trackIds: List<String>) -> Unit)? = null
     var onTrackUpdated: ((Track) -> Unit)? = null
+    var referencedQueueTrackIdsProvider: (() -> Set<String>)? = null
 
     private val libraryFile = File(directory, "library.json")
     private val playlistsFile = File(directory, "playlists.json")
@@ -138,6 +141,8 @@ class LibraryStore(
 
     private var rereadAll = false
     private var byId: Map<String, Track> = emptyMap()
+    private val ephemeralTracks = LinkedHashMap<String, Track>()
+    private val persistedEphemeralIds = HashSet<String>()
     private val trackUris = mutableMapOf<String, String>()
     private val metadataOverrides = mutableMapOf<String, TrackMetadataOverride>()
     private val folderSortOrders = mutableMapOf<String, TrackSortOrder>()
@@ -188,6 +193,10 @@ class LibraryStore(
             metadataOverrides.putAll(loadedLib.metadataOverrides)
             folderSortOrders.putAll(loadedLib.folderSortOrders)
             folderTrackOrders.putAll(loadedLib.folderTrackOrders)
+            for ((eid, etrack) in loadedLib.ephemeralTracks) {
+                ephemeralTracks[eid] = etrack.copy(isEphemeral = true)
+                persistedEphemeralIds.add(eid)
+            }
             migrateCloudFolderKeys(initialRoots)
         }
 
@@ -260,6 +269,14 @@ class LibraryStore(
     private fun saveLibrary() {
         val snapshot = synchronized(stateLock) {
             val current = _state.value
+            val referenced = referencedQueueTrackIdsProvider?.invoke()
+            val persistedEphemeral = if (referenced != null) {
+                ephemeralTracks.filterKeys { it in referenced }
+            } else {
+                ephemeralTracks.toMap()
+            }
+            persistedEphemeralIds.clear()
+            persistedEphemeralIds.addAll(persistedEphemeral.keys)
             LibraryFile(
                 roots = current.roots,
                 tracks = current.tracks,
@@ -268,6 +285,7 @@ class LibraryStore(
                 metadataOverrides = metadataOverrides.toMap(),
                 folderSortOrders = folderSortOrders.toMap(),
                 folderTrackOrders = folderTrackOrders.toMap(),
+                ephemeralTracks = persistedEphemeral,
             )
         }
         runCatching {
@@ -1040,7 +1058,13 @@ class LibraryStore(
                 "Cloud provider unavailable for $sourceUrl",
             )
         val cleanUrl = classified?.normalizedUrl ?: extractCloudSourceInput(sourceUrl)
-        provider.fetchCollection(cleanUrl, cookie)
+        val effectiveCookie = if (provider.supportsCookie) {
+            cookie?.trim()?.takeIf { it.isNotEmpty() }
+                ?: providerRegistry.extensionCookieFor(provider.providerId)
+        } else {
+            null
+        }
+        provider.fetchCollection(cleanUrl, effectiveCookie)
     }
 
     fun markRootCloudSynced(
@@ -1167,8 +1191,13 @@ class LibraryStore(
         }
 
         val playlist = try {
+            val effectiveCookie = if (provider.supportsCookie) {
+                cleanCookie ?: providerRegistry.extensionCookieFor(provider.providerId)
+            } else {
+                null
+            }
             withContext(Dispatchers.IO) {
-                provider.fetchCollection(trimmedUrl, cleanCookie)
+                provider.fetchCollection(trimmedUrl, effectiveCookie)
             }
         } catch (err: Exception) {
             return Result.failure(err)
@@ -1381,9 +1410,15 @@ class LibraryStore(
             val syncNow = System.currentTimeMillis()
 
             try {
+                val effectiveCookie = if (provider.supportsCookie) {
+                    root.cookie?.trim()?.takeIf { it.isNotEmpty() }
+                        ?: providerRegistry.extensionCookieFor(provider.providerId)
+                } else {
+                    null
+                }
                 provider.crawlProgressive(
                     sourceUrl = sourceUrl,
-                    cookie = root.cookie,
+                    cookie = effectiveCookie,
                     priorityPathProvider = { cloudPriorityPaths[root.id] },
                 ) { batch ->
                     if (!isActive) throw CancellationException()
@@ -1619,8 +1654,14 @@ class LibraryStore(
                     continue
                 }
                 val syncResult = withContext(Dispatchers.IO) {
+                    val effectiveCookie = if (provider.supportsCookie) {
+                        root.cookie?.trim()?.takeIf { it.isNotEmpty() }
+                            ?: providerRegistry.extensionCookieFor(provider.providerId)
+                    } else {
+                        null
+                    }
                     runCatching {
-                        provider.fetchCollection(url, root.cookie)
+                        provider.fetchCollection(url, effectiveCookie)
                     }
                 }
                 val playlist = syncResult.getOrNull()
@@ -2138,6 +2179,73 @@ class LibraryStore(
         return updatedTrack
     }
 
+    suspend fun applyFallbackMetadataForSavedFile(
+        savedFileName: String,
+        sourceTrack: Track,
+        targetDir: File? = null,
+        targetUri: Uri? = null,
+    ) {
+        val targetCanonical = targetDir?.let { dir ->
+            runCatching { File(dir, savedFileName).canonicalPath }.getOrNull()
+        }
+        val candidate = _state.value.tracks
+            .filter { !it.isCloud && it.fileName.equals(savedFileName, ignoreCase = true) }
+            .firstOrNull { local ->
+                when {
+                    targetCanonical != null ->
+                        runCatching { localFileFor(local)?.canonicalPath }.getOrNull() == targetCanonical
+                    targetUri != null -> {
+                        val root = rootFor(local)
+                        val rootUri = root?.treeUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+                        rootUri != null && (canonicalUriKey(rootUri) == canonicalUriKey(targetUri) || isUriInsideIndexedRoot(targetUri))
+                    }
+                    else -> true
+                }
+            } ?: return
+
+        val needTitle = sourceTrack.title.isNotBlank() &&
+            candidate.title.equals(candidate.fileName.substringBeforeLast('.', candidate.fileName), ignoreCase = true)
+        val needArtist = candidate.artist == "Unknown Artist" &&
+            sourceTrack.artist.isNotBlank() &&
+            sourceTrack.artist != "Unknown Artist"
+        val needAlbum = candidate.album == "Unknown Album" &&
+            sourceTrack.album.isNotBlank() &&
+            sourceTrack.album != "Unknown Album"
+        val needGenre = candidate.genre.isBlank() && sourceTrack.genre.isNotBlank()
+        val artUrl = sourceTrack.remoteArtworkUrl
+            ?.takeIf { CloudThumbnailCache.isAllowedUrl(it) }
+        val resolvedArtKey = if (candidate.artworkKey == null) {
+            sourceTrack.artworkKey ?: artUrl?.let { url ->
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        val providerHeaders = providerRegistry.providerForTrack(sourceTrack, null)
+                            ?.artworkHeaders()
+                            .orEmpty()
+                        val resp = cloudHttpClient.get(url, headers = providerHeaders)
+                        if (resp.statusCode in 200..299 && resp.bodyBytes.isNotEmpty()) {
+                            artwork.store(resp.bodyBytes)
+                        } else {
+                            null
+                        }
+                    }.getOrNull()
+                }
+            }
+        } else {
+            null
+        }
+
+        if (needTitle || needArtist || needAlbum || needGenre || resolvedArtKey != null) {
+            updateTrackMetadata(
+                trackId = candidate.id,
+                title = if (needTitle) sourceTrack.title else null,
+                artist = if (needArtist) sourceTrack.artist else null,
+                album = if (needAlbum) sourceTrack.album else null,
+                genre = if (needGenre) sourceTrack.genre else null,
+                artworkKey = resolvedArtKey,
+            )
+        }
+    }
+
     private fun forget(ids: Set<String>) {
         if (ids.isEmpty()) return
         val current = _state.value
@@ -2200,12 +2308,53 @@ class LibraryStore(
         return Triple(albums, artists, idMap)
     }
 
-    fun track(id: String): Track? = byId[id]
+    fun registerEphemeralTrack(track: Track) {
+        registerEphemeralTracks(listOf(track))
+    }
 
-    fun tracks(ids: List<String>): List<Track> = ids.mapNotNull { byId[it] }
+    fun registerEphemeralTracks(tracks: List<Track>) {
+        if (tracks.isEmpty()) return
+        synchronized(stateLock) {
+            for (t in tracks) {
+                val normalized = t.copy(isEphemeral = true)
+                ephemeralTracks[normalized.id] = normalized
+            }
+        }
+        if (referencedQueueTrackIdsProvider == null) {
+            saveLibrary()
+        }
+    }
+
+    fun pruneEphemeralTracks(referencedIds: Set<String>) {
+        var changed = false
+        synchronized(stateLock) {
+            val iter = ephemeralTracks.entries.iterator()
+            while (iter.hasNext()) {
+                val entry = iter.next()
+                if (entry.key !in referencedIds) {
+                    iter.remove()
+                    changed = true
+                }
+            }
+            val nextPersisted = ephemeralTracks.keys.filterTo(HashSet()) { it in referencedIds }
+            if (nextPersisted != persistedEphemeralIds) {
+                changed = true
+            }
+        }
+        if (changed) {
+            saveLibrary()
+        }
+    }
+
+    fun ephemeralTrackIds(): Set<String> = synchronized(stateLock) { ephemeralTracks.keys.toSet() }
+
+    fun track(id: String): Track? = byId[id] ?: synchronized(stateLock) { ephemeralTracks[id] }
+
+    fun tracks(ids: List<String>): List<Track> = ids.mapNotNull { track(it) }
 
     fun rootFor(track: Track): LibraryRoot? =
-        _state.value.roots.firstOrNull { it.id == track.rootId }
+        if (track.isEphemeral || Track.isEphemeralId(track.id)) null
+        else _state.value.roots.firstOrNull { it.id == track.rootId }
 
     fun appFolderDirectory(): File = appFolderDir
 
@@ -2229,7 +2378,15 @@ class LibraryStore(
 
     fun isAvailable(root: LibraryRoot): Boolean = root.id in _state.value.availableRootIds
 
-    fun isAvailable(track: Track): Boolean = track.rootId in _state.value.availableRootIds
+    fun isAvailable(track: Track): Boolean {
+        if (track.isEphemeral || Track.isEphemeralId(track.id)) {
+            val pid = CloudProviderIds.fromLegacySlug(track.cloudSource)
+                ?: Track.extensionIdFromEphemeralId(track.id)?.let { CloudProviderIds.extensionProviderId(it) }
+                ?: return false
+            return providerRegistry.availabilityFor(pid) == CloudProviderAvailability.AVAILABLE
+        }
+        return track.rootId in _state.value.availableRootIds
+    }
 
     /** Returns true if [uri] matches or resides inside an already-indexed local root. */
     fun isDirectoryInsideIndexedRoot(dir: File): Boolean {
@@ -2906,6 +3063,7 @@ class LibraryStore(
     fun isFavourite(id: String): Boolean = id in _state.value.favourites
 
     fun toggleFavourite(id: String) {
+        if (Track.isEphemeralId(id) || track(id)?.isEphemeral == true) return
         val current = _state.value
         val nextFavs = if (id in current.favourites) {
             current.favourites - id
@@ -2945,8 +3103,9 @@ class LibraryStore(
     }
 
     fun addToPlaylist(trackIds: List<String>, playlistId: String) {
-        if (trackIds.isEmpty()) return
-        updatePlaylist(playlistId) { it.copy(trackIds = it.trackIds + trackIds) }
+        val eligible = trackIds.filterNot { Track.isEphemeralId(it) || track(it)?.isEphemeral == true }
+        if (eligible.isEmpty()) return
+        updatePlaylist(playlistId) { it.copy(trackIds = it.trackIds + eligible) }
     }
 
     fun removeFromPlaylist(playlistId: String, index: Int) {

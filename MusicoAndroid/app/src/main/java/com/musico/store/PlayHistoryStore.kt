@@ -34,7 +34,7 @@ class PlayHistoryStore(
         _state = MutableStateFlow(
             if (loaded != null) {
                 PlayHistoryUiState(
-                    entries = loaded.entries,
+                    entries = loaded.entries.filterKeys { !Track.isEphemeralId(it) },
                     totalPlays = loaded.totalPlays,
                     totalSeconds = loaded.totalSeconds,
                 )
@@ -50,7 +50,7 @@ class PlayHistoryStore(
         runCatching {
             Persistence.save(
                 HistoryFile(
-                    entries = current.entries,
+                    entries = current.entries.filterKeys { !Track.isEphemeralId(it) },
                     totalPlays = current.totalPlays,
                     totalSeconds = current.totalSeconds,
                 ),
@@ -60,6 +60,7 @@ class PlayHistoryStore(
     }
 
     fun recordPlay(id: String, nowMs: Long = System.currentTimeMillis()) {
+        if (Track.isEphemeralId(id)) return
         val current = _state.value
         val existing = current.entries[id]
         val nextEntries = current.entries.toMutableMap()
@@ -74,8 +75,14 @@ class PlayHistoryStore(
         save()
     }
 
+    fun recordPlay(track: Track, nowMs: Long = System.currentTimeMillis()) {
+        if (track.isEphemeral || Track.isEphemeralId(track.id)) return
+        recordPlay(track.id, nowMs)
+    }
+
     /** Notes that a song has started playing: makes it recent without adding a play count. */
     fun markStarted(id: String, nowMs: Long = System.currentTimeMillis()) {
+        if (Track.isEphemeralId(id)) return
         val current = _state.value
         val existing = current.entries[id]
         val nextEntries = current.entries.toMutableMap()
@@ -87,11 +94,21 @@ class PlayHistoryStore(
         save()
     }
 
+    fun markStarted(track: Track, nowMs: Long = System.currentTimeMillis()) {
+        if (track.isEphemeral || Track.isEphemeralId(track.id)) return
+        markStarted(track.id, nowMs)
+    }
+
     /** Adds listening time in memory; callers flush with [save]. */
     fun addListening(seconds: Double) {
         if (seconds <= 0.0 || !seconds.isFinite()) return
         val current = _state.value
         _state.value = current.copy(totalSeconds = current.totalSeconds + seconds)
+    }
+
+    fun addListening(seconds: Double, track: Track) {
+        if (track.isEphemeral || Track.isEphemeralId(track.id)) return
+        addListening(seconds)
     }
 
     fun removeTracks(ids: Set<String>) {
@@ -105,13 +122,16 @@ class PlayHistoryStore(
         save()
     }
 
-    fun count(id: String): Int = _state.value.entries[id]?.count ?: 0
+    fun count(id: String): Int = if (Track.isEphemeralId(id)) 0 else (_state.value.entries[id]?.count ?: 0)
 
-    fun lastPlayed(id: String): Long? = _state.value.entries[id]?.lastPlayedEpochMs
+    fun lastPlayed(id: String): Long? = if (Track.isEphemeralId(id)) null else _state.value.entries[id]?.lastPlayedEpochMs
 
     private fun started(tracks: List<Track>): List<Pair<Track, PlayHistoryEntry>> {
         val entries = _state.value.entries
-        return tracks.mapNotNull { track -> entries[track.id]?.let { track to it } }
+        return tracks.mapNotNull { track ->
+            if (track.isEphemeral || Track.isEphemeralId(track.id)) null
+            else entries[track.id]?.let { track to it }
+        }
     }
 
     private fun played(tracks: List<Track>): List<Pair<Track, PlayHistoryEntry>> =
@@ -139,7 +159,7 @@ class PlayHistoryStore(
             .map { it.first }
 
     fun neverPlayed(tracks: List<Track>): List<Track> =
-        tracks.filter { count(it.id) == 0 }
+        tracks.filter { !it.isEphemeral && !Track.isEphemeralId(it.id) && count(it.id) == 0 }
 
     fun notPlayedLately(tracks: List<Track>, nowMs: Long = System.currentTimeMillis()): List<Track> {
         val cutoff = nowMs - STALE_AFTER_DAYS * 86_400_000L

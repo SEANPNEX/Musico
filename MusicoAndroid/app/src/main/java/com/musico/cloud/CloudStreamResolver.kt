@@ -30,7 +30,9 @@ open class CloudStreamResolver(
         root: LibraryRoot?,
         forceRefresh: Boolean = false,
     ): ResolvedStream {
-        val source = track.cloudSource ?: throw IOException("Not a cloud track: ${track.title}")
+        val source = track.cloudSource
+            ?: Track.extensionIdFromEphemeralId(track.id)?.let { CloudProviderIds.extensionProviderId(it) }
+            ?: throw IOException("Not a cloud track: ${track.title}")
         val remoteId = track.remoteTrackId ?: throw IOException("Missing remote ID for ${track.title}")
         val provider = providerRegistry.providerForTrack(track, root)
             ?: run {
@@ -44,7 +46,8 @@ open class CloudStreamResolver(
                 throw IOException("Unsupported cloud source: $source")
             }
 
-        val cookie = root?.cookie
+        val cookie = root?.cookie?.trim()?.takeIf { it.isNotEmpty() }
+            ?: providerRegistry.extensionCookieFor(provider.providerId)
         val key = cacheKey(provider.providerId, track, cookie)
 
         if (!forceRefresh) {
@@ -67,12 +70,19 @@ open class CloudStreamResolver(
     open fun invalidate(track: Track, root: LibraryRoot? = null) {
         val providerId = providerRegistry.providerForTrack(track, root)?.providerId
             ?: CloudProviderIds.fromLegacySlug(track.cloudSource)
+            ?: Track.extensionIdFromEphemeralId(track.id)?.let { CloudProviderIds.extensionProviderId(it) }
             ?: track.cloudSource
         if (root != null) {
+            val effectiveCookie = root.cookie?.trim()?.takeIf { it.isNotEmpty() }
+                ?: providerId?.let { providerRegistry.extensionCookieFor(it) }
             if (providerId != null) {
+                cache.remove(cacheKey(providerId, track, effectiveCookie))
                 cache.remove(cacheKey(providerId, track, root.cookie))
             }
-            track.cloudSource?.let { cache.remove(cacheKey(it, track, root.cookie)) }
+            track.cloudSource?.let {
+                cache.remove(cacheKey(it, track, effectiveCookie))
+                cache.remove(cacheKey(it, track, root.cookie))
+            }
         } else {
             val prefixes = listOfNotNull(providerId, track.cloudSource).distinct()
                 .map { "$it:${track.remoteTrackId}:" }

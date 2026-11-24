@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using Microsoft.Win32;
+using MusicoWindows.Extensions;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
@@ -25,14 +26,33 @@ public static class TrackMenuHelper
         Action<string, string, string, string, Action<string>> openTextPrompt,
         Action<ContextMenu>? appendExtra = null,
         Action<Track, string>? openSaveCloudTrack = null,
-        Action<Track>? openSongInfo = null)
+        Action<Track>? openSongInfo = null,
+        Track? explicitTrack = null)
     {
         var menu = new ContextMenu();
         var ids = trackIds.ToList();
         bool hasTracks = ids.Count > 0;
+        Track? singleTrack = explicitTrack ?? (ids.Count == 1 ? services.Library.GetTrack(ids[0]) : null);
+        bool isEphemeral = singleTrack?.IsEphemeral == true || (ids.Count == 1 && Track.HasEphemeralIdPrefix(ids[0]));
 
-        var playNext = CreateItem(L.Get("Menu_PlayNext"), "\uE8B2", () => services.Player.PlayNext(ids), hasTracks);
-        var addToQueue = CreateItem(L.Get("Menu_AddToQueue"), "\uE710", () => services.Player.AddToQueue(ids, null), hasTracks);
+        void EnsureEphemeralRegistered()
+        {
+            if (singleTrack is { IsEphemeral: true })
+            {
+                services.Library.RegisterEphemeralTrack(singleTrack);
+            }
+        }
+
+        var playNext = CreateItem(L.Get("Menu_PlayNext"), "\uE8B2", () =>
+        {
+            EnsureEphemeralRegistered();
+            services.Player.PlayNext(ids);
+        }, hasTracks);
+        var addToQueue = CreateItem(L.Get("Menu_AddToQueue"), "\uE710", () =>
+        {
+            EnsureEphemeralRegistered();
+            services.Player.AddToQueue(ids, null);
+        }, hasTracks);
         menu.Items.Add(playNext);
         menu.Items.Add(addToQueue);
 
@@ -47,59 +67,68 @@ public static class TrackMenuHelper
             foreach (var queue in services.Queues.Queues.Where(q => q.Id != services.Queues.ActiveId))
             {
                 Guid queueId = queue.Id;
-                otherQueues.Items.Add(CreateItem(queue.Name, null, () => services.Player.AddToQueue(ids, queueId), hasTracks));
+                otherQueues.Items.Add(CreateItem(queue.Name, null, () =>
+                {
+                    EnsureEphemeralRegistered();
+                    services.Player.AddToQueue(ids, queueId);
+                }, hasTracks));
             }
             menu.Items.Add(otherQueues);
         }
 
-        var playInNew = CreateItem(L.Get("Menu_PlayInNewQueue"), "\uE8A9", () => services.Player.PlayInNewQueue(ids), hasTracks);
+        var playInNew = CreateItem(L.Get("Menu_PlayInNewQueue"), "\uE8A9", () =>
+        {
+            EnsureEphemeralRegistered();
+            services.Player.PlayInNewQueue(ids);
+        }, hasTracks);
         menu.Items.Add(playInNew);
 
-        menu.Items.Add(new Separator());
+        if (!isEphemeral)
+        {
+            menu.Items.Add(new Separator());
 
-        var addToPlaylist = new MenuItem
-        {
-            Header = L.Get("Menu_AddToPlaylist"),
-            Icon = CreateGlyph("\uE8D6"),
-            IsEnabled = hasTracks
-        };
-        foreach (var pl in services.Library.Playlists)
-        {
-            Guid playlistId = pl.Id;
-            addToPlaylist.Items.Add(CreateItem(pl.Name, null, () => services.Library.AddToPlaylist(ids, playlistId), hasTracks));
-        }
-        if (services.Library.Playlists.Count > 0)
-        {
-            addToPlaylist.Items.Add(new Separator());
-        }
-        addToPlaylist.Items.Add(CreateItem(L.Get("Menu_NewPlaylistEllipsis"), "\uE710", () =>
-        {
-            openTextPrompt(
-                L.Get("Nav_NewPlaylist"),
-                L.Get("Playlists_NewMessage"),
-                string.Empty,
-                L.Get("Common_Create"),
-                name =>
-                {
-                    var id = services.Library.CreatePlaylist(name);
-                    services.Library.AddToPlaylist(ids, id);
-                });
-        }, hasTracks));
-        menu.Items.Add(addToPlaylist);
+            var addToPlaylist = new MenuItem
+            {
+                Header = L.Get("Menu_AddToPlaylist"),
+                Icon = CreateGlyph("\uE8D6"),
+                IsEnabled = hasTracks
+            };
+            foreach (var pl in services.Library.Playlists)
+            {
+                Guid playlistId = pl.Id;
+                addToPlaylist.Items.Add(CreateItem(pl.Name, null, () => services.Library.AddToPlaylist(ids, playlistId), hasTracks));
+            }
+            if (services.Library.Playlists.Count > 0)
+            {
+                addToPlaylist.Items.Add(new Separator());
+            }
+            addToPlaylist.Items.Add(CreateItem(L.Get("Menu_NewPlaylistEllipsis"), "\uE710", () =>
+            {
+                openTextPrompt(
+                    L.Get("Nav_NewPlaylist"),
+                    L.Get("Playlists_NewMessage"),
+                    string.Empty,
+                    L.Get("Common_Create"),
+                    name =>
+                    {
+                        var id = services.Library.CreatePlaylist(name);
+                        services.Library.AddToPlaylist(ids, id);
+                    });
+            }, hasTracks));
+            menu.Items.Add(addToPlaylist);
 
-        if (!string.IsNullOrEmpty(favouriteTrackId))
-        {
-            bool isFav = services.Library.IsFavourite(favouriteTrackId);
-            menu.Items.Add(CreateItem(
-                isFav ? L.Get("Menu_RemoveFromFavourites") : L.Get("Menu_AddToFavourites"),
-                isFav ? "\uEB52" : "\uEB51",
-                () => services.Library.ToggleFavourite(favouriteTrackId),
-                true));
+            if (!string.IsNullOrEmpty(favouriteTrackId))
+            {
+                bool isFav = services.Library.IsFavourite(favouriteTrackId);
+                menu.Items.Add(CreateItem(
+                    isFav ? L.Get("Menu_RemoveFromFavourites") : L.Get("Menu_AddToFavourites"),
+                    isFav ? "\uEB52" : "\uEB51",
+                    () => services.Library.ToggleFavourite(favouriteTrackId),
+                    true));
+            }
         }
 
-        if (ids.Count == 1 &&
-            !string.IsNullOrEmpty(favouriteTrackId) &&
-            services.Library.GetTrack(ids[0]) is { } singleTrack)
+        if (ids.Count == 1 && singleTrack is not null)
         {
             menu.Items.Add(CreateItem(
                 L.Get("SongInfo_Title"),
@@ -117,7 +146,7 @@ public static class TrackMenuHelper
                 }));
         }
 
-        if (ids.Count == 1 && services.Library.GetTrack(ids[0]) is { IsCloud: true } cloudTrack)
+        if (ids.Count == 1 && singleTrack is { IsCloud: true } cloudTrack && CanExportCloudTrack(services, cloudTrack))
         {
             menu.Items.Add(new Separator());
             menu.Items.Add(CreateItem(
@@ -128,6 +157,18 @@ public static class TrackMenuHelper
 
         appendExtra?.Invoke(menu);
         return menu;
+    }
+
+    public static bool CanExportCloudTrack(AppServices services, Track track)
+    {
+        if (!track.IsCloud) return false;
+        var provider = services.CloudProviders.GetBySourceOrProviderId(track.CloudSource);
+        if (provider is null || !provider.IsAvailable) return false;
+        if (provider is JsExtensionCloudProvider jsExt)
+        {
+            return jsExt.Manifest.HasCapability(ExtensionCapability.Stream);
+        }
+        return true;
     }
 
     private static void PromptAndExportCloudTrack(

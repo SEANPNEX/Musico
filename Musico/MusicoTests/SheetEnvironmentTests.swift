@@ -160,6 +160,29 @@ final class SheetEnvironmentTests: XCTestCase {
         )
         try await present(ExtensionPermissionReviewSheet(extensionItem: sampleExt), over: false, attachEmptyHostEnvironment: true)
         try await present(ExtensionDetailView(extensionID: sampleExt.id), over: false, attachEmptyHostEnvironment: true)
+        try await present(
+            CloudCollectionPreviewSheet(
+                extensionDescriptor: CloudSearchExtensionDescriptor(
+                    id: "com.test.sheet",
+                    providerID: "ext.com.test.sheet",
+                    name: "Sheet Sample",
+                    badgeLabel: "Sheet",
+                    searchKinds: [.album, .playlist],
+                    supportsStream: true,
+                    supportsCollection: true,
+                    supportsCookie: true
+                ),
+                item: CloudSearchResult(
+                    extensionID: "com.test.sheet",
+                    kind: .album,
+                    remoteId: "alb-1",
+                    title: "Preview Sheet Album",
+                    sourceUrl: "https://example.com/album/alb-1"
+                )
+            ),
+            over: false,
+            attachEmptyHostEnvironment: true
+        )
         try await present(AddSongsToPlaylistSheet(playlistID: UUID()), over: false, attachEmptyHostEnvironment: true)
         try await present(
             NamePromptSheet(

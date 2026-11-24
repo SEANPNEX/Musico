@@ -15,16 +15,21 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import com.musico.core.ArtworkCache
+import com.musico.core.CloudThumbnailCache
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+
+val LocalThumbnailCache = staticCompositionLocalOf<CloudThumbnailCache?> { null }
 
 @Composable
 fun ArtworkImage(
@@ -32,15 +37,25 @@ fun ArtworkImage(
     artworkCache: ArtworkCache,
     modifier: Modifier = Modifier,
     size: Dp? = null,
-    cornerRadius: Dp = 8.dp
+    cornerRadius: Dp = 8.dp,
+    remoteArtworkUrl: String? = null,
+    thumbnailCache: CloudThumbnailCache? = LocalThumbnailCache.current,
+    fallbackIcon: ImageVector = Icons.Rounded.MusicNote,
 ) {
-    val bitmap by produceState<Bitmap?>(initialValue = null, key1 = artworkKey) {
-        value = if (artworkKey == null) {
-            null
-        } else {
-            withContext(Dispatchers.IO) {
+    val bitmap by produceState<Bitmap?>(
+        initialValue = null,
+        key1 = artworkKey,
+        key2 = remoteArtworkUrl,
+        key3 = thumbnailCache,
+    ) {
+        value = when {
+            artworkKey != null -> withContext(Dispatchers.IO) {
                 artworkCache.bitmap(artworkKey)
             }
+            !remoteArtworkUrl.isNullOrBlank() && thumbnailCache != null -> {
+                thumbnailCache.load(remoteArtworkUrl)
+            }
+            else -> null
         }
     }
 
@@ -66,7 +81,7 @@ fun ArtworkImage(
             )
         } else {
             Icon(
-                imageVector = Icons.Rounded.MusicNote,
+                imageVector = fallbackIcon,
                 contentDescription = null,
                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
                 modifier = Modifier.size(if (size != null) size * 0.45f else 48.dp)

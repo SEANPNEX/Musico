@@ -25,6 +25,7 @@ public sealed class LibraryStore : ObservableStore
     {
         public List<LibraryRoot> Roots { get; set; } = new();
         public List<Track> Tracks { get; set; } = new();
+        public Dictionary<string, Track>? EphemeralTracks { get; set; }
         public int? ReaderVersion { get; set; }
         public bool? AppFolderRemoved { get; set; }
         public Dictionary<string, TrackMetadataOverride> MetadataOverrides { get; set; } = new();
@@ -68,6 +69,8 @@ public sealed class LibraryStore : ObservableStore
 
     private readonly Dictionary<Guid, string> _rootPaths = new();
     private Dictionary<string, Track> _byId = new();
+    private readonly object _ephemeralLock = new();
+    private Dictionary<string, Track> _ephemeralTracks = new(StringComparer.Ordinal);
 
     private List<LibraryRoot> _roots = new();
     private List<Track> _tracks = new();
@@ -149,6 +152,17 @@ public sealed class LibraryStore : ObservableStore
 
         _roots = loadedRoots;
         _tracks = file?.Tracks ?? new List<Track>();
+        if (file?.EphemeralTracks is { Count: > 0 })
+        {
+            lock (_ephemeralLock)
+            {
+                foreach (var kvp in file.EphemeralTracks)
+                {
+                    if (string.IsNullOrWhiteSpace(kvp.Key) || kvp.Value is null) continue;
+                    _ephemeralTracks[kvp.Key] = kvp.Value with { IsEphemeral = true };
+                }
+            }
+        }
         _metadataOverrides = file?.MetadataOverrides is not null
             ? new Dictionary<string, TrackMetadataOverride>(file.MetadataOverrides, StringComparer.Ordinal)
             : new Dictionary<string, TrackMetadataOverride>(StringComparer.Ordinal);
@@ -195,10 +209,20 @@ public sealed class LibraryStore : ObservableStore
     {
         try
         {
+            Dictionary<string, Track>? ephemeralSnapshot = null;
+            lock (_ephemeralLock)
+            {
+                if (_ephemeralTracks.Count > 0)
+                {
+                    ephemeralSnapshot = new Dictionary<string, Track>(_ephemeralTracks, StringComparer.Ordinal);
+                }
+            }
+
             Persistence.Save(new LibraryFile
             {
                 Roots = _roots,
                 Tracks = _tracks,
+                EphemeralTracks = ephemeralSnapshot,
                 ReaderVersion = _rereadAll ? null : CurrentReaderVersion,
                 AppFolderRemoved = _appFolderRemoved ? true : null,
                 MetadataOverrides = _metadataOverrides,
@@ -2068,7 +2092,7 @@ public sealed class LibraryStore : ObservableStore
         CancellationToken ct = default)
     {
         var track = GetTrack(trackId);
-        if (track is null) return null;
+        if (track is null || track.IsEphemeral || Track.HasEphemeralIdPrefix(track.Id)) return null;
 
         string finalTitle = string.IsNullOrWhiteSpace(title) ? track.Title : title.Trim();
         string finalArtist = string.IsNullOrWhiteSpace(artist) ? "Unknown Artist" : artist.Trim();
@@ -2244,16 +2268,103 @@ public sealed class LibraryStore : ObservableStore
         OnPropertyChanged(nameof(Artists));
     }
 
-    public Track? GetTrack(string id) => _byId.TryGetValue(id, out var track) ? track : null;
+    public Track? GetTrack(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return null;
+        if (_byId.TryGetValue(id, out var track)) return track;
+        lock (_ephemeralLock)
+        {
+            return _ephemeralTracks.TryGetValue(id, out var eph) ? eph : null;
+        }
+    }
 
     public IReadOnlyList<Track> GetTracks(IEnumerable<string> ids)
     {
         var list = new List<Track>();
         foreach (string id in ids)
         {
-            if (_byId.TryGetValue(id, out var track)) list.Add(track);
+            if (GetTrack(id) is { } track) list.Add(track);
         }
         return list;
+    }
+
+    public bool IsEphemeralTrack(string id)
+    {
+        if (string.IsNullOrEmpty(id)) return false;
+        lock (_ephemeralLock)
+        {
+            return _ephemeralTracks.ContainsKey(id);
+        }
+    }
+
+    public int EphemeralTrackCount
+    {
+        get
+        {
+            lock (_ephemeralLock)
+            {
+                return _ephemeralTracks.Count;
+            }
+        }
+    }
+
+    public void RegisterEphemeralTrack(Track track)
+    {
+        ArgumentNullException.ThrowIfNull(track);
+        RegisterEphemeralTracks([track]);
+    }
+
+    public void RegisterEphemeralTracks(IEnumerable<Track> tracks)
+    {
+        ArgumentNullException.ThrowIfNull(tracks);
+        bool changed = false;
+        lock (_ephemeralLock)
+        {
+            foreach (var track in tracks)
+            {
+                if (track is null || string.IsNullOrWhiteSpace(track.Id)) continue;
+                var normalized = track.IsEphemeral ? track : track with { IsEphemeral = true };
+                if (!_ephemeralTracks.TryGetValue(normalized.Id, out var existing) || !Equals(existing, normalized))
+                {
+                    _ephemeralTracks[normalized.Id] = normalized;
+                    changed = true;
+                }
+            }
+        }
+        if (changed)
+        {
+            SaveLibrary();
+        }
+    }
+
+    public int PruneEphemeralTracks(ISet<string> referencedIds)
+    {
+        ArgumentNullException.ThrowIfNull(referencedIds);
+        int removed = 0;
+        lock (_ephemeralLock)
+        {
+            if (_ephemeralTracks.Count == 0) return 0;
+            var toRemove = new List<string>();
+            foreach (string id in _ephemeralTracks.Keys)
+            {
+                if (!referencedIds.Contains(id))
+                {
+                    toRemove.Add(id);
+                }
+            }
+            foreach (string id in toRemove)
+            {
+                if (_ephemeralTracks.Remove(id))
+                {
+                    removed++;
+                }
+            }
+        }
+        if (removed > 0)
+        {
+            SaveLibrary();
+        }
+        return removed;
     }
 
     public string? GetFilePath(Track track) =>

@@ -37,6 +37,7 @@ import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -86,6 +87,7 @@ class QuickJsExtensionRuntime(
         val hasFetchFolder: Boolean = false,
         val hasResolveStream: Boolean = false,
         val hasSearchLyrics: Boolean = false,
+        val hasSearch: Boolean = false,
         val code: String? = null,
         val message: String? = null,
     )
@@ -98,8 +100,31 @@ class QuickJsExtensionRuntime(
         val hasFetchFolder: Boolean = false,
         val hasResolveStream: Boolean = false,
         val hasSearchLyrics: Boolean = false,
+        val hasSearch: Boolean = false,
         val code: String? = null,
         val message: String? = null,
+    )
+
+    @Serializable
+    private data class RawExtSearchResult(
+        val kind: String? = null,
+        val remoteTrackId: JsonElement? = null,
+        val remoteId: JsonElement? = null,
+        val id: JsonElement? = null,
+        val title: String? = null,
+        val artist: String? = null,
+        val album: String? = null,
+        val durationSec: Double? = null,
+        val artworkUrl: String? = null,
+        val sourceUrl: String? = null,
+        val relativePath: String? = null,
+        val trackCount: Int? = null,
+    )
+
+    @Serializable
+    private data class RawExtSearchResponse(
+        val items: List<RawExtSearchResult>? = null,
+        val nextCursor: JsonElement? = null,
     )
 
     @Serializable
@@ -148,7 +173,8 @@ class QuickJsExtensionRuntime(
                   hasFetchCollection: typeof exported.fetchCollection === 'function',
                   hasFetchFolder: typeof exported.fetchFolder === 'function',
                   hasResolveStream: typeof exported.resolveStream === 'function',
-                  hasSearchLyrics: typeof exported.searchLyrics === 'function'
+                  hasSearchLyrics: typeof exported.searchLyrics === 'function',
+                  hasSearch: typeof exported.search === 'function'
                 });
               } catch (err) {
                 return JSON.stringify({
@@ -189,6 +215,7 @@ class QuickJsExtensionRuntime(
             hasFetchFolder = parsed.hasFetchFolder,
             hasResolveStream = parsed.hasResolveStream,
             hasSearchLyrics = parsed.hasSearchLyrics,
+            hasSearch = parsed.hasSearch,
         )
         return validated
     }
@@ -213,7 +240,8 @@ class QuickJsExtensionRuntime(
                   hasFetchCollection: typeof exported.fetchCollection === 'function',
                   hasFetchFolder: typeof exported.fetchFolder === 'function',
                   hasResolveStream: typeof exported.resolveStream === 'function',
-                  hasSearchLyrics: typeof exported.searchLyrics === 'function'
+                  hasSearchLyrics: typeof exported.searchLyrics === 'function',
+                  hasSearch: typeof exported.search === 'function'
                 });
               } catch (err) {
                 return JSON.stringify({
@@ -251,6 +279,7 @@ class QuickJsExtensionRuntime(
             hasFetchFolder = parsed.hasFetchFolder,
             hasResolveStream = parsed.hasResolveStream,
             hasSearchLyrics = parsed.hasSearchLyrics,
+            hasSearch = parsed.hasSearch,
         )
     }
 
@@ -412,6 +441,124 @@ class QuickJsExtensionRuntime(
                 err,
             )
         }
+    }
+
+    suspend fun search(
+        extension: InstalledExtension,
+        query: String,
+        kind: CloudSearchFilterKind = CloudSearchFilterKind.ALL,
+        limit: Int = DEFAULT_SEARCH_LIMIT,
+        cursor: String? = null,
+        cookie: String? = null,
+    ): ExtSearchPage {
+        if (ExtensionCapability.SEARCH !in extension.manifest.capabilities) {
+            throw CloudSourceException(
+                CloudErrorCode.PERMISSION_DENIED,
+                "${extension.manifest.name} does not declare search capability.",
+            )
+        }
+        val effectiveCookie = if (ExtensionCapability.COOKIE in extension.manifest.capabilities) {
+            cookie?.trim()?.takeIf { it.isNotEmpty() }
+        } else {
+            null
+        }
+        val cleanCursor = cursor?.trim()?.takeIf { it.isNotEmpty() }
+        val reqJson = json.encodeToString(
+            buildJsonObject {
+                put("query", query)
+                put("kind", kind.wireName)
+                put("limit", limit.coerceAtLeast(1))
+                if (cleanCursor != null) put("cursor", cleanCursor) else put("cursor", JsonNull)
+                if (effectiveCookie != null) put("cookie", effectiveCookie) else put("cookie", JsonNull)
+            }
+        )
+        val raw = invokeHook(
+            extension = extension,
+            hookName = "search",
+            requestJson = reqJson,
+            isAsync = true,
+            timeoutMs = shortTimeoutMs,
+        )
+        val envelope = runCatching { json.decodeFromString<HookEnvelope>(raw) }.getOrElse { err ->
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "Malformed extension return payload: ${err.message}",
+                err,
+            )
+        }
+        if (!envelope.ok) {
+            val code = CloudErrorCode.fromCodeString(envelope.code) ?: CloudErrorCode.EXTENSION_RUNTIME_ERROR
+            throw CloudSourceException(code, envelope.message ?: "Extension hook failed ($code)")
+        }
+        val payload = envelope.result
+        if (payload == null || payload is JsonNull) {
+            return ExtSearchPage(items = emptyList(), nextCursor = null)
+        }
+        val parsed = runCatching {
+            json.decodeFromJsonElement(kotlinx.serialization.serializer<RawExtSearchResponse>(), payload)
+        }.getOrElse { err ->
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "Invalid extension search schema: ${err.message}",
+                err,
+            )
+        }
+        val items = parsed.items.orEmpty().mapNotNull { item ->
+            val itemKind = item.kind?.let { ExtensionSearchKind.fromWire(it) } ?: return@mapNotNull null
+            val cleanTitle = item.title?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val cleanArtist = item.artist?.trim()?.takeIf { it.isNotEmpty() }
+            val cleanAlbum = item.album?.trim()?.takeIf { it.isNotEmpty() }
+            val cleanDuration = item.durationSec?.takeIf { it.isFinite() && it >= 0.0 }
+            val cleanArtwork = item.artworkUrl?.trim()?.takeIf { it.isNotEmpty() }
+            when (itemKind) {
+                ExtensionSearchKind.TRACK -> {
+                    val trackId = (if (item.remoteTrackId != null) {
+                        lossyScalarString(item.remoteTrackId)
+                    } else {
+                        lossyScalarString(item.id)
+                    }) ?: return@mapNotNull null
+                    ExtSearchResultItem.TrackItem(
+                        remoteTrackId = trackId,
+                        title = cleanTitle,
+                        artist = cleanArtist,
+                        album = cleanAlbum,
+                        durationSec = cleanDuration,
+                        artworkUrl = cleanArtwork,
+                        relativePath = item.relativePath?.trim()?.takeIf { it.isNotEmpty() },
+                    )
+                }
+                ExtensionSearchKind.PLAYLIST, ExtensionSearchKind.ALBUM -> {
+                    val colId = (if (item.remoteId != null) {
+                        lossyScalarString(item.remoteId)
+                    } else {
+                        lossyScalarString(item.id)
+                    }) ?: return@mapNotNull null
+                    ExtSearchResultItem.CollectionItem(
+                        kind = itemKind,
+                        remoteId = colId,
+                        title = cleanTitle,
+                        artist = cleanArtist,
+                        album = cleanAlbum,
+                        durationSec = cleanDuration,
+                        artworkUrl = cleanArtwork,
+                        sourceUrl = item.sourceUrl?.trim()?.takeIf { it.isNotEmpty() },
+                        trackCount = item.trackCount?.takeIf { it >= 0 },
+                    )
+                }
+            }
+        }
+        val next = lossyScalarString(parsed.nextCursor)
+        return ExtSearchPage(items = items, nextCursor = next)
+    }
+
+    private fun lossyScalarString(element: JsonElement?): String? {
+        val prim = element as? JsonPrimitive ?: return null
+        if (prim is JsonNull) return null
+        if (prim.isString) return prim.content.trim().takeIf { it.isNotEmpty() }
+        if (prim.booleanOrNull != null) return null
+        val num = prim.doubleOrNull ?: return null
+        if (!num.isFinite()) return null
+        return prim.content.trim().takeIf { it.isNotEmpty() }
     }
 
     private suspend fun invokeHook(
@@ -847,9 +994,10 @@ class QuickJsExtensionRuntime(
         hasFetchFolder: Boolean,
         hasResolveStream: Boolean,
         hasSearchLyrics: Boolean,
+        hasSearch: Boolean,
     ) {
         val requiresSourceHooks = manifest.capabilities.any {
-            it == ExtensionCapability.PLAYLIST || it == ExtensionCapability.TREE || it == ExtensionCapability.STREAM
+            it == ExtensionCapability.PLAYLIST || it == ExtensionCapability.TREE
         }
         if (requiresSourceHooks) {
             require(hasCanHandle) { "Extension must export canHandle(input) function" }
@@ -865,6 +1013,9 @@ class QuickJsExtensionRuntime(
         }
         if (ExtensionCapability.LYRICS in manifest.capabilities) {
             require(hasSearchLyrics) { "Extension declaring lyrics capability must export searchLyrics(ctx, req)" }
+        }
+        if (ExtensionCapability.SEARCH in manifest.capabilities) {
+            require(hasSearch) { "Extension declaring search capability must export search(ctx, req)" }
         }
     }
 
@@ -894,6 +1045,7 @@ class QuickJsExtensionRuntime(
         const val MAX_STACK_SIZE_BYTES = 1024L * 1024L
         const val DEFAULT_SHORT_TIMEOUT_MS = 15_000L
         const val DEFAULT_LONG_TIMEOUT_MS = 60_000L
+        const val DEFAULT_SEARCH_LIMIT = 20
         private const val HEX_CHARS = "0123456789abcdef"
         private val threadCounter = AtomicInteger(1)
         private val daemonDispatcher = Executors.newCachedThreadPool { runnable ->

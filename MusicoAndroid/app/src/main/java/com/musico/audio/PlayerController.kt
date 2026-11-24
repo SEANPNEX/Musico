@@ -6,6 +6,8 @@ import android.net.Uri
 import androidx.media3.common.MediaMetadata
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
+import com.musico.cloud.CloudErrorCode
+import com.musico.cloud.CloudSourceException
 import com.musico.cloud.CloudStreamResolver
 import com.musico.cloud.ResolvedStream
 import com.musico.core.Persistence
@@ -18,6 +20,7 @@ import com.musico.model.compareTracks
 import com.musico.store.LibraryStore
 import com.musico.store.PlayHistoryStore
 import com.musico.store.QueueStore
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -37,6 +40,7 @@ sealed interface PlaybackError {
     data class ConsecutiveFailures(val count: Int) : PlaybackError
     data class TrackFailed(val title: String?) : PlaybackError
     data class EngineError(val message: String?) : PlaybackError
+    data object ExtensionUnavailable : PlaybackError
 }
 
 data class PlayerUiState(
@@ -129,6 +133,13 @@ class PlayerController(
         library.onTracksRemoved = { ids -> tracksRemoved(ids) }
         library.onFolderAdded = { name, trackIds -> onFolderAdded(name, trackIds) }
         library.onTrackUpdated = { track -> onTrackUpdated(track) }
+        if (library.referencedQueueTrackIdsProvider == null) {
+            library.referencedQueueTrackIdsProvider = { queues.allReferencedTrackIds() }
+        }
+        if (queues.onReferencedTrackIdsChanged == null) {
+            queues.onReferencedTrackIdsChanged = { ids -> library.pruneEphemeralTracks(ids) }
+        }
+        library.pruneEphemeralTracks(queues.allReferencedTrackIds())
     }
 
     fun shutdown() {
@@ -320,10 +331,16 @@ class PlayerController(
 
         cloudLoadJob = scope.launch {
             val root = library.rootFor(track)
-            val resolved = runCatching {
-                withContext(Dispatchers.IO) {
-                    cloudResolver.resolve(track, root, forceRefresh = forceRefresh)
-                }
+            val resolved = try {
+                Result.success(
+                    withContext(Dispatchers.IO) {
+                        cloudResolver.resolve(track, root, forceRefresh = forceRefresh)
+                    }
+                )
+            } catch (cancel: CancellationException) {
+                throw cancel
+            } catch (err: Exception) {
+                Result.failure(err)
             }
             if (gen != loadGeneration || !isActive) return@launch
 
@@ -365,6 +382,11 @@ class PlayerController(
             }
 
             if (gen != loadGeneration || !isActive) return@launch
+            val cloudErr = resolved.exceptionOrNull() as? CloudSourceException
+            if (cloudErr?.code == CloudErrorCode.EXTENSION_UNAVAILABLE) {
+                stopOnExtensionUnavailable(cloudErr)
+                return@launch
+            }
             val nextFailures = consecutiveFailures + 1
             var advanced: String? = null
             if (nextFailures < MAX_CONSECUTIVE_FAILURES) {
@@ -380,6 +402,18 @@ class PlayerController(
                 startCurrent(autoplay = autoplay, positionSec = 0.0, initialFailures = nextFailures)
             }
         }
+    }
+
+    private fun stopOnExtensionUnavailable(err: CloudSourceException) {
+        engine.unload()
+        stopTicker()
+        isLoaded = false
+        _state.value = _state.value.copy(
+            isPlaying = false,
+            isLoadingCloud = false,
+            errorMessage = err.message,
+            playbackError = PlaybackError.ExtensionUnavailable,
+        )
     }
 
     private fun stopOnConsecutiveFailures(failures: Int) {
@@ -643,6 +677,7 @@ class PlayerController(
         val track = _state.value.currentTrack ?: return
         if (!isLoaded) return
         listenedSec += seconds
+        if (track.isEphemeral || Track.isEphemeralId(track.id)) return
         history.addListening(seconds)
         if (!markedRecent && listenedSec >= RECENT_AFTER_SEC) {
             markedRecent = true
@@ -655,6 +690,7 @@ class PlayerController(
     }
 
     private fun countPlay(track: Track) {
+        if (track.isEphemeral || Track.isEphemeralId(track.id)) return
         playCounted = true
         markedRecent = true
         history.recordPlay(track.id)

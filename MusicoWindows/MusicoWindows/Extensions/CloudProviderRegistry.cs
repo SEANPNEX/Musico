@@ -97,6 +97,7 @@ public interface ICloudSourceProvider
     bool SupportsProxy { get; }
     bool UsesFlatCloudListing { get; }
     bool SupportsProgressiveTree { get; }
+    bool SupportsCollectionImport { get; }
     bool IsAvailable { get; }
 
     bool MatchesUrlPattern(string? candidate);
@@ -146,6 +147,7 @@ internal sealed class YouTubeCloudProvider : ICloudSourceProvider
     public bool SupportsProxy => true;
     public bool UsesFlatCloudListing => true;
     public bool SupportsProgressiveTree => false;
+    public bool SupportsCollectionImport => true;
     public bool IsAvailable => true;
 
     public bool MatchesUrlPattern(string? candidate)
@@ -230,6 +232,7 @@ internal sealed class BilibiliCloudProvider : ICloudSourceProvider
     public bool SupportsProxy => false;
     public bool UsesFlatCloudListing => true;
     public bool SupportsProgressiveTree => false;
+    public bool SupportsCollectionImport => true;
     public bool IsAvailable => true;
 
     public bool MatchesUrlPattern(string? candidate)
@@ -318,6 +321,7 @@ internal sealed class GoogleDriveCloudProvider : ICloudSourceProvider
     public bool SupportsProxy => true;
     public bool UsesFlatCloudListing => false;
     public bool SupportsProgressiveTree => true;
+    public bool SupportsCollectionImport => true;
     public bool IsAvailable => true;
 
     public bool MatchesUrlPattern(string? candidate)
@@ -441,6 +445,10 @@ public sealed class CloudProviderRegistry
     public YouTubeClient YouTube { get; }
     public BilibiliClient Bilibili { get; }
     public GoogleDriveClient GoogleDrive { get; }
+    internal Func<string, string?>? ExtensionCookieResolver { get; set; }
+
+    public string? GetExtensionCookie(string? extensionId) =>
+        string.IsNullOrWhiteSpace(extensionId) ? null : ExtensionCookieResolver?.Invoke(extensionId.Trim());
 
     public event Action? Changed;
 
@@ -533,7 +541,7 @@ public sealed class CloudProviderRegistry
         List<ICloudSourceProvider> extSnapshot;
         lock (_lock)
         {
-            extSnapshot = _extensions.Where(e => e.IsAvailable).ToList();
+            extSnapshot = _extensions.Where(e => e.IsAvailable && e.SupportsCollectionImport).ToList();
         }
         return extSnapshot.Any(p => p.MatchesUrlPattern(candidate));
     }
@@ -546,7 +554,7 @@ public sealed class CloudProviderRegistry
         List<ICloudSourceProvider> extSnapshot;
         lock (_lock)
         {
-            extSnapshot = _extensions.Where(e => e.IsAvailable).ToList();
+            extSnapshot = _extensions.Where(e => e.IsAvailable && e.SupportsCollectionImport).ToList();
         }
 
         foreach (var provider in extSnapshot)

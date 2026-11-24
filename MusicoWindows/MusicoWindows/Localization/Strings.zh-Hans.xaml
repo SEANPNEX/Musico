@@ -247,4 +247,17 @@
     <sys:String x:Key="Str_Extensions_ClearLogs">清空日志</sys:String>
     <sys:String x:Key="Str_Extensions_LogsEmpty">暂无日志记录。</sys:String>
 
+    <!-- Cloud Search & Preview -->
+    <sys:String x:Key="Str_Songs_SearchButton">搜索</sys:String>
+    <sys:String x:Key="Str_Songs_KindAll">全部</sys:String>
+    <sys:String x:Key="Str_Songs_KindTracks">单曲</sys:String>
+    <sys:String x:Key="Str_Songs_KindAlbums">专辑</sys:String>
+    <sys:String x:Key="Str_Songs_KindPlaylists">歌单</sys:String>
+    <sys:String x:Key="Str_Songs_CloudRetry">重试</sys:String>
+    <sys:String x:Key="Str_Songs_LoadMore">加载更多</sys:String>
+    <sys:String x:Key="Str_Songs_CloudSearching">正在搜索...</sys:String>
+    <sys:String x:Key="Str_Songs_CloudLoadingMore">正在加载更多...</sys:String>
+    <sys:String x:Key="Str_Preview_AddAsCloudFolder">添加为云端文件夹</sys:String>
+    <sys:String x:Key="Str_Preview_PlayAll">全部播放</sys:String>
+
 </ResourceDictionary>

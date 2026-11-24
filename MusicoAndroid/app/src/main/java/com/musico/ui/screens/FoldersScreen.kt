@@ -701,7 +701,7 @@ fun FoldersScreen(
 
     if (showAddCloudDialog) {
         AddCloudFolderDialog(
-            providers = activeProviders,
+            providers = activeProviders.filter { it.supportsCollections },
             previewMatchedProvider = { raw -> providerRegistry.previewProvider(raw) },
             onDismiss = { showAddCloudDialog = false },
             onAdd = { url, cookie, providerIdHint ->

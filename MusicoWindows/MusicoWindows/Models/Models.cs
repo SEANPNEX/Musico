@@ -168,10 +168,77 @@ public sealed record Track(
     string? CloudSource = null,
     string? RemoteTrackId = null,
     string? RemoteArtworkUrl = null,
-    string? Genre = null)
+    string? Genre = null,
+    bool IsEphemeral = false)
 {
+    public const string EphemeralIdPrefix = "extsearch:";
+
+    public bool IsEphemeral { get; set; } = IsEphemeral;
+
     [JsonIgnore]
     public bool IsCloud => CloudSource is not null;
+
+    public static string MakeEphemeralId(string extensionId, string remoteTrackId)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId))
+            throw new ArgumentException("Extension id is required.", nameof(extensionId));
+        if (string.IsNullOrWhiteSpace(remoteTrackId))
+            throw new ArgumentException("Remote track id is required.", nameof(remoteTrackId));
+        return $"{EphemeralIdPrefix}{extensionId.Trim()}:{remoteTrackId.Trim()}";
+    }
+
+    public static bool HasEphemeralIdPrefix(string? trackId) =>
+        !string.IsNullOrWhiteSpace(trackId) &&
+        trackId.StartsWith(EphemeralIdPrefix, StringComparison.OrdinalIgnoreCase);
+
+    public static string? TryParseEphemeralExtensionId(string? trackId)
+    {
+        if (!HasEphemeralIdPrefix(trackId)) return null;
+        string rest = trackId![EphemeralIdPrefix.Length..];
+        int sep = rest.IndexOf(':');
+        return sep > 0 ? rest[..sep] : null;
+    }
+
+    public static Track MakeEphemeral(
+        string extensionId,
+        string remoteTrackId,
+        string title,
+        string? artist = null,
+        string? album = null,
+        double durationSeconds = 0,
+        string? remoteArtworkUrl = null,
+        int? trackNumber = null,
+        string? relativePath = null)
+    {
+        string extId = extensionId.Trim();
+        string remoteId = remoteTrackId.Trim();
+        string resolvedTitle = string.IsNullOrWhiteSpace(title) ? remoteId : title.Trim();
+        string resolvedArtist = artist?.Trim() ?? string.Empty;
+        string resolvedAlbum = album?.Trim() ?? string.Empty;
+        string relPath = string.IsNullOrWhiteSpace(relativePath) ? $"{resolvedTitle} ({remoteId})" : relativePath.Trim();
+
+        return new Track(
+            Id: MakeEphemeralId(extId, remoteId),
+            RootId: Guid.Empty,
+            RelativePath: relPath,
+            Title: resolvedTitle,
+            Artist: resolvedArtist,
+            Album: resolvedAlbum,
+            AlbumArtist: resolvedArtist,
+            TrackNumber: trackNumber,
+            DiscNumber: null,
+            DurationSeconds: Math.Max(0, durationSeconds),
+            FileSize: 0,
+            ModifiedUtc: DateTimeOffset.UtcNow,
+            HasEmbeddedLyrics: false,
+            DateAddedUtc: DateTimeOffset.UtcNow,
+            ArtworkKey: null,
+            CloudSource: $"ext.{extId}",
+            RemoteTrackId: remoteId,
+            RemoteArtworkUrl: string.IsNullOrWhiteSpace(remoteArtworkUrl) ? null : remoteArtworkUrl.Trim(),
+            Genre: null,
+            IsEphemeral: true);
+    }
     /// <summary>Folder part of RelativePath (empty string for files directly in the root).</summary>
     [JsonIgnore]
     public string FolderPath

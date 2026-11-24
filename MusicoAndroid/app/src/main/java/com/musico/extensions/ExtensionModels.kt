@@ -41,12 +41,48 @@ enum class ExtensionCapability(val wireName: String) {
 
     @SerialName("lyrics")
     LYRICS("lyrics"),
+
+    @SerialName("search")
+    SEARCH("search"),
     ;
 
     companion object {
         fun fromWire(raw: String): ExtensionCapability? =
             entries.firstOrNull { it.wireName == raw.trim().lowercase() }
     }
+}
+
+@Serializable
+enum class ExtensionSearchKind(val wireName: String) {
+    @SerialName("track")
+    TRACK("track"),
+
+    @SerialName("playlist")
+    PLAYLIST("playlist"),
+
+    @SerialName("album")
+    ALBUM("album"),
+    ;
+
+    fun toFilterKind(): CloudSearchFilterKind = when (this) {
+        TRACK -> CloudSearchFilterKind.TRACK
+        PLAYLIST -> CloudSearchFilterKind.PLAYLIST
+        ALBUM -> CloudSearchFilterKind.ALBUM
+    }
+
+    companion object {
+        val DEFAULT_ALL: List<ExtensionSearchKind> = listOf(TRACK, PLAYLIST, ALBUM)
+
+        fun fromWire(raw: String): ExtensionSearchKind? =
+            entries.firstOrNull { it.wireName == raw.trim().lowercase() }
+    }
+}
+
+enum class CloudSearchFilterKind(val wireName: String) {
+    ALL("all"),
+    TRACK("track"),
+    PLAYLIST("playlist"),
+    ALBUM("album"),
 }
 
 @Serializable
@@ -145,6 +181,7 @@ data class ExtensionManifest(
     val entry: String = "index.js",
     val capabilities: List<ExtensionCapability> = emptyList(),
     val urlPatterns: List<String> = emptyList(),
+    val searchKinds: List<ExtensionSearchKind> = emptyList(),
     val permissions: ExtensionPermissions = ExtensionPermissions(),
     val settings: List<ExtensionSettingSpec> = emptyList(),
 ) {
@@ -153,6 +190,9 @@ data class ExtensionManifest(
 
     val effectiveBadgeLabel: String
         get() = (badgeLabel?.trim()?.takeIf { it.isNotEmpty() } ?: name.trim()).take(MAX_BADGE_LENGTH)
+
+    val effectiveSearchKinds: List<ExtensionSearchKind>
+        get() = searchKinds.distinct().ifEmpty { ExtensionSearchKind.DEFAULT_ALL }
 
     companion object {
         const val CURRENT_API_VERSION = 1
@@ -257,7 +297,7 @@ object ExtensionManifestValidator {
             "Extension manifest.capabilities must not be empty"
         }
         val requiresSourcePatterns = manifest.capabilities.any {
-            it == ExtensionCapability.PLAYLIST || it == ExtensionCapability.TREE || it == ExtensionCapability.STREAM
+            it == ExtensionCapability.PLAYLIST || it == ExtensionCapability.TREE
         }
         if (requiresSourcePatterns) {
             require(manifest.urlPatterns.isNotEmpty()) {
@@ -289,6 +329,7 @@ object ExtensionManifestValidator {
             name = manifest.name.trim(),
             version = manifest.version.trim(),
             entry = cleanEntry,
+            searchKinds = manifest.searchKinds.distinct(),
         )
     }
 
@@ -334,6 +375,7 @@ data class ExtensionState(
     val sourceUrl: String? = null,
     val hasIcon: Boolean = false,
     val settings: Map<String, JsonPrimitive> = emptyMap(),
+    val cookie: String? = null,
 )
 
 data class InstalledExtension(
@@ -409,4 +451,57 @@ data class ExtResolveStreamResult(
     val expiresAtMs: Long? = null,
     val fallbackUrls: List<String>? = null,
     val contentLength: Long? = null,
+)
+
+data class SearchExtensionDescriptor(
+    val id: String,
+    val providerId: String,
+    val name: String,
+    val badgeLabel: String,
+    val searchKinds: List<ExtensionSearchKind>,
+    val supportsStream: Boolean,
+    val supportsCollection: Boolean,
+    val supportsCookie: Boolean,
+)
+
+sealed interface ExtSearchResultItem {
+    val kind: ExtensionSearchKind
+    val id: String
+    val title: String
+    val artist: String?
+    val album: String?
+    val durationSec: Double?
+    val artworkUrl: String?
+
+    data class TrackItem(
+        val remoteTrackId: String,
+        override val title: String,
+        override val artist: String? = null,
+        override val album: String? = null,
+        override val durationSec: Double? = null,
+        override val artworkUrl: String? = null,
+        val relativePath: String? = null,
+    ) : ExtSearchResultItem {
+        override val kind: ExtensionSearchKind get() = ExtensionSearchKind.TRACK
+        override val id: String get() = remoteTrackId
+    }
+
+    data class CollectionItem(
+        override val kind: ExtensionSearchKind,
+        val remoteId: String,
+        override val title: String,
+        override val artist: String? = null,
+        override val album: String? = null,
+        override val durationSec: Double? = null,
+        override val artworkUrl: String? = null,
+        val sourceUrl: String? = null,
+        val trackCount: Int? = null,
+    ) : ExtSearchResultItem {
+        override val id: String get() = remoteId
+    }
+}
+
+data class ExtSearchPage(
+    val items: List<ExtSearchResultItem>,
+    val nextCursor: String? = null,
 )

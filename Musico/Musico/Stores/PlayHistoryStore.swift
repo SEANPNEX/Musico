@@ -24,10 +24,14 @@ final class PlayHistoryStore {
     private(set) var totalSeconds: TimeInterval
     @ObservationIgnored private let fileURL: URL
 
+    nonisolated static func isEphemeralTrackID(_ id: String) -> Bool {
+        id.hasPrefix(Track.ephemeralIDPrefix)
+    }
+
     init(directory: URL) {
         fileURL = directory.appendingPathComponent("history.json")
         let file = Persistence.load(HistoryFile.self, from: fileURL)
-        entries = file?.entries ?? [:]
+        entries = (file?.entries ?? [:]).filter { !Self.isEphemeralTrackID($0.key) }
         totalPlays = file?.totalPlays ?? 0
         totalSeconds = file?.totalSeconds ?? 0
     }
@@ -37,6 +41,7 @@ final class PlayHistoryStore {
     }
 
     func recordPlay(_ id: String, at date: Date = Date()) {
+        guard !Self.isEphemeralTrackID(id) else { return }
         entries[id] = Entry(count: (entries[id]?.count ?? 0) + 1, lastPlayed: date)
         totalPlays += 1
         save()
@@ -44,6 +49,7 @@ final class PlayHistoryStore {
 
     /// Notes that a song has started playing: it becomes "recently played" without gaining a play.
     func markStarted(_ id: String, at date: Date = Date()) {
+        guard !Self.isEphemeralTrackID(id) else { return }
         entries[id] = Entry(count: entries[id]?.count ?? 0, lastPlayed: date)
         save()
     }
@@ -67,7 +73,10 @@ final class PlayHistoryStore {
 
     /// Songs that have been started at least once, with their history.
     private func started(_ tracks: [Track]) -> [(track: Track, entry: Entry)] {
-        tracks.compactMap { track in entries[track.id].map { (track, $0) } }
+        tracks.compactMap { track in
+            guard !track.isEphemeral, !Self.isEphemeralTrackID(track.id) else { return nil }
+            return entries[track.id].map { (track, $0) }
+        }
     }
 
     /// Songs with at least one counted play.
@@ -95,7 +104,7 @@ final class PlayHistoryStore {
     }
 
     func neverPlayed(_ tracks: [Track]) -> [Track] {
-        tracks.filter { count(for: $0.id) == 0 }
+        tracks.filter { !$0.isEphemeral && !Self.isEphemeralTrackID($0.id) && count(for: $0.id) == 0 }
     }
 
     /// Started before, but not within `staleAfterDays`; the longest-neglected first.

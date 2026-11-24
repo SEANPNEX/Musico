@@ -84,7 +84,7 @@ public partial class FullPlayerView : UserControl
         var track = player.CurrentTrack;
         var queue = services.Queues.Active;
 
-        CoverArt.SetSource(services.Library.Artwork, track?.ArtworkKey, 600);
+        CoverArt.SetSource(services.Library.Artwork, track?.ArtworkKey, 600, track?.RemoteArtworkUrl, services.Thumbnails);
         if (!string.Equals(_lastTrackId, track?.Id, StringComparison.Ordinal))
         {
             _lastTrackId = track?.Id;
@@ -106,7 +106,7 @@ public partial class FullPlayerView : UserControl
 
         bool hasTrack = track != null;
         SongInfoButton.IsEnabled = hasTrack;
-        FavouriteButton.IsEnabled = hasTrack;
+        FavouriteButton.IsEnabled = hasTrack && !track!.IsEphemeral;
         ShuffleButton.IsEnabled = hasTrack;
         PrevButton.IsEnabled = hasTrack;
         PlayPauseButton.IsEnabled = hasTrack;
@@ -166,11 +166,12 @@ public partial class FullPlayerView : UserControl
         var menu = TrackMenuHelper.BuildTrackMenu(
             _ctx.Services,
             [track.Id],
-            track.Id,
+            track.IsEphemeral ? null : track.Id,
             _ctx.OpenTextPrompt,
             null,
             _ctx.OpenSaveCloudTrack,
-            _ctx.OpenSongInfo);
+            _ctx.OpenSongInfo,
+            explicitTrack: track);
         menu.PlacementTarget = TrackInfoBar;
         menu.IsOpen = true;
         e.Handled = true;
@@ -178,7 +179,7 @@ public partial class FullPlayerView : UserControl
 
     private void Favourite_Click(object sender, RoutedEventArgs e)
     {
-        if (_ctx?.Services.Player.CurrentTrack is { } track)
+        if (_ctx?.Services.Player.CurrentTrack is { IsEphemeral: false } track)
             _ctx.Services.Library.ToggleFavourite(track.Id);
     }
 

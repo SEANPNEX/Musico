@@ -47,7 +47,7 @@ public partial class TrackRowControl : UserControl
         _isAvailable = isAvailable;
         _isCurrent = isCurrent;
 
-        CoverArt.SetSource(services.Library.Artwork, track.ArtworkKey, 96);
+        CoverArt.SetSource(services.Library.Artwork, track.ArtworkKey, 96, track.RemoteArtworkUrl, services.Thumbnails);
         TitleText.Text = track.Title;
         SubtitleText.Text = subtitle;
         DurationText.Text = TimeFormatter.Format(track.DurationSeconds);
@@ -73,11 +73,12 @@ public partial class TrackRowControl : UserControl
         ContextMenu = TrackMenuHelper.BuildTrackMenu(
             services,
             [track.Id],
-            track.Id,
+            track.IsEphemeral ? null : track.Id,
             openTextPrompt,
             extraMenuItems,
             openSaveCloudTrack,
-            openSongInfo);
+            openSongInfo,
+            explicitTrack: track);
     }
 
     public void EnableDragReorder(string scopeKey, int index, int itemCount, Action<int, int> onDropReorder)

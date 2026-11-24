@@ -31,6 +31,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.musico.audio.PlayerUiState
+import com.musico.extensions.ExtensionStore
 import com.musico.i18n.AppStrings
 import com.musico.i18n.LanguageStore
 import com.musico.i18n.LocalStrings
@@ -73,6 +74,7 @@ fun LibraryScreen(
     queues: List<PlayQueue>,
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
+    extensionStore: ExtensionStore? = null,
     languageStore: LanguageStore? = null,
     pendingSearchRequest: SearchRequest? = null,
     onConsumeSearchRequest: () -> Unit = {},
@@ -218,6 +220,7 @@ fun LibraryScreen(
                                 queues = queues,
                                 activeQueue = activeQueue,
                                 trackActions = trackActions,
+                                extensionStore = extensionStore,
                                 pendingSearchRequest = pendingSearchRequest,
                                 onConsumeSearchRequest = onConsumeSearchRequest,
                                 modifier = Modifier.fillMaxSize()

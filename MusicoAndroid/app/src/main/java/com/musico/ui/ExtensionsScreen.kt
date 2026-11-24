@@ -21,10 +21,12 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Extension
@@ -32,6 +34,8 @@ import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.UploadFile
+import androidx.compose.material.icons.rounded.Visibility
+import androidx.compose.material.icons.rounded.VisibilityOff
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
@@ -66,6 +70,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -260,6 +267,9 @@ fun ExtensionsScreen(
             onUpdateSetting = { key, value ->
                 extensionStore.updateSetting(activeSettingsExt.id, key, value)
             },
+            onUpdateCookie = { cookie ->
+                extensionStore.updateCookie(activeSettingsExt.id, cookie)
+            },
             onResetDefaults = {
                 extensionStore.resetSettings(activeSettingsExt.id)
             },
@@ -420,7 +430,7 @@ private fun ExtensionItemCard(
                         Spacer(Modifier.width(4.dp))
                         Text(strings.permissionsLabel)
                     }
-                    if (manifest.settings.isNotEmpty()) {
+                    if (manifest.settings.isNotEmpty() || ExtensionCapability.COOKIE in manifest.capabilities) {
                         TextButton(onClick = onOpenSettings) {
                             Icon(Icons.Rounded.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
@@ -584,26 +594,35 @@ private fun PermissionReviewDialog(
                     }
                 }
 
-                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(
                         text = strings.capabilitiesLabel,
                         style = MaterialTheme.typography.labelLarge,
                         fontWeight = FontWeight.SemiBold,
                     )
-                    FlowRow(
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                         manifest.capabilities.forEach { cap ->
-                            Surface(
-                                color = MaterialTheme.colorScheme.primaryContainer,
-                                shape = MaterialTheme.shapes.small,
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
                             ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = MaterialTheme.shapes.small,
+                                ) {
+                                    Text(
+                                        text = capabilityLabel(cap, strings),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    )
+                                }
                                 Text(
-                                    text = capabilityLabel(cap, strings),
-                                    style = MaterialTheme.typography.labelMedium,
-                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    text = capabilityDescription(cap, strings),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f),
                                 )
                             }
                         }
@@ -658,10 +677,15 @@ private fun ExtensionSettingsDialog(
     extension: InstalledExtension,
     strings: AppStrings,
     onUpdateSetting: (key: String, value: JsonPrimitive) -> Unit,
+    onUpdateCookie: (String?) -> Unit,
     onResetDefaults: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val overrides = extension.state.settings
+    val hasCookie = ExtensionCapability.COOKIE in extension.manifest.capabilities
+    val cookieValue = extension.state.cookie.orEmpty()
+    var showCookie by remember(extension.id) { mutableStateOf(false) }
+
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = { Icon(Icons.Rounded.Tune, contentDescription = null) },
@@ -681,6 +705,40 @@ private fun ExtensionSettingsDialog(
                         onUpdate = { value -> onUpdateSetting(spec.key, value) },
                     )
                 }
+                if (hasCookie) {
+                    if (extension.manifest.settings.isNotEmpty()) {
+                        HorizontalDivider()
+                    }
+                    OutlinedTextField(
+                        value = cookieValue,
+                        onValueChange = { onUpdateCookie(it) },
+                        label = { Text(strings.extensionCookieLabel) },
+                        placeholder = { Text(strings.extensionCookiePlaceholder) },
+                        supportingText = { Text(strings.extensionCookieSupportingText) },
+                        singleLine = true,
+                        visualTransformation = if (showCookie) VisualTransformation.None else PasswordVisualTransformation(),
+                        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                        trailingIcon = {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                IconButton(onClick = { showCookie = !showCookie }) {
+                                    Icon(
+                                        imageVector = if (showCookie) Icons.Rounded.VisibilityOff else Icons.Rounded.Visibility,
+                                        contentDescription = if (showCookie) strings.hideCookie else strings.showCookie,
+                                    )
+                                }
+                                if (cookieValue.isNotEmpty()) {
+                                    IconButton(onClick = { onUpdateCookie(null) }) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Clear,
+                                            contentDescription = strings.clearCookie,
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
             }
         },
         confirmButton = {
@@ -688,10 +746,14 @@ private fun ExtensionSettingsDialog(
                 Text(strings.done)
             }
         },
-        dismissButton = {
-            TextButton(onClick = onResetDefaults) {
-                Text(strings.resetDefaults)
+        dismissButton = if (extension.manifest.settings.isNotEmpty()) {
+            {
+                TextButton(onClick = onResetDefaults) {
+                    Text(strings.resetDefaults)
+                }
             }
+        } else {
+            null
         },
     )
 }
@@ -868,4 +930,15 @@ private fun capabilityLabel(cap: ExtensionCapability, strings: AppStrings): Stri
     ExtensionCapability.COOKIE -> strings.capabilityCookie
     ExtensionCapability.PROXY -> strings.capabilityProxy
     ExtensionCapability.LYRICS -> strings.capabilityLyrics
+    ExtensionCapability.SEARCH -> strings.capabilitySearch
+}
+
+private fun capabilityDescription(cap: ExtensionCapability, strings: AppStrings): String = when (cap) {
+    ExtensionCapability.PLAYLIST -> strings.capabilityPlaylistDesc
+    ExtensionCapability.TREE -> strings.capabilityTreeDesc
+    ExtensionCapability.STREAM -> strings.capabilityStreamDesc
+    ExtensionCapability.COOKIE -> strings.capabilityCookieDesc
+    ExtensionCapability.PROXY -> strings.capabilityProxyDesc
+    ExtensionCapability.LYRICS -> strings.capabilityLyricsDesc
+    ExtensionCapability.SEARCH -> strings.capabilitySearchDesc
 }

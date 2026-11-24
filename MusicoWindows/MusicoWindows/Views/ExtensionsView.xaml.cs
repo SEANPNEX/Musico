@@ -68,8 +68,29 @@ public partial class ExtensionsView : UserControl
             {
                 RefreshLogsDrawer();
             }
+            if (IsKeyboardFocusInsideExtensionsList())
+            {
+                return;
+            }
             Refresh();
         });
+    }
+
+    private bool IsKeyboardFocusInsideExtensionsList()
+    {
+        if (Keyboard.FocusedElement is DependencyObject focused)
+        {
+            DependencyObject? cur = focused;
+            while (cur is not null)
+            {
+                if (ReferenceEquals(cur, ExtensionsStack))
+                {
+                    return true;
+                }
+                cur = VisualTreeHelper.GetParent(cur);
+            }
+        }
+        return false;
     }
 
     private void Refresh()
@@ -255,6 +276,12 @@ public partial class ExtensionsView : UserControl
         permTb.SetResourceReference(TextBlock.ForegroundProperty, "TextTertiaryBrush");
         rootPanel.Children.Add(permTb);
 
+        // Extension Cookie Editor (masked PasswordBox when Cookie capability declared)
+        if (ext.Manifest.HasCapability(ExtensionCapability.Cookie))
+        {
+            rootPanel.Children.Add(BuildCookieSection(ext, store));
+        }
+
         // Dynamic Settings Editor
         if (ext.Manifest.Settings is { Count: > 0 } settings)
         {
@@ -292,6 +319,94 @@ public partial class ExtensionsView : UserControl
 
         card.Child = rootPanel;
         return card;
+    }
+
+    private Border BuildCookieSection(InstalledExtension ext, ExtensionStore store)
+    {
+        var border = new Border
+        {
+            Margin = new Thickness(44, 12, 0, 0),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(0, 10, 0, 0)
+        };
+        border.SetResourceReference(Border.BorderBrushProperty, "DividerBrush");
+
+        var panel = new StackPanel();
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var labelTb = new TextBlock
+        {
+            Text = L.Get("Extensions_CookieLabel"),
+            FontFamily = (FontFamily)FindResource("Win10Font"),
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 0)
+        };
+        labelTb.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+        Grid.SetColumn(labelTb, 0);
+        row.Children.Add(labelTb);
+
+        string currentCookie = store.GetCookie(ext.Id) ?? string.Empty;
+        var passwordBox = new PasswordBox
+        {
+            Style = (Style)FindResource("Win10PasswordBoxStyle"),
+            Height = 32,
+            MaxWidth = 360,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Password = currentCookie
+        };
+        passwordBox.ToolTip = L.Get("Extensions_CookiePlaceholder");
+
+        passwordBox.LostFocus += (_, _) => store.SetCookie(ext.Id, passwordBox.Password);
+        passwordBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                e.Handled = true;
+                store.SetCookie(ext.Id, passwordBox.Password);
+                Keyboard.ClearFocus();
+            }
+        };
+
+        Grid.SetColumn(passwordBox, 1);
+        row.Children.Add(passwordBox);
+
+        var clearBtn = new Button
+        {
+            Style = (Style)FindResource("Win10ButtonStyle"),
+            Content = L.Get("Extensions_CookieClear"),
+            Margin = new Thickness(8, 0, 0, 0),
+            IsEnabled = !string.IsNullOrEmpty(currentCookie)
+        };
+        clearBtn.Click += (_, _) =>
+        {
+            passwordBox.Password = string.Empty;
+            store.SetCookie(ext.Id, null);
+        };
+        passwordBox.PasswordChanged += (_, _) =>
+        {
+            clearBtn.IsEnabled = !string.IsNullOrEmpty(passwordBox.Password);
+        };
+        Grid.SetColumn(clearBtn, 2);
+        row.Children.Add(clearBtn);
+
+        panel.Children.Add(row);
+
+        var hintTb = new TextBlock
+        {
+            Text = L.Get("Extensions_CookieSavedHint"),
+            FontFamily = (FontFamily)FindResource("Win10Font"),
+            FontSize = 11,
+            Margin = new Thickness(220, 4, 0, 0)
+        };
+        hintTb.SetResourceReference(TextBlock.ForegroundProperty, "TextTertiaryBrush");
+        panel.Children.Add(hintTb);
+
+        border.Child = panel;
+        return border;
     }
 
     private Grid BuildSettingRow(string extensionId, ExtensionSettingSpec spec, ExtensionStore store)
@@ -542,6 +657,7 @@ public partial class ExtensionsView : UserControl
         ExtensionCapability.Cookie => L.Get("Extensions_Capability_Cookie"),
         ExtensionCapability.Proxy => L.Get("Extensions_Capability_Proxy"),
         ExtensionCapability.Lyrics => L.Get("Extensions_Capability_Lyrics"),
+        ExtensionCapability.Search => L.Get("Extensions_Capability_Search"),
         _ => cap.ToString()
     };
 

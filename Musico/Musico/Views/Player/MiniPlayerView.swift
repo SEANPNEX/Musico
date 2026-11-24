@@ -14,7 +14,7 @@ struct MiniPlayerView: View {
             let row = HStack(spacing: 12) {
                 Button(action: onOpen) {
                     HStack(spacing: 12) {
-                        ArtworkView(artworkKey: track.artworkKey, size: isGlassAccessory ? 34 : 40)
+                        ArtworkView(artworkKey: track.artworkKey, remoteArtworkURL: track.remoteArtworkURL, size: isGlassAccessory ? 34 : 40)
                             .id(track.id)
                             .transition(.opacity)
                             .animation(.easeInOut(duration: 0.2), value: track.id)
@@ -29,7 +29,7 @@ struct MiniPlayerView: View {
                 .buttonStyle(.plain)
                 .accessibilityLabel(L10n.tr("Open Now Playing"))
                 .contextMenu {
-                    TrackMenuItems(ids: [track.id], favouriteID: track.id)
+                    TrackMenuItems(ids: [track.id], favouriteID: track.isEphemeral ? nil : track.id)
                 }
 
                 if player.isBuffering {

@@ -247,4 +247,17 @@
     <sys:String x:Key="Str_Extensions_ClearLogs">Clear Logs</sys:String>
     <sys:String x:Key="Str_Extensions_LogsEmpty">No log entries yet.</sys:String>
 
+    <!-- Cloud Search & Preview -->
+    <sys:String x:Key="Str_Songs_SearchButton">Search</sys:String>
+    <sys:String x:Key="Str_Songs_KindAll">All</sys:String>
+    <sys:String x:Key="Str_Songs_KindTracks">Songs</sys:String>
+    <sys:String x:Key="Str_Songs_KindAlbums">Albums</sys:String>
+    <sys:String x:Key="Str_Songs_KindPlaylists">Playlists</sys:String>
+    <sys:String x:Key="Str_Songs_CloudRetry">Retry</sys:String>
+    <sys:String x:Key="Str_Songs_LoadMore">Load More</sys:String>
+    <sys:String x:Key="Str_Songs_CloudSearching">Searching...</sys:String>
+    <sys:String x:Key="Str_Songs_CloudLoadingMore">Loading more...</sys:String>
+    <sys:String x:Key="Str_Preview_AddAsCloudFolder">Add as Cloud Folder</sys:String>
+    <sys:String x:Key="Str_Preview_PlayAll">Play All</sys:String>
+
 </ResourceDictionary>

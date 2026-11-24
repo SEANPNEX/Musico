@@ -383,6 +383,32 @@ struct ExtensionDetailView: View {
                 )
             }
 
+            if ext.manifest.capabilities.contains(.cookie) {
+                Section {
+                    LabeledContent(L10n.tr("Cookie (optional)")) {
+                        SecureField(
+                            L10n.tr("Cookie (optional)"),
+                            text: Binding(
+                                get: { ext.state.cookie ?? "" },
+                                set: { extensionStore.updateCookie(extensionID: ext.id, cookie: $0) }
+                            )
+                        )
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    }
+                    if !(ext.state.cookie ?? "").isEmpty {
+                        Button(L10n.tr("Clear Cookie"), role: .destructive) {
+                            extensionStore.updateCookie(extensionID: ext.id, cookie: nil)
+                        }
+                    }
+                } header: {
+                    Text(L10n.tr("Authentication"))
+                } footer: {
+                    Text(L10n.tr("Saved locally for search and playback with this extension. Folder-specific cookies still take precedence."))
+                }
+            }
+
             if let settings = ext.manifest.settings, !settings.isEmpty {
                 Section(L10n.tr("Settings")) {
                     ForEach(settings) { spec in
@@ -412,6 +438,15 @@ struct ExtensionDetailView: View {
                     Text(ext.manifest.capabilities.map(\.rawValue).joined(separator: ", "))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+                if ext.manifest.capabilities.contains(.search) {
+                    HStack {
+                        Text(L10n.tr("Search Kinds"))
+                        Spacer()
+                        Text(ext.manifest.effectiveSearchKinds.map(\.localizedTitle).joined(separator: ", "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Button(L10n.tr("Review Permissions…")) {
                     showReviewSheet = true

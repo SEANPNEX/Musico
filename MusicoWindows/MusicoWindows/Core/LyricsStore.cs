@@ -18,7 +18,7 @@ public sealed class LyricsStore
         DirectoryPath = directoryPath;
     }
 
-    private string ImportedPath(string trackId) => Path.Combine(DirectoryPath, $"{trackId}.lrc");
+    private string ImportedPath(string trackId) => Path.Combine(DirectoryPath, $"{Persistence.SafeTrackFileKey(trackId)}.lrc");
 
     public (Lyrics Lyrics, LyricsSource Source)? Resolve(
         string trackId,
