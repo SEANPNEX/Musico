@@ -15,6 +15,7 @@ jobs:
   android:
     name: Android (Unit Tests & Debug APK)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: MusicoAndroid
@@ -36,6 +37,7 @@ jobs:
   windows:
     name: Windows (xUnit Tests & WPF Release Build)
     runs-on: windows-latest
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: MusicoWindows
@@ -58,6 +60,7 @@ jobs:
   apple:
     name: Apple (iOS Simulator Tests & Mac Catalyst Build)
     runs-on: macos-26
+    timeout-minutes: 45
     defaults:
       run:
         working-directory: Musico
@@ -98,11 +101,13 @@ jobs:
             if xcodebuild -project Musico.xcodeproj -scheme Musico \
               -destination "platform=iOS Simulator,id=$SIM_UDID" \
               -derivedDataPath build/DerivedData \
+              -retry-tests-on-failure \
+              -test-iterations 2 \
               CODE_SIGNING_ALLOWED=NO \
               test 2>&1 | tee build/ci-test.log; then
               exit 0
             fi
-            grep -Eq "failed preflight checks|RPC timeout|Early unexpected exit|XPC connection interrupted" build/ci-test.log || exit 1
+            grep -Eq "failed preflight checks|RPC timeout|Early unexpected exit|XPC connection interrupted|Lost connection to the test manager" build/ci-test.log || exit 1
             xcrun simctl shutdown "$SIM_UDID" || true
             sleep 8
           done

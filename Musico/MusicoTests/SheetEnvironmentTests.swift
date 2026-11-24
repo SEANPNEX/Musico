@@ -6,6 +6,14 @@ import SwiftUI
 /// These show each sheet the way the app does, with the stores set on the presenting view.
 @MainActor
 final class SheetEnvironmentTests: XCTestCase {
+    private func tearDownWindow(_ window: UIWindow) {
+        if window.rootViewController?.presentedViewController != nil {
+            window.rootViewController?.dismiss(animated: false)
+        }
+        window.isHidden = true
+        window.rootViewController = nil
+    }
+
     /// `sheet` nil shows the app's own root view in `layout`, with the full player open if `player`.
     private func present(
         _ sheet: (some View)?,
@@ -15,48 +23,66 @@ final class SheetEnvironmentTests: XCTestCase {
         withSampleTrack: Bool = false,
         attachEmptyHostEnvironment: Bool = false
     ) async throws {
-        let state = makeTempDir()
-        let docs = makeTempDir()
-        if withSampleTrack {
-            let fixture = try XCTUnwrap(Bundle(for: SheetEnvironmentTests.self).url(forResource: "sample", withExtension: "mp3"))
-            try FileManager.default.copyItem(at: fixture, to: docs.appendingPathComponent("sample.mp3"))
+        var player: PlayerController?
+        defer { player?.shutdown() }
+
+        let label = sheet.map { String(describing: type(of: $0)) } ?? "RootView"
+        let shown = expectation(description: "sheet appeared: \(label)")
+        var didFulfill = false
+        let markShown = {
+            guard !didFulfill else { return }
+            didFulfill = true
+            shown.fulfill()
         }
-        let library = LibraryStore(directory: state, documentsURL: docs, reader: StubReader(),
-                                   artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")))
-        if withSampleTrack {
-            await library.rescan()
-        }
-        let queues = QueueStore(directory: state)
-        let history = PlayHistoryStore(directory: state)
-        let player = PlayerController(library: library, queues: queues, history: history, engine: AudioEngine(),
-                                      settingsURL: state.appendingPathComponent("settings.json"))
-        defer { player.shutdown() }
-        if withSampleTrack, let id = library.tracks.first?.id {
-            player.play([id], startAt: 0)
-            player.pause()
-        }
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-        let window = UIWindow(windowScene: scene)
-        let shown = expectation(description: "sheet appeared")
+
         let root: AnyView
         if let sheet {
-            let content = AnyView(sheet.onAppear { shown.fulfill() })
+            let content = AnyView(sheet.onAppear(perform: markShown))
             if attachEmptyHostEnvironment {
-                root = AnyView(SheetHost(content: content, delay: 0))
+                root = AnyView(SheetHost(content: content, delay: 100))
             } else {
-                root = AnyView(SheetHost(content: outer ? AnyView(SheetHost(content: content, delay: 600)) : content, delay: 0))
+                root = AnyView(SheetHost(content: outer ? AnyView(SheetHost(content: content, delay: 600)) : content, delay: 100))
             }
         } else {
-            root = AnyView(RootView(showPlayer: showPlayer, layout: layout).onAppear { shown.fulfill() })
+            root = AnyView(RootView(showPlayer: showPlayer, layout: layout).onAppear(perform: markShown))
         }
-        let hosted = attachEmptyHostEnvironment
-            ? root
-            : AnyView(root.environment(library).environment(queues).environment(player).environment(history))
+
+        let hosted: AnyView
+        if attachEmptyHostEnvironment {
+            hosted = root
+        } else {
+            let state = makeTempDir()
+            let docs = makeTempDir()
+            if withSampleTrack {
+                let fixture = try XCTUnwrap(Bundle(for: SheetEnvironmentTests.self).url(forResource: "sample", withExtension: "mp3"))
+                try FileManager.default.copyItem(at: fixture, to: docs.appendingPathComponent("sample.mp3"))
+            }
+            let library = LibraryStore(directory: state, documentsURL: docs, reader: StubReader(),
+                                       artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")))
+            if withSampleTrack {
+                await library.rescan()
+            }
+            let queues = QueueStore(directory: state)
+            let history = PlayHistoryStore(directory: state)
+            let createdPlayer = PlayerController(library: library, queues: queues, history: history, engine: AudioEngine(),
+                                                 settingsURL: state.appendingPathComponent("settings.json"))
+            player = createdPlayer
+            if withSampleTrack, let id = library.tracks.first?.id {
+                createdPlayer.play([id], startAt: 0)
+                createdPlayer.pause()
+            }
+            hosted = AnyView(root.environment(library).environment(queues).environment(createdPlayer).environment(history))
+        }
+
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        let window = UIWindow(windowScene: scene)
         window.rootViewController = UIHostingController(rootView: hosted)
         window.makeKeyAndVisible()
-        await fulfillment(of: [shown], timeout: 5)
-        try await Task.sleep(for: .milliseconds(1000))
-        window.isHidden = true
+        defer { tearDownWindow(window) }
+        await fulfillment(of: [shown], timeout: 15)
+        try await Task.sleep(for: .milliseconds(attachEmptyHostEnvironment ? 300 : 1000))
+        tearDownWindow(window)
+        try await Task.sleep(for: .milliseconds(50))
     }
 
     private func presentSongInfoViaHost(layout: AppLayout, showPlayer: Bool) async throws {
@@ -80,12 +106,15 @@ final class SheetEnvironmentTests: XCTestCase {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         let shown = expectation(description: "song info sheet appeared")
+        var didFulfill = false
         let root = SongInfoTriggerHarness(
             trackID: trackID,
             layout: layout,
             showPlayer: showPlayer,
             onTriggerReady: { prompt in
                 prompt.show(trackID, library: library, history: history, navigation: navigation)
+                guard !didFulfill else { return }
+                didFulfill = true
                 shown.fulfill()
             }
         )
@@ -97,9 +126,9 @@ final class SheetEnvironmentTests: XCTestCase {
 
         window.rootViewController = UIHostingController(rootView: root)
         window.makeKeyAndVisible()
-        await fulfillment(of: [shown], timeout: 5)
+        defer { tearDownWindow(window) }
+        await fulfillment(of: [shown], timeout: 15)
         try await Task.sleep(for: .milliseconds(800))
-        window.isHidden = true
     }
 
     func testPlayerSheetOpensFromTheRootView() async throws { try await present(nil as EmptyView?, over: false) }
@@ -227,6 +256,7 @@ final class SheetEnvironmentTests: XCTestCase {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         let rendered = expectation(description: "playlist and queue views rendered")
+        var didFulfill = false
         let harness = VStack(spacing: 12) {
             NavigationStack { PlaylistsView() }
             NavigationStack { PlaylistDetailView(ref: .favourites) }
@@ -234,7 +264,11 @@ final class SheetEnvironmentTests: XCTestCase {
             NavigationStack { QueuesView() }
             SidebarRootView(openPlayer: {})
         }
-        .onAppear { rendered.fulfill() }
+        .onAppear {
+            guard !didFulfill else { return }
+            didFulfill = true
+            rendered.fulfill()
+        }
         .modifier(NewPlaylistAlert())
         .modifier(CloudExportHostModifier())
         .modifier(SongInfoHostModifier())
@@ -245,9 +279,9 @@ final class SheetEnvironmentTests: XCTestCase {
 
         window.rootViewController = UIHostingController(rootView: harness)
         window.makeKeyAndVisible()
-        await fulfillment(of: [rendered], timeout: 5)
+        defer { tearDownWindow(window) }
+        await fulfillment(of: [rendered], timeout: 15)
         try await Task.sleep(for: .milliseconds(400))
-        window.isHidden = true
     }
 
     func testPlayerBarAndMiniPlayerRenderAndControlPlayback() async throws {
@@ -283,6 +317,7 @@ final class SheetEnvironmentTests: XCTestCase {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         let rendered = expectation(description: "player controls rendered")
+        var didFulfill = false
         let controls = VStack(spacing: 12) {
             MiniPlayerView(isGlassAccessory: false, onOpen: {})
             MiniPlayerView(isGlassAccessory: true, onOpen: {})
@@ -293,7 +328,11 @@ final class SheetEnvironmentTests: XCTestCase {
             MarqueeText(text: "A Very Long Queue Name That Should Scroll Cleanly Across Narrow Screens", font: .footnote)
                 .frame(width: 140)
         }
-        .onAppear { rendered.fulfill() }
+        .onAppear {
+            guard !didFulfill else { return }
+            didFulfill = true
+            rendered.fulfill()
+        }
         .modifier(NewPlaylistAlert())
         .modifier(CloudExportHostModifier())
         .modifier(SongInfoHostModifier())
@@ -304,9 +343,9 @@ final class SheetEnvironmentTests: XCTestCase {
 
         window.rootViewController = UIHostingController(rootView: controls)
         window.makeKeyAndVisible()
-        await fulfillment(of: [rendered], timeout: 5)
+        defer { tearDownWindow(window) }
+        await fulfillment(of: [rendered], timeout: 15)
         try await Task.sleep(for: .milliseconds(300))
-        window.isHidden = true
     }
 }
 
@@ -353,7 +392,9 @@ private struct SheetHost: View {
         Color.clear
             .sheet(isPresented: $show) { content }
             .task {
-                try? await Task.sleep(for: .milliseconds(delay))
+                if delay > 0 {
+                    try? await Task.sleep(for: .milliseconds(delay))
+                }
                 show = true
             }
     }

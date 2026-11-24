@@ -408,7 +408,12 @@ public sealed class ExtensionRuntimeTests
     {
         string stateDir = TestHelpers.MakeTempDir();
         string musicDir = TestHelpers.MakeTempDir();
-        var subAGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        int workerCount = JsExtensionCloudProvider.FolderWorkerConcurrency;
+        int blockersEntered = 0;
+        var allBlockersEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseFirstBlocker = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseRemainingBlockers = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var subBVisited = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var visitOrder = new List<string>();
         var orderLock = new object();
 
@@ -417,35 +422,45 @@ public sealed class ExtensionRuntimeTests
             string path = req.RequestUri!.AbsolutePath;
             if (path == "/api/root/p1")
             {
-                // Root has SubA (first) and SubB (second) -> we'll prioritize SubB before releasing SubA!
-                // Wait: actually let's have 2 queued folders when worker 1 blocks on Blocker so SubB is prioritized ahead of SubA!
+                var subfolders = Enumerable.Range(1, workerCount)
+                    .Select(i => new { id = $"blocker-{i}", name = $"Blocker{i}", pathSegments = new[] { $"Blocker{i}" } })
+                    .Concat([
+                        new { id = "sub-a", name = "SubA", pathSegments = new[] { "SubA" } },
+                        new { id = "sub-b", name = "SubB", pathSegments = new[] { "SubB" } }
+                    ])
+                    .ToArray();
+
                 string json = JsonSerializer.Serialize(new
                 {
                     remoteId = "p1",
                     title = "Priority Tree",
                     tracks = new[] { new { remoteTrackId = "r0", relativePath = "root.mp3", title = "Root Song" } },
-                    subfolders = new[]
-                    {
-                        new { id = "blocker", name = "Blocker", pathSegments = new[] { "Blocker" } },
-                        new { id = "sub-a", name = "SubA", pathSegments = new[] { "SubA" } },
-                        new { id = "sub-b", name = "SubB", pathSegments = new[] { "SubB" } }
-                    }
+                    subfolders
                 });
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
             }
 
-            if (path == "/api/folder/blocker")
+            if (path.StartsWith("/api/folder/blocker-", StringComparison.Ordinal))
             {
-                await subAGate.Task.WaitAsync(ct).ConfigureAwait(false);
-                string json = JsonSerializer.Serialize(new { folderId = "blocker", tracks = Array.Empty<object>(), subfolders = Array.Empty<object>() });
+                string id = path["/api/folder/".Length..];
+                if (Interlocked.Increment(ref blockersEntered) == workerCount)
+                {
+                    allBlockersEntered.TrySetResult();
+                }
+                var gate = id == "blocker-1" ? releaseFirstBlocker : releaseRemainingBlockers;
+                await gate.Task.WaitAsync(ct).ConfigureAwait(false);
+                string json = JsonSerializer.Serialize(new { folderId = id, tracks = Array.Empty<object>(), subfolders = Array.Empty<object>() });
                 return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
             }
 
             if (path == "/api/folder/sub-a" || path == "/api/folder/sub-b")
             {
                 string id = path["/api/folder/".Length..];
-                if (id == "sub-a") await subAGate.Task.WaitAsync(ct).ConfigureAwait(false);
                 lock (orderLock) { visitOrder.Add(id); }
+                if (id == "sub-b")
+                {
+                    subBVisited.TrySetResult();
+                }
                 string folderName = id == "sub-a" ? "SubA" : "SubB";
                 string json = JsonSerializer.Serialize(new
                 {
@@ -504,12 +519,21 @@ public sealed class ExtensionRuntimeTests
             providerRegistry: registry);
 
         var root = await lib.AddCloudRootAsync("https://ptree.test/root/p1");
-        // Prioritize SubB while Blocker and SubA are gated
-        lib.PrioritizeCloudFolder(root.Id, "SubB");
-        await Task.Delay(50);
-        subAGate.TrySetResult();
-
-        await lib.WaitForCloudSyncAsync(root.Id);
+        try
+        {
+            await allBlockersEntered.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            // Prioritize SubB while every worker slot is occupied on blockers and SubA/SubB are still queued
+            lib.PrioritizeCloudFolder(root.Id, "SubB");
+            releaseFirstBlocker.TrySetResult();
+            await subBVisited.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            releaseRemainingBlockers.TrySetResult();
+            await lib.WaitForCloudSyncAsync(root.Id).WaitAsync(TimeSpan.FromSeconds(10));
+        }
+        finally
+        {
+            releaseFirstBlocker.TrySetResult();
+            releaseRemainingBlockers.TrySetResult();
+        }
 
         Assert.Contains("sub-b", visitOrder);
         Assert.Contains("sub-a", visitOrder);
