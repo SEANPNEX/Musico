@@ -34,6 +34,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -42,6 +43,7 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import java.security.MessageDigest
 import java.util.Base64
 import javax.crypto.Mac
@@ -88,6 +90,8 @@ class QuickJsExtensionRuntime(
         val hasResolveStream: Boolean = false,
         val hasSearchLyrics: Boolean = false,
         val hasSearch: Boolean = false,
+        val hasStartQrLogin: Boolean = false,
+        val hasPollQrLogin: Boolean = false,
         val code: String? = null,
         val message: String? = null,
     )
@@ -101,7 +105,27 @@ class QuickJsExtensionRuntime(
         val hasResolveStream: Boolean = false,
         val hasSearchLyrics: Boolean = false,
         val hasSearch: Boolean = false,
+        val hasStartQrLogin: Boolean = false,
+        val hasPollQrLogin: Boolean = false,
         val code: String? = null,
+        val message: String? = null,
+    )
+
+    @Serializable
+    private data class RawExtQrLoginStart(
+        val sessionId: JsonElement? = null,
+        val qrContent: String? = null,
+        val qrUrl: String? = null,
+        val expiresAtMs: Double? = null,
+        val pollIntervalMs: Double? = null,
+        val message: String? = null,
+    )
+
+    @Serializable
+    private data class RawExtQrLoginPoll(
+        val status: String? = null,
+        val cookie: String? = null,
+        val accountName: String? = null,
         val message: String? = null,
     )
 
@@ -174,7 +198,9 @@ class QuickJsExtensionRuntime(
                   hasFetchFolder: typeof exported.fetchFolder === 'function',
                   hasResolveStream: typeof exported.resolveStream === 'function',
                   hasSearchLyrics: typeof exported.searchLyrics === 'function',
-                  hasSearch: typeof exported.search === 'function'
+                  hasSearch: typeof exported.search === 'function',
+                  hasStartQrLogin: typeof exported.startQrLogin === 'function',
+                  hasPollQrLogin: typeof exported.pollQrLogin === 'function'
                 });
               } catch (err) {
                 return JSON.stringify({
@@ -216,6 +242,8 @@ class QuickJsExtensionRuntime(
             hasResolveStream = parsed.hasResolveStream,
             hasSearchLyrics = parsed.hasSearchLyrics,
             hasSearch = parsed.hasSearch,
+            hasStartQrLogin = parsed.hasStartQrLogin,
+            hasPollQrLogin = parsed.hasPollQrLogin,
         )
         return validated
     }
@@ -241,7 +269,9 @@ class QuickJsExtensionRuntime(
                   hasFetchFolder: typeof exported.fetchFolder === 'function',
                   hasResolveStream: typeof exported.resolveStream === 'function',
                   hasSearchLyrics: typeof exported.searchLyrics === 'function',
-                  hasSearch: typeof exported.search === 'function'
+                  hasSearch: typeof exported.search === 'function',
+                  hasStartQrLogin: typeof exported.startQrLogin === 'function',
+                  hasPollQrLogin: typeof exported.pollQrLogin === 'function'
                 });
               } catch (err) {
                 return JSON.stringify({
@@ -280,6 +310,8 @@ class QuickJsExtensionRuntime(
             hasResolveStream = parsed.hasResolveStream,
             hasSearchLyrics = parsed.hasSearchLyrics,
             hasSearch = parsed.hasSearch,
+            hasStartQrLogin = parsed.hasStartQrLogin,
+            hasPollQrLogin = parsed.hasPollQrLogin,
         )
     }
 
@@ -457,7 +489,7 @@ class QuickJsExtensionRuntime(
                 "${extension.manifest.name} does not declare search capability.",
             )
         }
-        val effectiveCookie = if (ExtensionCapability.COOKIE in extension.manifest.capabilities) {
+        val effectiveCookie = if (extension.manifest.supportsCookieAuth) {
             cookie?.trim()?.takeIf { it.isNotEmpty() }
         } else {
             null
@@ -549,6 +581,105 @@ class QuickJsExtensionRuntime(
         }
         val next = lossyScalarString(parsed.nextCursor)
         return ExtSearchPage(items = items, nextCursor = next)
+    }
+
+    suspend fun startQrLogin(extension: InstalledExtension): ExtQrLoginSession {
+        if (!extension.manifest.supportsQrLogin) {
+            throw CloudSourceException(
+                CloudErrorCode.PERMISSION_DENIED,
+                "${extension.manifest.name} does not declare qr_login capability.",
+            )
+        }
+        val raw = invokeHook(
+            extension = extension,
+            hookName = "startQrLogin",
+            requestJson = "{}",
+            isAsync = true,
+            timeoutMs = shortTimeoutMs,
+        )
+        val spec = decodeEnvelope<RawExtQrLoginStart>(raw)
+        val sessionId = lossyScalarString(spec.sessionId)
+            ?: throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "startQrLogin requires a non-empty sessionId.",
+            )
+        val qrContent = spec.qrContent?.trim()?.takeIf { it.isNotEmpty() }
+            ?: spec.qrUrl?.trim()?.takeIf { it.isNotEmpty() }
+            ?: throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "startQrLogin requires a non-empty qrContent.",
+            )
+        if (qrContent.toByteArray(Charsets.UTF_8).size > 512) {
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "startQrLogin qrContent exceeds 512 UTF-8 bytes.",
+            )
+        }
+        val pollIntervalMs = spec.pollIntervalMs
+            ?.takeIf { it.isFinite() }
+            ?.let { Math.round(it).toInt() }
+            ?.coerceIn(1_000, 10_000)
+            ?: 2_000
+        val expiresAtMs = spec.expiresAtMs
+            ?.takeIf { it.isFinite() && it > 0.0 }
+            ?.toLong()
+        return ExtQrLoginSession(
+            sessionId = sessionId,
+            qrContent = qrContent,
+            expiresAtMs = expiresAtMs,
+            pollIntervalMs = pollIntervalMs,
+            message = spec.message?.trim()?.takeIf { it.isNotEmpty() },
+        )
+    }
+
+    suspend fun pollQrLogin(
+        extension: InstalledExtension,
+        sessionId: String,
+    ): ExtQrLoginPollResult {
+        if (!extension.manifest.supportsQrLogin) {
+            throw CloudSourceException(
+                CloudErrorCode.PERMISSION_DENIED,
+                "${extension.manifest.name} does not declare qr_login capability.",
+            )
+        }
+        val cleanSessionId = sessionId.trim()
+        if (cleanSessionId.isEmpty()) {
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "pollQrLogin requires a non-empty sessionId.",
+            )
+        }
+        val reqJson = json.encodeToString(
+            buildJsonObject {
+                put("sessionId", cleanSessionId)
+            }
+        )
+        val raw = invokeHook(
+            extension = extension,
+            hookName = "pollQrLogin",
+            requestJson = reqJson,
+            isAsync = true,
+            timeoutMs = shortTimeoutMs,
+        )
+        val spec = decodeEnvelope<RawExtQrLoginPoll>(raw)
+        val status = ExtQrLoginStatus.fromWire(spec.status)
+            ?: throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "Unsupported QR login status: ${spec.status}",
+            )
+        val cookie = spec.cookie?.trim()?.takeIf { it.isNotEmpty() }
+        if (status == ExtQrLoginStatus.CONFIRMED && cookie == null) {
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "pollQrLogin returned confirmed without a cookie.",
+            )
+        }
+        return ExtQrLoginPollResult(
+            status = status,
+            cookie = cookie,
+            accountName = spec.accountName?.trim()?.takeIf { it.isNotEmpty() },
+            message = spec.message?.trim()?.takeIf { it.isNotEmpty() },
+        )
     }
 
     private fun lossyScalarString(element: JsonElement?): String? {
@@ -869,6 +1000,13 @@ class QuickJsExtensionRuntime(
                             if (resp.bytesBase64 != null) {
                                 put("bytesBase64", resp.bytesBase64)
                             }
+                            if (resp.setCookies.isNotEmpty()) {
+                                putJsonArray("setCookies") {
+                                    for (entry in resp.setCookies) {
+                                        add(entry)
+                                    }
+                                }
+                            }
                         },
                     )
                 }
@@ -995,6 +1133,8 @@ class QuickJsExtensionRuntime(
         hasResolveStream: Boolean,
         hasSearchLyrics: Boolean,
         hasSearch: Boolean,
+        hasStartQrLogin: Boolean = false,
+        hasPollQrLogin: Boolean = false,
     ) {
         val requiresSourceHooks = manifest.capabilities.any {
             it == ExtensionCapability.PLAYLIST || it == ExtensionCapability.TREE
@@ -1016,6 +1156,10 @@ class QuickJsExtensionRuntime(
         }
         if (ExtensionCapability.SEARCH in manifest.capabilities) {
             require(hasSearch) { "Extension declaring search capability must export search(ctx, req)" }
+        }
+        if (ExtensionCapability.QR_LOGIN in manifest.capabilities) {
+            require(hasStartQrLogin) { "Extension declaring qr_login capability must export startQrLogin(ctx, req)" }
+            require(hasPollQrLogin) { "Extension declaring qr_login capability must export pollQrLogin(ctx, req)" }
         }
     }
 

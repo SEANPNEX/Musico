@@ -157,7 +157,7 @@ class ExtensionStore(
                     supportsStream = ExtensionCapability.STREAM in ext.manifest.capabilities,
                     supportsCollection = ExtensionCapability.PLAYLIST in ext.manifest.capabilities ||
                         ExtensionCapability.TREE in ext.manifest.capabilities,
-                    supportsCookie = ExtensionCapability.COOKIE in ext.manifest.capabilities,
+                    supportsCookie = ext.manifest.supportsCookieAuth,
                 )
             }
 
@@ -201,8 +201,32 @@ class ExtensionStore(
 
     fun cookieForExtension(extensionId: String): String? {
         val ext = findById(extensionId) ?: return null
-        if (ExtensionCapability.COOKIE !in ext.manifest.capabilities) return null
+        if (!ext.manifest.supportsCookieAuth) return null
         return ext.state.cookie?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
+    suspend fun startQrLogin(extensionId: String): ExtQrLoginSession {
+        val ext = _extensions.value.firstOrNull {
+            it.id == extensionId && it.enabled && it.manifest.supportsQrLogin
+        } ?: throw CloudSourceException(
+            CloudErrorCode.EXTENSION_UNAVAILABLE,
+            "QR login extension unavailable: $extensionId",
+        )
+        return runtime.startQrLogin(ext)
+    }
+
+    suspend fun pollQrLogin(extensionId: String, sessionId: String): ExtQrLoginPollResult {
+        val ext = _extensions.value.firstOrNull {
+            it.id == extensionId && it.enabled && it.manifest.supportsQrLogin
+        } ?: throw CloudSourceException(
+            CloudErrorCode.EXTENSION_UNAVAILABLE,
+            "QR login extension unavailable: $extensionId",
+        )
+        val result = runtime.pollQrLogin(ext, sessionId)
+        if (result.status == ExtQrLoginStatus.CONFIRMED && !result.cookie.isNullOrBlank()) {
+            updateCookie(extensionId, result.cookie)
+        }
+        return result
     }
 
     fun cookieForProvider(providerId: String?): String? {
@@ -349,7 +373,7 @@ class ExtensionStore(
             val preservedSettings = existing?.state?.settings
                 ?.filterKeys { it in validKeys }
                 ?: emptyMap()
-            val preservedCookie = if (ExtensionCapability.COOKIE in manifest.capabilities) {
+            val preservedCookie = if (manifest.supportsCookieAuth) {
                 existing?.state?.cookie?.trim()?.takeIf { it.isNotEmpty() }
             } else {
                 null
@@ -429,7 +453,7 @@ class ExtensionStore(
             val idx = cur.indexOfFirst { it.id == extensionId }
             if (idx < 0) return
             val existing = cur[idx]
-            if (ExtensionCapability.COOKIE !in existing.manifest.capabilities) return
+            if (!existing.manifest.supportsCookieAuth) return
             if (existing.state.cookie == normalized) return
             val nextState = existing.state.copy(cookie = normalized, updatedAtMs = clockMs())
             Persistence.save(nextState, File(File(extensionsDir, extensionId), STATE_FILE))

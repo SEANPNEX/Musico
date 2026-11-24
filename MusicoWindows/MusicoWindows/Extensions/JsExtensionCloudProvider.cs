@@ -59,7 +59,7 @@ public sealed class JsExtensionCloudProvider : ICloudSourceProvider
     public string BadgeLabel => _extension.Manifest.EffectiveBadgeLabel;
     public RootKind RootKind => RootKind.CloudExtension;
     public string CloudSourceKey => _extension.ProviderId;
-    public bool SupportsCookies => _extension.Manifest.HasCapability(ExtensionCapability.Cookie);
+    public bool SupportsCookies => _extension.Manifest.SupportsCookieAuth;
     public bool SupportsProxy => _extension.Manifest.HasCapability(ExtensionCapability.Proxy);
     public bool SupportsCollectionImport =>
         _extension.Manifest.HasCapability(ExtensionCapability.Playlist) ||

@@ -334,6 +334,18 @@ public static class ExtensionPackageLoader
         {
             throw new InvalidDataException("Extension declares 'search' capability and must export a 'search' function.");
         }
+
+        if (manifest.HasCapability(ExtensionCapability.QrLogin))
+        {
+            if (!IsFunction(exports.Get("startQrLogin")))
+            {
+                throw new InvalidDataException("Extension declares 'qr_login' capability and must export a 'startQrLogin' function.");
+            }
+            if (!IsFunction(exports.Get("pollQrLogin")))
+            {
+                throw new InvalidDataException("Extension declares 'qr_login' capability and must export a 'pollQrLogin' function.");
+            }
+        }
     }
 
     private static bool IsFunction(JsValue val) => val is Jint.Native.Function.Function;

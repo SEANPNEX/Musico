@@ -189,6 +189,7 @@ interface AppStrings {
     val capabilityProxy: String
     val capabilityLyrics: String
     val capabilitySearch: String
+    val capabilityQrLogin: String
     val capabilityPlaylistDesc: String
     val capabilityTreeDesc: String
     val capabilityStreamDesc: String
@@ -196,12 +197,25 @@ interface AppStrings {
     val capabilityProxyDesc: String
     val capabilityLyricsDesc: String
     val capabilitySearchDesc: String
+    val capabilityQrLoginDesc: String
     val extensionCookieLabel: String
     val extensionCookiePlaceholder: String
     val extensionCookieSupportingText: String
     val showCookie: String
     val hideCookie: String
     val clearCookie: String
+    val qrLoginAction: String
+    val signInWithQrCode: String
+    val qrLoginGenerating: String
+    val qrLoginFailed: String
+    val qrLoginExpired: String
+    val qrLoginRefreshHint: String
+    val qrLoginSignedIn: String
+    val qrLoginScannedConfirm: String
+    val qrLoginWaiting: String
+    val qrLoginRefresh: String
+    fun qrLoginScanPrompt(sourceName: String): String
+    fun qrLoginCookieSaved(extensionName: String): String
 
     // Songs screen & cloud search
     val searchPlaceholder: String
@@ -727,6 +741,7 @@ object EnStrings : AppStrings {
     override val capabilityProxy = "Proxy"
     override val capabilityLyrics = "Lyrics Search"
     override val capabilitySearch = "Cloud Search"
+    override val capabilityQrLogin = "QR Code Login"
     override val capabilityPlaylistDesc = "Load playlists or albums from links"
     override val capabilityTreeDesc = "Browse nested cloud folders"
     override val capabilityStreamDesc = "Resolve playable audio streams"
@@ -734,12 +749,25 @@ object EnStrings : AppStrings {
     override val capabilityProxyDesc = "Route extension network requests through proxy"
     override val capabilityLyricsDesc = "Search online lyrics"
     override val capabilitySearchDesc = "Search tracks, albums, and playlists from this source"
+    override val capabilityQrLoginDesc = "Sign in by scanning a QR code in-app"
     override val extensionCookieLabel = "Extension Cookie"
     override val extensionCookiePlaceholder = "Paste cookie header (optional)"
     override val extensionCookieSupportingText = "Stored locally and sent only to this extension for search, preview, and streaming."
     override val showCookie = "Show cookie"
     override val hideCookie = "Hide cookie"
     override val clearCookie = "Clear cookie"
+    override val qrLoginAction = "QR Login"
+    override val signInWithQrCode = "Sign In with QR Code…"
+    override val qrLoginGenerating = "Generating QR code…"
+    override val qrLoginFailed = "QR Code Login Failed"
+    override val qrLoginExpired = "QR Code Expired"
+    override val qrLoginRefreshHint = "Refresh to generate a new QR code."
+    override val qrLoginSignedIn = "Signed In"
+    override val qrLoginScannedConfirm = "Scanned — Confirm on Your Phone"
+    override val qrLoginWaiting = "Waiting for QR code scan…"
+    override val qrLoginRefresh = "Refresh QR Code"
+    override fun qrLoginScanPrompt(sourceName: String) = "Scan with $sourceName App"
+    override fun qrLoginCookieSaved(extensionName: String) = "Session cookie saved to $extensionName."
 
     override val searchPlaceholder = "Songs, artists, albums, genres"
     override val clearSearch = "Clear search"
@@ -1239,6 +1267,7 @@ object ZhHansStrings : AppStrings {
     override val capabilityProxy = "代理"
     override val capabilityLyrics = "歌词搜索"
     override val capabilitySearch = "云端搜索"
+    override val capabilityQrLogin = "扫码登录"
     override val capabilityPlaylistDesc = "从链接加载歌单或专辑"
     override val capabilityTreeDesc = "浏览多层云端文件夹"
     override val capabilityStreamDesc = "解析可播放的音频流"
@@ -1246,12 +1275,25 @@ object ZhHansStrings : AppStrings {
     override val capabilityProxyDesc = "通过代理发送扩展网络请求"
     override val capabilityLyricsDesc = "在线搜索歌词"
     override val capabilitySearchDesc = "在此来源中搜索歌曲、专辑和歌单"
+    override val capabilityQrLoginDesc = "在应用内扫码登录账号"
     override val extensionCookieLabel = "扩展 Cookie"
     override val extensionCookiePlaceholder = "粘贴 Cookie 请求头（可选）"
     override val extensionCookieSupportingText = "仅保存在本地，并仅发送给此扩展用于搜索、预览和播放。"
     override val showCookie = "显示 Cookie"
     override val hideCookie = "隐藏 Cookie"
     override val clearCookie = "清除 Cookie"
+    override val qrLoginAction = "扫码登录"
+    override val signInWithQrCode = "扫码登录…"
+    override val qrLoginGenerating = "正在生成二维码…"
+    override val qrLoginFailed = "扫码登录失败"
+    override val qrLoginExpired = "二维码已过期"
+    override val qrLoginRefreshHint = "请刷新以重新生成二维码。"
+    override val qrLoginSignedIn = "登录成功"
+    override val qrLoginScannedConfirm = "已扫码 — 请在手机上确认"
+    override val qrLoginWaiting = "等待扫描二维码…"
+    override val qrLoginRefresh = "刷新二维码"
+    override fun qrLoginScanPrompt(sourceName: String) = "请使用 $sourceName 客户端扫码"
+    override fun qrLoginCookieSaved(extensionName: String) = "会话 Cookie 已保存到 $extensionName。"
 
     override val searchPlaceholder = "搜索歌曲、艺术家、专辑、流派"
     override val clearSearch = "清除搜索"

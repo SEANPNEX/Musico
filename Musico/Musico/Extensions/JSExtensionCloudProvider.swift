@@ -17,7 +17,7 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
     var rootKind: LibraryRoot.Kind { .cloudExtension }
     var trackCloudSource: String { manifest.providerID }
     var supportsTree: Bool { manifest.capabilities.contains(.tree) }
-    var supportsCookie: Bool { manifest.capabilities.contains(.cookie) }
+    var supportsCookie: Bool { manifest.supportsCookieAuth }
     var supportsCollection: Bool { manifest.capabilities.contains(.playlist) || manifest.capabilities.contains(.tree) }
 
     init(

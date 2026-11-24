@@ -105,6 +105,7 @@ data class CloudHttpGenericResponse(
     val headers: Map<String, String>,
     val text: String,
     val bytesBase64: String? = null,
+    val setCookies: List<String> = emptyList(),
 )
 
 interface CloudHttpClient {
@@ -177,10 +178,18 @@ private suspend fun CloudHttpClient.executeDefaultGenericRequest(
             headers = lowerHeaders,
             rawBytes = resp.bodyBytes,
             returnBytes = request.returnBytes,
+            setCookies = extractSetCookies(resp.headers),
         )
     }
     throw CloudSourceException(CloudErrorCode.NETWORK_ERROR, "Too many redirects for ${request.url}")
 }
+
+internal fun extractSetCookies(headers: Map<String, List<String>>): List<String> =
+    headers.entries
+        .filter { it.key.equals("Set-Cookie", ignoreCase = true) }
+        .flatMap { it.value }
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
 
 internal const val CLOUD_HTTP_MAX_EXTENSION_REDIRECTS = 10
 internal const val CLOUD_HTTP_MAX_BODY_BYTES = 8 * 1024 * 1024
@@ -227,6 +236,7 @@ internal fun toGenericResponse(
     headers: Map<String, String>,
     rawBytes: ByteArray,
     returnBytes: Boolean,
+    setCookies: List<String> = emptyList(),
 ): CloudHttpGenericResponse {
     val capped = if (rawBytes.size > CLOUD_HTTP_MAX_BODY_BYTES) {
         rawBytes.copyOf(CLOUD_HTTP_MAX_BODY_BYTES)
@@ -241,6 +251,7 @@ internal fun toGenericResponse(
         headers = headers,
         text = capped.toString(Charsets.UTF_8),
         bytesBase64 = b64,
+        setCookies = setCookies,
     )
 }
 
@@ -302,6 +313,7 @@ class UrlConnectionCloudHttpClient(
             headers = normalizeResponseHeaders(resp.headers),
             rawBytes = resp.bodyBytes,
             returnBytes = request.returnBytes,
+            setCookies = extractSetCookies(resp.headers),
         )
     }
 

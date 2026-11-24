@@ -16,7 +16,8 @@ public enum ExtensionCapability
     Cookie,
     Proxy,
     Lyrics,
-    Search
+    Search,
+    QrLogin
 }
 
 [JsonConverter(typeof(ExtensionSearchKindJsonConverter))]
@@ -49,6 +50,7 @@ public sealed class ExtensionCapabilityJsonConverter : JsonConverter<ExtensionCa
             "proxy" => ExtensionCapability.Proxy,
             "lyrics" => ExtensionCapability.Lyrics,
             "search" => ExtensionCapability.Search,
+            "qr_login" => ExtensionCapability.QrLogin,
             _ => throw new JsonException($"Unsupported extension capability: '{raw}'.")
         };
     }
@@ -64,6 +66,7 @@ public sealed class ExtensionCapabilityJsonConverter : JsonConverter<ExtensionCa
             ExtensionCapability.Proxy => "proxy",
             ExtensionCapability.Lyrics => "lyrics",
             ExtensionCapability.Search => "search",
+            ExtensionCapability.QrLogin => "qr_login",
             _ => value.ToString().ToLowerInvariant()
         });
     }
@@ -284,6 +287,14 @@ public sealed class ExtensionManifest
 
     public bool HasCapability(ExtensionCapability capability) =>
         Capabilities.Contains(capability);
+
+    [JsonIgnore]
+    public bool SupportsCookieAuth =>
+        HasCapability(ExtensionCapability.Cookie) || HasCapability(ExtensionCapability.QrLogin);
+
+    [JsonIgnore]
+    public bool SupportsQrLogin =>
+        HasCapability(ExtensionCapability.QrLogin);
 }
 
 public static class HostAllowlistMatcher
@@ -726,3 +737,53 @@ public sealed record CloudSearchExtensionDescriptor(
     bool SupportsStream,
     bool SupportsCookie,
     bool SupportsCollectionImport);
+
+public enum ExtQrLoginStatus
+{
+    Pending,
+    Scanned,
+    Confirmed,
+    Expired,
+    Error
+}
+
+public static class ExtQrLoginStatusExtensions
+{
+    public static bool TryParseWire(string? raw, out ExtQrLoginStatus status)
+    {
+        switch (raw?.Trim().ToLowerInvariant())
+        {
+            case "pending":
+                status = ExtQrLoginStatus.Pending;
+                return true;
+            case "scanned":
+                status = ExtQrLoginStatus.Scanned;
+                return true;
+            case "confirmed":
+                status = ExtQrLoginStatus.Confirmed;
+                return true;
+            case "expired":
+                status = ExtQrLoginStatus.Expired;
+                return true;
+            case "error":
+                status = ExtQrLoginStatus.Error;
+                return true;
+            default:
+                status = ExtQrLoginStatus.Error;
+                return false;
+        }
+    }
+}
+
+public sealed record ExtQrLoginSession(
+    string SessionId,
+    string QrContent,
+    long? ExpiresAtMs = null,
+    int PollIntervalMs = 2000,
+    string? Message = null);
+
+public sealed record ExtQrLoginPollResult(
+    ExtQrLoginStatus Status,
+    string? Cookie = null,
+    string? AccountName = null,
+    string? Message = null);

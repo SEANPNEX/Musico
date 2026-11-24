@@ -132,7 +132,7 @@ public sealed class ExtensionStore : IExtensionHostServices
                     DisplayName: e.Manifest.EffectiveBadgeLabel,
                     SearchKinds: e.Manifest.EffectiveSearchKinds,
                     SupportsStream: e.Manifest.HasCapability(ExtensionCapability.Stream),
-                    SupportsCookie: e.Manifest.HasCapability(ExtensionCapability.Cookie),
+                    SupportsCookie: e.Manifest.SupportsCookieAuth,
                     SupportsCollectionImport:
                         e.Manifest.HasCapability(ExtensionCapability.Playlist) ||
                         e.Manifest.HasCapability(ExtensionCapability.Tree)))
@@ -157,7 +157,7 @@ public sealed class ExtensionStore : IExtensionHostServices
                 string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase) &&
                 e.IsEnabled &&
                 e.Manifest.HasCapability(ExtensionCapability.Search));
-            cookie = ext is not null && ext.Manifest.HasCapability(ExtensionCapability.Cookie)
+            cookie = ext is not null && ext.Manifest.SupportsCookieAuth
                 ? ext.State.Cookie
                 : null;
         }
@@ -201,7 +201,7 @@ public sealed class ExtensionStore : IExtensionHostServices
             ext = _extensions.FirstOrDefault(e =>
                 string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase) &&
                 e.IsEnabled);
-            cookie = ext is not null && ext.Manifest.HasCapability(ExtensionCapability.Cookie)
+            cookie = ext is not null && ext.Manifest.SupportsCookieAuth
                 ? ext.State.Cookie
                 : null;
         }
@@ -251,6 +251,73 @@ public sealed class ExtensionStore : IExtensionHostServices
             SaveStateLocked();
         }
         Changed?.Invoke();
+    }
+
+    public async Task<ExtQrLoginSession> StartQrLoginAsync(
+        string extensionId,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        InstalledExtension? ext;
+        lock (_stateLock)
+        {
+            ext = _extensions.FirstOrDefault(e =>
+                string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase) &&
+                e.IsEnabled &&
+                e.Manifest.SupportsQrLogin);
+        }
+        if (ext is null)
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionUnavailable,
+                $"QR login is unavailable or extension '{extensionId}' is disabled.");
+        }
+
+        string script = ReadScriptSource(ext);
+        return await _runtime.StartQrLoginAsync(
+            ext.Manifest,
+            script,
+            proxyUrl: proxyUrl,
+            host: this,
+            ct: ct).ConfigureAwait(false);
+    }
+
+    public async Task<ExtQrLoginPollResult> PollQrLoginAsync(
+        string extensionId,
+        string sessionId,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        InstalledExtension? ext;
+        lock (_stateLock)
+        {
+            ext = _extensions.FirstOrDefault(e =>
+                string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase) &&
+                e.IsEnabled &&
+                e.Manifest.SupportsQrLogin);
+        }
+        if (ext is null)
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionUnavailable,
+                $"QR login is unavailable or extension '{extensionId}' is disabled.");
+        }
+
+        string script = ReadScriptSource(ext);
+        ExtQrLoginPollResult result = await _runtime.PollQrLoginAsync(
+            ext.Manifest,
+            script,
+            sessionId,
+            proxyUrl: proxyUrl,
+            host: this,
+            ct: ct).ConfigureAwait(false);
+
+        if (result.Status == ExtQrLoginStatus.Confirmed && !string.IsNullOrWhiteSpace(result.Cookie))
+        {
+            SetCookie(ext.Id, result.Cookie);
+        }
+
+        return result;
     }
 
     public List<CloudLyricsExtensionDescriptor> GetActiveLyricsExtensions()
@@ -396,7 +463,7 @@ public sealed class ExtensionStore : IExtensionHostServices
                 Format = pkg.Format,
                 SourceLocation = sourceLocation,
                 InstalledUtc = DateTimeOffset.UtcNow,
-                Cookie = existing?.State.Cookie,
+                Cookie = pkg.Manifest.SupportsCookieAuth ? existing?.State.Cookie : null,
                 Settings = settings
             };
 

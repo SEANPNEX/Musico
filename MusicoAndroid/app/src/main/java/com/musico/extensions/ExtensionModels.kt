@@ -44,6 +44,9 @@ enum class ExtensionCapability(val wireName: String) {
 
     @SerialName("search")
     SEARCH("search"),
+
+    @SerialName("qr_login")
+    QR_LOGIN("qr_login"),
     ;
 
     companion object {
@@ -193,6 +196,12 @@ data class ExtensionManifest(
 
     val effectiveSearchKinds: List<ExtensionSearchKind>
         get() = searchKinds.distinct().ifEmpty { ExtensionSearchKind.DEFAULT_ALL }
+
+    val supportsCookieAuth: Boolean
+        get() = ExtensionCapability.COOKIE in capabilities || ExtensionCapability.QR_LOGIN in capabilities
+
+    val supportsQrLogin: Boolean
+        get() = ExtensionCapability.QR_LOGIN in capabilities
 
     companion object {
         const val CURRENT_API_VERSION = 1
@@ -504,4 +513,35 @@ sealed interface ExtSearchResultItem {
 data class ExtSearchPage(
     val items: List<ExtSearchResultItem>,
     val nextCursor: String? = null,
+)
+
+enum class ExtQrLoginStatus(val wireName: String) {
+    PENDING("pending"),
+    SCANNED("scanned"),
+    CONFIRMED("confirmed"),
+    EXPIRED("expired"),
+    ERROR("error"),
+    ;
+
+    companion object {
+        fun fromWire(raw: String?): ExtQrLoginStatus? {
+            val clean = raw?.trim()?.lowercase() ?: return null
+            return entries.firstOrNull { it.wireName == clean }
+        }
+    }
+}
+
+data class ExtQrLoginSession(
+    val sessionId: String,
+    val qrContent: String,
+    val expiresAtMs: Long? = null,
+    val pollIntervalMs: Int = 2_000,
+    val message: String? = null,
+)
+
+data class ExtQrLoginPollResult(
+    val status: ExtQrLoginStatus,
+    val cookie: String? = null,
+    val accountName: String? = null,
+    val message: String? = null,
 )

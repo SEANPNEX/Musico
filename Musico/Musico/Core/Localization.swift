@@ -863,5 +863,23 @@ enum L10n {
         "Couldn’t Load Collection": "无法加载合集",
         "No playable tracks found in this collection.": "此合集中未找到可播放的歌曲。",
         "Adding…": "正在添加…",
+
+        // Extension QR Code Login
+        "QR Code Login": "扫码登录",
+        "Sign in by scanning a QR code in-app.": "在应用内扫码登录账号。",
+        "Sign In with QR Code…": "扫码登录…",
+        "Enable this extension first to sign in with a QR code. Folder-specific cookies still take precedence.": "请先启用此扩展再使用扫码登录。已添加文件夹的独立 Cookie 仍会优先使用。",
+        "Generating QR code…": "正在生成二维码…",
+        "QR Code Login Failed": "扫码登录失败",
+        "QR Code Expired": "二维码已过期",
+        "Refresh to generate a new QR code.": "请刷新以重新生成二维码。",
+        "Could not complete QR code login.": "未能完成扫码登录。",
+        "Signed In": "登录成功",
+        "Session cookie saved to %@.": "会话 Cookie 已保存到 %@。",
+        "Scanned — Confirm on Your Phone": "已扫码 — 请在手机上确认",
+        "Scan with %@ App": "请使用 %@ 客户端扫码",
+        "Waiting for QR code scan…": "等待扫描二维码…",
+        "Refresh QR Code": "刷新二维码",
+        "Couldn’t generate QR code.": "无法生成二维码。",
     ]
 }

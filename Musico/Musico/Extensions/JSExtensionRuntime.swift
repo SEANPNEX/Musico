@@ -172,6 +172,22 @@ private struct JSSearchEnvelope: Codable {
     var nextCursor: JSLossyString?
 }
 
+private struct JSQRLoginStartSpec: Codable {
+    var sessionId: JSLossyString?
+    var qrContent: String?
+    var qrUrl: String?
+    var expiresAtMs: Double?
+    var pollIntervalMs: Double?
+    var message: String?
+}
+
+private struct JSQRLoginPollSpec: Codable {
+    var status: String?
+    var cookie: String?
+    var accountName: String?
+    var message: String?
+}
+
 protocol ExtensionRuntimeHostDelegate: AnyObject, Sendable {
     func kvGet(extensionID: String, key: String) -> String?
     func kvSet(extensionID: String, key: String, value: String, ttlSeconds: Double?)
@@ -378,7 +394,9 @@ final class JSExtensionRuntime: @unchecked Sendable {
                 fetchFolder: typeof exp.fetchFolder === 'function',
                 resolveStream: typeof exp.resolveStream === 'function',
                 searchLyrics: typeof exp.searchLyrics === 'function',
-                search: typeof exp.search === 'function'
+                search: typeof exp.search === 'function',
+                startQrLogin: typeof exp.startQrLogin === 'function',
+                pollQrLogin: typeof exp.pollQrLogin === 'function'
               });
             })()
         """
@@ -405,6 +423,14 @@ final class JSExtensionRuntime: @unchecked Sendable {
         }
         if manifest.capabilities.contains(.search), flags["search"] != true {
             throw ExtensionImportError.invalidPackage("Search-capable extension must export search(ctx, req).")
+        }
+        if manifest.capabilities.contains(.qrLogin) {
+            if flags["startQrLogin"] != true {
+                throw ExtensionImportError.invalidPackage("QR-login extension must export startQrLogin(ctx, req).")
+            }
+            if flags["pollQrLogin"] != true {
+                throw ExtensionImportError.invalidPackage("QR-login extension must export pollQrLogin(ctx, req).")
+            }
         }
     }
 
@@ -647,6 +673,84 @@ final class JSExtensionRuntime: @unchecked Sendable {
         }
         let nextCursor = Self.trimmedNonEmpty(envelope.nextCursor?.value)
         return CloudSearchPage(items: items, nextCursor: nextCursor)
+    }
+
+    func startQRLogin() async throws -> ExtensionQRLoginSession {
+        let json = try await invokeAsyncHook(name: "startQrLogin", requestObject: [:], timeoutMs: shortTimeoutMs)
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "null" else {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "startQrLogin must return an object."
+            )
+        }
+        let spec = try JSONDecoder().decode(JSQRLoginStartSpec.self, from: Data(trimmed.utf8))
+        guard let sessionId = Self.trimmedNonEmpty(spec.sessionId?.value) else {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "startQrLogin requires a non-empty sessionId."
+            )
+        }
+        guard let qrContent = Self.trimmedNonEmpty(spec.qrContent) ?? Self.trimmedNonEmpty(spec.qrUrl),
+              qrContent.utf8.count <= 512 else {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "startQrLogin requires a non-empty qrContent (<= 512 bytes)."
+            )
+        }
+        let rawInterval = spec.pollIntervalMs.flatMap { $0.isFinite ? Int($0.rounded()) : nil } ?? 2_000
+        let pollIntervalMs = min(10_000, max(1_000, rawInterval))
+        let expiresAtMs = spec.expiresAtMs.flatMap { ($0.isFinite && $0 > 0) ? $0 : nil }
+        return ExtensionQRLoginSession(
+            sessionId: sessionId,
+            qrContent: qrContent,
+            expiresAtMs: expiresAtMs,
+            pollIntervalMs: pollIntervalMs,
+            message: Self.trimmedNonEmpty(spec.message)
+        )
+    }
+
+    func pollQRLogin(sessionID: String) async throws -> ExtensionQRLoginPollResult {
+        let cleanSessionID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanSessionID.isEmpty else {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "pollQrLogin requires a non-empty sessionId."
+            )
+        }
+        let json = try await invokeAsyncHook(
+            name: "pollQrLogin",
+            requestObject: ["sessionId": cleanSessionID],
+            timeoutMs: shortTimeoutMs
+        )
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "null" else {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "pollQrLogin must return an object."
+            )
+        }
+        let spec = try JSONDecoder().decode(JSQRLoginPollSpec.self, from: Data(trimmed.utf8))
+        let statusRaw = spec.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        guard let status = ExtensionQRLoginStatus(rawValue: statusRaw) else {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "Unsupported QR login status '\(spec.status ?? "")'."
+            )
+        }
+        let cookie = Self.trimmedNonEmpty(spec.cookie)
+        if status == .confirmed, cookie == nil {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "pollQrLogin returned confirmed without a cookie."
+            )
+        }
+        return ExtensionQRLoginPollResult(
+            status: status,
+            cookie: cookie,
+            accountName: Self.trimmedNonEmpty(spec.accountName),
+            message: Self.trimmedNonEmpty(spec.message)
+        )
     }
 
     private static func trimmedNonEmpty(_ raw: String?) -> String? {
@@ -1304,12 +1408,19 @@ private final class AsyncInvocationSession: @unchecked Sendable {
 
             let capped = response.data.prefix(JSExtensionRuntime.maxHTTPBodyBytes)
             let text = String(data: capped, encoding: .utf8) ?? String(decoding: capped, as: UTF8.self)
+            let effectiveFinalURL = response.finalURL ?? currentURL
+            let parsedSetCookies = HTTPCookie
+                .cookies(withResponseHeaderFields: response.headers, for: effectiveFinalURL)
+                .map { "\($0.name)=\($0.value)" }
             var out: [String: Any] = [
                 "status": response.statusCode,
-                "finalUrl": response.finalURL?.absoluteString ?? currentURL.absoluteString,
+                "finalUrl": effectiveFinalURL.absoluteString,
                 "headers": lowerHeaders,
                 "text": text
             ]
+            if !parsedSetCookies.isEmpty {
+                out["setCookies"] = parsedSetCookies
+            }
             if returnBytes || capped.count <= JSExtensionRuntime.maxInlineBase64Bytes {
                 out["bytesBase64"] = capped.base64EncodedString()
             }

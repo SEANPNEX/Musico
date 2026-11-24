@@ -391,7 +391,7 @@ module.exports = {
 | `description` | `string` | 否 | 一句话简介。 |
 | `badgeLabel` | `string` | 否 | 在 **Folders**、搜索切换标签及歌词来源胶囊上展示的短标签（默认取 `name`，最多 16 个字符）。 |
 | `entry` | `string` | 否 | `.musicoext` 包内的入口 JS 路径（默认为 `"index.js"`）。 |
-| `capabilities` | `string[]` | 是 | 非空数组，支持声明 `"playlist"`、`"tree"`、`"stream"`、`"cookie"`、`"proxy"`、`"lyrics"`、`"search"`。 |
+| `capabilities` | `string[]` | 是 | 非空数组，支持声明 `"playlist"`、`"tree"`、`"stream"`、`"cookie"`、`"proxy"`、`"lyrics"`、`"search"`、`"qr_login"`。 |
 | `urlPatterns` | `string[]` | 条件必填 | 原生端先做预筛选的正则表达式列表。声明 `"playlist"` 或 `"tree"` 时**必填**；其余扩展（如纯 `"lyrics"`、纯 `"search"` 或 `"search" + "stream"`）可省略或留空。 |
 | `searchKinds` | `string[]` | 否 | 支持 `"track"`、`"playlist"`、`"album"` 的子集，控制搜歌页面的分类筛选选项（省略或为空时默认开启全部三种）。 |
 | `permissions.hosts` | `string[]` | 是 | 严格的 HTTP/HTTPS 域名白名单：支持精确域名（`example.com`）或二级以上通配子域（`*.sub.domain`，禁止裸 `*` 或 `*.com`）。 |
@@ -419,6 +419,12 @@ module.exports = {
 - **`searchLyrics(ctx, req)`** *（异步，声明 `"lyrics"` 时必填）*
   - **入参：** `{ title, artist, album?, durationSec? }`
   - **返回：** `ExtLyricsCandidate[]` | `{ candidates: ExtLyricsCandidate[] }` | `{ results: ExtLyricsCandidate[] }` | `null`
+- **`startQrLogin(ctx, req)`** *（异步，声明 `"qr_login"` 时必填）*
+  - **入参：** `{}`
+  - **返回：** `{ sessionId, qrContent, expiresAtMs?, pollIntervalMs?, message? }`（`qrContent` 上限 512 UTF-8 字节；`pollIntervalMs` 限制在 `1000`–`10000` ms，默认 `2000`）
+- **`pollQrLogin(ctx, req)`** *（异步，声明 `"qr_login"` 时必填）*
+  - **入参：** `{ sessionId }`
+  - **返回：** `{ status: "pending" | "scanned" | "confirmed" | "expired" | "error", cookie?, accountName?, message? }` —— 当 `status === "confirmed"` 时必须返回非空 `cookie`，宿主会自动保存到扩展 Cookie 且绝不写入日志
 
 ### `ExtSearchResult` 字段说明
 - **`kind`** *（必填）*：`"track"` | `"playlist"` | `"album"`
@@ -451,7 +457,7 @@ module.exports = {
 
 - **`await ctx.http.request({ method?, url, headers?, body?, followRedirects?, timeoutMs?, returnBytes? })`**
   - 走各平台原生 HTTP 客户端（沿用平台超时与 Windows 代理设置，需声明 `"proxy"` 能力）。
-  - 返回 `{ status, finalUrl, headers, text, bytesBase64? }`（响应头键名统一小写；响应体上限 8 MB；当 `returnBytes === true` 或响应体 ≤ 1 MB 时返回 `bytesBase64`）。
+  - 返回 `{ status, finalUrl, headers, setCookies?, text, bytesBase64? }`（响应头键名统一小写；`setCookies` 数组会单独保留每条 `Set-Cookie` 避免被逗号拼接；响应体上限 8 MB；当 `returnBytes === true` 或响应体 ≤ 1 MB 时返回 `bytesBase64`）。
   - 初始 URL **以及每一跳 3xx 重定向**都会校验 `permissions.hosts`（最多 10 跳；跨主机跳转自动剥离 `Cookie` 与 `Authorization`；非 `http`/`https` 协议直接抛出 `PERMISSION_DENIED`）。
   - `resolveStream` 返回的 `url` 与 `fallbackUrls` 初始地址同样会校验 `permissions.hosts`。
 - **`ctx.crypto`**：`md5(str)`、`sha1(str)`、`sha256(str)`、`hmacSha256(key, msg)` *（均返回小写十六进制）*、`base64Encode(str)`、`base64Decode(b64)`。
@@ -461,7 +467,7 @@ module.exports = {
 - **`ctx.log`**：`info(msg)`、`warn(msg)`、`error(msg)`，写入每个扩展独立保留最近 200 条的环形日志缓冲区。
 
 ### 扩展级 Cookie 与隐私保护
-- 声明了 `"cookie"` 能力的扩展会在 **扩展管理（Extensions）** 中获得一个遮罩隐藏的 **扩展级 Cookie（Extension Cookie）** 输入框（与已挂载云端文件夹各自的 Cookie 并存）。
+- 声明了 `"cookie"` 或 `"qr_login"` 能力的扩展会在 **扩展管理（Extensions）** 中获得一个遮罩隐藏的 **扩展级 Cookie（Extension Cookie）** 输入框（与已挂载云端文件夹各自的 Cookie 并存）；声明 `"qr_login"` 还会显示应用内 **扫码登录（QR Code Login）** 按钮，通过 `startQrLogin` / `pollQrLogin` 自动完成登录并保存 Cookie。
 - Musico 会将此扩展级 Cookie 通过 `req.cookie` 传入 `search(ctx, req)`、搜索结果预览时的 `fetchCollection(ctx, req)`，以及临时曲目播放时的 `resolveStream(ctx, req)`。
 - 对于已挂载到 **Folders** 的云端目录，各 `LibraryRoot` 依然保持严格隔离，且目录自己的 Cookie 优先级高于扩展级 Cookie。
 - **切勿在 `ctx.log` 中打印 `req.cookie`！** *（作为纵深防御，Android 与 Windows 宿主还会自动将日志中意外出现的 Cookie 原文与 URL 编码变体替换为 `[REDACTED]`。）*
@@ -504,6 +510,8 @@ node docs/extensions/tools/mock-runner.mjs path/to/ext fetch-folder "folder_1" -
 node docs/extensions/tools/mock-runner.mjs path/to/ext resolve-stream "track_1" --setting preferHighBitrate=true
 node docs/extensions/tools/mock-runner.mjs path/to/ext search "Yoasobi" --kind track --limit 20 --cookie "sid=..."
 node docs/extensions/tools/mock-runner.mjs path/to/ext search-lyrics "Idol" --artist "YOASOBI" --duration 213
+node docs/extensions/tools/mock-runner.mjs path/to/ext start-qr-login
+node docs/extensions/tools/mock-runner.mjs path/to/ext poll-qr-login "<sessionId>"
 ```
 
 更多现成参考：

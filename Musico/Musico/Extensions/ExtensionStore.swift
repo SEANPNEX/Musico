@@ -176,6 +176,7 @@ final class ExtensionStore {
     @ObservationIgnored private nonisolated(unsafe) var installedNamesByProviderID: [String: String] = [:]
     @ObservationIgnored private nonisolated(unsafe) var lyricsRuntimesByID: [String: (badgeLabel: String, runtime: JSExtensionRuntime)] = [:]
     @ObservationIgnored private nonisolated(unsafe) var searchRuntimesByID: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)] = [:]
+    @ObservationIgnored private nonisolated(unsafe) var qrLoginRuntimesByID: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)] = [:]
 
     nonisolated init(
         baseDirectory: URL = ExtensionStore.defaultBaseDirectory,
@@ -206,6 +207,7 @@ final class ExtensionStore {
         )
         self.lyricsRuntimesByID = synced.lyrics
         self.searchRuntimesByID = synced.search
+        self.qrLoginRuntimesByID = synced.qrLogin
 
         self.hostStorage.onLogsChanged = { [weak self] extID in
             Task { @MainActor [weak self] in
@@ -344,7 +346,7 @@ final class ExtensionStore {
 
         let existingState = extensions.first { $0.id == manifest.id }?.state
         let mergedSettings = filterCompatibleSettings(existingState?.settings ?? [:], manifest: manifest)
-        let preservedCookie = manifest.capabilities.contains(.cookie) ? existingState?.cookie : nil
+        let preservedCookie = manifest.supportsCookieAuth ? existingState?.cookie : nil
         // Newly imported or updated packages always require Permission Review before enabling.
         let newState = ExtensionState(
             isEnabled: false,
@@ -481,7 +483,7 @@ final class ExtensionStore {
                     searchKinds: $0.manifest.effectiveSearchKinds,
                     supportsStream: $0.manifest.capabilities.contains(.stream),
                     supportsCollection: $0.manifest.capabilities.contains(.playlist) || $0.manifest.capabilities.contains(.tree),
-                    supportsCookie: $0.manifest.capabilities.contains(.cookie)
+                    supportsCookie: $0.manifest.supportsCookieAuth
                 )
             }
     }
@@ -500,7 +502,7 @@ final class ExtensionStore {
             let name = installedName(forProviderID: "ext.\(extensionID)") ?? extensionID
             throw CloudSourceError.extensionUnavailable(name: name)
         }
-        let cookie = entry.manifest.capabilities.contains(.cookie) ? hostStorage.cookie(for: extensionID) : nil
+        let cookie = entry.manifest.supportsCookieAuth ? hostStorage.cookie(for: extensionID) : nil
         return try await entry.runtime.search(
             query: query,
             kind: kind.rawValue,
@@ -532,8 +534,36 @@ final class ExtensionStore {
             runtime: searchEntry.runtime,
             extensionCookieProvider: { [weak hostStorage] in hostStorage?.cookie(for: extensionID) }
         )
-        let cookie = searchEntry.manifest.capabilities.contains(.cookie) ? hostStorage.cookie(for: extensionID) : nil
+        let cookie = searchEntry.manifest.supportsCookieAuth ? hostStorage.cookie(for: extensionID) : nil
         return try await provider.fetchCollection(sourceURL: cleanURL, cookie: cookie)
+    }
+
+    nonisolated func startQRLogin(extensionID: String) async throws -> ExtensionQRLoginSession {
+        let entry: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)? = lookupLock.withLock {
+            qrLoginRuntimesByID[extensionID]
+        }
+        guard let entry else {
+            let name = installedName(forProviderID: "ext.\(extensionID)") ?? extensionID
+            throw CloudSourceError.extensionUnavailable(name: name)
+        }
+        return try await entry.runtime.startQRLogin()
+    }
+
+    nonisolated func pollQRLogin(extensionID: String, sessionID: String) async throws -> ExtensionQRLoginPollResult {
+        let entry: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)? = lookupLock.withLock {
+            qrLoginRuntimesByID[extensionID]
+        }
+        guard let entry else {
+            let name = installedName(forProviderID: "ext.\(extensionID)") ?? extensionID
+            throw CloudSourceError.extensionUnavailable(name: name)
+        }
+        let result = try await entry.runtime.pollQRLogin(sessionID: sessionID)
+        if result.status == .confirmed, let cookie = result.cookie {
+            await MainActor.run {
+                self.updateCookie(extensionID: extensionID, cookie: cookie)
+            }
+        }
+        return result
     }
 
     nonisolated func makeCloudLyricsService() -> CloudLyricsService {
@@ -595,6 +625,7 @@ final class ExtensionStore {
             installedNamesByProviderID = map
             lyricsRuntimesByID = synced.lyrics
             searchRuntimesByID = synced.search
+            qrLoginRuntimesByID = synced.qrLogin
         }
     }
 
@@ -617,11 +648,13 @@ final class ExtensionStore {
         longTimeoutMs: Int
     ) -> (
         lyrics: [String: (badgeLabel: String, runtime: JSExtensionRuntime)],
-        search: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)]
+        search: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)],
+        qrLogin: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)]
     ) {
         var providers: [any CloudSourceProvider] = []
         var lyricsRuntimes: [String: (badgeLabel: String, runtime: JSExtensionRuntime)] = [:]
         var searchRuntimes: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)] = [:]
+        var qrLoginRuntimes: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)] = [:]
         for ext in extensions where ext.isActive {
             let scriptURL = ext.directoryURL.appendingPathComponent(ext.manifest.effectiveEntry)
             let fallbackURL = ext.directoryURL.appendingPathComponent("index.js")
@@ -654,9 +687,12 @@ final class ExtensionStore {
             if ext.manifest.capabilities.contains(.search) {
                 searchRuntimes[ext.manifest.id] = (manifest: ext.manifest, runtime: runtime)
             }
+            if ext.manifest.capabilities.contains(.qrLogin) {
+                qrLoginRuntimes[ext.manifest.id] = (manifest: ext.manifest, runtime: runtime)
+            }
         }
         registry.replaceExtensions(providers)
-        return (lyricsRuntimes, searchRuntimes)
+        return (lyricsRuntimes, searchRuntimes, qrLoginRuntimes)
     }
 
     private nonisolated static func loadAllFromDisk(
@@ -690,7 +726,7 @@ final class ExtensionStore {
             hostStorage.loadExtension(
                 id: manifest.id,
                 settings: state.settings,
-                cookie: manifest.capabilities.contains(.cookie) ? state.cookie : nil
+                cookie: manifest.supportsCookieAuth ? state.cookie : nil
             )
             loaded.append(InstalledExtension(
                 manifest: manifest,

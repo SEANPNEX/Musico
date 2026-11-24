@@ -9,6 +9,7 @@ enum ExtensionCapability: String, Codable, Hashable, CaseIterable, Sendable {
     case proxy
     case lyrics
     case search
+    case qrLogin = "qr_login"
 
     @MainActor
     var localizedTitle: String {
@@ -20,6 +21,7 @@ enum ExtensionCapability: String, Codable, Hashable, CaseIterable, Sendable {
         case .proxy: L10n.tr("Proxy Support")
         case .lyrics: L10n.tr("Lyrics Search")
         case .search: L10n.tr("Cloud Search")
+        case .qrLogin: L10n.tr("QR Code Login")
         }
     }
 
@@ -33,8 +35,32 @@ enum ExtensionCapability: String, Codable, Hashable, CaseIterable, Sendable {
         case .proxy: L10n.tr("Use system proxy configuration for requests.")
         case .lyrics: L10n.tr("Search online lyrics for playing songs.")
         case .search: L10n.tr("Search songs, albums, and playlists online.")
+        case .qrLogin: L10n.tr("Sign in by scanning a QR code in-app.")
         }
     }
+}
+
+enum ExtensionQRLoginStatus: String, Codable, Hashable, Sendable {
+    case pending
+    case scanned
+    case confirmed
+    case expired
+    case error
+}
+
+struct ExtensionQRLoginSession: Equatable, Sendable {
+    var sessionId: String
+    var qrContent: String
+    var expiresAtMs: Double?
+    var pollIntervalMs: Int
+    var message: String?
+}
+
+struct ExtensionQRLoginPollResult: Equatable, Sendable {
+    var status: ExtensionQRLoginStatus
+    var cookie: String?
+    var accountName: String?
+    var message: String?
 }
 
 /// Entity types an extension declares support for in `manifest.searchKinds`.
@@ -417,6 +443,14 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
     }
 
     var providerID: String { "ext.\(id)" }
+
+    var supportsCookieAuth: Bool {
+        capabilities.contains(.cookie) || capabilities.contains(.qrLogin)
+    }
+
+    var supportsQRLogin: Bool {
+        capabilities.contains(.qrLogin)
+    }
 
     var effectiveSearchKinds: [ExtensionSearchKind] {
         let raw = searchKinds ?? []

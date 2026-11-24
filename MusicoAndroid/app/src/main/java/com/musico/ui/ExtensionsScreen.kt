@@ -31,6 +31,8 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Link
+import androidx.compose.material.icons.rounded.QrCode2
+import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Security
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.UploadFile
@@ -41,6 +43,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
@@ -76,6 +79,9 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.musico.extensions.ExtQrLoginPollResult
+import com.musico.extensions.ExtQrLoginSession
+import com.musico.extensions.ExtQrLoginStatus
 import com.musico.extensions.ExtensionCapability
 import com.musico.extensions.ExtensionLogEntry
 import com.musico.extensions.ExtensionManifest
@@ -88,6 +94,10 @@ import com.musico.i18n.AppStrings
 import com.musico.i18n.LocalStrings
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
+import com.musico.ui.components.QrCodeCanvas
+import com.musico.ui.components.QrCodeEncoder
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonPrimitive
 import java.text.DateFormat
@@ -113,6 +123,7 @@ fun ExtensionsScreen(
     var showImportUrlDialog by remember { mutableStateOf(false) }
     var importError by remember { mutableStateOf<String?>(null) }
     var settingsTargetId by remember { mutableStateOf<String?>(null) }
+    var qrLoginTargetId by remember { mutableStateOf<String?>(null) }
     var logsTargetId by remember { mutableStateOf<String?>(null) }
     var permissionsTarget by remember { mutableStateOf<ExtensionManifest?>(null) }
     var uninstallTarget by remember { mutableStateOf<InstalledExtension?>(null) }
@@ -214,6 +225,7 @@ fun ExtensionsScreen(
                             },
                             onOpenPermissions = { permissionsTarget = ext.manifest },
                             onOpenSettings = { settingsTargetId = ext.id },
+                            onOpenQrLogin = { qrLoginTargetId = ext.id },
                             onOpenLogs = { logsTargetId = ext.id },
                             onRequestUninstall = { uninstallTarget = ext },
                         )
@@ -270,10 +282,24 @@ fun ExtensionsScreen(
             onUpdateCookie = { cookie ->
                 extensionStore.updateCookie(activeSettingsExt.id, cookie)
             },
+            onOpenQrLogin = {
+                settingsTargetId = null
+                qrLoginTargetId = activeSettingsExt.id
+            },
             onResetDefaults = {
                 extensionStore.resetSettings(activeSettingsExt.id)
             },
             onDismiss = { settingsTargetId = null },
+        )
+    }
+
+    val activeQrLoginExt = qrLoginTargetId?.let { id -> extensions.firstOrNull { it.id == id } }
+    if (activeQrLoginExt != null) {
+        ExtensionQrLoginDialog(
+            extension = activeQrLoginExt,
+            extensionStore = extensionStore,
+            strings = strings,
+            onDismiss = { qrLoginTargetId = null },
         )
     }
 
@@ -327,6 +353,7 @@ private fun ExtensionItemCard(
     onToggleEnabled: (Boolean) -> Unit,
     onOpenPermissions: () -> Unit,
     onOpenSettings: () -> Unit,
+    onOpenQrLogin: () -> Unit,
     onOpenLogs: () -> Unit,
     onRequestUninstall: () -> Unit,
 ) {
@@ -430,11 +457,18 @@ private fun ExtensionItemCard(
                         Spacer(Modifier.width(4.dp))
                         Text(strings.permissionsLabel)
                     }
-                    if (manifest.settings.isNotEmpty() || ExtensionCapability.COOKIE in manifest.capabilities) {
+                    if (manifest.settings.isNotEmpty() || manifest.supportsCookieAuth) {
                         TextButton(onClick = onOpenSettings) {
                             Icon(Icons.Rounded.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
                             Text(strings.settingsLabel)
+                        }
+                    }
+                    if (manifest.supportsQrLogin) {
+                        TextButton(enabled = extension.enabled, onClick = onOpenQrLogin) {
+                            Icon(Icons.Rounded.QrCode2, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(strings.qrLoginAction)
                         }
                     }
                     TextButton(onClick = onOpenLogs) {
@@ -678,11 +712,13 @@ private fun ExtensionSettingsDialog(
     strings: AppStrings,
     onUpdateSetting: (key: String, value: JsonPrimitive) -> Unit,
     onUpdateCookie: (String?) -> Unit,
+    onOpenQrLogin: () -> Unit,
     onResetDefaults: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val overrides = extension.state.settings
-    val hasCookie = ExtensionCapability.COOKIE in extension.manifest.capabilities
+    val hasCookie = extension.manifest.supportsCookieAuth
+    val hasQrLogin = extension.manifest.supportsQrLogin
     val cookieValue = extension.state.cookie.orEmpty()
     var showCookie by remember(extension.id) { mutableStateOf(false) }
 
@@ -708,6 +744,17 @@ private fun ExtensionSettingsDialog(
                 if (hasCookie) {
                     if (extension.manifest.settings.isNotEmpty()) {
                         HorizontalDivider()
+                    }
+                    if (hasQrLogin) {
+                        OutlinedButton(
+                            enabled = extension.enabled,
+                            onClick = onOpenQrLogin,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.Rounded.QrCode2, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(strings.signInWithQrCode)
+                        }
                     }
                     OutlinedTextField(
                         value = cookieValue,
@@ -931,6 +978,7 @@ private fun capabilityLabel(cap: ExtensionCapability, strings: AppStrings): Stri
     ExtensionCapability.PROXY -> strings.capabilityProxy
     ExtensionCapability.LYRICS -> strings.capabilityLyrics
     ExtensionCapability.SEARCH -> strings.capabilitySearch
+    ExtensionCapability.QR_LOGIN -> strings.capabilityQrLogin
 }
 
 private fun capabilityDescription(cap: ExtensionCapability, strings: AppStrings): String = when (cap) {
@@ -941,4 +989,223 @@ private fun capabilityDescription(cap: ExtensionCapability, strings: AppStrings)
     ExtensionCapability.PROXY -> strings.capabilityProxyDesc
     ExtensionCapability.LYRICS -> strings.capabilityLyricsDesc
     ExtensionCapability.SEARCH -> strings.capabilitySearchDesc
+    ExtensionCapability.QR_LOGIN -> strings.capabilityQrLoginDesc
+}
+
+@Composable
+private fun ExtensionQrLoginDialog(
+    extension: InstalledExtension,
+    extensionStore: ExtensionStore,
+    strings: AppStrings,
+    onDismiss: () -> Unit,
+) {
+    var reloadToken by androidx.compose.runtime.remember { androidx.compose.runtime.mutableIntStateOf(0) }
+    var session by remember { mutableStateOf<ExtQrLoginSession?>(null) }
+    var matrix by remember { mutableStateOf<com.musico.ui.components.QrCodeMatrix?>(null) }
+    var pollResult by remember { mutableStateOf<ExtQrLoginPollResult?>(null) }
+    var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isLoadingStart by remember { mutableStateOf(true) }
+
+    androidx.compose.runtime.LaunchedEffect(extension.id, reloadToken) {
+        isLoadingStart = true
+        errorMessage = null
+        pollResult = null
+        matrix = null
+        session = null
+        try {
+            val started = extensionStore.startQrLogin(extension.id)
+            if (!isActive) return@LaunchedEffect
+            val encoded = QrCodeEncoder.encode(started.qrContent)
+            session = started
+            matrix = encoded
+            isLoadingStart = false
+
+            while (isActive) {
+                val exp = started.expiresAtMs
+                if (exp != null && System.currentTimeMillis() >= exp) {
+                    pollResult = ExtQrLoginPollResult(
+                        status = ExtQrLoginStatus.EXPIRED,
+                        message = strings.qrLoginRefreshHint,
+                    )
+                    break
+                }
+                delay(started.pollIntervalMs.toLong())
+                if (!isActive) break
+                val next = extensionStore.pollQrLogin(extension.id, started.sessionId)
+                if (!isActive) break
+                pollResult = next
+                when (next.status) {
+                    ExtQrLoginStatus.PENDING, ExtQrLoginStatus.SCANNED -> Unit
+                    ExtQrLoginStatus.CONFIRMED -> {
+                        delay(1200)
+                        if (isActive) onDismiss()
+                        return@LaunchedEffect
+                    }
+                    ExtQrLoginStatus.EXPIRED, ExtQrLoginStatus.ERROR -> return@LaunchedEffect
+                }
+            }
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            errorMessage = t.message ?: strings.qrLoginFailed
+            isLoadingStart = false
+        }
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Rounded.QrCode2, contentDescription = null) },
+        title = { Text("${extension.manifest.name} — ${strings.capabilityQrLogin}") },
+        text = {
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                when {
+                    isLoadingStart -> {
+                        CircularProgressIndicator()
+                        Text(
+                            text = strings.qrLoginGenerating,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    errorMessage != null -> {
+                        Icon(
+                            imageVector = Icons.Rounded.WarningAmber,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(40.dp),
+                        )
+                        Text(
+                            text = errorMessage.orEmpty(),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    pollResult?.status == ExtQrLoginStatus.EXPIRED -> {
+                        Icon(
+                            imageVector = Icons.Rounded.Refresh,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.tertiary,
+                            modifier = Modifier.size(40.dp),
+                        )
+                        Text(
+                            text = strings.qrLoginExpired,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Text(
+                            text = pollResult?.message ?: strings.qrLoginRefreshHint,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    pollResult?.status == ExtQrLoginStatus.ERROR -> {
+                        Icon(
+                            imageVector = Icons.Rounded.WarningAmber,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.size(40.dp),
+                        )
+                        Text(
+                            text = strings.qrLoginFailed,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        pollResult?.message?.let { msg ->
+                            Text(
+                                text = msg,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                    pollResult?.status == ExtQrLoginStatus.CONFIRMED -> {
+                        Icon(
+                            imageVector = Icons.Rounded.Check,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(44.dp),
+                        )
+                        Text(
+                            text = strings.qrLoginSignedIn,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        pollResult?.accountName?.takeIf { it.isNotBlank() }?.let { acct ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.primaryContainer,
+                                shape = MaterialTheme.shapes.small,
+                            ) {
+                                Text(
+                                    text = acct,
+                                    style = MaterialTheme.typography.labelMedium,
+                                    color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                )
+                            }
+                        }
+                        Text(
+                            text = pollResult?.message ?: strings.qrLoginCookieSaved(extension.manifest.name),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    matrix != null -> {
+                        QrCodeCanvas(
+                            matrix = matrix!!,
+                            modifier = Modifier.size(220.dp),
+                        )
+                        if (pollResult?.status == ExtQrLoginStatus.SCANNED) {
+                            Text(
+                                text = strings.qrLoginScannedConfirm,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            pollResult?.accountName?.takeIf { it.isNotBlank() }?.let { acct ->
+                                Surface(
+                                    color = MaterialTheme.colorScheme.primaryContainer,
+                                    shape = MaterialTheme.shapes.small,
+                                ) {
+                                    Text(
+                                        text = acct,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                                    )
+                                }
+                            }
+                        } else {
+                            Text(
+                                text = strings.qrLoginScanPrompt(extension.manifest.effectiveBadgeLabel),
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                            Text(
+                                text = pollResult?.message ?: session?.message ?: strings.qrLoginWaiting,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            if (pollResult?.status != ExtQrLoginStatus.CONFIRMED && !isLoadingStart) {
+                TextButton(onClick = { reloadToken += 1 }) {
+                    Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text(strings.qrLoginRefresh)
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(if (pollResult?.status == ExtQrLoginStatus.CONFIRMED) strings.done else strings.cancel)
+            }
+        },
+    )
 }

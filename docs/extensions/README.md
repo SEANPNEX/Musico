@@ -391,7 +391,7 @@ Package the included starter directory into a `.musicoext` bundle:
 | `description` | `string` | No | Short description shown in Extension Manager. |
 | `badgeLabel` | `string` | No | Short pill badge in **Folders**, **Songs** search chips, and lyrics badges (defaults to `name`, max 16 chars). |
 | `entry` | `string` | No | Relative script path inside `.musicoext` (defaults to `"index.js"`). |
-| `capabilities` | `string[]` | Yes | Non-empty subset of `"playlist"`, `"tree"`, `"stream"`, `"cookie"`, `"proxy"`, `"lyrics"`, `"search"`. |
+| `capabilities` | `string[]` | Yes | Non-empty subset of `"playlist"`, `"tree"`, `"stream"`, `"cookie"`, `"proxy"`, `"lyrics"`, `"search"`, `"qr_login"`. |
 | `urlPatterns` | `string[]` | Conditional | Native regex strings tested before starting a JS VM. **Required** when `"playlist"` or `"tree"` is declared; optional/empty allowed otherwise. |
 | `searchKinds` | `string[]` | No | Subset of `"track"`, `"playlist"`, `"album"`. Controls available filter pills when `"search"` is declared (defaults to all three when omitted/empty). |
 | `permissions.hosts` | `string[]` | Yes | Strict HTTP/HTTPS allowlist: exact domain (`example.com`) or `*.sub.domain` (≥ 2 domain labels after `*.`; bare `*` and `*.tld` are rejected). |
@@ -419,6 +419,12 @@ Package the included starter directory into a `.musicoext` bundle:
 - **`searchLyrics(ctx, req)`** *(async — required when `"lyrics"` capability is declared)*
   - **Input:** `{ title, artist, album?, durationSec? }`
   - **Returns:** `ExtLyricsCandidate[]` | `{ candidates: ExtLyricsCandidate[] }` | `{ results: ExtLyricsCandidate[] }` | `null`
+- **`startQrLogin(ctx, req)`** *(async — required when `"qr_login"` capability is declared)*
+  - **Input:** `{}`
+  - **Returns:** `{ sessionId, qrContent, expiresAtMs?, pollIntervalMs?, message? }` (`qrContent` ≤ 512 UTF-8 bytes; `pollIntervalMs` clamped to `1000`–`10000` ms, default `2000`)
+- **`pollQrLogin(ctx, req)`** *(async — required when `"qr_login"` capability is declared)*
+  - **Input:** `{ sessionId }`
+  - **Returns:** `{ status: "pending" | "scanned" | "confirmed" | "expired" | "error", cookie?, accountName?, message? }` — when `status === "confirmed"`, `cookie` must be non-empty and is persisted directly into the extension's cookie store without logging
 
 ### `ExtSearchResult` Schema
 - **`kind`** *(required)*: `"track"` | `"playlist"` | `"album"`
@@ -451,7 +457,7 @@ Package the included starter directory into a `.musicoext` bundle:
 
 - **`await ctx.http.request({ method?, url, headers?, body?, followRedirects?, timeoutMs?, returnBytes? })`**
   - Routes through native HTTP clients (preserving platform timeouts and Windows proxy settings when `"proxy"` capability is declared).
-  - Returns `{ status, finalUrl, headers, text, bytesBase64? }` with lowercase header keys (response body capped at 8 MB; `bytesBase64` included when `returnBytes === true` or body ≤ 1 MB).
+  - Returns `{ status, finalUrl, headers, setCookies?, text, bytesBase64? }` with lowercase header keys (`setCookies` preserves individual `Set-Cookie` entries cleanly without HTTP comma-joining; response body capped at 8 MB; `bytesBase64` included when `returnBytes === true` or body ≤ 1 MB).
   - Enforces `permissions.hosts` on the initial URL **and every redirect hop** (up to 10 hops; strips `Cookie` & `Authorization` headers across host changes; non-`http`/`https` schemes reject with `PERMISSION_DENIED`).
   - Also validates `resolveStream`'s returned `url` and `fallbackUrls` against `permissions.hosts`.
 - **`ctx.crypto`**: `md5(str)`, `sha1(str)`, `sha256(str)`, `hmacSha256(key, msg)` *(all lowercase hex)*, `base64Encode(str)`, `base64Decode(b64)`.
@@ -461,7 +467,7 @@ Package the included starter directory into a `.musicoext` bundle:
 - **`ctx.log`**: `info(msg)`, `warn(msg)`, `error(msg)` stored in a 200-entry ring buffer visible in Extension Manager.
 
 ### Extension-Level Cookies & Privacy
-- Extensions declaring `"cookie"` get a masked **Extension Cookie** input in **Extensions** (Extension Manager), alongside existing per-folder cookies on mounted Cloud Folders.
+- Extensions declaring `"cookie"` or `"qr_login"` get a masked **Extension Cookie** input in **Extensions** (Extension Manager), alongside existing per-folder cookies on mounted Cloud Folders; `"qr_login"` extensions also show an in-app **Sign In with QR Code** action that runs `startQrLogin` / `pollQrLogin` and saves the returned cookie automatically.
 - Musico passes this extension-level cookie via `req.cookie` to `search(ctx, req)`, ephemeral preview `fetchCollection(ctx, req)`, and root-less `resolveStream(ctx, req)` for ephemeral tracks.
 - For mounted Cloud Folders, each `LibraryRoot` keeps its own strictly isolated cookie that takes precedence over the extension-level cookie.
 - **Never log `req.cookie` via `ctx.log`!** *(As defense-in-depth, Android and Windows also automatically redact raw and URL-encoded cookie strings from `ctx.log` entries.)*
@@ -504,6 +510,8 @@ node docs/extensions/tools/mock-runner.mjs path/to/ext fetch-folder "folder_1" -
 node docs/extensions/tools/mock-runner.mjs path/to/ext resolve-stream "track_1" --setting preferHighBitrate=true
 node docs/extensions/tools/mock-runner.mjs path/to/ext search "Yoasobi" --kind track --limit 20 --cookie "sid=..."
 node docs/extensions/tools/mock-runner.mjs path/to/ext search-lyrics "Idol" --artist "YOASOBI" --duration 213
+node docs/extensions/tools/mock-runner.mjs path/to/ext start-qr-login
+node docs/extensions/tools/mock-runner.mjs path/to/ext poll-qr-login "<sessionId>"
 ```
 
 More starter and test examples in this folder:

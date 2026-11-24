@@ -885,4 +885,249 @@ public sealed class ExtensionRuntimeTests
         Assert.True(importedFromUrl.PendingPermissionReview);
         Assert.False(importedFromUrl.IsEnabled);
     }
+
+    [Fact]
+    public void QrLoginCapability_RequiresStartAndPollHooks()
+    {
+        string missingPoll = """
+            var manifest = {
+              apiVersion: 1,
+              id: 'com.musico.test.win.qr.nopoll',
+              name: 'Missing Poll',
+              version: '1.0.0',
+              capabilities: ['search', 'qr_login'],
+              permissions: { hosts: ['qr.fixture.test'] }
+            };
+            async function search() { return { items: [], hasMore: false }; }
+            async function startQrLogin() { return { sessionId: 's1', qrContent: 'https://qr.fixture.test/s1' }; }
+            module.exports = { manifest: manifest, search: search, startQrLogin: startQrLogin };
+            """;
+        var pollEx = Assert.Throws<InvalidDataException>(() => ExtensionPackageLoader.LoadSingleFileScript(missingPoll));
+        Assert.Contains("pollQrLogin", pollEx.Message);
+
+        string missingStart = """
+            var manifest = {
+              apiVersion: 1,
+              id: 'com.musico.test.win.qr.nostart',
+              name: 'Missing Start',
+              version: '1.0.0',
+              capabilities: ['search', 'qr_login'],
+              permissions: { hosts: ['qr.fixture.test'] }
+            };
+            async function search() { return { items: [], hasMore: false }; }
+            async function pollQrLogin() { return { status: 'pending' }; }
+            module.exports = { manifest: manifest, search: search, pollQrLogin: pollQrLogin };
+            """;
+        var startEx = Assert.Throws<InvalidDataException>(() => ExtensionPackageLoader.LoadSingleFileScript(missingStart));
+        Assert.Contains("startQrLogin", startEx.Message);
+    }
+
+    [Fact]
+    public async Task QrLogin_LifecycleSetCookiesAutoSaveSearchForwardingAndRedaction()
+    {
+        int checkAttempt = 0;
+        var handler = new AsyncStubHttpHandler((req, _) =>
+        {
+            string url = req.RequestUri!.AbsoluteUri;
+            if (url == "https://qr.fixture.test/qr/unikey")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"unikey":"u-win-1"}""", Encoding.UTF8, "application/json")
+                });
+            }
+            if (url == "https://qr.fixture.test/qr/check")
+            {
+                checkAttempt++;
+                if (checkAttempt == 1)
+                {
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent("""{"code":801}""", Encoding.UTF8, "application/json")
+                    });
+                }
+                if (checkAttempt == 2)
+                {
+                    return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent("""{"code":802,"nickname":"WinListener"}""", Encoding.UTF8, "application/json")
+                    });
+                }
+                var confirmed = new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"code":803}""", Encoding.UTF8, "application/json")
+                };
+                confirmed.Headers.TryAddWithoutValidation(
+                    "Set-Cookie",
+                    "MUSIC_U=secret_win_cookie_777; Max-Age=2592000; Expires=Thu, 31 Dec 2099 23:59:59 GMT; Path=/; HttpOnly");
+                confirmed.Headers.TryAddWithoutValidation(
+                    "Set-Cookie",
+                    "__csrf=csrf_win; Expires=Thu, 31 Dec 2099 23:59:59 GMT; Path=/");
+                return Task.FromResult(confirmed);
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        });
+
+        string extId = "com.musico.test.win.qr.flow";
+        string script = $$"""
+            var manifest = {
+              apiVersion: 1,
+              id: '{{extId}}',
+              name: 'QR Windows Fixture',
+              version: '1.0.0',
+              capabilities: ['search', 'qr_login'],
+              permissions: { hosts: ['qr.fixture.test'] }
+            };
+            async function startQrLogin(ctx) {
+              var res = await ctx.http.request({ method: 'POST', url: 'https://qr.fixture.test/qr/unikey' });
+              var body = JSON.parse(res.text);
+              return {
+                sessionId: body.unikey,
+                qrContent: 'https://music.163.com/login?codekey=' + body.unikey,
+                pollIntervalMs: 1500
+              };
+            }
+            async function pollQrLogin(ctx, req) {
+              if (req.sessionId === 'empty-cookie') {
+                return { status: 'confirmed', cookie: '   ' };
+              }
+              var res = await ctx.http.request({ method: 'POST', url: 'https://qr.fixture.test/qr/check' });
+              var body = JSON.parse(res.text);
+              if (body.code === 801) return { status: 'pending' };
+              if (body.code === 802) return { status: 'scanned', accountName: body.nickname };
+              if (body.code === 803) {
+                var list = Array.isArray(res.setCookies) ? res.setCookies : [];
+                var musicU = '';
+                var csrf = '';
+                for (var i = 0; i < list.length; i++) {
+                  var firstPair = String(list[i]).split(';')[0].trim();
+                  if (firstPair.indexOf('MUSIC_U=') === 0) musicU = firstPair;
+                  if (firstPair.indexOf('__csrf=') === 0) csrf = firstPair;
+                }
+                return {
+                  status: 'confirmed',
+                  cookie: [musicU, csrf].filter(Boolean).join('; '),
+                  accountName: 'WinListener'
+                };
+              }
+              return { status: 'expired' };
+            }
+            async function search(ctx, req) {
+              ctx.log.info('searching with cookie: ' + (req.cookie || 'none'));
+              return {
+                items: [
+                  {
+                    kind: 'track',
+                    remoteTrackId: 'tr-1',
+                    title: req.cookie === 'MUSIC_U=secret_win_cookie_777; __csrf=csrf_win' ? 'AUTHED_OK' : 'NO_AUTH'
+                  }
+                ],
+                hasMore: false
+              };
+            }
+            module.exports = {
+              manifest: manifest,
+              startQrLogin: startQrLogin,
+              pollQrLogin: pollQrLogin,
+              search: search
+            };
+            """;
+
+        var store = new ExtensionStore(TestHelpers.MakeTempDir(), handler);
+        var staged = store.StageImportedPackage(ExtensionPackageLoader.LoadSingleFileScript(script));
+        store.ApproveAndEnable(staged.Id);
+
+        Assert.True(staged.Manifest.SupportsCookieAuth);
+        Assert.True(staged.Manifest.SupportsQrLogin);
+        var searchDesc = Assert.Single(store.GetActiveSearchExtensions());
+        Assert.True(searchDesc.SupportsCookie);
+
+        ExtQrLoginSession session = await store.StartQrLoginAsync(extId);
+        Assert.Equal("u-win-1", session.SessionId);
+        Assert.Equal("https://music.163.com/login?codekey=u-win-1", session.QrContent);
+        Assert.Equal(1500, session.PollIntervalMs);
+
+        ExtQrLoginPollResult poll1 = await store.PollQrLoginAsync(extId, session.SessionId);
+        Assert.Equal(ExtQrLoginStatus.Pending, poll1.Status);
+        Assert.Null(store.GetCookie(extId));
+
+        ExtQrLoginPollResult poll2 = await store.PollQrLoginAsync(extId, session.SessionId);
+        Assert.Equal(ExtQrLoginStatus.Scanned, poll2.Status);
+        Assert.Equal("WinListener", poll2.AccountName);
+        Assert.Null(store.GetCookie(extId));
+
+        ExtQrLoginPollResult poll3 = await store.PollQrLoginAsync(extId, session.SessionId);
+        Assert.Equal(ExtQrLoginStatus.Confirmed, poll3.Status);
+        Assert.Equal("MUSIC_U=secret_win_cookie_777; __csrf=csrf_win", poll3.Cookie);
+        Assert.Equal("MUSIC_U=secret_win_cookie_777; __csrf=csrf_win", store.GetCookie(extId));
+
+        ExtSearchPage page = await store.SearchAsync(extId, "hello");
+        var item = Assert.Single(page.Items);
+        Assert.Equal("AUTHED_OK", item.Title);
+
+        IReadOnlyList<ExtensionLogEntry> logs = store.GetLogs(extId);
+        Assert.DoesNotContain(logs, l => l.Message.Contains("secret_win_cookie_777", StringComparison.Ordinal));
+
+        var ex = await Assert.ThrowsAsync<CloudServiceException>(() => store.PollQrLoginAsync(extId, "empty-cookie"));
+        Assert.Equal(CloudErrorCode.ExtensionRuntimeError, ex.Code);
+    }
+
+    [Fact]
+    public void QrCodeEncoder_Versions1Through10AndNetEaseUrl_ProducesValidIsoStructure()
+    {
+        int[] lengths = [10, 20, 35, 55, 75, 95, 115, 140, 170, 205];
+        for (int i = 0; i < lengths.Length; i++)
+        {
+            int expectedVersion = i + 1;
+            QrCodeMatrix matrix = QrCodeEncoder.Encode(new string('A', lengths[i]));
+            Assert.Equal(expectedVersion, matrix.Version);
+            int expectedSize = 17 + 4 * expectedVersion;
+            Assert.Equal(expectedSize, matrix.Size);
+            Assert.Equal(expectedSize * expectedSize, matrix.Modules.Length);
+
+            AssertFinderPattern(matrix, 0, 0);
+            AssertFinderPattern(matrix, 0, matrix.Size - 7);
+            AssertFinderPattern(matrix, matrix.Size - 7, 0);
+            Assert.True(matrix.Get(matrix.Size - 8, 8));
+
+            for (int t = 8; t < matrix.Size - 8; t++)
+            {
+                Assert.Equal(t % 2 == 0, matrix.Get(6, t));
+                Assert.Equal(t % 2 == 0, matrix.Get(t, 6));
+            }
+        }
+
+        QrCodeMatrix urlMatrix = QrCodeEncoder.Encode("https://music.163.com/login?codekey=test-uuid-1234567890");
+        Assert.Equal(4, urlMatrix.Version);
+        Assert.Equal(33, urlMatrix.Size);
+        for (int i = 0; i <= 5; i++)
+        {
+            Assert.Equal(urlMatrix.Get(8, i), urlMatrix.Get(urlMatrix.Size - 1 - i, 8));
+        }
+        Assert.Equal(urlMatrix.Get(8, 7), urlMatrix.Get(urlMatrix.Size - 7, 8));
+        Assert.Equal(urlMatrix.Get(8, 8), urlMatrix.Get(8, urlMatrix.Size - 8));
+        Assert.Equal(urlMatrix.Get(7, 8), urlMatrix.Get(8, urlMatrix.Size - 7));
+        for (int i = 0; i <= 5; i++)
+        {
+            Assert.Equal(urlMatrix.Get(i, 8), urlMatrix.Get(8, urlMatrix.Size - 1 - i));
+        }
+
+        Assert.Throws<ArgumentException>(() => QrCodeEncoder.Encode(""));
+        Assert.Throws<ArgumentException>(() => QrCodeEncoder.Encode(new string('x', 214)));
+    }
+
+    private static void AssertFinderPattern(QrCodeMatrix matrix, int top, int left)
+    {
+        for (int r = 0; r < 7; r++)
+        {
+            for (int c = 0; c < 7; c++)
+            {
+                bool expected = r == 0 || r == 6 || c == 0 || c == 6 || (r is >= 2 and <= 4 && c is >= 2 and <= 4);
+                Assert.Equal(expected, matrix.Get(top + r, left + c));
+            }
+        }
+        int sepRow = top == 0 ? 7 : top - 1;
+        int sepCol = left == 0 ? 7 : left - 1;
+        Assert.False(matrix.Get(sepRow, sepCol));
+    }
 }

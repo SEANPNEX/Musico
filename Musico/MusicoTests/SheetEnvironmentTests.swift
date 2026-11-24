@@ -189,6 +189,22 @@ final class SheetEnvironmentTests: XCTestCase {
         )
         try await present(ExtensionPermissionReviewSheet(extensionItem: sampleExt), over: false, attachEmptyHostEnvironment: true)
         try await present(ExtensionDetailView(extensionID: sampleExt.id), over: false, attachEmptyHostEnvironment: true)
+        let qrExt = InstalledExtension(
+            manifest: ExtensionManifest(
+                apiVersion: 1,
+                id: "com.test.sheet.qr",
+                name: "QR Sample",
+                version: "1.0.0",
+                capabilities: [.playlist, .stream, .qrLogin],
+                urlPatterns: ["^https://example\\.com/.+"],
+                permissions: ExtensionPermissions(hosts: ["example.com"])
+            ),
+            state: ExtensionState(),
+            directoryURL: makeTempDir(),
+            iconData: nil,
+            logs: []
+        )
+        try await present(ExtensionQRLoginSheet(extensionItem: qrExt), over: false, attachEmptyHostEnvironment: true)
         try await present(
             CloudCollectionPreviewSheet(
                 extensionDescriptor: CloudSearchExtensionDescriptor(

@@ -11,6 +11,8 @@
  *   node mock-runner.mjs <path-to-bundle-or-.musico.js> resolve-stream <remoteTrackId> [--cookie "..."] [--force]
  *   node mock-runner.mjs <path-to-bundle-or-.musico.js> search <query> [--kind all|track|playlist|album] [--limit 20] [--cursor "..."] [--cookie "..."] [--setting k=v]
  *   node mock-runner.mjs <path-to-bundle-or-.musico.js> search-lyrics <title> [--artist "..."] [--album "..."] [--duration 213] [--setting k=v]
+ *   node mock-runner.mjs <path-to-bundle-or-.musico.js> start-qr-login [--setting k=v]
+ *   node mock-runner.mjs <path-to-bundle-or-.musico.js> poll-qr-login <sessionId> [--setting k=v]
  */
 
 import fs from 'node:fs';
@@ -27,8 +29,34 @@ const FIXTURES_DIR = path.resolve(__dirname, '../fixtures');
 const STARTER_DIR = path.resolve(__dirname, '../starter');
 const STARTER_SINGLE = path.resolve(__dirname, '../starter-single-file.musico.js');
 
-export const VALID_CAPABILITIES = new Set(['playlist', 'tree', 'stream', 'cookie', 'proxy', 'lyrics', 'search']);
+export const VALID_CAPABILITIES = new Set(['playlist', 'tree', 'stream', 'cookie', 'proxy', 'lyrics', 'search', 'qr_login']);
 export const VALID_SEARCH_KINDS = new Set(['track', 'playlist', 'album']);
+export const VALID_QR_LOGIN_STATUSES = new Set(['pending', 'scanned', 'confirmed', 'expired', 'error']);
+
+export function validateRequiredHooks(manifest, exportsObj) {
+  assert.ok(exportsObj && typeof exportsObj === 'object', 'Extension must export hooks object');
+  const caps = new Set(manifest.capabilities || []);
+  if (caps.has('playlist') || caps.has('tree')) {
+    assert.equal(typeof exportsObj.canHandle, 'function', 'Extension must export canHandle(input)');
+    assert.equal(typeof exportsObj.fetchCollection, 'function', 'Extension must export fetchCollection(ctx, req)');
+  }
+  if (caps.has('tree')) {
+    assert.equal(typeof exportsObj.fetchFolder, 'function', 'Extension must export fetchFolder(ctx, req)');
+  }
+  if (caps.has('stream')) {
+    assert.equal(typeof exportsObj.resolveStream, 'function', 'Extension must export resolveStream(ctx, req)');
+  }
+  if (caps.has('lyrics')) {
+    assert.equal(typeof exportsObj.searchLyrics, 'function', 'Extension must export searchLyrics(ctx, req)');
+  }
+  if (caps.has('search')) {
+    assert.equal(typeof exportsObj.search, 'function', 'Extension must export search(ctx, req)');
+  }
+  if (caps.has('qr_login')) {
+    assert.equal(typeof exportsObj.startQrLogin, 'function', 'Extension must export startQrLogin(ctx, req)');
+    assert.equal(typeof exportsObj.pollQrLogin, 'function', 'Extension must export pollQrLogin(ctx, req)');
+  }
+}
 
 export function validateManifest(manifest) {
   assert.ok(manifest && typeof manifest === 'object', 'manifest must be an object');
@@ -121,6 +149,7 @@ export function loadExtension(targetPath) {
 
   validateManifest(manifest);
   const exportsObj = evaluateCommonJS(source);
+  validateRequiredHooks(manifest, exportsObj);
   return { manifest, source, exportsObj };
 }
 
@@ -139,7 +168,7 @@ export function evaluateCommonJS(source, timeoutMs = 15000) {
   return mod.exports;
 }
 
-export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = new Map(), httpResponder = null, platform = 'macos', appVersion = '1.2.4-dev' } = {}) {
+export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = new Map(), httpResponder = null, platform = 'macos', appVersion = '1.2.5-dev' } = {}) {
   const logs = [];
   const allowedHosts = manifest.permissions?.hosts || [];
   const defaultSettings = {};
@@ -180,7 +209,10 @@ export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = n
           const buf = Buffer.from(await nativeRes.arrayBuffer());
           const hdrs = {};
           nativeRes.headers.forEach((v, k) => { hdrs[k.toLowerCase()] = v; });
-          resp = { status: nativeRes.status, headers: hdrs, bodyBuffer: buf };
+          const rawSetCookies = typeof nativeRes.headers.getSetCookie === 'function'
+            ? nativeRes.headers.getSetCookie().map((c) => String(c || '').trim()).filter(Boolean)
+            : (hdrs['set-cookie'] ? [hdrs['set-cookie']] : []);
+          resp = { status: nativeRes.status, headers: hdrs, setCookies: rawSetCookies, bodyBuffer: buf };
         } finally {
           clearTimeout(timer);
         }
@@ -191,6 +223,9 @@ export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = n
       for (const [k, v] of Object.entries(resp.headers || {})) {
         lowerHeaders[k.toLowerCase()] = String(v);
       }
+      const setCookies = Array.isArray(resp.setCookies)
+        ? resp.setCookies.map((c) => String(c || '').trim()).filter(Boolean)
+        : (lowerHeaders['set-cookie'] ? [lowerHeaders['set-cookie']] : []);
 
       if (followRedirects && [301, 302, 303, 307, 308].includes(status) && lowerHeaders.location) {
         const nextUrl = new URL(lowerHeaders.location, currentUrl).toString();
@@ -216,6 +251,9 @@ export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = n
         headers: lowerHeaders,
         text: capped.toString('utf8')
       };
+      if (setCookies.length > 0) {
+        out.setCookies = setCookies;
+      }
       if (req?.returnBytes === true || capped.length <= 1024 * 1024) {
         out.bytesBase64 = capped.toString('base64');
       }
@@ -364,6 +402,47 @@ export async function runSearchLyrics(ext, bridge, req, timeoutMs = 15000) {
   throw Object.assign(new Error('searchLyrics() must return an array or { candidates | results } object'), {
     code: 'EXTENSION_RUNTIME_ERROR'
   });
+}
+
+export async function runStartQrLogin(ext, bridge, req = {}, timeoutMs = 15000) {
+  assert.equal(typeof ext.exportsObj.startQrLogin, 'function', 'Extension must export startQrLogin(ctx, req)');
+  const result = await invokeWithTimeout(() => ext.exportsObj.startQrLogin(bridge.ctx, req && typeof req === 'object' ? req : {}), timeoutMs);
+  assert.ok(result && typeof result === 'object' && !Array.isArray(result), 'startQrLogin() must return an object');
+  const sessionId = typeof result.sessionId === 'string' ? result.sessionId.trim() : '';
+  assert.ok(sessionId.length > 0, 'startQrLogin() requires non-empty sessionId');
+  const rawQrContent = typeof result.qrContent === 'string' && result.qrContent.trim()
+    ? result.qrContent.trim()
+    : (typeof result.qrUrl === 'string' ? result.qrUrl.trim() : '');
+  assert.ok(rawQrContent.length > 0, 'startQrLogin() requires non-empty qrContent');
+  assert.ok(Buffer.byteLength(rawQrContent, 'utf8') <= 512, 'startQrLogin() qrContent must be <= 512 UTF-8 bytes');
+  const rawPoll = typeof result.pollIntervalMs === 'number' && Number.isFinite(result.pollIntervalMs)
+    ? Math.round(result.pollIntervalMs)
+    : 2000;
+  const pollIntervalMs = Math.max(1000, Math.min(rawPoll, 10000));
+  const expiresAtMs = typeof result.expiresAtMs === 'number' && Number.isFinite(result.expiresAtMs) && result.expiresAtMs > 0
+    ? result.expiresAtMs
+    : null;
+  const message = typeof result.message === 'string' && result.message.trim() ? result.message.trim() : null;
+  return { sessionId, qrContent: rawQrContent, expiresAtMs, pollIntervalMs, message };
+}
+
+export async function runPollQrLogin(ext, bridge, req, timeoutMs = 15000) {
+  assert.equal(typeof ext.exportsObj.pollQrLogin, 'function', 'Extension must export pollQrLogin(ctx, req)');
+  const sessionId = typeof req?.sessionId === 'string' ? req.sessionId.trim() : '';
+  assert.ok(sessionId.length > 0, 'pollQrLogin() requires non-empty sessionId');
+  const result = await invokeWithTimeout(() => ext.exportsObj.pollQrLogin(bridge.ctx, { sessionId }), timeoutMs);
+  assert.ok(result && typeof result === 'object' && !Array.isArray(result), 'pollQrLogin() must return an object');
+  const status = typeof result.status === 'string' ? result.status.trim().toLowerCase() : '';
+  assert.ok(VALID_QR_LOGIN_STATUSES.has(status), `Invalid QR login status: ${result.status}`);
+  const cookie = typeof result.cookie === 'string' && result.cookie.trim() ? result.cookie.trim() : null;
+  if (status === 'confirmed' && !cookie) {
+    throw Object.assign(new Error('pollQrLogin() returned confirmed without a non-empty cookie'), {
+      code: 'EXTENSION_RUNTIME_ERROR'
+    });
+  }
+  const accountName = typeof result.accountName === 'string' && result.accountName.trim() ? result.accountName.trim() : null;
+  const message = typeof result.message === 'string' && result.message.trim() ? result.message.trim() : null;
+  return { status, cookie, accountName, message };
 }
 
 async function runSelfTest() {
@@ -677,8 +756,97 @@ async function runSelfTest() {
     permissions: { hosts: ['example.com'] }
   }), /Unsupported searchKind/);
 
+  // 6. Test qr_login hooks + setCookies HTTP bridge
+  const qrResponder = async ({ url }) => {
+    const u = new URL(url);
+    if (u.pathname === '/qr/start') {
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        text: JSON.stringify({ key: 'qr-sess-1', url: 'https://auth.fixture.test/login?codekey=qr-sess-1' })
+      };
+    }
+    if (u.pathname === '/qr/poll') {
+      const state = u.searchParams.get('state') || 'pending';
+      if (state === 'confirmed') {
+        return {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'set-cookie': 'NMTID=abc; Path=/; Expires=Thu, 01 Jan 2099 00:00:00 GMT, MUSIC_U=secret_u; Path=/; HttpOnly'
+          },
+          setCookies: [
+            'NMTID=abc; Path=/; Expires=Thu, 01 Jan 2099 00:00:00 GMT',
+            'MUSIC_U=secret_u; Path=/; HttpOnly'
+          ],
+          text: JSON.stringify({ status: 'confirmed', nickname: 'Tester' })
+        };
+      }
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        text: JSON.stringify({ status: state, nickname: state === 'scanned' ? 'Tester' : null })
+      };
+    }
+    return { status: 404, headers: {}, text: 'not found' };
+  };
+
+  const qrSource = `
+    var manifest = {
+      apiVersion: 1,
+      id: 'com.example.test.qr',
+      name: 'Test QR',
+      version: '1.0.0',
+      capabilities: ['qr_login'],
+      permissions: { hosts: ['auth.fixture.test'] }
+    };
+    async function startQrLogin(ctx) {
+      var res = await ctx.http.request({ method: 'GET', url: 'https://auth.fixture.test/qr/start' });
+      var data = JSON.parse(res.text);
+      return { sessionId: data.key, qrContent: data.url, pollIntervalMs: 250 };
+    }
+    async function pollQrLogin(ctx, req) {
+      var res = await ctx.http.request({ method: 'GET', url: 'https://auth.fixture.test/qr/poll?state=' + encodeURIComponent(req.sessionId) });
+      var data = JSON.parse(res.text);
+      if (data.status === 'confirmed') {
+        var cookieLine = (res.setCookies || []).find(function(c) { return c.indexOf('MUSIC_U=') === 0; }) || '';
+        var val = cookieLine.split(';')[0];
+        return { status: 'confirmed', cookie: val, accountName: data.nickname };
+      }
+      return { status: data.status, accountName: data.nickname || null };
+    }
+    module.exports = { manifest: manifest, startQrLogin: startQrLogin, pollQrLogin: pollQrLogin };
+  `;
+  const qrExports = evaluateCommonJS(qrSource);
+  validateManifest(qrExports.manifest);
+  validateRequiredHooks(qrExports.manifest, qrExports);
+  const qrExt = { manifest: qrExports.manifest, source: qrSource, exportsObj: qrExports };
+  const qrBridge = createHostBridge(qrExports.manifest, { httpResponder: qrResponder });
+  const qrStart = await runStartQrLogin(qrExt, qrBridge, {});
+  assert.equal(qrStart.sessionId, 'qr-sess-1');
+  assert.equal(qrStart.pollIntervalMs, 1000);
+  const qrPending = await runPollQrLogin(qrExt, qrBridge, { sessionId: 'pending' });
+  assert.equal(qrPending.status, 'pending');
+  const qrScanned = await runPollQrLogin(qrExt, qrBridge, { sessionId: 'scanned' });
+  assert.equal(qrScanned.status, 'scanned');
+  assert.equal(qrScanned.accountName, 'Tester');
+  const qrConfirmed = await runPollQrLogin(qrExt, qrBridge, { sessionId: 'confirmed' });
+  assert.equal(qrConfirmed.status, 'confirmed');
+  assert.equal(qrConfirmed.cookie, 'MUSIC_U=secret_u');
+  const qrExpired = await runPollQrLogin(qrExt, qrBridge, { sessionId: 'expired' });
+  assert.equal(qrExpired.status, 'expired');
+
+  assert.throws(() => validateRequiredHooks({
+    apiVersion: 1,
+    id: 'com.example.invalid.qr',
+    name: 'Invalid QR',
+    version: '1.0.0',
+    capabilities: ['qr_login'],
+    permissions: { hosts: ['auth.fixture.test'] }
+  }, { manifest: {} }), /startQrLogin/);
+
   console.log('ALL_SELF_TESTS_PASSED', {
-    testedFixtures: ['basic-playlist.musico.js', 'tree-source', 'security-and-errors.musico.js', 'starter', 'starter-single-file.musico.js', 'in-memory-lyrics', 'in-memory-search'],
+    testedFixtures: ['basic-playlist.musico.js', 'tree-source', 'security-and-errors.musico.js', 'starter', 'starter-single-file.musico.js', 'in-memory-lyrics', 'in-memory-search', 'in-memory-qr-login'],
     httpRequestsExecuted: capturedRequests.length
   });
 }
@@ -689,12 +857,24 @@ async function main() {
     await runSelfTest();
     return;
   }
-  if (args.length < 3) {
-    console.error('Usage: node mock-runner.mjs [--self-test | <ext-path> <can-handle|fetch-collection|fetch-folder|resolve-stream|search|search-lyrics> <target> [options]]');
+  const hasStartQrCommand = args.length >= 2 && args[1] === 'start-qr-login';
+  if (args.length < 3 && !hasStartQrCommand) {
+    console.error('Usage: node mock-runner.mjs [--self-test | <ext-path> <can-handle|fetch-collection|fetch-folder|resolve-stream|search|search-lyrics|start-qr-login|poll-qr-login> [target] [options]]');
     process.exit(2);
   }
 
-  const [extPath, command, target, ...rest] = args;
+  let extPath;
+  let command;
+  let target;
+  let rest;
+  if (hasStartQrCommand) {
+    [extPath, command, ...rest] = args;
+    if (rest.length > 0 && !rest[0].startsWith('--')) {
+      target = rest.shift();
+    }
+  } else {
+    [extPath, command, target, ...rest] = args;
+  }
   let cookie = null;
   let cursor = null;
   let depth = 1;
@@ -740,6 +920,10 @@ async function main() {
     output = await runSearch(ext, bridge, { query: target, kind, limit, cursor, cookie }, 15000);
   } else if (command === 'search-lyrics') {
     output = await runSearchLyrics(ext, bridge, { title: target, artist, album, durationSec }, 15000);
+  } else if (command === 'start-qr-login') {
+    output = await runStartQrLogin(ext, bridge, {}, 15000);
+  } else if (command === 'poll-qr-login') {
+    output = await runPollQrLogin(ext, bridge, { sessionId: target }, 15000);
   } else {
     throw new Error(`Unknown command: ${command}`);
   }

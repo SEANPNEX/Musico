@@ -589,6 +589,155 @@ public sealed class JintExtensionRuntime
         return new ExtSearchPage(items, nextCursor, hasMore, totalCount);
     }
 
+    public async Task<ExtQrLoginSession> StartQrLoginAsync(
+        ExtensionManifest manifest,
+        string scriptSource,
+        string? proxyUrl = null,
+        IExtensionHostServices? host = null,
+        CancellationToken ct = default)
+    {
+        JsonElement payload = await InvokeHookAsync<JsonElement>(
+            manifest,
+            scriptSource,
+            hookName: "startQrLogin",
+            requestPayload: new Dictionary<string, object?>(),
+            includeCtx: true,
+            timeout: _shortHookTimeout,
+            proxyUrl: proxyUrl,
+            host: host,
+            ct: ct).ConfigureAwait(false);
+
+        if (payload.ValueKind != JsonValueKind.Object)
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionRuntimeError,
+                "Extension startQrLogin() must return an object.");
+        }
+
+        string? sessionId = ReadPropertyScalarString(payload, "sessionId");
+        if (string.IsNullOrEmpty(sessionId))
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionRuntimeError,
+                "Extension startQrLogin() must return a non-empty sessionId.");
+        }
+
+        string? qrContent = ReadPropertyTrimmedString(payload, "qrContent") ?? ReadPropertyTrimmedString(payload, "qrUrl");
+        if (string.IsNullOrEmpty(qrContent))
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionRuntimeError,
+                "Extension startQrLogin() must return a non-empty qrContent.");
+        }
+
+        if (Encoding.UTF8.GetByteCount(qrContent) > 512)
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionRuntimeError,
+                "Extension startQrLogin() qrContent exceeds 512 UTF-8 bytes.");
+        }
+
+        int pollIntervalMs = 2000;
+        if (payload.TryGetProperty("pollIntervalMs", out JsonElement intervalEl) &&
+            intervalEl.ValueKind == JsonValueKind.Number &&
+            intervalEl.TryGetDouble(out double intervalVal) &&
+            double.IsFinite(intervalVal))
+        {
+            pollIntervalMs = Math.Clamp((int)Math.Round(intervalVal), 1000, 10000);
+        }
+
+        long? expiresAtMs = null;
+        if (payload.TryGetProperty("expiresAtMs", out JsonElement expEl) &&
+            expEl.ValueKind == JsonValueKind.Number &&
+            expEl.TryGetDouble(out double expVal) &&
+            double.IsFinite(expVal) &&
+            expVal > 0)
+        {
+            expiresAtMs = (long)Math.Floor(expVal);
+        }
+
+        string? message = ReadPropertyTrimmedString(payload, "message");
+        return new ExtQrLoginSession(sessionId, qrContent, expiresAtMs, pollIntervalMs, message);
+    }
+
+    public async Task<ExtQrLoginPollResult> PollQrLoginAsync(
+        ExtensionManifest manifest,
+        string scriptSource,
+        string sessionId,
+        string? proxyUrl = null,
+        IExtensionHostServices? host = null,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionRuntimeError,
+                "QR login sessionId must not be empty.");
+        }
+
+        var req = new Dictionary<string, object?>
+        {
+            ["sessionId"] = sessionId.Trim()
+        };
+
+        JsonElement payload = await InvokeHookAsync<JsonElement>(
+            manifest,
+            scriptSource,
+            hookName: "pollQrLogin",
+            requestPayload: req,
+            includeCtx: true,
+            timeout: _shortHookTimeout,
+            proxyUrl: proxyUrl,
+            host: host,
+            ct: ct).ConfigureAwait(false);
+
+        if (payload.ValueKind != JsonValueKind.Object)
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionRuntimeError,
+                "Extension pollQrLogin() must return an object.");
+        }
+
+        string? rawStatus = ReadPropertyTrimmedString(payload, "status");
+        if (!ExtQrLoginStatusExtensions.TryParseWire(rawStatus, out ExtQrLoginStatus status))
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionRuntimeError,
+                $"Extension pollQrLogin() returned invalid status '{rawStatus}'.");
+        }
+
+        string? cookie = ReadPropertyTrimmedString(payload, "cookie");
+        if (status == ExtQrLoginStatus.Confirmed && string.IsNullOrEmpty(cookie))
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionRuntimeError,
+                "Extension pollQrLogin() returned 'confirmed' without a cookie.");
+        }
+
+        string? accountName = ReadPropertyTrimmedString(payload, "accountName");
+        string? message = ReadPropertyTrimmedString(payload, "message");
+        return new ExtQrLoginPollResult(status, cookie, accountName, message);
+    }
+
+    private static string? ReadPropertyTrimmedString(JsonElement obj, string propertyName)
+    {
+        if (!obj.TryGetProperty(propertyName, out JsonElement el) || el.ValueKind != JsonValueKind.String)
+        {
+            return null;
+        }
+        string? val = el.GetString();
+        return string.IsNullOrWhiteSpace(val) ? null : val.Trim();
+    }
+
+    private static string? ReadPropertyScalarString(JsonElement obj, string propertyName)
+    {
+        if (!obj.TryGetProperty(propertyName, out JsonElement el))
+        {
+            return null;
+        }
+        return ReadLossyScalarString(el);
+    }
+
     private static string? ReadLossyScalarString(JsonElement? el)
     {
         if (el is not JsonElement val) return null;

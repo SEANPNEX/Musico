@@ -246,6 +246,9 @@
     <sys:String x:Key="Str_Extensions_LogsTitle">Extension Debug Logs</sys:String>
     <sys:String x:Key="Str_Extensions_ClearLogs">Clear Logs</sys:String>
     <sys:String x:Key="Str_Extensions_LogsEmpty">No log entries yet.</sys:String>
+    <sys:String x:Key="Str_Extensions_QrLoginTitle">Sign In with QR Code</sys:String>
+    <sys:String x:Key="Str_Extensions_QrLoginRefresh">Refresh QR Code</sys:String>
+    <sys:String x:Key="Str_Extensions_QrLoginClose">Close</sys:String>
 
     <!-- Cloud Search & Preview -->
     <sys:String x:Key="Str_Songs_SearchButton">Search</sys:String>
