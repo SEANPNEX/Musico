@@ -252,19 +252,6 @@
                                         </StackPanel>
                                     </RadioButton>
 
-                                    <Button x:Name="ExitSettingsButton"
-                                            Style="{StaticResource Win10FlatButtonStyle}"
-                                            Height="40"
-                                            Padding="0"
-                                            HorizontalContentAlignment="Left"
-                                            ToolTip="{DynamicResource Str_WindowBehavior_SettingsTitle}"
-                                            Click="ExitSettings_Click">
-                                        <StackPanel Orientation="Horizontal" Margin="14,0">
-                                            <TextBlock Text="&#xE8AC;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="15" Width="22" VerticalAlignment="Center" />
-                                            <TextBlock x:Name="LblExit" Text="{DynamicResource Str_Nav_Exit}" Margin="12,0,0,0" VerticalAlignment="Center" />
-                                        </StackPanel>
-                                    </Button>
-
                                     <RadioButton x:Name="NavExtensions"
                                                  Style="{StaticResource Win10NavItemStyle}"
                                                  GroupName="MainNav"
@@ -484,7 +471,6 @@
             <controls:SongInfoDialog x:Name="SongInfoDialog" />
             <controls:TextInputDialog x:Name="PromptDialog" />
             <controls:ConfirmDialog x:Name="ConfirmOverlay" />
-            <controls:WindowBehaviorDialog x:Name="WindowBehaviorOverlay" />
         </Grid>
     </Grid>
 </Window>

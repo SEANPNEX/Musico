@@ -18,7 +18,6 @@
     <sys:String x:Key="Str_Nav_NewPlaylist">New Playlist</sys:String>
     <sys:String x:Key="Str_Nav_Queues">Queues</sys:String>
     <sys:String x:Key="Str_Nav_Stats">Stats</sys:String>
-    <sys:String x:Key="Str_Nav_Exit">Exit</sys:String>
     <sys:String x:Key="Str_Nav_Extensions">Extensions</sys:String>
     <sys:String x:Key="Str_Nav_LightTheme">Light Theme</sys:String>
     <sys:String x:Key="Str_Nav_ThemeTooltip">Switch Light / Dark theme</sys:String>
@@ -27,15 +26,6 @@
     <sys:String x:Key="Str_Nav_Rescan">Rescan Library</sys:String>
     <sys:String x:Key="Str_Nav_RescanTooltip">Rescan library folders</sys:String>
     <sys:String x:Key="Str_Nav_CheckUpdates">Check for Updates</sys:String>
-
-    <!-- Window close behavior -->
-    <sys:String x:Key="Str_WindowBehavior_SettingsTitle">Exit settings</sys:String>
-    <sys:String x:Key="Str_WindowBehavior_CloseTitle">Close Musico</sys:String>
-    <sys:String x:Key="Str_WindowBehavior_CloseMessage">What should happen when you close the window? Your choice will be remembered for this version. Each new version will ask again.</sys:String>
-    <sys:String x:Key="Str_WindowBehavior_SettingsMessage">Choose what closing the window should do. OK only saves the setting here. You can always quit immediately using Exit in the tray menu.</sys:String>
-    <sys:String x:Key="Str_WindowBehavior_MinimizeToTray">Minimize to system tray (keep playing)</sys:String>
-    <sys:String x:Key="Str_WindowBehavior_Exit">Exit Musico</sys:String>
-    <sys:String x:Key="Str_WindowBehavior_OK">OK</sys:String>
 
     <!-- Common -->
     <sys:String x:Key="Str_Common_Cancel">Cancel</sys:String>

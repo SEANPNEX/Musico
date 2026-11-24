@@ -115,12 +115,6 @@ Grab the latest builds from the [**Releases**](https://github.com/SEANPNEX/local
   - `Cmd+P` / `Cmd+Left` / `Cmd+Right`: Play / Pause, Previous / Next track (`Playback` menu also includes Shuffle, Repeat, and Show/Hide Now Playing)
   - `Esc`: Close Full Player (plus standard system media keys)
 
-### 6. Windows System Tray & Close Behavior
-- On the first window close in each app version, choose **Minimize to system tray** or **Exit Musico**. **OK** saves and applies the choice; **Cancel** leaves the app running without changing the preference. Later closes in that version reuse your choice.
-- The **Exit** sidebar item after **Stats** opens exit settings. **OK** here only saves the preference, without closing the window or skipping a new version's first-close confirmation. The title-bar minimize button still minimizes to the taskbar normally.
-- Right-click the notification-area icon for **Play / Pause**, **Previous track**, **Next track**, **Show main window**, and **Exit**. Double-click the icon to restore the window. Tray **Exit** always quits; application updates and Windows sign-out/shutdown also bypass the close prompt.
-- Preferences are stored in `window_prefs.json` in the app data directory (or `Data` beside the executable in portable mode).
-
 ---
 
 ## 🛠️ Building & Testing Locally

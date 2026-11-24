@@ -18,7 +18,6 @@
     <sys:String x:Key="Str_Nav_NewPlaylist">新建播放列表</sys:String>
     <sys:String x:Key="Str_Nav_Queues">播放队列</sys:String>
     <sys:String x:Key="Str_Nav_Stats">收听统计</sys:String>
-    <sys:String x:Key="Str_Nav_Exit">退出</sys:String>
     <sys:String x:Key="Str_Nav_Extensions">扩展</sys:String>
     <sys:String x:Key="Str_Nav_LightTheme">浅色主题</sys:String>
     <sys:String x:Key="Str_Nav_ThemeTooltip">切换浅色/深色主题</sys:String>
@@ -27,15 +26,6 @@
     <sys:String x:Key="Str_Nav_Rescan">重新扫描音乐库</sys:String>
     <sys:String x:Key="Str_Nav_RescanTooltip">重新扫描音乐库文件夹</sys:String>
     <sys:String x:Key="Str_Nav_CheckUpdates">检查更新</sys:String>
-
-    <!-- Window close behavior -->
-    <sys:String x:Key="Str_WindowBehavior_SettingsTitle">退出设置</sys:String>
-    <sys:String x:Key="Str_WindowBehavior_CloseTitle">关闭 Musico</sys:String>
-    <sys:String x:Key="Str_WindowBehavior_CloseMessage">关闭窗口时要执行什么操作？本版本将记住您的选择，每次更新版本后会再次询问。</sys:String>
-    <sys:String x:Key="Str_WindowBehavior_SettingsMessage">选择关闭窗口时的行为。此处点击“确定”仅保存设置。您随时可以通过托盘菜单中的“退出”直接结束程序。</sys:String>
-    <sys:String x:Key="Str_WindowBehavior_MinimizeToTray">最小化到系统托盘（继续播放）</sys:String>
-    <sys:String x:Key="Str_WindowBehavior_Exit">退出程序</sys:String>
-    <sys:String x:Key="Str_WindowBehavior_OK">确定</sys:String>
 
     <!-- Common -->
     <sys:String x:Key="Str_Common_Cancel">取消</sys:String>

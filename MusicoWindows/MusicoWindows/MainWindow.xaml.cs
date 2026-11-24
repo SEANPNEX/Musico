@@ -8,7 +8,6 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using MusicoWindows.Controls;
-using MusicoWindows.Core;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
@@ -22,21 +21,17 @@ public partial class MainWindow : Window
 {
     private readonly AppServices _services;
     private readonly ViewContext _ctx;
-    private readonly WindowPreferences _windowPreferences;
     private readonly List<RadioButton> _dynamicPlaylistButtons = new();
 
     private bool _navExpanded = true;
     private SidePanelKind? _sidePanel;
     private string _activeRoute = "songs";
     private Guid? _activePlaylistId;
-    private bool _closeRequestPending;
-    private WindowState _restoreWindowState = WindowState.Normal;
 
     public MainWindow(AppServices services)
     {
         InitializeComponent();
         _services = services;
-        _windowPreferences = new WindowPreferences(services.StateDirectory, services.Update.CurrentVersion.ToString());
 
         _ctx = new ViewContext
         {
@@ -85,12 +80,7 @@ public partial class MainWindow : Window
         LocalizationManager.LanguageChanged += OnLanguageChanged;
         SourceInitialized += (_, _) => AcrylicBackdrop.Apply(this, ThemeManager.IsDark);
         Loaded += OnMainWindowLoaded;
-        StateChanged += (_, _) =>
-        {
-            if (WindowState != WindowState.Minimized)
-                _restoreWindowState = WindowState;
-            UpdateMaximizedState();
-        };
+        StateChanged += (_, _) => UpdateMaximizedState();
         Closed += (_, _) =>
         {
             ThemeManager.ThemeChanged -= OnThemeChanged;
@@ -559,7 +549,6 @@ public partial class MainWindow : Window
         LblNewPlaylist.Visibility = labelVis;
         LblQueues.Visibility = labelVis;
         LblStats.Visibility = labelVis;
-        LblExit.Visibility = labelVis;
         LblExtensions.Visibility = labelVis;
         LblTheme.Visibility = labelVis;
         LblLanguage.Visibility = labelVis;
@@ -656,7 +645,7 @@ public partial class MainWindow : Window
 
     private void CheckUpdatesFooter_Click(object sender, RoutedEventArgs e)
     {
-        UpdateDialog.Show(_services, () => ((App)Application.Current).RequestExit());
+        UpdateDialog.Show(_services, () => Application.Current.Shutdown());
     }
 
     private void DownloadsFooter_Click(object sender, RoutedEventArgs e)
@@ -682,95 +671,8 @@ public partial class MainWindow : Window
 
     private void Close_Click(object sender, RoutedEventArgs e) => Close();
 
-    protected override void OnClosing(CancelEventArgs e)
-    {
-        base.OnClosing(e);
-        if (e.Cancel || ((App)Application.Current).IsExiting) return;
-
-        e.Cancel = true;
-        if (_closeRequestPending || WindowBehaviorOverlay.IsOpen) return;
-        _closeRequestPending = true;
-        // Finish the Closing event before showing a prompt or initiating a real shutdown.
-        Dispatcher.BeginInvoke(() =>
-        {
-            _closeRequestPending = false;
-            if (((App)Application.Current).IsExiting) return;
-            if (_windowPreferences.RequiresConfirmation)
-            {
-                var previousState = WindowState;
-                RestoreFromTray();
-                ShowWindowBehaviorDialog(closing: true, onCancel: () => WindowState = previousState);
-            }
-            else
-            {
-                ApplyCloseBehavior();
-            }
-        });
-    }
-
-    private void ExitSettings_Click(object sender, RoutedEventArgs e) => ShowWindowBehaviorDialog(closing: false);
-
-    private void ShowWindowBehaviorDialog(bool closing, Action? onCancel = null)
-    {
-        WindowBehaviorOverlay.Show(_windowPreferences.Behavior, closing, behavior =>
-        {
-            try
-            {
-                _windowPreferences.Save(behavior, confirmVersion: closing);
-            }
-            catch (Exception ex) when (ex is System.IO.IOException or UnauthorizedAccessException)
-            {
-                MessageBox.Show(this, L.Get("WindowBehavior_SaveFailed"), L.Get("WindowBehavior_SettingsTitle"),
-                    MessageBoxButton.OK, MessageBoxImage.Error);
-                return false;
-            }
-
-            if (closing)
-                Dispatcher.BeginInvoke(ApplyCloseBehavior);
-            return true;
-        }, onCancel);
-    }
-
-    private void ApplyCloseBehavior()
-    {
-        var app = (App)Application.Current;
-        if (app.IsExiting) return;
-        if (_windowPreferences.Behavior == WindowCloseBehavior.Exit)
-        {
-            app.RequestExit();
-        }
-        else if (app.EnsureTrayIcon())
-        {
-            Hide();
-        }
-        else
-        {
-            RestoreFromTray();
-            MessageBox.Show(this, L.Get("Tray_Unavailable"), "Musico", MessageBoxButton.OK, MessageBoxImage.Error);
-        }
-    }
-
-    internal void RestoreFromTray()
-    {
-        if (((App)Application.Current).IsExiting) return;
-        Show();
-        if (WindowState == WindowState.Minimized)
-            WindowState = _restoreWindowState;
-        Activate();
-    }
-
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
-        if (WindowBehaviorOverlay.IsOpen)
-        {
-            if (e.Key == Key.Escape)
-            {
-                WindowBehaviorOverlay.Close();
-                e.Handled = true;
-            }
-            return;
-        }
-
         if (e.Key == Key.Escape)
         {
             if (ConfirmOverlay.IsOpen) { ConfirmOverlay.Close(); e.Handled = true; return; }
