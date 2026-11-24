@@ -125,6 +125,9 @@ public static class L
 
     private static readonly Dictionary<string, string> En = new(StringComparer.Ordinal)
     {
+        ["App_AlreadyRunning"] = "Musico is already running.",
+        ["App_InstanceCheckFailed"] = "Musico could not check whether another instance is running. Please close other copies of Musico and try again.",
+
         // Language switcher
         ["Lang_FollowSystem"] = "Follow System",
         ["Lang_English"] = "English",
@@ -557,6 +560,9 @@ public static class L
 
     private static readonly Dictionary<string, string> ZhHans = new(StringComparer.Ordinal)
     {
+        ["App_AlreadyRunning"] = "Musico 已在运行。",
+        ["App_InstanceCheckFailed"] = "无法检查 Musico 是否已在运行。请关闭其他 Musico 程序后重试。",
+
         // Language switcher
         ["Lang_FollowSystem"] = "跟随系统",
         ["Lang_English"] = "English",
