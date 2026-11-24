@@ -1,14 +1,18 @@
-# Musico JavaScript Extensions Developer Guide (API v1)
+# ♪ Musico JavaScript Extensions Developer Guide (API v1) ♪
 
-**English** | [简体中文](README.zh-CN.md)
+**English** | [简体中文](README.zh-CN.md) | [← Back to Root README](../../README.md)
 
-Write one JavaScript extension in CommonJS format and run it natively inside **Musico** across **iOS / iPadOS / macOS** (`JavaScriptCore`), **Android** (`QuickJS`), and **Windows** (`Jint`) with zero WebViews. Extensions share the exact same `CloudSourceProvider` pipeline as YouTube, Bilibili, and Google Drive, so they automatically support **Save to Local Folder**, **Update from Cloud**, **Playlists**, **Offline Cache**, and source badge pills.
+Write one JavaScript extension in CommonJS format and run it natively inside **Musico** across **iOS / iPadOS / macOS** (`JavaScriptCore`), **Android** (`QuickJS`), and **Windows** (`Jint`) with zero WebViews `(ﾉ◕ヮ◕)ﾉ*:･ﾟ✧`! One extension model powers three workflows seamlessly:
+
+1. **Custom Cloud Sources** (`"playlist"`, `"tree"`, `"stream"`): Shared `CloudSourceProvider` pipeline with YouTube, Bilibili, and Google Drive — automatically getting **Save to Local Folder**, **Update from Cloud**, **Playlists**, **Offline Cache**, and custom source badge pills.
+2. **Extension-Only Cloud Search** (`"search"`): Opt-in search tab in **Songs** with conditional source switcher (stays hidden with zero `"search"` extensions enabled), ephemeral playback excluded from Library & Stats, single-track **Save to Local Folder…**, and playlist/album preview sheets with **Add as Cloud Folder**.
+3. **Custom Cloud Lyrics Providers** (`"lyrics"`): Plugs directly into Musico's on-demand **Search Online…** lyrics picker alongside built-in **LRCLIB** and **NetEase**!
 
 ---
 
-## 1. Quick Start — Minimal Practical Example
+## 1. Quick Start — Minimal Cloud Source Example
 
-The fastest way to ship an extension is a single **`.musico.js`** script that exports both `manifest` and your provider hooks. Save the example below as `minimal-source.musico.js`, test it locally with Node.js, or import it directly in **Musico → Extensions**.
+The fastest way to ship an extension is a single **`.musico.js`** script exporting both `manifest` and your hooks. Save the example below as `minimal-source.musico.js`, test it locally with Node.js, or import it directly in **Musico → Extensions**.
 
 ```js
 'use strict';
@@ -190,11 +194,179 @@ Musico's progressive crawler automatically populates subfolders live as they fin
 
 ---
 
-## 3. Packaging Formats
+## 3. Cloud Search Extension Example (`"search"` + `search`)
+
+Want your extension to show up in Musico's opt-in **Search Source Switcher** inside **Songs**? Declare `"search"` in `capabilities`, export `search(ctx, req)`, and optionally narrow what users can filter with `searchKinds` (`["track", "playlist", "album"]`).
+
+- If your extension **only searches and plays tracks** (`["search", "stream"]`), `urlPatterns`, `canHandle`, and `fetchCollection` can be omitted!
+- If your search also returns playlists or albums and you want tapping a collection to open Musico's lightweight preview sheet + **Add as Cloud Folder**, also declare `"playlist"` (or `"tree"`), include `urlPatterns`, implement `canHandle` / `fetchCollection`, and return `sourceUrl` on collection items.
+
+```js
+'use strict';
+
+var manifest = {
+  apiVersion: 1,
+  id: 'com.example.musico.cloudsearch',
+  name: 'Example Search',
+  version: '1.0.0',
+  badgeLabel: 'ExSearch',
+  capabilities: ['search', 'stream', 'cookie'],
+  searchKinds: ['track', 'playlist', 'album'], // optional; defaults to all three
+  urlPatterns: [], // optional/empty allowed when "playlist" and "tree" are omitted
+  permissions: {
+    hosts: ['api.music.example.com', '*.cdn.music.example.com']
+  }
+};
+
+async function search(ctx, req) {
+  // req = { query, kind: "all" | "track" | "playlist" | "album", limit, cursor?, cookie? }
+  var headers = { Accept: 'application/json' };
+  if (req.cookie) headers.Cookie = req.cookie; // from Extension Manager's masked Cookie field
+
+  var apiUrl =
+    'https://api.music.example.com/v1/search?q=' + encodeURIComponent(req.query) +
+    '&kind=' + encodeURIComponent(req.kind || 'all') +
+    '&limit=' + encodeURIComponent(String(req.limit || 20)) +
+    (req.cursor ? '&cursor=' + encodeURIComponent(req.cursor) : '');
+
+  var res = await ctx.http.request({ method: 'GET', url: apiUrl, headers: headers, timeoutMs: 12000 });
+  if (res.status === 401 || res.status === 403) {
+    var authErr = new Error('Please configure your cookie in Extension Manager.');
+    authErr.code = 'AUTH_REQUIRED';
+    throw authErr;
+  }
+  if (res.status >= 400) {
+    var netErr = new Error('HTTP ' + String(res.status));
+    netErr.code = 'NETWORK_ERROR';
+    throw netErr;
+  }
+
+  var data = JSON.parse(res.text || '{}');
+  var items = (data.items || []).map(function (it) {
+    if (it.kind === 'playlist' || it.kind === 'album') {
+      return {
+        kind: it.kind,
+        remoteId: String(it.id),
+        title: String(it.title || 'Untitled'),
+        artist: it.artist || null,
+        artworkUrl: it.coverHttpsUrl || null, // https:// thumbnails are cached in memory only
+        sourceUrl: it.url || null,            // passed to fetchCollection for preview & Add Folder
+        trackCount: typeof it.trackCount === 'number' ? it.trackCount : null
+      };
+    }
+    return {
+      kind: 'track',
+      remoteTrackId: String(it.id),
+      title: String(it.title || 'Untitled'),
+      artist: it.artist || 'Unknown Artist',
+      album: it.album || null,
+      durationSec: typeof it.durationSec === 'number' ? it.durationSec : 0,
+      artworkUrl: it.coverHttpsUrl || null,
+      relativePath: it.fileHint || null
+    };
+  });
+
+  return {
+    items: items,
+    nextCursor: data.nextCursor ? String(data.nextCursor) : null
+  };
+}
+
+async function resolveStream(ctx, req) {
+  var headers = { Accept: 'application/json' };
+  if (req.cookie) headers.Cookie = req.cookie;
+  var res = await ctx.http.request({
+    method: 'GET',
+    url: 'https://api.music.example.com/v1/tracks/' + encodeURIComponent(req.remoteTrackId) + '/stream',
+    headers: headers
+  });
+  var stream = JSON.parse(res.text || '{}');
+  return {
+    url: String(stream.url),
+    fileExtension: stream.ext || 'mp3',
+    mimeType: stream.mime || 'audio/mpeg'
+  };
+}
+
+module.exports = {
+  manifest: manifest,
+  search: search,
+  resolveStream: resolveStream
+};
+```
+
+> **How Musico treats search results & playback ♪(´▽｀):**
+> - Searches run **only on explicit submit** (`Enter` or Search button) and automatically cancel in-flight calls if the user edits and submits a new query or switches sources.
+> - Musico deduplicates paginated results by `(kind, itemID)` and stops pagination automatically if `nextCursor === prevCursor`.
+> - Played search tracks enter the ephemeral registry (`extsearch:<extensionId>:<remoteTrackId>`), stay **excluded from Library tabs & listening Stats**, and auto-prune once no queue references them — unless the user explicitly saves a song via **Save to Local Folder…**.
+
+---
+
+## 4. Cloud Lyrics Extension Example (`"lyrics"` + `searchLyrics`)
+
+Want to plug a custom lyrics source straight into **Lyrics → Search Online…** alongside **LRCLIB** and **NetEase**? Declare `"lyrics"` in `capabilities` and export `searchLyrics(ctx, req)` — no `urlPatterns` or `canHandle` required!
+
+```js
+'use strict';
+
+var manifest = {
+  apiVersion: 1,
+  id: 'com.example.musico.lyrics',
+  name: 'Example Lyrics',
+  version: '1.0.0',
+  badgeLabel: 'ExLyrics',
+  capabilities: ['lyrics'],
+  permissions: {
+    hosts: ['lyrics.example.com']
+  }
+};
+
+async function searchLyrics(ctx, req) {
+  // req = { title, artist, album?, durationSec? }
+  var q = encodeURIComponent((req.title || '') + ' ' + (req.artist || ''));
+  var res = await ctx.http.request({
+    method: 'GET',
+    url: 'https://lyrics.example.com/v1/search?q=' + q,
+    headers: { Accept: 'application/json' },
+    timeoutMs: 12000
+  });
+  if (res.status >= 400) {
+    var err = new Error('Lyrics API HTTP ' + String(res.status));
+    err.code = 'NETWORK_ERROR';
+    throw err;
+  }
+
+  var rows = JSON.parse(res.text || '[]');
+  return rows.map(function (row) {
+    return {
+      externalId: row.id ? String(row.id) : null,
+      title: row.title || req.title,
+      artist: row.artist || req.artist,
+      album: row.album || null,
+      durationSec: typeof row.durationSec === 'number' ? row.durationSec : null,
+      syncedLyrics: row.lrc || null,
+      plainLyrics: row.plain || null,
+      translatedLyrics: row.translationLrc || null,
+      instrumental: Boolean(row.instrumental)
+    };
+  });
+}
+
+module.exports = {
+  manifest: manifest,
+  searchLyrics: searchLyrics
+};
+```
+
+> **Note:** Musico runs `searchLyrics` **only when the user opens Search Online…** (never automatically during playback) and waits for explicit user confirmation before writing lyrics locally. Both bare arrays (`[...]`) and object envelopes (`{ candidates: [...] }` / `{ results: [...] }`) are accepted across Apple, Android, and Windows.
+
+---
+
+## 5. Packaging Formats
 
 | Format | Structure | Best For |
 |---|---|---|
-| **Single-File (`.musico.js`)** | One JS file exporting `{ manifest, canHandle, ... }` on `module.exports`. | Simple scripts, quick sharing, single-file starters (e.g. [`starter-single-file.musico.js`](starter-single-file.musico.js)). |
+| **Single-File (`.musico.js`)** | One JS file exporting `{ manifest, ...hooks }` on `module.exports`. | Simple scripts, quick sharing, single-file starters (e.g. [`starter-single-file.musico.js`](starter-single-file.musico.js)). |
 | **Bundle Archive (`.musicoext`)** | Standard `.zip` containing `manifest.json`, `index.js` (or `manifest.entry`), and optional `icon.png`. | Extensions with separate assets or multi-file packaging (e.g. [`starter/`](starter/manifest.json)). |
 
 Package the included starter directory into a `.musicoext` bundle:
@@ -207,39 +379,58 @@ Package the included starter directory into a `.musicoext` bundle:
 
 ---
 
-## 4. `manifest.json` Reference
+## 6. `manifest.json` Reference
 
 | Field | Type | Required | Constraints & Notes |
 |---|---|---|---|
 | `apiVersion` | `integer` | Yes | Must be `1`. |
 | `id` | `string` | Yes | Reverse-DNS ID matching `^[a-z0-9._-]{3,64}$`. Stored on roots as `providerID = "ext.<id>"`. |
-| `name` | `string` | Yes | Display name in **Extensions** and **Add Cloud Folder**. |
+| `name` | `string` | Yes | Display name in **Extensions**, **Add Cloud Folder**, and **Search Source Switcher** / **Search Online…** (fallback). |
 | `version` | `string` | Yes | SemVer (`MAJOR.MINOR.PATCH`). |
 | `author` | `string` | No | Optional author name shown in Extension Manager. |
 | `description` | `string` | No | Short description shown in Extension Manager. |
-| `badgeLabel` | `string` | No | Short pill badge in **Folders** (defaults to `name`, max 16 chars). |
+| `badgeLabel` | `string` | No | Short pill badge in **Folders**, **Songs** search chips, and lyrics badges (defaults to `name`, max 16 chars). |
 | `entry` | `string` | No | Relative script path inside `.musicoext` (defaults to `"index.js"`). |
-| `capabilities` | `string[]` | Yes | Subset of `"playlist"`, `"tree"`, `"stream"`, `"cookie"`, `"proxy"`. |
-| `urlPatterns` | `string[]` | Yes | Native regex strings tested before starting a JS VM. |
+| `capabilities` | `string[]` | Yes | Non-empty subset of `"playlist"`, `"tree"`, `"stream"`, `"cookie"`, `"proxy"`, `"lyrics"`, `"search"`. |
+| `urlPatterns` | `string[]` | Conditional | Native regex strings tested before starting a JS VM. **Required** when `"playlist"` or `"tree"` is declared; optional/empty allowed otherwise. |
+| `searchKinds` | `string[]` | No | Subset of `"track"`, `"playlist"`, `"album"`. Controls available filter pills when `"search"` is declared (defaults to all three when omitted/empty). |
 | `permissions.hosts` | `string[]` | Yes | Strict HTTP/HTTPS allowlist: exact domain (`example.com`) or `*.sub.domain` (≥ 2 domain labels after `*.`; bare `*` and `*.tld` are rejected). |
 | `settings` | `array` | No | List of `{ key, label, type, default, options? }` where `type` is `"boolean"`, `"string"`, or `"select"`. Select `options` may be strings (`["us", "jp"]`) or `{ value, label }` objects. |
 
 ---
 
-## 5. Hook Contracts & Track Schema (`module.exports`)
+## 7. Hook Contracts & Schemas (`module.exports`)
 
-- **`canHandle(input)`** *(sync — required)*
+- **`canHandle(input)`** *(sync — required when `"playlist"` or `"tree"` is declared)*
   - **Input:** `{ rawText, extractedUrl }`
   - **Returns:** `{ matched, normalizedUrl?, remoteId?, kind?: "playlist" | "folder" | "track" }`
-- **`fetchCollection(ctx, req)`** *(async — required for `"playlist"` or `"tree"`)*
+- **`fetchCollection(ctx, req)`** *(async — required for `"playlist"` or `"tree"`; also called by ephemeral search previews for `"playlist"`/`"album"` items with `sourceUrl`)*
   - **Input:** `{ url, cookie?, cursor? }`
   - **Returns:** `{ remoteId, title, tracks: ExtTrack[], subfolders?: ExtSubfolder[], nextCursor? }`
 - **`fetchFolder(ctx, req)`** *(async — required when `"tree"` capability is declared)*
   - **Input:** `{ folderId, pathSegments, depth, cookie?, cursor?, extra? }`
   - **Returns:** `{ folderId, tracks: ExtTrack[], subfolders?: ExtSubfolder[], nextCursor? }`
-- **`resolveStream(ctx, req)`** *(async — required when `"stream"` capability is declared)*
+- **`resolveStream(ctx, req)`** *(async — required when `"stream"` capability is declared; receives extension cookie on ephemeral tracks or root cookie on mounted Cloud Folders)*
   - **Input:** `{ remoteTrackId, relativePath?, cookie?, forceRefresh }`
   - **Returns:** `{ url, headers?, fileExtension, mimeType?, expiresAtMs?, fallbackUrls?, contentLength? }`
+- **`search(ctx, req)`** *(async — required when `"search"` capability is declared)*
+  - **Input:** `{ query, kind: "all" | "track" | "playlist" | "album", limit, cursor?, cookie? }`
+  - **Returns:** `{ items: ExtSearchResult[], nextCursor?: string | null }` (or `null` when empty)
+- **`searchLyrics(ctx, req)`** *(async — required when `"lyrics"` capability is declared)*
+  - **Input:** `{ title, artist, album?, durationSec? }`
+  - **Returns:** `ExtLyricsCandidate[]` | `{ candidates: ExtLyricsCandidate[] }` | `{ results: ExtLyricsCandidate[] }` | `null`
+
+### `ExtSearchResult` Schema
+- **`kind`** *(required)*: `"track"` | `"playlist"` | `"album"`
+- **`remoteTrackId`**: Required string when `kind === "track"` *(note: Apple requires `remoteTrackId` specifically, while Android/Windows also accept numeric IDs or fallback `id` — always emit string `remoteTrackId` for cross-platform reliability!)*
+- **`remoteId`**: Required string when `kind === "playlist"` or `"album"`
+- **`title`** *(required)*: Non-empty string
+- **Optional fields:** `artist?`, `album?`, `durationSec?` (seconds), `artworkUrl?` (`https://` cached in-memory only), `sourceUrl?` (passed to `fetchCollection` when previewing/mounting a playlist or album), `relativePath?` (forwarded to `resolveStream`), `trackCount?` (displayed on playlist/album rows)
+
+### `ExtLyricsCandidate` Schema
+- `externalId?` (`string`)
+- `title?` (`string`), `artist?` (`string`), `album?` (`string`), `durationSec?` (`number`)
+- `syncedLyrics?` (`string`, LRC format), `plainLyrics?` (`string`), `translatedLyrics?` (`string`, LRC or plain translation), `instrumental?` (`boolean`)
 
 ### `ExtTrack` Mapping Across Platforms
 
@@ -256,7 +447,7 @@ Package the included starter directory into a `.musicoext` bundle:
 
 ---
 
-## 6. Host Bridge API (`ctx`) & Security Guardrails
+## 8. Host Bridge API (`ctx`), Cookies & Security Guardrails
 
 - **`await ctx.http.request({ method?, url, headers?, body?, followRedirects?, timeoutMs?, returnBytes? })`**
   - Routes through native HTTP clients (preserving platform timeouts and Windows proxy settings when `"proxy"` capability is declared).
@@ -269,14 +460,20 @@ Package the included starter directory into a `.musicoext` bundle:
 - **`ctx.env`**: `{ platform: "ios" | "macos" | "android" | "windows", appVersion, apiVersion: 1 }`.
 - **`ctx.log`**: `info(msg)`, `warn(msg)`, `error(msg)` stored in a 200-entry ring buffer visible in Extension Manager.
 
+### Extension-Level Cookies & Privacy
+- Extensions declaring `"cookie"` get a masked **Extension Cookie** input in **Extensions** (Extension Manager), alongside existing per-folder cookies on mounted Cloud Folders.
+- Musico passes this extension-level cookie via `req.cookie` to `search(ctx, req)`, ephemeral preview `fetchCollection(ctx, req)`, and root-less `resolveStream(ctx, req)` for ephemeral tracks.
+- For mounted Cloud Folders, each `LibraryRoot` keeps its own strictly isolated cookie that takes precedence over the extension-level cookie.
+- **Never log `req.cookie` via `ctx.log`!** *(As defense-in-depth, Android and Windows also automatically redact raw and URL-encoded cookie strings from `ctx.log` entries.)*
+
 ### Guardrails & Compatibility Tips
-- **Fresh Isolated VM Per Call:** Global JS variables do not persist across calls (and cookies stay isolated per `LibraryRoot`). Use `ctx.kv` for intentional token caching.
-- **Resource Limits:** `15s` cap on `canHandle` / `resolveStream`, `60s` cap on `fetchCollection` / `fetchFolder`, and a `32 MB` heap limit on QuickJS (Android) and Jint (Windows).
+- **Fresh Isolated VM Per Call:** Global JS variables do not persist across calls. Use `ctx.kv` for intentional short-lived token caching.
+- **Resource & Network Limits:** `15s` cap on `canHandle`, `resolveStream`, `search`, and `searchLyrics` (with automatic cancellation when a new query is submitted or search source switches), `60s` cap on `fetchCollection` / `fetchFolder`, `32 MB` heap limit on QuickJS (Android) & Jint (Windows), and `https://`-only in-memory LRU caching for search/preview thumbnails (`artworkUrl`).
 - **Portable JS Subset:** Stick to **ES2020 + CommonJS `module.exports` + `ctx.*`**. Avoid Node-only modules (`require`, `fs`, `Buffer`) and browser DOM globals (`window`, `document`).
 
 ---
 
-## 7. Standard Error Codes
+## 9. Standard Error Codes
 
 Set `err.code` on thrown errors so Musico shows localized messages and handles auth/retries cleanly:
 
@@ -292,7 +489,7 @@ Set `err.code` on thrown errors so Musico shows localized messages and handles a
 
 ---
 
-## 8. Local Testing & Included Templates
+## 10. Local Testing & Included Templates
 
 Test extensions without rebuilding native apps using the zero-dependency Node.js 18+ runner in [`tools/mock-runner.mjs`](tools/mock-runner.mjs):
 
@@ -300,11 +497,13 @@ Test extensions without rebuilding native apps using the zero-dependency Node.js
 # Run built-in conformance suite across all fixtures & starter templates
 node docs/extensions/tools/mock-runner.mjs --self-test
 
-# Inspect canHandle & fetchCollection on your extension
+# Inspect cloud source, search & lyrics hooks on your extension
 node docs/extensions/tools/mock-runner.mjs docs/extensions/starter can-handle "https://example.com/playlist/demo_1"
 node docs/extensions/tools/mock-runner.mjs path/to/ext fetch-collection "https://example.com/playlist/demo_1" --cookie "sid=..."
 node docs/extensions/tools/mock-runner.mjs path/to/ext fetch-folder "folder_1" --path "Album/Disc 1" --depth 1
 node docs/extensions/tools/mock-runner.mjs path/to/ext resolve-stream "track_1" --setting preferHighBitrate=true
+node docs/extensions/tools/mock-runner.mjs path/to/ext search "Yoasobi" --kind track --limit 20 --cookie "sid=..."
+node docs/extensions/tools/mock-runner.mjs path/to/ext search-lyrics "Idol" --artist "YOASOBI" --duration 213
 ```
 
 More starter and test examples in this folder:

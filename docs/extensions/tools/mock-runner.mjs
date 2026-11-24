@@ -9,6 +9,8 @@
  *   node mock-runner.mjs <path-to-bundle-or-.musico.js> fetch-collection <url> [--cookie "..."] [--cursor "..."] [--setting k=v]
  *   node mock-runner.mjs <path-to-bundle-or-.musico.js> fetch-folder <folderId> [--path a/b] [--depth 1] [--cursor "..."]
  *   node mock-runner.mjs <path-to-bundle-or-.musico.js> resolve-stream <remoteTrackId> [--cookie "..."] [--force]
+ *   node mock-runner.mjs <path-to-bundle-or-.musico.js> search <query> [--kind all|track|playlist|album] [--limit 20] [--cursor "..."] [--cookie "..."] [--setting k=v]
+ *   node mock-runner.mjs <path-to-bundle-or-.musico.js> search-lyrics <title> [--artist "..."] [--album "..."] [--duration 213] [--setting k=v]
  */
 
 import fs from 'node:fs';
@@ -25,6 +27,9 @@ const FIXTURES_DIR = path.resolve(__dirname, '../fixtures');
 const STARTER_DIR = path.resolve(__dirname, '../starter');
 const STARTER_SINGLE = path.resolve(__dirname, '../starter-single-file.musico.js');
 
+export const VALID_CAPABILITIES = new Set(['playlist', 'tree', 'stream', 'cookie', 'proxy', 'lyrics', 'search']);
+export const VALID_SEARCH_KINDS = new Set(['track', 'playlist', 'album']);
+
 export function validateManifest(manifest) {
   assert.ok(manifest && typeof manifest === 'object', 'manifest must be an object');
   assert.equal(manifest.apiVersion, 1, 'manifest.apiVersion must be 1');
@@ -32,9 +37,24 @@ export function validateManifest(manifest) {
   assert.ok(typeof manifest.name === 'string' && manifest.name.trim().length > 0, 'manifest.name required');
   assert.match(String(manifest.version || ''), /^\d+\.\d+\.\d+/, 'manifest.version must be SemVer');
   assert.ok(Array.isArray(manifest.capabilities) && manifest.capabilities.length > 0, 'capabilities required');
-  assert.ok(Array.isArray(manifest.urlPatterns) && manifest.urlPatterns.length > 0, 'urlPatterns required');
-  for (const pat of manifest.urlPatterns) {
+  for (const cap of manifest.capabilities) {
+    assert.ok(VALID_CAPABILITIES.has(String(cap)), `Unsupported capability: ${cap}`);
+  }
+  const requiresUrlPatterns = manifest.capabilities.includes('playlist') || manifest.capabilities.includes('tree');
+  if (requiresUrlPatterns) {
+    assert.ok(Array.isArray(manifest.urlPatterns) && manifest.urlPatterns.length > 0, 'urlPatterns required for playlist/tree extensions');
+  } else if (manifest.urlPatterns !== undefined) {
+    assert.ok(Array.isArray(manifest.urlPatterns), 'urlPatterns must be an array');
+  }
+  for (const pat of manifest.urlPatterns || []) {
+    assert.ok(typeof pat === 'string' && pat.length > 0, 'urlPattern must be a non-empty string');
     new RegExp(pat);
+  }
+  if (manifest.searchKinds !== undefined) {
+    assert.ok(Array.isArray(manifest.searchKinds), 'searchKinds must be an array');
+    for (const kind of manifest.searchKinds) {
+      assert.ok(VALID_SEARCH_KINDS.has(String(kind)), `Unsupported searchKind: ${kind}`);
+    }
   }
   assert.ok(manifest.permissions && Array.isArray(manifest.permissions.hosts) && manifest.permissions.hosts.length > 0, 'permissions.hosts required');
   for (const hostPat of manifest.permissions.hosts) {
@@ -119,7 +139,7 @@ export function evaluateCommonJS(source, timeoutMs = 15000) {
   return mod.exports;
 }
 
-export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = new Map(), httpResponder = null, platform = 'macos', appVersion = '1.2.0-dev' } = {}) {
+export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = new Map(), httpResponder = null, platform = 'macos', appVersion = '1.2.4-dev' } = {}) {
   const logs = [];
   const allowedHosts = manifest.permissions?.hosts || [];
   const defaultSettings = {};
@@ -287,6 +307,63 @@ export async function runResolveStream(ext, bridge, req, timeoutMs = 15000) {
     bridge.assertAllowedUrl(fb);
   }
   return result;
+}
+
+export async function runSearch(ext, bridge, req, timeoutMs = 15000) {
+  assert.equal(typeof ext.exportsObj.search, 'function', 'Extension must export search(ctx, req)');
+  const payload = {
+    query: String(req?.query || ''),
+    kind: String(req?.kind || 'all'),
+    limit: Math.max(1, Number(req?.limit || 20)),
+    ...(req?.cursor ? { cursor: String(req.cursor) } : {}),
+    ...(req?.cookie ? { cookie: String(req.cookie) } : {})
+  };
+  const result = await invokeWithTimeout(() => ext.exportsObj.search(bridge.ctx, payload), timeoutMs);
+  if (result == null) {
+    return { items: [], nextCursor: null };
+  }
+  assert.ok(typeof result === 'object' && !Array.isArray(result), 'search() must return an object { items, nextCursor? }');
+  assert.ok(Array.isArray(result.items), 'search() result.items must be an array');
+  for (const item of result.items) {
+    assert.ok(item && typeof item === 'object', 'Each search item must be an object');
+    assert.ok(VALID_SEARCH_KINDS.has(String(item.kind)), `Invalid search item kind: ${item.kind}`);
+    assert.ok(typeof item.title === 'string' && item.title.trim().length > 0, 'Each search item requires a non-empty title');
+    if (item.kind === 'track') {
+      assert.ok(item.remoteTrackId != null && String(item.remoteTrackId).trim().length > 0, 'Track search item requires remoteTrackId');
+    } else {
+      assert.ok(item.remoteId != null && String(item.remoteId).trim().length > 0, `${item.kind} search item requires remoteId`);
+    }
+  }
+  return {
+    items: result.items,
+    nextCursor: result.nextCursor == null ? null : String(result.nextCursor)
+  };
+}
+
+export async function runSearchLyrics(ext, bridge, req, timeoutMs = 15000) {
+  assert.equal(typeof ext.exportsObj.searchLyrics, 'function', 'Extension must export searchLyrics(ctx, req)');
+  const payload = {
+    title: String(req?.title || ''),
+    artist: String(req?.artist || ''),
+    ...(req?.album ? { album: String(req.album) } : {}),
+    ...(typeof req?.durationSec === 'number' && Number.isFinite(req.durationSec) && req.durationSec > 0
+      ? { durationSec: req.durationSec }
+      : {})
+  };
+  const result = await invokeWithTimeout(() => ext.exportsObj.searchLyrics(bridge.ctx, payload), timeoutMs);
+  if (result == null) {
+    return [];
+  }
+  if (Array.isArray(result)) {
+    return result;
+  }
+  if (typeof result === 'object') {
+    if (Array.isArray(result.candidates)) return result.candidates;
+    if (Array.isArray(result.results)) return result.results;
+  }
+  throw Object.assign(new Error('searchLyrics() must return an array or { candidates | results } object'), {
+    code: 'EXTENSION_RUNTIME_ERROR'
+  });
 }
 
 async function runSelfTest() {
@@ -500,8 +577,108 @@ async function runSelfTest() {
   const starterSingle = loadExtension(STARTER_SINGLE);
   assert.equal(starterSingle.exportsObj.canHandle({ rawText: 'https://example.org/mix/demo99' }).matched, true);
 
+  // 5. Test v1.2.3/v1.2.4 manifest rules plus in-memory lyrics & cloud-search hooks
+  const lyricsSource = `
+    var manifest = {
+      apiVersion: 1,
+      id: 'com.example.test.lyrics',
+      name: 'Test Lyrics',
+      version: '1.0.0',
+      capabilities: ['lyrics'],
+      permissions: { hosts: ['lyrics.fixture.test'] }
+    };
+    async function searchLyrics(ctx, req) {
+      if (req.title === 'envelope') {
+        return { candidates: [{ externalId: 'c1', title: req.title, artist: req.artist, plainLyrics: 'hello' }] };
+      }
+      return [{ externalId: 'c2', title: req.title, artist: req.artist, syncedLyrics: '[00:01.00]la', instrumental: false }];
+    }
+    module.exports = { manifest: manifest, searchLyrics: searchLyrics };
+  `;
+  const lyricsExports = evaluateCommonJS(lyricsSource);
+  validateManifest(lyricsExports.manifest);
+  const lyricsBridge = createHostBridge(lyricsExports.manifest);
+  const lyrArr = await runSearchLyrics({ manifest: lyricsExports.manifest, source: lyricsSource, exportsObj: lyricsExports }, lyricsBridge, {
+    title: 'Idol',
+    artist: 'YOASOBI',
+    durationSec: 213
+  });
+  assert.equal(lyrArr.length, 1);
+  assert.equal(lyrArr[0].externalId, 'c2');
+  const lyrEnv = await runSearchLyrics({ manifest: lyricsExports.manifest, source: lyricsSource, exportsObj: lyricsExports }, lyricsBridge, {
+    title: 'envelope',
+    artist: 'YOASOBI'
+  });
+  assert.equal(lyrEnv.length, 1);
+  assert.equal(lyrEnv[0].externalId, 'c1');
+
+  const searchSource = `
+    var manifest = {
+      apiVersion: 1,
+      id: 'com.example.test.search',
+      name: 'Test Search',
+      version: '1.0.0',
+      capabilities: ['search', 'stream', 'cookie'],
+      searchKinds: ['track', 'album'],
+      urlPatterns: [],
+      permissions: { hosts: ['search.fixture.test'] }
+    };
+    async function search(ctx, req) {
+      return {
+        items: [
+          { kind: 'track', remoteTrackId: 'tr-1', title: req.query + ' Song', artist: 'Singer', durationSec: 185 },
+          { kind: 'album', remoteId: 'al-1', title: req.query + ' Album', trackCount: 10, sourceUrl: 'https://search.fixture.test/album/al-1' }
+        ],
+        nextCursor: req.cookie ? 'cur-auth' : 'cur-anon'
+      };
+    }
+    module.exports = { manifest: manifest, search: search };
+  `;
+  const searchExports = evaluateCommonJS(searchSource);
+  validateManifest(searchExports.manifest);
+  const searchBridge = createHostBridge(searchExports.manifest);
+  const searchPage = await runSearch({ manifest: searchExports.manifest, source: searchSource, exportsObj: searchExports }, searchBridge, {
+    query: 'Star',
+    kind: 'all',
+    limit: 20,
+    cookie: 'sid=ok'
+  });
+  assert.equal(searchPage.items.length, 2);
+  assert.equal(searchPage.items[0].remoteTrackId, 'tr-1');
+  assert.equal(searchPage.items[1].remoteId, 'al-1');
+  assert.equal(searchPage.nextCursor, 'cur-auth');
+
+  assert.throws(() => validateManifest({
+    apiVersion: 1,
+    id: 'com.example.invalid.playlist',
+    name: 'Invalid Playlist',
+    version: '1.0.0',
+    capabilities: ['playlist', 'stream'],
+    urlPatterns: [],
+    permissions: { hosts: ['example.com'] }
+  }), /urlPatterns required/);
+
+  assert.throws(() => validateManifest({
+    apiVersion: 1,
+    id: 'com.example.invalid.cap',
+    name: 'Invalid Cap',
+    version: '1.0.0',
+    capabilities: ['unknown-cap'],
+    permissions: { hosts: ['example.com'] }
+  }), /Unsupported capability/);
+
+  assert.throws(() => validateManifest({
+    apiVersion: 1,
+    id: 'com.example.invalid.kind',
+    name: 'Invalid Kind',
+    version: '1.0.0',
+    capabilities: ['search'],
+    searchKinds: ['podcast'],
+    permissions: { hosts: ['example.com'] }
+  }), /Unsupported searchKind/);
+
   console.log('ALL_SELF_TESTS_PASSED', {
-    testedFixtures: ['basic-playlist.musico.js', 'tree-source', 'security-and-errors.musico.js', 'starter', 'starter-single-file.musico.js'],
+    testedFixtures: ['basic-playlist.musico.js', 'tree-source', 'security-and-errors.musico.js', 'starter', 'starter-single-file.musico.js', 'in-memory-lyrics', 'in-memory-search'],
     httpRequestsExecuted: capturedRequests.length
   });
 }
@@ -513,7 +690,7 @@ async function main() {
     return;
   }
   if (args.length < 3) {
-    console.error('Usage: node mock-runner.mjs [--self-test | <ext-path> <can-handle|fetch-collection|fetch-folder|resolve-stream> <target> [options]]');
+    console.error('Usage: node mock-runner.mjs [--self-test | <ext-path> <can-handle|fetch-collection|fetch-folder|resolve-stream|search|search-lyrics> <target> [options]]');
     process.exit(2);
   }
 
@@ -523,6 +700,11 @@ async function main() {
   let depth = 1;
   let pathSegments = [];
   let forceRefresh = false;
+  let kind = 'all';
+  let limit = 20;
+  let artist = '';
+  let album = null;
+  let durationSec = null;
   const settingsOverrides = {};
 
   for (let i = 0; i < rest.length; i++) {
@@ -532,6 +714,11 @@ async function main() {
     else if (flag === '--depth' && rest[i + 1]) depth = Number(rest[++i]);
     else if (flag === '--path' && rest[i + 1]) pathSegments = rest[++i].split('/').filter(Boolean);
     else if (flag === '--force') forceRefresh = true;
+    else if (flag === '--kind' && rest[i + 1]) kind = rest[++i];
+    else if (flag === '--limit' && rest[i + 1]) limit = Number(rest[++i]);
+    else if (flag === '--artist' && rest[i + 1]) artist = rest[++i];
+    else if (flag === '--album' && rest[i + 1]) album = rest[++i];
+    else if (flag === '--duration' && rest[i + 1]) durationSec = Number(rest[++i]);
     else if (flag === '--setting' && rest[i + 1]) {
       const [k, v] = rest[++i].split('=');
       settingsOverrides[k] = v === 'true' ? true : v === 'false' ? false : v;
@@ -549,6 +736,10 @@ async function main() {
     output = await invokeWithTimeout(() => ext.exportsObj.fetchFolder(bridge.ctx, { folderId: target, pathSegments, depth, cookie, cursor }), 60000);
   } else if (command === 'resolve-stream') {
     output = await runResolveStream(ext, bridge, { remoteTrackId: target, cookie, forceRefresh }, 15000);
+  } else if (command === 'search') {
+    output = await runSearch(ext, bridge, { query: target, kind, limit, cursor, cookie }, 15000);
+  } else if (command === 'search-lyrics') {
+    output = await runSearchLyrics(ext, bridge, { title: target, artist, album, durationSec }, 15000);
   } else {
     throw new Error(`Unknown command: ${command}`);
   }
