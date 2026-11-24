@@ -3002,7 +3002,7 @@ class LibraryStore(
     )
 
     companion object {
-        private const val READER_VERSION = 3
+        private const val READER_VERSION = 4
         const val APP_FOLDER_NAME = "Musico Folder"
         private val combiningMarks = "\\p{InCombiningDiacriticalMarks}+".toRegex()
 

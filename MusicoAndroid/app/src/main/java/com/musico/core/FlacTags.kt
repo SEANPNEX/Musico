@@ -5,6 +5,7 @@ import java.io.EOFException
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
+import java.util.Base64
 
 /**
  * Tags and cover art read straight from a FLAC file's metadata blocks.
@@ -52,11 +53,14 @@ object FlacTags {
         // Skip optional ID3v2 tag placed before the FLAC stream.
         if (magic[0] == 0x49.toByte() && magic[1] == 0x44.toByte() && magic[2] == 0x33.toByte()) {
             val rest = readExact(input, 6) ?: return null
+            val flags = rest[1].toInt() and 0xFF
+            val hasFooter = (flags and 0x10) != 0
             val size = ((rest[2].toInt() and 0x7F) shl 21) or
                 ((rest[3].toInt() and 0x7F) shl 14) or
                 ((rest[4].toInt() and 0x7F) shl 7) or
                 (rest[5].toInt() and 0x7F)
-            if (!skipExact(input, size.toLong())) return null
+            val skipSize = size.toLong() + if (hasFooter) 10L else 0L
+            if (!skipExact(input, skipSize)) return null
             magic = readExact(input, 4) ?: return null
         }
 
@@ -70,6 +74,7 @@ object FlacTags {
         }
 
         val comments = LinkedHashMap<String, String>()
+        val commentPictures = mutableListOf<Pair<Int, ByteArray>>()
         var picture: ByteArray? = null
         var hasFrontCover = false
 
@@ -87,16 +92,17 @@ object FlacTags {
             if (type == BLOCK_VORBIS_COMMENT || type == BLOCK_PICTURE) {
                 val body = readExact(input, length) ?: break
                 if (type == BLOCK_VORBIS_COMMENT) {
-                    parseComments(body, comments)
+                    parseComments(body, comments, commentPictures)
                 } else if (!hasFrontCover) {
                     val parsed = parsePicture(body)
                     if (parsed != null) {
                         val (kind, data) = parsed
-                        if (picture == null || kind == PICTURE_TYPE_FRONT_COVER) {
-                            picture = data
-                        }
-                        if (kind == PICTURE_TYPE_FRONT_COVER) {
-                            hasFrontCover = true
+                        val validData = EmbeddedArtworkExtractor.normalizeImageBytes(data)
+                        if (validData != null && (picture == null || kind == PICTURE_TYPE_FRONT_COVER)) {
+                            picture = validData
+                            if (kind == PICTURE_TYPE_FRONT_COVER) {
+                                hasFrontCover = true
+                            }
                         }
                     }
                 }
@@ -107,10 +113,19 @@ object FlacTags {
             if (isLast) break
         }
 
+        if (picture == null && commentPictures.isNotEmpty()) {
+            picture = commentPictures.firstOrNull { it.first == PICTURE_TYPE_FRONT_COVER }?.second
+                ?: commentPictures.firstOrNull()?.second
+        }
+
         return FlacMetadata(comments = comments, picture = picture)
     }
 
-    private fun parseComments(body: ByteArray, out: MutableMap<String, String>) {
+    private fun parseComments(
+        body: ByteArray,
+        out: MutableMap<String, String>,
+        commentPictures: MutableList<Pair<Int, ByteArray>>,
+    ) {
         var cursor = 0
         fun readIntLE(): Int? {
             if (cursor + 4 > body.size) return null
@@ -138,13 +153,36 @@ object FlacTags {
             if (eq <= 0) continue
             val key = entry.substring(0, eq).uppercase()
             val value = entry.substring(eq + 1)
-            if (!out.containsKey(key) && value.isNotEmpty()) {
-                out[key] = value
+            when (key) {
+                "METADATA_BLOCK_PICTURE" -> {
+                    val decoded = runCatching { Base64.getMimeDecoder().decode(value.trim()) }.getOrNull()
+                    val parsed = decoded?.let { parsePicture(it) }
+                    if (parsed != null) {
+                        val validData = EmbeddedArtworkExtractor.normalizeImageBytes(parsed.second)
+                        if (validData != null) {
+                            commentPictures.add(parsed.first to validData)
+                        }
+                    }
+                }
+
+                "COVERART" -> {
+                    val decoded = runCatching { Base64.getMimeDecoder().decode(value.trim()) }.getOrNull()
+                    val validData = decoded?.let { EmbeddedArtworkExtractor.normalizeImageBytes(it) }
+                    if (validData != null) {
+                        commentPictures.add(0 to validData)
+                    }
+                }
+
+                else -> {
+                    if (!out.containsKey(key) && value.isNotEmpty()) {
+                        out[key] = value
+                    }
+                }
             }
         }
     }
 
-    private fun parsePicture(body: ByteArray): Pair<Int, ByteArray>? {
+    internal fun parsePicture(body: ByteArray): Pair<Int, ByteArray>? {
         var cursor = 0
         fun readIntBE(): Int? {
             if (cursor + 4 > body.size) return null
@@ -159,7 +197,9 @@ object FlacTags {
         val kind = readIntBE() ?: return null
         val mimeLen = readIntBE() ?: return null
         if (mimeLen < 0 || cursor + mimeLen > body.size) return null
+        val mime = String(body, cursor, mimeLen, Charsets.ISO_8859_1).trim()
         cursor += mimeLen
+        if (mime == "-->") return null
 
         val descLen = readIntBE() ?: return null
         if (descLen < 0 || cursor + descLen + 16 > body.size) return null

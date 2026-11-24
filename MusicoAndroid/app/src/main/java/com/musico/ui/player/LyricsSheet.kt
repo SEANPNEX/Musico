@@ -201,19 +201,21 @@ fun LyricsContent(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 20.dp, end = 8.dp, top = 4.dp, bottom = 4.dp),
+                .padding(start = 20.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = track?.title ?: strings.lyrics,
                     style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.SemiBold,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
                 val source = resolvedSource
                 if (source != null) {
-                    Spacer(Modifier.height(2.dp))
+                    Spacer(Modifier.height(4.dp))
                     Surface(
                         color = MaterialTheme.colorScheme.secondaryContainer,
                         shape = MaterialTheme.shapes.extraSmall
@@ -228,91 +230,96 @@ fun LyricsContent(
                 }
             }
 
-            Box {
-                IconButton(
-                    onClick = { menuExpanded = true },
-                    enabled = track != null
-                ) {
-                    Icon(Icons.Rounded.MoreVert, contentDescription = strings.lyricsOptions)
-                }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false }
-                ) {
-                    resolvedSource?.let { source ->
-                        DropdownMenuItem(
-                            text = { Text(strings.lyricsSourceDescription(source)) },
-                            enabled = false,
-                            onClick = {}
-                        )
-                        HorizontalDivider()
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(2.dp)
+            ) {
+                Box {
+                    IconButton(
+                        onClick = { menuExpanded = true },
+                        enabled = track != null
+                    ) {
+                        Icon(Icons.Rounded.MoreVert, contentDescription = strings.lyricsOptions)
                     }
-                    if (cloudLyricsService != null) {
+                    DropdownMenu(
+                        expanded = menuExpanded,
+                        onDismissRequest = { menuExpanded = false }
+                    ) {
+                        resolvedSource?.let { source ->
+                            DropdownMenuItem(
+                                text = { Text(strings.lyricsSourceDescription(source)) },
+                                enabled = false,
+                                onClick = {}
+                            )
+                            HorizontalDivider()
+                        }
+                        if (cloudLyricsService != null) {
+                            DropdownMenuItem(
+                                text = { Text(strings.searchOnlineEllipsis) },
+                                leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    showCloudSearch = true
+                                }
+                            )
+                        }
                         DropdownMenuItem(
-                            text = { Text(strings.searchOnlineEllipsis) },
-                            leadingIcon = { Icon(Icons.Rounded.Search, contentDescription = null) },
+                            text = { Text(strings.importFromFileEllipsis) },
+                            leadingIcon = { Icon(Icons.Rounded.FileOpen, contentDescription = null) },
                             onClick = {
                                 menuExpanded = false
-                                showCloudSearch = true
+                                launchImport()
                             }
                         )
-                    }
-                    DropdownMenuItem(
-                        text = { Text(strings.importFromFileEllipsis) },
-                        leadingIcon = { Icon(Icons.Rounded.FileOpen, contentDescription = null) },
-                        onClick = {
-                            menuExpanded = false
-                            launchImport()
-                        }
-                    )
-                    if (track != null && canWriteSidecar && resolvedLyrics != null) {
-                        DropdownMenuItem(
-                            text = { Text(strings.saveLrcToFolder) },
-                            leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) },
-                            onClick = {
-                                menuExpanded = false
-                                val lrcText = lyricsStore.rawImportedText(track.id)
-                                    ?: resolvedLyrics?.lines?.joinToString("\n") { line ->
-                                        val t = line.timeSec
-                                        if (t != null) "${CloudLyricsFormatter.formatLrcTimestamp(t)}${line.text}"
-                                        else line.text
-                                    }
-                                if (!lrcText.isNullOrBlank()) {
-                                    scope.launch {
-                                        val res = libraryStore.writeSidecarLyrics(track, lrcText)
-                                        res.onSuccess {
-                                            infoMessage = strings.savedLrcToFolderNotice
-                                        }.onFailure { err ->
-                                            importError = err.message ?: strings.couldNotSaveLyricsTitle
+                        if (track != null && canWriteSidecar && resolvedLyrics != null) {
+                            DropdownMenuItem(
+                                text = { Text(strings.saveLrcToFolder) },
+                                leadingIcon = { Icon(Icons.Rounded.Download, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    val lrcText = lyricsStore.rawImportedText(track.id)
+                                        ?: resolvedLyrics?.lines?.joinToString("\n") { line ->
+                                            val t = line.timeSec
+                                            if (t != null) "${CloudLyricsFormatter.formatLrcTimestamp(t)}${line.text}"
+                                            else line.text
+                                        }
+                                    if (!lrcText.isNullOrBlank()) {
+                                        scope.launch {
+                                            val res = libraryStore.writeSidecarLyrics(track, lrcText)
+                                            res.onSuccess {
+                                                infoMessage = strings.savedLrcToFolderNotice
+                                            }.onFailure { err ->
+                                                importError = err.message ?: strings.couldNotSaveLyricsTitle
+                                            }
                                         }
                                     }
                                 }
-                            }
-                        )
-                    }
-                    if (track != null && lyricsStore.hasImported(track.id)) {
-                        DropdownMenuItem(
-                            text = { Text(strings.removeImportedLyrics) },
-                            leadingIcon = {
-                                Icon(
-                                    Icons.Rounded.Delete,
-                                    contentDescription = null,
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            },
-                            onClick = {
-                                menuExpanded = false
-                                lyricsStore.removeImported(track.id)
-                                revision += 1
-                            }
-                        )
+                            )
+                        }
+                        if (track != null && lyricsStore.hasImported(track.id)) {
+                            DropdownMenuItem(
+                                text = { Text(strings.removeImportedLyrics) },
+                                leadingIcon = {
+                                    Icon(
+                                        Icons.Rounded.Delete,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    lyricsStore.removeImported(track.id)
+                                    revision += 1
+                                }
+                            )
+                        }
                     }
                 }
-            }
 
-            if (!embedded && onDone != null) {
-                TextButton(onClick = onDone) {
-                    Text(strings.done)
+                if (!embedded && onDone != null) {
+                    TextButton(onClick = onDone) {
+                        Text(strings.done, maxLines = 1)
+                    }
                 }
             }
         }
@@ -476,5 +483,6 @@ private fun PlainLyricsList(
                 color = MaterialTheme.colorScheme.onSurface
             )
         }
+        Spacer(Modifier.height(32.dp))
     }
 }

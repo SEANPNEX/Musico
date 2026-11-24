@@ -9,7 +9,6 @@ import java.io.BufferedInputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.InputStream
-import java.nio.charset.Charset
 
 data class TrackMetadata(
     val title: String? = null,
@@ -85,7 +84,13 @@ class AndroidMetadataReader(
             if (uri.scheme == "file" && uri.path != null) {
                 retriever.setDataSource(uri.path)
             } else {
-                retriever.setDataSource(context, uri)
+                try {
+                    retriever.setDataSource(context, uri)
+                } catch (_: Exception) {
+                    context.contentResolver.openFileDescriptor(uri, "r")?.use { pfd ->
+                        retriever.setDataSource(pfd.fileDescriptor)
+                    }
+                }
             }
             title = clean(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE))
             artist = clean(retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST))
@@ -99,7 +104,7 @@ class AndroidMetadataReader(
             if (durationMs != null && durationMs > 0) {
                 durationSec = durationMs / 1000.0
             }
-            artwork = retriever.embeddedPicture
+            artwork = retriever.embeddedPicture?.let { EmbeddedArtworkExtractor.normalizeImageBytes(it) }
         } catch (_: Exception) {
             // Best-effort metadata reading; fall through to container-specific readers.
         } finally {
@@ -124,12 +129,19 @@ class AndroidMetadataReader(
                 trackNumber = trackNumber ?: parseLeadingInt(flac.comments["TRACKNUMBER"])
                 discNumber = discNumber ?: parseLeadingInt(flac.comments["DISCNUMBER"])
                 lyrics = lyrics ?: comment("LYRICS", "UNSYNCEDLYRICS")
-                artwork = artwork ?: flac.picture
+                artwork = artwork ?: flac.picture?.let { EmbeddedArtworkExtractor.normalizeImageBytes(it) }
             }
         }
 
-        if (lyrics == null) {
-            lyrics = openStream(uri)?.use { extractId3Uslt(BufferedInputStream(it)) }
+        if (artwork == null || lyrics == null) {
+            val extracted = EmbeddedArtworkExtractor.extract(
+                context = context,
+                uri = uri,
+                needArtwork = artwork == null,
+                needLyrics = lyrics == null,
+            )
+            artwork = artwork ?: extracted.artwork
+            lyrics = lyrics ?: extracted.lyrics
         }
 
         TrackMetadata(
@@ -157,8 +169,6 @@ class AndroidMetadataReader(
     }
 
     companion object {
-        private const val MAX_ID3_TAG_BYTES = 4 * 1024 * 1024
-
         internal fun clean(value: String?): String? {
             val trimmed = value?.trim() ?: return null
             return trimmed.ifEmpty { null }
@@ -175,124 +185,11 @@ class AndroidMetadataReader(
          * Extracts the first USLT (unsynchronized lyrics) frame from an ID3v2.3 or ID3v2.4 header.
          */
         internal fun extractId3Uslt(input: InputStream): String? {
-            val header = readBytes(input, 10) ?: return null
-            if (header[0] != 0x49.toByte() || header[1] != 0x44.toByte() || header[2] != 0x33.toByte()) {
-                return null
-            }
-            val majorVersion = header[3].toInt() and 0xFF
-            if (majorVersion < 3 || majorVersion > 4) return null
-            val flags = header[5].toInt() and 0xFF
-            val tagSize = synchsafeInt(header, 6)
-            if (tagSize <= 0 || tagSize > MAX_ID3_TAG_BYTES) return null
-
-            val tagBytes = readBytes(input, tagSize) ?: return null
-            var pos = 0
-
-            // Skip extended header if present (bit 6)
-            if ((flags and 0x40) != 0 && pos + 4 <= tagBytes.size) {
-                val extSize = if (majorVersion == 4) synchsafeInt(tagBytes, pos) else bigEndianInt(tagBytes, pos)
-                if (extSize > 0) {
-                    pos += if (majorVersion == 4) extSize else extSize + 4
-                }
-            }
-
-            while (pos + 10 <= tagBytes.size) {
-                if (tagBytes[pos] == 0.toByte()) break // padding
-                val frameId = String(tagBytes, pos, 4, Charsets.ISO_8859_1)
-                val frameSize = if (majorVersion == 4) {
-                    synchsafeInt(tagBytes, pos + 4)
-                } else {
-                    bigEndianInt(tagBytes, pos + 4)
-                }
-                pos += 10
-                if (frameSize <= 0 || pos + frameSize > tagBytes.size) break
-
-                if (frameId == "USLT") {
-                    val decoded = decodeUsltFrame(tagBytes, pos, frameSize)
-                    if (decoded != null) return decoded
-                }
-                pos += frameSize
-            }
-            return null
-        }
-
-        private fun decodeUsltFrame(data: ByteArray, offset: Int, length: Int): String? {
-            if (length < 5) return null
-            val encodingByte = data[offset].toInt() and 0xFF
-            // bytes offset+1 .. offset+3 are ISO-639-2 language
-            var cursor = offset + 4
-            val end = offset + length
-
-            val charset: Charset
-            val twoByteNull: Boolean
-            when (encodingByte) {
-                0 -> {
-                    charset = Charsets.ISO_8859_1
-                    twoByteNull = false
-                }
-                1 -> {
-                    charset = Charsets.UTF_16
-                    twoByteNull = true
-                }
-                2 -> {
-                    charset = Charsets.UTF_16BE
-                    twoByteNull = true
-                }
-                3 -> {
-                    charset = Charsets.UTF_8
-                    twoByteNull = false
-                }
-                else -> return null
-            }
-
-            // Skip content descriptor (null-terminated)
-            if (twoByteNull) {
-                while (cursor + 1 < end) {
-                    if (data[cursor] == 0.toByte() && data[cursor + 1] == 0.toByte()) {
-                        cursor += 2
-                        break
-                    }
-                    cursor += 2
-                }
-            } else {
-                while (cursor < end) {
-                    if (data[cursor] == 0.toByte()) {
-                        cursor += 1
-                        break
-                    }
-                    cursor += 1
-                }
-            }
-
-            if (cursor >= end) return null
-            val text = String(data, cursor, end - cursor, charset)
-                .trimEnd('\u0000')
-            return clean(text)
-        }
-
-        private fun synchsafeInt(b: ByteArray, offset: Int): Int {
-            return ((b[offset].toInt() and 0x7F) shl 21) or
-                ((b[offset + 1].toInt() and 0x7F) shl 14) or
-                ((b[offset + 2].toInt() and 0x7F) shl 7) or
-                (b[offset + 3].toInt() and 0x7F)
-        }
-
-        private fun bigEndianInt(b: ByteArray, offset: Int): Int {
-            return ((b[offset].toInt() and 0xFF) shl 24) or
-                ((b[offset + 1].toInt() and 0xFF) shl 16) or
-                ((b[offset + 2].toInt() and 0xFF) shl 8) or
-                (b[offset + 3].toInt() and 0xFF)
-        }
-
-        private fun readBytes(input: InputStream, count: Int): ByteArray? {
-            val buf = ByteArray(count)
-            var offset = 0
-            while (offset < count) {
-                val read = input.read(buf, offset, count - offset)
-                if (read < 0) return null
-                offset += read
-            }
-            return buf
+            return EmbeddedArtworkExtractor.extractId3v2(
+                input = input,
+                needArtwork = false,
+                needLyrics = true,
+            ).lyrics
         }
     }
 }
