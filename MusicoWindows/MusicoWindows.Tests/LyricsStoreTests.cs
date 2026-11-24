@@ -90,4 +90,81 @@ public sealed class LyricsStoreTests : IDisposable
         Assert.Throws<InvalidDataException>(() => _store.ImportLyrics(badPath, "t"));
         Assert.False(_store.HasImported("t"));
     }
+
+    [Fact]
+    public void FolderMatchNormalizesTrackNumbersNoiseDiacriticsAndPreservesJapaneseKana()
+    {
+        string cafeSong = Path.Combine(_musicDir, "01 - Café Del Mar (Official Audio).mp3");
+        File.WriteAllBytes(cafeSong, []);
+        WriteSidecar("[00:05.00]Sunrise on the beach", "Artist - Cafe del Mar [FLAC].lrc");
+
+        var resolved = _store.Resolve("cafe", cafeSong, "embedded fallback", "Café Del Mar", "Artist");
+        Assert.NotNull(resolved);
+        Assert.Equal(LyricsSource.FolderMatch, resolved!.Value.Source);
+        Assert.Equal(["Sunrise on the beach"], resolved.Value.Lyrics.Lines.Select(l => l.Text));
+
+        string jpSong = Path.Combine(_musicDir, "かがみ.mp3");
+        File.WriteAllBytes(jpSong, []);
+        WriteSidecar("[00:01.00]wrong kana", "かかみ.lrc");
+        Assert.Null(_store.Resolve("jp", jpSong, null, "かがみ", ""));
+
+        WriteSidecar("[00:02.00]exact kana", "01. かがみ.lrc");
+        var jpResolved = _store.Resolve("jp", jpSong, null, "かがみ", "");
+        Assert.NotNull(jpResolved);
+        Assert.Equal(LyricsSource.FolderMatch, jpResolved!.Value.Source);
+        Assert.Equal(["exact kana"], jpResolved.Value.Lyrics.Lines.Select(l => l.Text));
+
+        string yearSong = Path.Combine(_musicDir, "1989.mp3");
+        File.WriteAllBytes(yearSong, []);
+        WriteSidecar("[00:03.00]welcome to 1989", "01 - 1989.lrc");
+        var yearResolved = _store.Resolve("yr", yearSong, null, "1989", "Taylor");
+        Assert.NotNull(yearResolved);
+        Assert.Equal(LyricsSource.FolderMatch, yearResolved!.Value.Source);
+        Assert.Equal(["welcome to 1989"], yearResolved.Value.Lyrics.Lines.Select(l => l.Text));
+    }
+
+    [Fact]
+    public void FolderMatchSkipsGenericAndSubfolderAndPrefersTimedLrcOverTxt()
+    {
+        string trackPath = Path.Combine(_musicDir, "Nightcall.mp3");
+        File.WriteAllBytes(trackPath, []);
+        string subDir = Path.Combine(_musicDir, "Subfolder");
+        Directory.CreateDirectory(subDir);
+        File.WriteAllText(Path.Combine(subDir, "Nightcall.lrc"), "[00:01.00]sub");
+        WriteSidecar("[00:01.00]generic", "lyrics.lrc");
+        WriteSidecar("readme", "readme.txt");
+
+        var embeddedOnly = _store.Resolve("nc", trackPath, "tag line", "Nightcall", "Kavinsky");
+        Assert.Equal(LyricsSource.Embedded, embeddedOnly!.Value.Source);
+
+        string genericSong = Path.Combine(_musicDir, "lyrics.mp3");
+        File.WriteAllBytes(genericSong, []);
+        Assert.Equal(LyricsSource.Sidecar, _store.Resolve("gen", genericSong, null)!.Value.Source);
+
+        WriteSidecar("plain txt", "Kavinsky - Nightcall.txt");
+        WriteSidecar("[00:04.00]timed lrc", "Kavinsky - Nightcall.lrc");
+        var matched = _store.Resolve("nc", trackPath, "tag line", "Nightcall", "Kavinsky");
+        Assert.Equal(LyricsSource.FolderMatch, matched!.Value.Source);
+        Assert.Equal(["timed lrc"], matched.Value.Lyrics.Lines.Select(l => l.Text));
+    }
+
+    [Fact]
+    public void SaveImportedExportSidecarAndLyricsChangedEventWork()
+    {
+        var changedIds = new List<string>();
+        _store.LyricsChanged += id => changedIds.Add(id);
+
+        Assert.True(_store.CanExportSidecar(_songPath));
+        const string lrc = "[00:10.00]Cloud line";
+        _store.SaveImportedLyrics(lrc, "t");
+        Assert.True(_store.HasImported("t"));
+        Assert.Equal(lrc, _store.ReadRawImportedText("t"));
+
+        _store.ExportSidecarLyrics(lrc, _songPath);
+        string sidecarPath = Path.ChangeExtension(_songPath, ".lrc");
+        Assert.Equal(lrc, File.ReadAllText(sidecarPath));
+
+        _store.RemoveImported("t");
+        Assert.Equal(["t", "t"], changedIds);
+    }
 }

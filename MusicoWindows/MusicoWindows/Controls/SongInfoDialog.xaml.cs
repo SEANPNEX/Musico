@@ -45,7 +45,7 @@ public partial class SongInfoDialog : UserControl
         PreviewCoverImage.Source = null;
         PreviewCoverImage.Visibility = Visibility.Collapsed;
         CoverArt.Visibility = Visibility.Visible;
-        CoverArt.SetSource(ctx.Services.Library.Artwork, _track.ArtworkKey, 240);
+        CoverArt.SetSource(ctx.Services.Library.Artwork, _track.ArtworkKey, 240, _track.RemoteArtworkUrl, ctx.Services.Thumbnails);
         CoverStatusText.Text = string.IsNullOrEmpty(_track.ArtworkKey)
             ? L.Get("SongInfo_NoCover")
             : L.Get("SongInfo_EmbeddedOrCachedCover");
@@ -53,6 +53,23 @@ public partial class SongInfoDialog : UserControl
         UpdateQuickSearchLinks();
         PopulateBasePlaybackInfo(_track);
         SetBusy(false);
+
+        if (_track.IsEphemeral)
+        {
+            TitleBox.IsReadOnly = true;
+            ArtistBox.IsReadOnly = true;
+            AlbumBox.IsReadOnly = true;
+            GenreBox.IsReadOnly = true;
+            ChangeCoverButton.IsEnabled = false;
+            SaveButton.IsEnabled = false;
+        }
+        else
+        {
+            TitleBox.IsReadOnly = false;
+            ArtistBox.IsReadOnly = false;
+            AlbumBox.IsReadOnly = false;
+            GenreBox.IsReadOnly = false;
+        }
 
         Visibility = Visibility.Visible;
         Win10Animations.AnimateModalOpen(BackdropGrid, DialogCard);

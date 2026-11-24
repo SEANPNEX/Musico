@@ -2,12 +2,18 @@ import SwiftUI
 
 struct ArtworkView: View {
     let artworkKey: String?
+    /// Optional remote `https://` artwork URL loaded via the in-memory thumbnail cache when `artworkKey` is nil.
+    var remoteArtworkURL: String? = nil
     /// Fixed edge length, or nil to fill the available width as a square.
     var size: CGFloat?
     var cornerRadius: CGFloat? = nil
 
     @Environment(LibraryStore.self) private var library
     @State private var image: UIImage?
+
+    private var taskKey: String {
+        "\(artworkKey ?? "")|\(remoteArtworkURL ?? "")"
+    }
 
     var body: some View {
         Color(.tertiarySystemFill)
@@ -23,10 +29,25 @@ struct ArtworkView: View {
             }
             .frame(width: size, height: size)
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius ?? ((size ?? 160) * 0.1), style: .continuous))
-            .task(id: artworkKey) {
-                guard let artworkKey else { image = nil; return }
-                let cache = library.artwork
-                image = await Task.detached { cache.image(forKey: artworkKey) }.value
+            .task(id: taskKey) {
+                if let artworkKey {
+                    let cache = library.artwork
+                    image = await Task.detached { cache.image(forKey: artworkKey) }.value
+                    return
+                }
+                if let remoteArtworkURL {
+                    if let cached = CloudThumbnailCache.shared.cachedImage(for: remoteArtworkURL) {
+                        image = cached
+                        return
+                    }
+                    image = nil
+                    let loaded = await CloudThumbnailCache.shared.loadImage(from: remoteArtworkURL)
+                    if !Task.isCancelled {
+                        image = loaded
+                    }
+                    return
+                }
+                image = nil
             }
     }
 }
@@ -41,7 +62,7 @@ struct TrackRow: View {
     var body: some View {
         let isCurrent = player.currentTrack?.id == track.id
         HStack(spacing: 12) {
-            ArtworkView(artworkKey: track.artworkKey, size: 44)
+            ArtworkView(artworkKey: track.artworkKey, remoteArtworkURL: track.remoteArtworkURL, size: 44)
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title)
                     .foregroundStyle(isCurrent ? Color.accentColor : .primary)
@@ -92,7 +113,7 @@ struct TrackRows: View {
             }
             .buttonStyle(.plain)
             .disabled(!library.isAvailable(track))
-            .contextMenu { TrackMenuItems(ids: [track.id], favouriteID: track.id) }
+            .contextMenu { TrackMenuItems(ids: [track.id], favouriteID: track.isEphemeral ? nil : track.id) }
         }
     }
 }
@@ -438,6 +459,19 @@ struct TrackMenuItems: View {
     @Environment(CloudExportPrompt.self) private var cloudExport
     @Environment(SongInfoPrompt.self) private var songInfo
     @Environment(\.appNavigation) private var navigation
+    @Environment(\.extensionStore) private var extensionStore
+
+    private var hasEphemeralTrack: Bool {
+        ids.contains { library.track($0)?.isEphemeral == true || $0.hasPrefix(Track.ephemeralIDPrefix) }
+    }
+
+    private func canSaveCloudTrack(_ track: Track) -> Bool {
+        guard track.isCloud else { return false }
+        if track.isEphemeral, let extID = track.ephemeralExtensionID {
+            return extensionStore.extension(forID: extID)?.manifest.capabilities.contains(.stream) ?? false
+        }
+        return true
+    }
 
     var body: some View {
         Button(L10n.tr("Play Next"), systemImage: "text.line.first.and.arrowtriangle.forward") { player.playNext(ids) }
@@ -450,30 +484,32 @@ struct TrackMenuItems: View {
             }
         }
         Button(L10n.tr("Play in New Queue"), systemImage: "plus.rectangle.on.rectangle") { player.playInNewQueue(ids) }
-        if ids.count == 1, let trackID = ids.first, library.track(trackID) != nil {
-            Button(L10n.tr("Song Info"), systemImage: "info.circle") {
-                songInfo.show(trackID, library: library, history: history, navigation: navigation)
+        if !hasEphemeralTrack {
+            if ids.count == 1, let trackID = ids.first, library.track(trackID) != nil {
+                Button(L10n.tr("Song Info"), systemImage: "info.circle") {
+                    songInfo.show(trackID, library: library, history: history, navigation: navigation)
+                }
             }
-        }
-        Divider()
-        Menu(L10n.tr("Add to Playlist"), systemImage: "music.note.list") {
-            ForEach(library.playlists) { playlist in
-                Button(playlist.name) { library.add(ids, toPlaylist: playlist.id) }
+            Divider()
+            Menu(L10n.tr("Add to Playlist"), systemImage: "music.note.list") {
+                ForEach(library.playlists) { playlist in
+                    Button(playlist.name) { library.add(ids, toPlaylist: playlist.id) }
+                }
+                Button(L10n.tr("New Playlist…"), systemImage: "plus") {
+                    newPlaylist.songCount = ids.count
+                    newPlaylist.create = { [library, ids] name in
+                        library.add(ids, toPlaylist: library.createPlaylist(name: name))
+                    }
+                }
             }
-            Button(L10n.tr("New Playlist…"), systemImage: "plus") {
-                newPlaylist.songCount = ids.count
-                newPlaylist.create = { [library, ids] name in
-                    library.add(ids, toPlaylist: library.createPlaylist(name: name))
+            if let favouriteID {
+                let isFavourite = library.isFavourite(favouriteID)
+                Button(isFavourite ? L10n.tr("Remove from Favourites") : L10n.tr("Add to Favourites"), systemImage: isFavourite ? "heart.slash" : "heart") {
+                    library.toggleFavourite(favouriteID)
                 }
             }
         }
-        if let favouriteID {
-            let isFavourite = library.isFavourite(favouriteID)
-            Button(isFavourite ? L10n.tr("Remove from Favourites") : L10n.tr("Add to Favourites"), systemImage: isFavourite ? "heart.slash" : "heart") {
-                library.toggleFavourite(favouriteID)
-            }
-        }
-        if ids.count == 1, let trackID = ids.first, let track = library.track(trackID), track.isCloud {
+        if ids.count == 1, let trackID = ids.first, let track = library.track(trackID), canSaveCloudTrack(track) {
             Divider()
             Button(L10n.tr("Save to Local Folder…"), systemImage: "square.and.arrow.down") {
                 let root = library.root(track.rootID)

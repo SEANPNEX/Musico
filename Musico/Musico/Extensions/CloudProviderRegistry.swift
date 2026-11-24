@@ -23,10 +23,15 @@ protocol CloudSourceProvider: Sendable {
     var trackCloudSource: String { get }
     var supportsTree: Bool { get }
     var supportsCookie: Bool { get }
+    var supportsCollection: Bool { get }
 
     func canHandle(rawText: String, extractedURL: String) -> CloudMatchResult?
     func fetchCollection(sourceURL: String, cookie: String?) async throws -> CloudPlaylistResult
     func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult
+}
+
+extension CloudSourceProvider {
+    var supportsCollection: Bool { true }
 }
 
 protocol CloudProgressiveTreeProvider: CloudSourceProvider {
@@ -392,6 +397,9 @@ final class CloudProviderRegistry: @unchecked Sendable {
                     return cs
                 }
             }
+        }
+        if let extID = track.ephemeralExtensionID {
+            return "ext.\(extID)"
         }
         return root?.resolvedProviderID ?? root?.effectiveProviderID
     }

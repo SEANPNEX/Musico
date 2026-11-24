@@ -58,4 +58,78 @@ final class LyricsStoreTests: XCTestCase {
         XCTAssertThrowsError(try store.importLyrics(from: url, trackID: "t"))
         XCTAssertFalse(store.hasImported(trackID: "t"))
     }
+
+    func testFolderMatchFuzzyNormalizesTrackPrefixNoiseDiacriticsAndArtistOrder() {
+        let caféSong = music.appendingPathComponent("01 - Café Del Mar (Official Audio).mp3")
+        try! Data().write(to: caféSong)
+        _ = write("[00:05.00]Sunrise on the beach", "Artist - Cafe del Mar [FLAC].lrc")
+
+        let found = store.lyrics(
+            trackID: "cafe",
+            fileURL: caféSong,
+            embedded: "embedded fallback",
+            trackTitle: "Café Del Mar",
+            trackArtist: "Artist"
+        )
+        XCTAssertEqual(found?.1, .folderMatch)
+        XCTAssertEqual(found?.0.lines.map(\.text), ["Sunrise on the beach"])
+    }
+
+    func testFolderMatchPreservesJapaneseDakutenAnd1989Title() {
+        let jpSong = music.appendingPathComponent("かがみ.mp3")
+        try! Data().write(to: jpSong)
+        _ = write("[00:01.00]wrong kana", "かかみ.lrc")
+        XCTAssertNil(store.lyrics(trackID: "jp", fileURL: jpSong, embedded: nil, trackTitle: "かがみ", trackArtist: ""))
+
+        _ = write("[00:02.00]exact kana", "01. かがみ.lrc")
+        let jpFound = store.lyrics(trackID: "jp", fileURL: jpSong, embedded: nil, trackTitle: "かがみ", trackArtist: "")
+        XCTAssertEqual(jpFound?.1, .folderMatch)
+        XCTAssertEqual(jpFound?.0.lines.map(\.text), ["exact kana"])
+
+        let numericSong = music.appendingPathComponent("1989.mp3")
+        try! Data().write(to: numericSong)
+        _ = write("[00:03.00]welcome to 1989", "01 - 1989.lrc")
+        let numFound = store.lyrics(trackID: "yr", fileURL: numericSong, embedded: nil, trackTitle: "1989", trackArtist: "Taylor")
+        XCTAssertEqual(numFound?.1, .folderMatch)
+        XCTAssertEqual(numFound?.0.lines.map(\.text), ["welcome to 1989"])
+    }
+
+    func testFolderMatchIgnoresGenericNamesAndSubfoldersAndPrefersTimedLrcOverTxt() throws {
+        let trackURL = music.appendingPathComponent("Nightcall.mp3")
+        try! Data().write(to: trackURL)
+        let subDir = music.appendingPathComponent("Subfolder")
+        try FileManager.default.createDirectory(at: subDir, withIntermediateDirectories: true)
+        try Data("[00:01.00]sub".utf8).write(to: subDir.appendingPathComponent("Nightcall.lrc"))
+        _ = write("[00:01.00]generic", "lyrics.lrc")
+        _ = write("[00:01.00]readme", "readme.txt")
+
+        // Only generic / subfolder files present -> falls through to embedded
+        let embeddedOnly = store.lyrics(trackID: "nc", fileURL: trackURL, embedded: "tag text", trackTitle: "Nightcall", trackArtist: "Kavinsky")
+        XCTAssertEqual(embeddedOnly?.1, .embedded)
+
+        // Exact sidecar named "lyrics.lrc" still matches "lyrics.mp3"
+        let genericNamedSong = music.appendingPathComponent("lyrics.mp3")
+        try! Data().write(to: genericNamedSong)
+        XCTAssertEqual(store.lyrics(trackID: "gen", fileURL: genericNamedSong, embedded: nil)?.1, .sidecar)
+
+        // Tie-breaker: timed .lrc beats untimed .txt at equal score, and folderMatch beats embedded
+        _ = write("plain line", "Kavinsky - Nightcall.txt")
+        _ = write("[00:04.00]timed line", "Kavinsky - Nightcall.lrc")
+        let folderFound = store.lyrics(trackID: "nc", fileURL: trackURL, embedded: "tag text", trackTitle: "Nightcall", trackArtist: "Kavinsky")
+        XCTAssertEqual(folderFound?.1, .folderMatch)
+        XCTAssertEqual(folderFound?.0.isTimed, true)
+        XCTAssertEqual(folderFound?.0.lines.map(\.text), ["timed line"])
+    }
+
+    func testSaveImportedAndExportSidecar() throws {
+        XCTAssertTrue(store.canExportSidecar(for: song))
+        let lrc = "[00:10.00]Cloud line"
+        try store.saveImportedLyrics(text: lrc, trackID: "t")
+        XCTAssertTrue(store.hasImported(trackID: "t"))
+        XCTAssertEqual(store.rawImportedText(trackID: "t"), lrc)
+
+        try store.exportSidecarLyrics(text: lrc, for: song)
+        let sidecarURL = music.appendingPathComponent("song.lrc")
+        XCTAssertEqual(try String(contentsOf: sidecarURL, encoding: .utf8), lrc)
+    }
 }

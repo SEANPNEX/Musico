@@ -155,16 +155,80 @@ struct Track: Codable, Hashable, Identifiable, Sendable {
     var cloudSource: String? = nil
     var remoteTrackID: String? = nil
     var remoteArtworkURL: String? = nil
+    var isEphemeral: Bool = false
 
-    var isCloud: Bool { cloudSource != nil }
+    var isCloud: Bool { cloudSource != nil || isEphemeral }
 
     var displayGenre: String {
         (genre ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    static let ephemeralRootID = UUID(uuidString: "00000000-0000-0000-0000-00000000E9E3")!
+    static let ephemeralIDPrefix = "extsearch:"
+
     static func makeID(rootID: UUID, relativePath: String) -> String {
         let digest = SHA256.hash(data: Data("\(rootID.uuidString)/\(relativePath)".utf8))
         return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func makeEphemeralID(extensionID: String, remoteTrackID: String) -> String {
+        "\(ephemeralIDPrefix)\(extensionID):\(remoteTrackID)"
+    }
+
+    static func makeEphemeral(extensionID: String, info: CloudTrackInfo, now: Date = Date()) -> Track {
+        Track(
+            id: makeEphemeralID(extensionID: extensionID, remoteTrackID: info.remoteTrackID),
+            rootID: ephemeralRootID,
+            relativePath: info.relativePath,
+            title: info.title,
+            artist: info.artist,
+            album: info.album,
+            albumArtist: info.artist,
+            trackNumber: info.trackNumber,
+            discNumber: nil,
+            duration: info.duration,
+            fileSize: 0,
+            modified: now,
+            hasEmbeddedLyrics: false,
+            dateAdded: now,
+            artworkKey: nil,
+            genre: nil,
+            cloudSource: "ext.\(extensionID)",
+            remoteTrackID: info.remoteTrackID,
+            remoteArtworkURL: info.artworkURL,
+            isEphemeral: true
+        )
+    }
+
+    var ephemeralExtensionID: String? {
+        if id.hasPrefix(Self.ephemeralIDPrefix) {
+            let rest = id.dropFirst(Self.ephemeralIDPrefix.count)
+            if let colon = rest.firstIndex(of: ":") {
+                let extID = String(rest[..<colon])
+                if !extID.isEmpty { return extID }
+            }
+        }
+        if let cs = cloudSource?.trimmingCharacters(in: .whitespacesAndNewlines), cs.hasPrefix("ext.") {
+            let extID = String(cs.dropFirst(4))
+            if !extID.isEmpty { return extID }
+        }
+        return nil
+    }
+
+    /// Safe filename stem for caches (`CloudAudioCache`, `LyricsStore`) so arbitrary remote IDs never create paths or exceed length limits.
+    static func safeCacheStem(for trackID: String) -> String {
+        if !trackID.hasPrefix(ephemeralIDPrefix),
+           !trackID.isEmpty,
+           !trackID.hasPrefix("."),
+           trackID.utf8.count <= 200,
+           !trackID.contains("/"),
+           !trackID.contains("\\"),
+           !trackID.contains(".."),
+           !trackID.contains("\0") {
+            return trackID
+        }
+        let digest = SHA256.hash(data: Data(trackID.utf8))
+        return "extsearch_" + digest.map { String(format: "%02x", $0) }.joined()
     }
 
     /// Folder part of `relativePath` ("" for files directly in the root).
@@ -176,6 +240,38 @@ struct Track: Codable, Hashable, Identifiable, Sendable {
     var fileName: String {
         guard let slash = relativePath.lastIndex(of: "/") else { return relativePath }
         return String(relativePath[relativePath.index(after: slash)...])
+    }
+}
+
+extension Track {
+    enum CodingKeys: String, CodingKey {
+        case id, rootID, relativePath, title, artist, album, albumArtist
+        case trackNumber, discNumber, duration, fileSize, modified, hasEmbeddedLyrics, dateAdded
+        case artworkKey, genre, cloudSource, remoteTrackID, remoteArtworkURL, isEphemeral
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(String.self, forKey: .id)
+        self.rootID = try c.decode(UUID.self, forKey: .rootID)
+        self.relativePath = try c.decode(String.self, forKey: .relativePath)
+        self.title = try c.decode(String.self, forKey: .title)
+        self.artist = try c.decode(String.self, forKey: .artist)
+        self.album = try c.decode(String.self, forKey: .album)
+        self.albumArtist = try c.decode(String.self, forKey: .albumArtist)
+        self.trackNumber = try c.decodeIfPresent(Int.self, forKey: .trackNumber)
+        self.discNumber = try c.decodeIfPresent(Int.self, forKey: .discNumber)
+        self.duration = try c.decode(TimeInterval.self, forKey: .duration)
+        self.fileSize = try c.decode(Int64.self, forKey: .fileSize)
+        self.modified = try c.decode(Date.self, forKey: .modified)
+        self.hasEmbeddedLyrics = try c.decode(Bool.self, forKey: .hasEmbeddedLyrics)
+        self.dateAdded = try c.decode(Date.self, forKey: .dateAdded)
+        self.artworkKey = try c.decodeIfPresent(String.self, forKey: .artworkKey)
+        self.genre = try c.decodeIfPresent(String.self, forKey: .genre)
+        self.cloudSource = try c.decodeIfPresent(String.self, forKey: .cloudSource)
+        self.remoteTrackID = try c.decodeIfPresent(String.self, forKey: .remoteTrackID)
+        self.remoteArtworkURL = try c.decodeIfPresent(String.self, forKey: .remoteArtworkURL)
+        self.isEphemeral = try c.decodeIfPresent(Bool.self, forKey: .isEphemeral) ?? false
     }
 }
 

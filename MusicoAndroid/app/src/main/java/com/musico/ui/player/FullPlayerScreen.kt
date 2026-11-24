@@ -72,8 +72,10 @@ import androidx.compose.ui.unit.dp
 import com.musico.audio.PlayerController
 import com.musico.audio.PlayerUiState
 import com.musico.core.LyricsStore
+import com.musico.extensions.ExtensionStore
 import com.musico.i18n.AppStrings
 import com.musico.i18n.LocalStrings
+import com.musico.lyrics.CloudLyricsService
 import com.musico.model.RepeatMode
 import com.musico.model.SleepMode
 import com.musico.store.LibraryStore
@@ -118,7 +120,9 @@ fun FullPlayerScreen(
     trackActions: TrackActionState,
     onPickLyricsFile: ((Uri) -> Unit) -> Unit,
     onClose: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    cloudLyricsService: CloudLyricsService? = null,
+    extensionStore: ExtensionStore? = null,
 ) {
     val strings = LocalStrings.current
     var activeSheet by remember { mutableStateOf<PlayerModalSheet?>(null) }
@@ -199,6 +203,8 @@ fun FullPlayerScreen(
                                     playerController = playerController,
                                     playerState = playerState,
                                     onPickLyricsFile = onPickLyricsFile,
+                                    cloudLyricsService = cloudLyricsService,
+                                    extensionStore = extensionStore,
                                     embedded = true,
                                     modifier = Modifier.fillMaxSize()
                                 )
@@ -252,6 +258,8 @@ fun FullPlayerScreen(
             playerController = playerController,
             playerState = playerState,
             onPickLyricsFile = onPickLyricsFile,
+            cloudLyricsService = cloudLyricsService,
+            extensionStore = extensionStore,
             onDismiss = { activeSheet = null }
         )
         PlayerModalSheet.EQUALIZER -> EqualizerSheet(
@@ -367,6 +375,7 @@ private fun PlayerControlsPane(
                     ArtworkImage(
                         artworkKey = currentTrack.artworkKey,
                         artworkCache = libraryStore.artwork,
+                        remoteArtworkUrl = currentTrack.remoteArtworkUrl,
                         cornerRadius = 20.dp,
                         modifier = Modifier
                             .fillMaxSize()
@@ -426,13 +435,15 @@ private fun PlayerControlsPane(
                             )
                         }
                     }
-                    val isFav = track.id in libraryState.favourites
-                    IconButton(onClick = { libraryStore.toggleFavourite(track.id) }) {
-                        Icon(
-                            imageVector = if (isFav) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
-                            contentDescription = if (isFav) strings.removeFromFavourites else strings.addToFavourites,
-                            tint = if (isFav) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
-                        )
+                    if (!track.isEphemeral) {
+                        val isFav = track.id in libraryState.favourites
+                        IconButton(onClick = { libraryStore.toggleFavourite(track.id) }) {
+                            Icon(
+                                imageVector = if (isFav) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
+                                contentDescription = if (isFav) strings.removeFromFavourites else strings.addToFavourites,
+                                tint = if (isFav) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurfaceVariant
+                            )
+                        }
                     }
                 }
 

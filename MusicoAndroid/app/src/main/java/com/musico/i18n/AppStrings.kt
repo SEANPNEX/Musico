@@ -187,8 +187,37 @@ interface AppStrings {
     val capabilityStream: String
     val capabilityCookie: String
     val capabilityProxy: String
+    val capabilityLyrics: String
+    val capabilitySearch: String
+    val capabilityQrLogin: String
+    val capabilityPlaylistDesc: String
+    val capabilityTreeDesc: String
+    val capabilityStreamDesc: String
+    val capabilityCookieDesc: String
+    val capabilityProxyDesc: String
+    val capabilityLyricsDesc: String
+    val capabilitySearchDesc: String
+    val capabilityQrLoginDesc: String
+    val extensionCookieLabel: String
+    val extensionCookiePlaceholder: String
+    val extensionCookieSupportingText: String
+    val showCookie: String
+    val hideCookie: String
+    val clearCookie: String
+    val qrLoginAction: String
+    val signInWithQrCode: String
+    val qrLoginGenerating: String
+    val qrLoginFailed: String
+    val qrLoginExpired: String
+    val qrLoginRefreshHint: String
+    val qrLoginSignedIn: String
+    val qrLoginScannedConfirm: String
+    val qrLoginWaiting: String
+    val qrLoginRefresh: String
+    fun qrLoginScanPrompt(sourceName: String): String
+    fun qrLoginCookieSaved(extensionName: String): String
 
-    // Songs screen
+    // Songs screen & cloud search
     val searchPlaceholder: String
     val clearSearch: String
     val sortSongs: String
@@ -204,6 +233,32 @@ interface AppStrings {
     val searchFieldArtist: String
     val searchFieldAlbum: String
     val searchFieldGenre: String
+    val searchSourceLocal: String
+    val cloudSearchKindAll: String
+    val cloudSearchKindTracks: String
+    val cloudSearchKindAlbums: String
+    val cloudSearchKindPlaylists: String
+    val cloudSearchKindAlbumBadge: String
+    val cloudSearchKindPlaylistBadge: String
+    val cloudSearchIdleDesc: String
+    val noCloudSearchResultsDesc: String
+    val loadMore: String
+    val loadingMore: String
+    val cloudSearchErrorTitle: String
+    val cloudSearchAuthRequiredHint: String
+    val cloudSearchRateLimitedHint: String
+    val cloudSearchPermissionDeniedHint: String
+    val cloudSearchNetworkErrorHint: String
+    val openPreview: String
+    val addAsCloudFolder: String
+    val addedToFolders: String
+    val collectionPreviewEmptyTitle: String
+    val collectionPreviewEmptyDesc: String
+    val collectionPreviewLoadFailedTitle: String
+    val collectionPreviewUnsupported: String
+    val saveToMusicoFolder: String
+    val chooseFolderEllipsis: String
+    val saveTrackDestinationMessage: String
 
     // Albums & Artists
     val noAlbumsYetTitle: String
@@ -279,6 +334,8 @@ interface AppStrings {
 
     // Lyrics
     val lyricsOptions: String
+    val searchOnlineEllipsis: String
+    val searchCloudLyricsTitle: String
     val importFromFileEllipsis: String
     val removeImportedLyrics: String
     val noLyricsTitle: String
@@ -287,10 +344,33 @@ interface AppStrings {
     val lyricsImportErrorFallback: String
     val lyricsSourceImported: String
     val lyricsSourceSidecar: String
+    val lyricsSourceFolderMatch: String
     val lyricsSourceEmbedded: String
     val lyricsSourceImportedDesc: String
     val lyricsSourceSidecarDesc: String
+    val lyricsSourceFolderMatchDesc: String
     val lyricsSourceEmbeddedDesc: String
+    val saveLrcToFolder: String
+    val savedLrcToFolderNotice: String
+    val alsoSaveLrcToFolder: String
+    val useLyrics: String
+    val includeTranslation: String
+    val lyricsTitleField: String
+    val lyricsArtistField: String
+    val searchAction: String
+    val autoSourceLabel: String
+    val lyricsFormatSynced: String
+    val lyricsFormatPlain: String
+    val lyricsFormatInstrumental: String
+    val lyricsTranslatedBadge: String
+    val noOnlineLyricsTitle: String
+    val noOnlineLyricsDesc: String
+    val searchingOnline: String
+    val retryAction: String
+    val selectResultToPreview: String
+    val partialSourcesFailedHint: String
+    val couldNotSaveLyricsTitle: String
+    val couldNotSearchLyricsTitle: String
 
     // Equalizer
     val reset: String
@@ -430,6 +510,9 @@ interface AppStrings {
     fun uninstallExtensionConfirmTitle(name: String): String
     fun detectedProviderHint(name: String): String
     fun extensionLogsCountLabel(count: Int): String
+    fun cloudSearchPlaceholder(sourceName: String): String
+    fun cloudSearchIdleTitle(sourceName: String): String
+    fun addedFolderNotice(name: String): String
     fun formatListeningTime(totalSeconds: Double): String
     fun formatRelativeTime(epochMs: Long, nowMs: Long = System.currentTimeMillis()): String
 
@@ -460,12 +543,14 @@ interface AppStrings {
     fun lyricsSourceBadge(source: LyricsSource): String = when (source) {
         LyricsSource.IMPORTED -> lyricsSourceImported
         LyricsSource.SIDECAR -> lyricsSourceSidecar
+        LyricsSource.FOLDER_MATCH -> lyricsSourceFolderMatch
         LyricsSource.EMBEDDED -> lyricsSourceEmbedded
     }
 
     fun lyricsSourceDescription(source: LyricsSource): String = when (source) {
         LyricsSource.IMPORTED -> lyricsSourceImportedDesc
         LyricsSource.SIDECAR -> lyricsSourceSidecarDesc
+        LyricsSource.FOLDER_MATCH -> lyricsSourceFolderMatchDesc
         LyricsSource.EMBEDDED -> lyricsSourceEmbeddedDesc
     }
 
@@ -654,6 +739,35 @@ object EnStrings : AppStrings {
     override val capabilityStream = "Audio Stream"
     override val capabilityCookie = "Cookie Auth"
     override val capabilityProxy = "Proxy"
+    override val capabilityLyrics = "Lyrics Search"
+    override val capabilitySearch = "Cloud Search"
+    override val capabilityQrLogin = "QR Code Login"
+    override val capabilityPlaylistDesc = "Load playlists or albums from links"
+    override val capabilityTreeDesc = "Browse nested cloud folders"
+    override val capabilityStreamDesc = "Resolve playable audio streams"
+    override val capabilityCookieDesc = "Use an optional cookie for account access"
+    override val capabilityProxyDesc = "Route extension network requests through proxy"
+    override val capabilityLyricsDesc = "Search online lyrics"
+    override val capabilitySearchDesc = "Search tracks, albums, and playlists from this source"
+    override val capabilityQrLoginDesc = "Sign in by scanning a QR code in-app"
+    override val extensionCookieLabel = "Extension Cookie"
+    override val extensionCookiePlaceholder = "Paste cookie header (optional)"
+    override val extensionCookieSupportingText = "Stored locally and sent only to this extension for search, preview, and streaming."
+    override val showCookie = "Show cookie"
+    override val hideCookie = "Hide cookie"
+    override val clearCookie = "Clear cookie"
+    override val qrLoginAction = "QR Login"
+    override val signInWithQrCode = "Sign In with QR Code…"
+    override val qrLoginGenerating = "Generating QR code…"
+    override val qrLoginFailed = "QR Code Login Failed"
+    override val qrLoginExpired = "QR Code Expired"
+    override val qrLoginRefreshHint = "Refresh to generate a new QR code."
+    override val qrLoginSignedIn = "Signed In"
+    override val qrLoginScannedConfirm = "Scanned — Confirm on Your Phone"
+    override val qrLoginWaiting = "Waiting for QR code scan…"
+    override val qrLoginRefresh = "Refresh QR Code"
+    override fun qrLoginScanPrompt(sourceName: String) = "Scan with $sourceName App"
+    override fun qrLoginCookieSaved(extensionName: String) = "Session cookie saved to $extensionName."
 
     override val searchPlaceholder = "Songs, artists, albums, genres"
     override val clearSearch = "Clear search"
@@ -670,6 +784,32 @@ object EnStrings : AppStrings {
     override val searchFieldArtist = "Artist"
     override val searchFieldAlbum = "Album"
     override val searchFieldGenre = "Genre"
+    override val searchSourceLocal = "Local"
+    override val cloudSearchKindAll = "All"
+    override val cloudSearchKindTracks = "Songs"
+    override val cloudSearchKindAlbums = "Albums"
+    override val cloudSearchKindPlaylists = "Playlists"
+    override val cloudSearchKindAlbumBadge = "Album"
+    override val cloudSearchKindPlaylistBadge = "Playlist"
+    override val cloudSearchIdleDesc = "Enter keywords and tap Search to query this extension."
+    override val noCloudSearchResultsDesc = "Try another query or switch category."
+    override val loadMore = "Load More"
+    override val loadingMore = "Loading more…"
+    override val cloudSearchErrorTitle = "Search Failed"
+    override val cloudSearchAuthRequiredHint = "Authentication required. Configure this extension’s cookie in Folders → Extensions → Settings."
+    override val cloudSearchRateLimitedHint = "Rate limited by this source. Please wait a moment and try again."
+    override val cloudSearchPermissionDeniedHint = "Blocked by the extension’s host allowlist."
+    override val cloudSearchNetworkErrorHint = "Network error while contacting this source."
+    override val openPreview = "Open Preview"
+    override val addAsCloudFolder = "Add as Cloud Folder"
+    override val addedToFolders = "Added to Folders"
+    override val collectionPreviewEmptyTitle = "No Songs Found"
+    override val collectionPreviewEmptyDesc = "This collection does not contain any playable items."
+    override val collectionPreviewLoadFailedTitle = "Couldn’t Load Collection"
+    override val collectionPreviewUnsupported = "This extension does not support loading collection previews."
+    override val saveToMusicoFolder = "Save to Musico Folder"
+    override val chooseFolderEllipsis = "Choose Folder…"
+    override val saveTrackDestinationMessage = "Choose where to save this song locally. Saved songs join your local library without cloud sync tracking."
 
     override val noAlbumsYetTitle = "No Albums Yet"
     override val noAlbumsYetDesc = "Albums appear once your library has songs."
@@ -739,6 +879,8 @@ object EnStrings : AppStrings {
     override val queuePanel = "Queue panel"
 
     override val lyricsOptions = "Lyrics options"
+    override val searchOnlineEllipsis = "Search Online…"
+    override val searchCloudLyricsTitle = "Search Cloud Lyrics"
     override val importFromFileEllipsis = "Import from File…"
     override val removeImportedLyrics = "Remove Imported Lyrics"
     override val noLyricsTitle = "No Lyrics"
@@ -747,10 +889,33 @@ object EnStrings : AppStrings {
     override val lyricsImportErrorFallback = "That file could not be read as lyrics text."
     override val lyricsSourceImported = "Imported"
     override val lyricsSourceSidecar = "Sidecar"
+    override val lyricsSourceFolderMatch = "Folder Match"
     override val lyricsSourceEmbedded = "Embedded"
     override val lyricsSourceImportedDesc = "From the file you imported"
     override val lyricsSourceSidecarDesc = "From a file next to the song"
+    override val lyricsSourceFolderMatchDesc = "Matched from song folder"
     override val lyricsSourceEmbeddedDesc = "From the song’s tags"
+    override val saveLrcToFolder = "Save .lrc to Song Folder"
+    override val savedLrcToFolderNotice = "Saved .lrc to song folder."
+    override val alsoSaveLrcToFolder = "Also save .lrc to song folder"
+    override val useLyrics = "Use Lyrics"
+    override val includeTranslation = "Include Translation"
+    override val lyricsTitleField = "Title"
+    override val lyricsArtistField = "Artist"
+    override val searchAction = "Search"
+    override val autoSourceLabel = "Auto"
+    override val lyricsFormatSynced = "Synced"
+    override val lyricsFormatPlain = "Plain"
+    override val lyricsFormatInstrumental = "Instrumental"
+    override val lyricsTranslatedBadge = "Translated"
+    override val noOnlineLyricsTitle = "No Lyrics Found Online"
+    override val noOnlineLyricsDesc = "Try editing the title or artist above, or switch lyrics source."
+    override val searchingOnline = "Searching…"
+    override val retryAction = "Try Again"
+    override val selectResultToPreview = "Select a result to preview"
+    override val partialSourcesFailedHint = "Some sources could not be reached."
+    override val couldNotSaveLyricsTitle = "Couldn’t Save Lyrics"
+    override val couldNotSearchLyricsTitle = "Couldn’t Search Lyrics"
 
     override val reset = "Reset"
     override val presetLabel = "Preset"
@@ -902,6 +1067,9 @@ object EnStrings : AppStrings {
     override fun uninstallExtensionConfirmTitle(name: String): String = "Uninstall “$name”?"
     override fun detectedProviderHint(name: String): String = "Detected: $name"
     override fun extensionLogsCountLabel(count: Int): String = "Logs ($count)"
+    override fun cloudSearchPlaceholder(sourceName: String): String = "Search $sourceName"
+    override fun cloudSearchIdleTitle(sourceName: String): String = "Search $sourceName"
+    override fun addedFolderNotice(name: String): String = "Added “$name” to Folders."
 
     override fun formatListeningTime(totalSeconds: Double): String {
         if (!totalSeconds.isFinite() || totalSeconds <= 0.0) return "0 min"
@@ -1097,6 +1265,35 @@ object ZhHansStrings : AppStrings {
     override val capabilityStream = "音频流"
     override val capabilityCookie = "Cookie 登录态"
     override val capabilityProxy = "代理"
+    override val capabilityLyrics = "歌词搜索"
+    override val capabilitySearch = "云端搜索"
+    override val capabilityQrLogin = "扫码登录"
+    override val capabilityPlaylistDesc = "从链接加载歌单或专辑"
+    override val capabilityTreeDesc = "浏览多层云端文件夹"
+    override val capabilityStreamDesc = "解析可播放的音频流"
+    override val capabilityCookieDesc = "使用可选 Cookie 访问受限内容"
+    override val capabilityProxyDesc = "通过代理发送扩展网络请求"
+    override val capabilityLyricsDesc = "在线搜索歌词"
+    override val capabilitySearchDesc = "在此来源中搜索歌曲、专辑和歌单"
+    override val capabilityQrLoginDesc = "在应用内扫码登录账号"
+    override val extensionCookieLabel = "扩展 Cookie"
+    override val extensionCookiePlaceholder = "粘贴 Cookie 请求头（可选）"
+    override val extensionCookieSupportingText = "仅保存在本地，并仅发送给此扩展用于搜索、预览和播放。"
+    override val showCookie = "显示 Cookie"
+    override val hideCookie = "隐藏 Cookie"
+    override val clearCookie = "清除 Cookie"
+    override val qrLoginAction = "扫码登录"
+    override val signInWithQrCode = "扫码登录…"
+    override val qrLoginGenerating = "正在生成二维码…"
+    override val qrLoginFailed = "扫码登录失败"
+    override val qrLoginExpired = "二维码已过期"
+    override val qrLoginRefreshHint = "请刷新以重新生成二维码。"
+    override val qrLoginSignedIn = "登录成功"
+    override val qrLoginScannedConfirm = "已扫码 — 请在手机上确认"
+    override val qrLoginWaiting = "等待扫描二维码…"
+    override val qrLoginRefresh = "刷新二维码"
+    override fun qrLoginScanPrompt(sourceName: String) = "请使用 $sourceName 客户端扫码"
+    override fun qrLoginCookieSaved(extensionName: String) = "会话 Cookie 已保存到 $extensionName。"
 
     override val searchPlaceholder = "搜索歌曲、艺术家、专辑、流派"
     override val clearSearch = "清除搜索"
@@ -1113,6 +1310,32 @@ object ZhHansStrings : AppStrings {
     override val searchFieldArtist = "艺术家"
     override val searchFieldAlbum = "专辑"
     override val searchFieldGenre = "流派"
+    override val searchSourceLocal = "本地"
+    override val cloudSearchKindAll = "全部"
+    override val cloudSearchKindTracks = "歌曲"
+    override val cloudSearchKindAlbums = "专辑"
+    override val cloudSearchKindPlaylists = "歌单"
+    override val cloudSearchKindAlbumBadge = "专辑"
+    override val cloudSearchKindPlaylistBadge = "歌单"
+    override val cloudSearchIdleDesc = "输入关键词并点击搜索以查询此扩展来源。"
+    override val noCloudSearchResultsDesc = "请尝试其他关键词或切换分类。"
+    override val loadMore = "加载更多"
+    override val loadingMore = "正在加载更多…"
+    override val cloudSearchErrorTitle = "搜索失败"
+    override val cloudSearchAuthRequiredHint = "需要登录验证。请在“文件夹 → 扩展管理 → 设置”中配置此扩展的 Cookie。"
+    override val cloudSearchRateLimitedHint = "请求过于频繁，请稍后再试。"
+    override val cloudSearchPermissionDeniedHint = "请求被扩展的主机白名单拦截。"
+    override val cloudSearchNetworkErrorHint = "连接此来源时发生网络错误。"
+    override val openPreview = "打开预览"
+    override val addAsCloudFolder = "添加为云端文件夹"
+    override val addedToFolders = "已添加到文件夹"
+    override val collectionPreviewEmptyTitle = "未找到歌曲"
+    override val collectionPreviewEmptyDesc = "该合集中没有可播放的曲目。"
+    override val collectionPreviewLoadFailedTitle = "无法加载合集"
+    override val collectionPreviewUnsupported = "该扩展不支持加载合集预览。"
+    override val saveToMusicoFolder = "保存到 Musico 文件夹"
+    override val chooseFolderEllipsis = "选择文件夹…"
+    override val saveTrackDestinationMessage = "选择将此歌曲保存到本地的位置。保存的歌曲将直接加入本地音乐库，不启用云端同步追踪。"
 
     override val noAlbumsYetTitle = "暂无专辑"
     override val noAlbumsYetDesc = "音乐库中有歌曲后，专辑将显示在此处。"
@@ -1182,6 +1405,8 @@ object ZhHansStrings : AppStrings {
     override val queuePanel = "队列面板"
 
     override val lyricsOptions = "歌词选项"
+    override val searchOnlineEllipsis = "在线搜索…"
+    override val searchCloudLyricsTitle = "在线搜索歌词"
     override val importFromFileEllipsis = "从文件导入…"
     override val removeImportedLyrics = "移除已导入的歌词"
     override val noLyricsTitle = "暂无歌词"
@@ -1190,10 +1415,33 @@ object ZhHansStrings : AppStrings {
     override val lyricsImportErrorFallback = "无法将该文件读取为歌词文本。"
     override val lyricsSourceImported = "已导入"
     override val lyricsSourceSidecar = "同目录文件"
+    override val lyricsSourceFolderMatch = "目录匹配"
     override val lyricsSourceEmbedded = "内嵌标签"
     override val lyricsSourceImportedDesc = "来自你导入的文件"
     override val lyricsSourceSidecarDesc = "来自歌曲旁的同目录文件"
+    override val lyricsSourceFolderMatchDesc = "匹配自歌曲所在文件夹"
     override val lyricsSourceEmbeddedDesc = "来自歌曲内嵌标签"
+    override val saveLrcToFolder = "保存 .lrc 到歌曲文件夹"
+    override val savedLrcToFolderNotice = "已将 .lrc 保存到歌曲文件夹。"
+    override val alsoSaveLrcToFolder = "同时保存 .lrc 到歌曲文件夹"
+    override val useLyrics = "使用歌词"
+    override val includeTranslation = "包含翻译"
+    override val lyricsTitleField = "标题"
+    override val lyricsArtistField = "艺术家"
+    override val searchAction = "搜索"
+    override val autoSourceLabel = "自动"
+    override val lyricsFormatSynced = "逐行同步"
+    override val lyricsFormatPlain = "纯文本"
+    override val lyricsFormatInstrumental = "纯音乐"
+    override val lyricsTranslatedBadge = "含翻译"
+    override val noOnlineLyricsTitle = "未找到在线歌词"
+    override val noOnlineLyricsDesc = "可尝试修改上方标题或艺术家，或切换歌词来源。"
+    override val searchingOnline = "正在搜索…"
+    override val retryAction = "重试"
+    override val selectResultToPreview = "选择一条结果以预览"
+    override val partialSourcesFailedHint = "部分来源暂时无法访问。"
+    override val couldNotSaveLyricsTitle = "无法保存歌词"
+    override val couldNotSearchLyricsTitle = "无法搜索歌词"
 
     override val reset = "重置"
     override val presetLabel = "预设"
@@ -1341,6 +1589,9 @@ object ZhHansStrings : AppStrings {
     override fun uninstallExtensionConfirmTitle(name: String): String = "确定卸载“$name”吗？"
     override fun detectedProviderHint(name: String): String = "已识别来源：$name"
     override fun extensionLogsCountLabel(count: Int): String = "日志 ($count)"
+    override fun cloudSearchPlaceholder(sourceName: String): String = "搜索 $sourceName"
+    override fun cloudSearchIdleTitle(sourceName: String): String = "搜索 $sourceName"
+    override fun addedFolderNotice(name: String): String = "已将“$name”添加到文件夹。"
 
     private val defaultQueueRegex = Regex("^Queue (\\d+)$")
 

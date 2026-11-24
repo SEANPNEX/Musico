@@ -298,6 +298,11 @@ enum L10n {
         if name.hasPrefix("Keyword: ") {
             return "关键词：\(name.dropFirst(9))"
         }
+        if name.hasPrefix("Search ("), let sepRange = name.range(of: "): ") {
+            let extName = name[name.index(name.startIndex, offsetBy: 8)..<sepRange.lowerBound]
+            let query = name[sepRange.upperBound...]
+            return "搜索 (\(extName))：\(query)"
+        }
         return name
     }
 
@@ -795,5 +800,86 @@ enum L10n {
         "Extension archive exceeds the %@ MB uncompressed size limit.": "扩展压缩包解压后大小超过 %@ MB 上限。",
         "Extension archive uses unsupported compression method (%@).": "扩展压缩包使用了不支持的压缩方式 (%@)。",
         "Failed to decompress “%@” from extension archive.": "无法从扩展压缩包解压“%@”。",
+
+        // Cloud Lyrics & Local Folder Matching (v1.2.3)
+        "Lyrics Search": "歌词搜索",
+        "Search online lyrics for playing songs.": "搜索正在播放歌曲的在线歌词。",
+        "Search Online…": "在线搜索…",
+        "Search Cloud Lyrics": "在线搜索歌词",
+        "Matched from song folder": "匹配自歌曲所在文件夹",
+        "Save .lrc to Song Folder": "保存 .lrc 到歌曲文件夹",
+        "Saved .lrc to song folder.": "已将 .lrc 保存到歌曲文件夹。",
+        "Also save .lrc to song folder": "同时保存 .lrc 到歌曲文件夹",
+        "The song’s folder cannot be modified.": "无法写入歌曲所在的文件夹。",
+        "Lyrics Action Failed": "歌词操作失败",
+        "Couldn’t Save Lyrics": "无法保存歌词",
+        "Couldn’t Search Lyrics": "无法搜索歌词",
+        "Search": "搜索",
+        "Use Lyrics": "使用歌词",
+        "Include Translation": "包含翻译",
+        "Auto": "自动",
+        "Synced": "逐行同步",
+        "Plain": "纯文本",
+        "Instrumental": "纯音乐",
+        "Translated": "含翻译",
+        "No Lyrics Found Online": "未找到在线歌词",
+        "Try editing the title or artist above, or switch lyrics source.": "可尝试修改上方歌名或歌手，或切换歌词来源。",
+        "Searching…": "正在搜索…",
+        "Select a result to preview": "选择一条结果以预览",
+        "Preview": "预览",
+        "Try Again": "重试",
+        "Enter a song title or artist to search.": "请输入歌名或歌手后再搜索。",
+        "Lyrics service is busy. Try again in %@s.": "歌词服务繁忙，请在 %@ 秒后重试。",
+        "Lyrics service rate limited. Please try again shortly.": "歌词服务请求过于频繁，请稍后再试。",
+        "Lyrics provider “%@” is unavailable.": "歌词提供方“%@”当前不可用。",
+        "Some sources could not be reached.": "部分来源暂时无法访问。",
+
+        // Extension-Only Cloud Search & Auth (v1.2.4)
+        "Cloud Search": "云端搜索",
+        "Search songs, albums, and playlists online.": "在线搜索歌曲、专辑和歌单。",
+        "Clear Cookie": "清除 Cookie",
+        "Saved locally for search and playback with this extension. Folder-specific cookies still take precedence.": "仅保存在本地，用于此扩展的搜索与播放。已添加文件夹的独立 Cookie 仍会优先使用。",
+        "Search Kinds": "搜索类型",
+        "Local": "本地",
+        "All": "全部",
+        "Search %@": "搜索 %@",
+        "Search %@…": "搜索 %@…",
+        "Enter a query and press Search to search %@.": "输入关键词并点击“搜索”，即可在 %@ 中搜索。",
+        "No Results Found": "未找到结果",
+        "Try another keyword or switch search filter.": "请尝试其他关键词或切换筛选类型。",
+        "Loading more…": "正在加载更多…",
+        "Load More": "加载更多",
+        "Authentication Required": "需要身份验证",
+        "Search Failed": "搜索失败",
+        "Configure a Cookie for “%@” in Extension Manager, then retry.": "请在扩展管理中为“%@”配置 Cookie 后重试。",
+        "Open Extension Manager": "打开扩展管理",
+        "Configure Cookie…": "配置 Cookie…",
+        "Open Preview": "打开预览",
+        "Add as Cloud Folder": "添加为云端文件夹",
+        "Added to Folders": "已添加到文件夹",
+        "Couldn’t Add Cloud Folder": "无法添加云端文件夹",
+        "Collection Preview": "合集预览",
+        "Loading collection…": "正在加载合集…",
+        "Couldn’t Load Collection": "无法加载合集",
+        "No playable tracks found in this collection.": "此合集中未找到可播放的歌曲。",
+        "Adding…": "正在添加…",
+
+        // Extension QR Code Login
+        "QR Code Login": "扫码登录",
+        "Sign in by scanning a QR code in-app.": "在应用内扫码登录账号。",
+        "Sign In with QR Code…": "扫码登录…",
+        "Enable this extension first to sign in with a QR code. Folder-specific cookies still take precedence.": "请先启用此扩展再使用扫码登录。已添加文件夹的独立 Cookie 仍会优先使用。",
+        "Generating QR code…": "正在生成二维码…",
+        "QR Code Login Failed": "扫码登录失败",
+        "QR Code Expired": "二维码已过期",
+        "Refresh to generate a new QR code.": "请刷新以重新生成二维码。",
+        "Could not complete QR code login.": "未能完成扫码登录。",
+        "Signed In": "登录成功",
+        "Session cookie saved to %@.": "会话 Cookie 已保存到 %@。",
+        "Scanned — Confirm on Your Phone": "已扫码 — 请在手机上确认",
+        "Scan with %@ App": "请使用 %@ 客户端扫码",
+        "Waiting for QR code scan…": "等待扫描二维码…",
+        "Refresh QR Code": "刷新二维码",
+        "Couldn’t generate QR code.": "无法生成二维码。",
     ]
 }

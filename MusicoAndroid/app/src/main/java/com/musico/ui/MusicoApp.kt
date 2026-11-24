@@ -63,6 +63,7 @@ import com.musico.i18n.stringsFor
 import com.musico.model.SearchField
 import java.util.Locale
 import com.musico.store.AppContainer
+import com.musico.ui.components.LocalThumbnailCache
 import com.musico.ui.components.TrackActionDialogs
 import com.musico.ui.components.rememberTrackActionState
 import com.musico.ui.player.FullPlayerScreen
@@ -113,7 +114,10 @@ fun MusicoApp(
     }
     val strings = stringsFor(resolvedLanguage)
 
-    CompositionLocalProvider(LocalStrings provides strings) {
+    CompositionLocalProvider(
+        LocalStrings provides strings,
+        LocalThumbnailCache provides appContainer.cloudThumbnailCache,
+    ) {
         MusicoAppContent(
             appContainer = appContainer,
             onPickFolder = onPickFolder,
@@ -140,6 +144,8 @@ private fun MusicoAppContent(
     val playerController = appContainer.playerController
     val updateManager = appContainer.updateManager
     val cloudExporter = appContainer.cloudExporter
+    val extensionStore = appContainer.extensionStore
+    val cloudLyricsService = appContainer.cloudLyricsService
 
     LaunchedEffect(updateManager) {
         updateManager.checkForUpdates(silent = true)
@@ -333,6 +339,8 @@ private fun MusicoAppContent(
                                                 playerController = playerController,
                                                 playerState = playerState,
                                                 onPickLyricsFile = onPickLyricsFile,
+                                                cloudLyricsService = cloudLyricsService,
+                                                extensionStore = extensionStore,
                                                 embedded = true,
                                                 modifier = Modifier.fillMaxSize()
                                             )
@@ -404,6 +412,8 @@ private fun MusicoAppContent(
                 playerState = playerState,
                 trackActions = trackActions,
                 onPickLyricsFile = onPickLyricsFile,
+                cloudLyricsService = cloudLyricsService,
+                extensionStore = extensionStore,
                 onClose = { showFullPlayer = false }
             )
         }
@@ -423,6 +433,7 @@ private fun MusicoAppContent(
         val displayError = when (structuredError) {
             is PlaybackError.ConsecutiveFailures -> strings.playbackStoppedConsecutive(structuredError.count)
             is PlaybackError.TrackFailed -> strings.playbackFailedTrack(structuredError.title ?: strings.thisSong)
+            is PlaybackError.ExtensionUnavailable -> strings.errorExtensionUnavailable
             is PlaybackError.EngineError -> structuredError.message ?: strings.playbackErrorGeneric
             null -> errorMsg ?: strings.playbackErrorGeneric
         }
@@ -489,6 +500,7 @@ private fun DestinationContent(
                     queues = queueState.queues,
                     activeQueue = queueState.active,
                     trackActions = trackActions,
+                    extensionStore = appContainer.extensionStore,
                     languageStore = appContainer.languageStore,
                     pendingSearchRequest = pendingSearchRequest,
                     onConsumeSearchRequest = onConsumeSearchRequest,

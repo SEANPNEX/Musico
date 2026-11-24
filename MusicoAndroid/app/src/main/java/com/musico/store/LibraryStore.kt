@@ -19,8 +19,11 @@ import com.musico.cloud.UrlConnectionCloudHttpClient
 import com.musico.cloud.YouTubeClient
 import com.musico.cloud.extractCloudSourceInput
 import com.musico.core.ArtworkCache
+import com.musico.core.CloudThumbnailCache
 import com.musico.core.FolderScanner
 import com.musico.core.LocalCloudDiscovery
+import com.musico.core.LrcParser
+import com.musico.core.LyricsNameMatcher
 import com.musico.core.MetadataReading
 import com.musico.core.Persistence
 import com.musico.core.ScannedFile
@@ -117,6 +120,7 @@ class LibraryStore(
         val metadataOverrides: Map<String, TrackMetadataOverride> = emptyMap(),
         val folderSortOrders: Map<String, TrackSortOrder> = emptyMap(),
         val folderTrackOrders: Map<String, List<String>> = emptyMap(),
+        val ephemeralTracks: Map<String, Track> = emptyMap(),
     )
 
     @Serializable
@@ -129,6 +133,7 @@ class LibraryStore(
     var onTracksRemoved: ((Set<String>) -> Unit)? = null
     var onFolderAdded: ((folderName: String, trackIds: List<String>) -> Unit)? = null
     var onTrackUpdated: ((Track) -> Unit)? = null
+    var referencedQueueTrackIdsProvider: (() -> Set<String>)? = null
 
     private val libraryFile = File(directory, "library.json")
     private val playlistsFile = File(directory, "playlists.json")
@@ -136,6 +141,8 @@ class LibraryStore(
 
     private var rereadAll = false
     private var byId: Map<String, Track> = emptyMap()
+    private val ephemeralTracks = LinkedHashMap<String, Track>()
+    private val persistedEphemeralIds = HashSet<String>()
     private val trackUris = mutableMapOf<String, String>()
     private val metadataOverrides = mutableMapOf<String, TrackMetadataOverride>()
     private val folderSortOrders = mutableMapOf<String, TrackSortOrder>()
@@ -186,6 +193,10 @@ class LibraryStore(
             metadataOverrides.putAll(loadedLib.metadataOverrides)
             folderSortOrders.putAll(loadedLib.folderSortOrders)
             folderTrackOrders.putAll(loadedLib.folderTrackOrders)
+            for ((eid, etrack) in loadedLib.ephemeralTracks) {
+                ephemeralTracks[eid] = etrack.copy(isEphemeral = true)
+                persistedEphemeralIds.add(eid)
+            }
             migrateCloudFolderKeys(initialRoots)
         }
 
@@ -258,6 +269,14 @@ class LibraryStore(
     private fun saveLibrary() {
         val snapshot = synchronized(stateLock) {
             val current = _state.value
+            val referenced = referencedQueueTrackIdsProvider?.invoke()
+            val persistedEphemeral = if (referenced != null) {
+                ephemeralTracks.filterKeys { it in referenced }
+            } else {
+                ephemeralTracks.toMap()
+            }
+            persistedEphemeralIds.clear()
+            persistedEphemeralIds.addAll(persistedEphemeral.keys)
             LibraryFile(
                 roots = current.roots,
                 tracks = current.tracks,
@@ -266,6 +285,7 @@ class LibraryStore(
                 metadataOverrides = metadataOverrides.toMap(),
                 folderSortOrders = folderSortOrders.toMap(),
                 folderTrackOrders = folderTrackOrders.toMap(),
+                ephemeralTracks = persistedEphemeral,
             )
         }
         runCatching {
@@ -1038,7 +1058,13 @@ class LibraryStore(
                 "Cloud provider unavailable for $sourceUrl",
             )
         val cleanUrl = classified?.normalizedUrl ?: extractCloudSourceInput(sourceUrl)
-        provider.fetchCollection(cleanUrl, cookie)
+        val effectiveCookie = if (provider.supportsCookie) {
+            cookie?.trim()?.takeIf { it.isNotEmpty() }
+                ?: providerRegistry.extensionCookieFor(provider.providerId)
+        } else {
+            null
+        }
+        provider.fetchCollection(cleanUrl, effectiveCookie)
     }
 
     fun markRootCloudSynced(
@@ -1165,8 +1191,13 @@ class LibraryStore(
         }
 
         val playlist = try {
+            val effectiveCookie = if (provider.supportsCookie) {
+                cleanCookie ?: providerRegistry.extensionCookieFor(provider.providerId)
+            } else {
+                null
+            }
             withContext(Dispatchers.IO) {
-                provider.fetchCollection(trimmedUrl, cleanCookie)
+                provider.fetchCollection(trimmedUrl, effectiveCookie)
             }
         } catch (err: Exception) {
             return Result.failure(err)
@@ -1379,9 +1410,15 @@ class LibraryStore(
             val syncNow = System.currentTimeMillis()
 
             try {
+                val effectiveCookie = if (provider.supportsCookie) {
+                    root.cookie?.trim()?.takeIf { it.isNotEmpty() }
+                        ?: providerRegistry.extensionCookieFor(provider.providerId)
+                } else {
+                    null
+                }
                 provider.crawlProgressive(
                     sourceUrl = sourceUrl,
-                    cookie = root.cookie,
+                    cookie = effectiveCookie,
                     priorityPathProvider = { cloudPriorityPaths[root.id] },
                 ) { batch ->
                     if (!isActive) throw CancellationException()
@@ -1617,8 +1654,14 @@ class LibraryStore(
                     continue
                 }
                 val syncResult = withContext(Dispatchers.IO) {
+                    val effectiveCookie = if (provider.supportsCookie) {
+                        root.cookie?.trim()?.takeIf { it.isNotEmpty() }
+                            ?: providerRegistry.extensionCookieFor(provider.providerId)
+                    } else {
+                        null
+                    }
                     runCatching {
-                        provider.fetchCollection(url, root.cookie)
+                        provider.fetchCollection(url, effectiveCookie)
                     }
                 }
                 val playlist = syncResult.getOrNull()
@@ -2136,6 +2179,73 @@ class LibraryStore(
         return updatedTrack
     }
 
+    suspend fun applyFallbackMetadataForSavedFile(
+        savedFileName: String,
+        sourceTrack: Track,
+        targetDir: File? = null,
+        targetUri: Uri? = null,
+    ) {
+        val targetCanonical = targetDir?.let { dir ->
+            runCatching { File(dir, savedFileName).canonicalPath }.getOrNull()
+        }
+        val candidate = _state.value.tracks
+            .filter { !it.isCloud && it.fileName.equals(savedFileName, ignoreCase = true) }
+            .firstOrNull { local ->
+                when {
+                    targetCanonical != null ->
+                        runCatching { localFileFor(local)?.canonicalPath }.getOrNull() == targetCanonical
+                    targetUri != null -> {
+                        val root = rootFor(local)
+                        val rootUri = root?.treeUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+                        rootUri != null && (canonicalUriKey(rootUri) == canonicalUriKey(targetUri) || isUriInsideIndexedRoot(targetUri))
+                    }
+                    else -> true
+                }
+            } ?: return
+
+        val needTitle = sourceTrack.title.isNotBlank() &&
+            candidate.title.equals(candidate.fileName.substringBeforeLast('.', candidate.fileName), ignoreCase = true)
+        val needArtist = candidate.artist == "Unknown Artist" &&
+            sourceTrack.artist.isNotBlank() &&
+            sourceTrack.artist != "Unknown Artist"
+        val needAlbum = candidate.album == "Unknown Album" &&
+            sourceTrack.album.isNotBlank() &&
+            sourceTrack.album != "Unknown Album"
+        val needGenre = candidate.genre.isBlank() && sourceTrack.genre.isNotBlank()
+        val artUrl = sourceTrack.remoteArtworkUrl
+            ?.takeIf { CloudThumbnailCache.isAllowedUrl(it) }
+        val resolvedArtKey = if (candidate.artworkKey == null) {
+            sourceTrack.artworkKey ?: artUrl?.let { url ->
+                withContext(Dispatchers.IO) {
+                    runCatching {
+                        val providerHeaders = providerRegistry.providerForTrack(sourceTrack, null)
+                            ?.artworkHeaders()
+                            .orEmpty()
+                        val resp = cloudHttpClient.get(url, headers = providerHeaders)
+                        if (resp.statusCode in 200..299 && resp.bodyBytes.isNotEmpty()) {
+                            artwork.store(resp.bodyBytes)
+                        } else {
+                            null
+                        }
+                    }.getOrNull()
+                }
+            }
+        } else {
+            null
+        }
+
+        if (needTitle || needArtist || needAlbum || needGenre || resolvedArtKey != null) {
+            updateTrackMetadata(
+                trackId = candidate.id,
+                title = if (needTitle) sourceTrack.title else null,
+                artist = if (needArtist) sourceTrack.artist else null,
+                album = if (needAlbum) sourceTrack.album else null,
+                genre = if (needGenre) sourceTrack.genre else null,
+                artworkKey = resolvedArtKey,
+            )
+        }
+    }
+
     private fun forget(ids: Set<String>) {
         if (ids.isEmpty()) return
         val current = _state.value
@@ -2198,12 +2308,53 @@ class LibraryStore(
         return Triple(albums, artists, idMap)
     }
 
-    fun track(id: String): Track? = byId[id]
+    fun registerEphemeralTrack(track: Track) {
+        registerEphemeralTracks(listOf(track))
+    }
 
-    fun tracks(ids: List<String>): List<Track> = ids.mapNotNull { byId[it] }
+    fun registerEphemeralTracks(tracks: List<Track>) {
+        if (tracks.isEmpty()) return
+        synchronized(stateLock) {
+            for (t in tracks) {
+                val normalized = t.copy(isEphemeral = true)
+                ephemeralTracks[normalized.id] = normalized
+            }
+        }
+        if (referencedQueueTrackIdsProvider == null) {
+            saveLibrary()
+        }
+    }
+
+    fun pruneEphemeralTracks(referencedIds: Set<String>) {
+        var changed = false
+        synchronized(stateLock) {
+            val iter = ephemeralTracks.entries.iterator()
+            while (iter.hasNext()) {
+                val entry = iter.next()
+                if (entry.key !in referencedIds) {
+                    iter.remove()
+                    changed = true
+                }
+            }
+            val nextPersisted = ephemeralTracks.keys.filterTo(HashSet()) { it in referencedIds }
+            if (nextPersisted != persistedEphemeralIds) {
+                changed = true
+            }
+        }
+        if (changed) {
+            saveLibrary()
+        }
+    }
+
+    fun ephemeralTrackIds(): Set<String> = synchronized(stateLock) { ephemeralTracks.keys.toSet() }
+
+    fun track(id: String): Track? = byId[id] ?: synchronized(stateLock) { ephemeralTracks[id] }
+
+    fun tracks(ids: List<String>): List<Track> = ids.mapNotNull { track(it) }
 
     fun rootFor(track: Track): LibraryRoot? =
-        _state.value.roots.firstOrNull { it.id == track.rootId }
+        if (track.isEphemeral || Track.isEphemeralId(track.id)) null
+        else _state.value.roots.firstOrNull { it.id == track.rootId }
 
     fun appFolderDirectory(): File = appFolderDir
 
@@ -2227,7 +2378,15 @@ class LibraryStore(
 
     fun isAvailable(root: LibraryRoot): Boolean = root.id in _state.value.availableRootIds
 
-    fun isAvailable(track: Track): Boolean = track.rootId in _state.value.availableRootIds
+    fun isAvailable(track: Track): Boolean {
+        if (track.isEphemeral || Track.isEphemeralId(track.id)) {
+            val pid = CloudProviderIds.fromLegacySlug(track.cloudSource)
+                ?: Track.extensionIdFromEphemeralId(track.id)?.let { CloudProviderIds.extensionProviderId(it) }
+                ?: return false
+            return providerRegistry.availabilityFor(pid) == CloudProviderAvailability.AVAILABLE
+        }
+        return track.rootId in _state.value.availableRootIds
+    }
 
     /** Returns true if [uri] matches or resides inside an already-indexed local root. */
     fun isDirectoryInsideIndexedRoot(dir: File): Boolean {
@@ -2295,6 +2454,261 @@ class LibraryStore(
 
         val ctx = context ?: return@withContext null
         readSafSibling(ctx, treeUri, folderPath, stem)
+    }
+
+    suspend fun readFolderMatchedLyrics(track: Track): ByteArray? = withContext(Dispatchers.IO) {
+        if (track.isCloud) return@withContext null
+        val current = _state.value
+        if (track.rootId !in current.availableRootIds) return@withContext null
+        val root = current.roots.firstOrNull { it.id == track.rootId } ?: return@withContext null
+        if (root.kind.isCloud) return@withContext null
+
+        val stem = track.fileName.substringBeforeLast('.', track.fileName)
+        val folderPath = track.folderPath
+
+        if (root.kind == RootKind.APP_FOLDER) {
+            val dir = if (folderPath.isEmpty()) appFolderDir else File(appFolderDir, folderPath)
+            return@withContext readLocalFolderMatch(dir, stem, track.title, track.artist)
+        }
+
+        val treeUriStr = root.treeUri ?: return@withContext null
+        val treeUri = runCatching { Uri.parse(treeUriStr) }.getOrNull() ?: return@withContext null
+        if (treeUri.scheme == "file" && treeUri.path != null) {
+            val base = File(treeUri.path!!)
+            val dir = if (folderPath.isEmpty()) base else File(base, folderPath)
+            return@withContext readLocalFolderMatch(dir, stem, track.title, track.artist)
+        }
+
+        val ctx = context ?: return@withContext null
+        readSafFolderMatch(ctx, treeUri, folderPath, stem, track.title, track.artist)
+    }
+
+    fun canWriteSidecarLyrics(track: Track): Boolean {
+        if (track.isCloud) return false
+        val current = _state.value
+        if (track.rootId !in current.availableRootIds) return false
+        val root = current.roots.firstOrNull { it.id == track.rootId } ?: return false
+        if (root.kind.isCloud) return false
+
+        val folderPath = track.folderPath
+        if (root.kind == RootKind.APP_FOLDER) {
+            val dir = if (folderPath.isEmpty()) appFolderDir else File(appFolderDir, folderPath)
+            return dir.exists() && dir.isDirectory && dir.canWrite()
+        }
+
+        val treeUriStr = root.treeUri ?: return false
+        val treeUri = runCatching { Uri.parse(treeUriStr) }.getOrNull() ?: return false
+        if (treeUri.scheme == "file" && treeUri.path != null) {
+            val base = File(treeUri.path!!)
+            val dir = if (folderPath.isEmpty()) base else File(base, folderPath)
+            return dir.exists() && dir.isDirectory && dir.canWrite()
+        }
+
+        val ctx = context ?: return false
+        val dirDoc = resolveSafFolderDoc(ctx, treeUri, folderPath) ?: return false
+        return dirDoc.canWrite()
+    }
+
+    suspend fun writeSidecarLyrics(track: Track, text: String): Result<Unit> = withContext(Dispatchers.IO) {
+        runCatching {
+            if (LrcParser.parse(text).lines.isEmpty()) {
+                throw IllegalArgumentException("Lyrics text is empty or unreadable.")
+            }
+            if (track.isCloud) throw IllegalStateException("Cloud tracks do not have a local song folder.")
+            val current = _state.value
+            if (track.rootId !in current.availableRootIds) {
+                throw IllegalStateException("Song folder is currently unavailable.")
+            }
+            val root = current.roots.firstOrNull { it.id == track.rootId }
+                ?: throw IllegalStateException("Song folder could not be found.")
+            if (root.kind.isCloud) throw IllegalStateException("Cloud tracks do not have a local song folder.")
+
+            val stem = track.fileName.substringBeforeLast('.', track.fileName)
+            val targetName = "$stem.lrc"
+            val folderPath = track.folderPath
+
+            if (root.kind == RootKind.APP_FOLDER) {
+                val dir = if (folderPath.isEmpty()) appFolderDir else File(appFolderDir, folderPath)
+                writeLocalSidecar(dir, targetName, text)
+                return@runCatching
+            }
+
+            val treeUriStr = root.treeUri ?: throw IllegalStateException("Folder URI is missing.")
+            val treeUri = Uri.parse(treeUriStr)
+            if (treeUri.scheme == "file" && treeUri.path != null) {
+                val base = File(treeUri.path!!)
+                val dir = if (folderPath.isEmpty()) base else File(base, folderPath)
+                writeLocalSidecar(dir, targetName, text)
+                return@runCatching
+            }
+
+            val ctx = context ?: throw IllegalStateException("Android context unavailable.")
+            val dirDoc = resolveSafFolderDoc(ctx, treeUri, folderPath)
+                ?: throw IllegalStateException("Could not open song folder.")
+            if (!dirDoc.canWrite()) {
+                throw IllegalStateException("Song folder is read-only.")
+            }
+            dirDoc.listFiles()
+                .firstOrNull { !it.isDirectory && it.name.equals(targetName, ignoreCase = true) }
+                ?.delete()
+            val created = dirDoc.createFile("application/octet-stream", targetName)
+                ?: throw IllegalStateException("Could not create .lrc file in song folder.")
+            ctx.contentResolver.openOutputStream(created.uri, "wt")?.use { out ->
+                out.write(text.toByteArray(Charsets.UTF_8))
+                out.flush()
+            } ?: throw IllegalStateException("Could not open output stream for .lrc file.")
+        }
+    }
+
+    private fun writeLocalSidecar(dir: File, targetName: String, text: String) {
+        if (!dir.exists()) dir.mkdirs()
+        val dest = File(dir, targetName)
+        val temp = File(dir, "$targetName.tmp.${System.nanoTime()}")
+        try {
+            temp.writeText(text, Charsets.UTF_8)
+            if (!temp.renameTo(dest)) {
+                temp.copyTo(dest, overwrite = true)
+                temp.delete()
+            }
+        } catch (t: Throwable) {
+            runCatching { temp.delete() }
+            throw t
+        }
+    }
+
+    private fun readLocalFolderMatch(
+        dir: File,
+        audioStem: String,
+        trackTitle: String,
+        trackArtist: String,
+    ): ByteArray? {
+        val children = dir.listFiles() ?: return null
+        val exactNames = setOf(
+            "$audioStem.lrc".lowercase(),
+            "$audioStem.txt".lowercase(),
+        )
+        data class Candidate(
+            val fileName: String,
+            val isLrc: Boolean,
+            val isTimed: Boolean,
+            val score: Double,
+            val bytes: ByteArray,
+        )
+
+        val candidates = ArrayList<Candidate>()
+        for (child in children) {
+            if (!child.isFile || child.isHidden) continue
+            val name = child.name
+            if (name.lowercase() in exactNames) continue
+            val ext = child.extension.lowercase()
+            if (ext != "lrc" && ext != "txt") continue
+            val score = LyricsNameMatcher.matchScore(child.nameWithoutExtension, audioStem, trackTitle, trackArtist)
+            if (score < LyricsNameMatcher.MINIMUM_MATCH_SCORE) continue
+            val bytes = runCatching { child.readBytes() }.getOrNull() ?: continue
+            val decoded = LrcParser.decode(bytes) ?: continue
+            val parsed = LrcParser.parse(decoded)
+            if (parsed.lines.isEmpty()) continue
+            candidates.add(Candidate(name, ext == "lrc", parsed.isTimed, score, bytes))
+        }
+        return candidates.sortedWith { a, b ->
+            if (kotlin.math.abs(a.score - b.score) > 0.001) b.score.compareTo(a.score)
+            else if (a.isTimed != b.isTimed) if (b.isTimed) 1 else -1
+            else if (a.isLrc != b.isLrc) if (b.isLrc) 1 else -1
+            else a.fileName.lowercase().compareTo(b.fileName.lowercase())
+        }.firstOrNull()?.bytes
+    }
+
+    private fun readSafFolderMatch(
+        ctx: Context,
+        treeUri: Uri,
+        folderPath: String,
+        audioStem: String,
+        trackTitle: String,
+        trackArtist: String,
+    ): ByteArray? {
+        val rootDocId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull() ?: return null
+        var currentDocId = rootDocId
+        if (folderPath.isNotEmpty()) {
+            for (segment in folderPath.split('/')) {
+                if (segment.isEmpty()) continue
+                currentDocId = findChildDocId(ctx, treeUri, currentDocId, segment, wantDir = true) ?: return null
+            }
+        }
+        val exactNames = setOf(
+            "$audioStem.lrc".lowercase(),
+            "$audioStem.txt".lowercase(),
+        )
+        val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, currentDocId)
+        val projection = arrayOf(
+            DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+            DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+            DocumentsContract.Document.COLUMN_MIME_TYPE,
+        )
+
+        data class RawSafChild(val docId: String, val name: String, val isLrc: Boolean, val score: Double)
+
+        val matched = ArrayList<RawSafChild>()
+        val cursor = runCatching {
+            ctx.contentResolver.query(childrenUri, projection, null, null, null)
+        }.getOrNull() ?: return null
+
+        cursor.use { c ->
+            val idIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
+            val nameIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+            val mimeIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+            while (c.moveToNext()) {
+                val id = if (idIdx >= 0) c.getString(idIdx) else null
+                val name = if (nameIdx >= 0) c.getString(nameIdx) else null
+                val mime = if (mimeIdx >= 0) c.getString(mimeIdx) else null
+                if (id == null || name == null) continue
+                if (mime == DocumentsContract.Document.MIME_TYPE_DIR) continue
+                if (name.lowercase() in exactNames) continue
+                val dot = name.lastIndexOf('.')
+                if (dot <= 0 || dot >= name.length - 1) continue
+                val stem = name.substring(0, dot)
+                val ext = name.substring(dot + 1).lowercase()
+                if (ext != "lrc" && ext != "txt") continue
+                val score = LyricsNameMatcher.matchScore(stem, audioStem, trackTitle, trackArtist)
+                if (score >= LyricsNameMatcher.MINIMUM_MATCH_SCORE) {
+                    matched.add(RawSafChild(id, name, ext == "lrc", score))
+                }
+            }
+        }
+
+        if (matched.isEmpty()) return null
+        data class ParsedSafChild(val name: String, val isLrc: Boolean, val isTimed: Boolean, val score: Double, val bytes: ByteArray)
+
+        val parsedCandidates = ArrayList<ParsedSafChild>(matched.size)
+        for (item in matched) {
+            val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, item.docId)
+            val bytes = runCatching {
+                ctx.contentResolver.openInputStream(docUri)?.use { it.readBytes() }
+            }.getOrNull() ?: continue
+            val decoded = LrcParser.decode(bytes) ?: continue
+            val parsed = LrcParser.parse(decoded)
+            if (parsed.lines.isEmpty()) continue
+            parsedCandidates.add(ParsedSafChild(item.name, item.isLrc, parsed.isTimed, item.score, bytes))
+        }
+
+        return parsedCandidates.sortedWith { a, b ->
+            if (kotlin.math.abs(a.score - b.score) > 0.001) b.score.compareTo(a.score)
+            else if (a.isTimed != b.isTimed) if (b.isTimed) 1 else -1
+            else if (a.isLrc != b.isLrc) if (b.isLrc) 1 else -1
+            else a.name.lowercase().compareTo(b.name.lowercase())
+        }.firstOrNull()?.bytes
+    }
+
+    private fun resolveSafFolderDoc(ctx: Context, treeUri: Uri, folderPath: String): DocumentFile? {
+        var current = DocumentFile.fromTreeUri(ctx, treeUri) ?: return null
+        if (folderPath.isNotEmpty()) {
+            for (segment in folderPath.split('/')) {
+                if (segment.isEmpty()) continue
+                current = current.findFile(segment)?.takeIf { it.isDirectory }
+                    ?: current.listFiles().firstOrNull { it.isDirectory && it.name.equals(segment, ignoreCase = true) }
+                    ?: return null
+            }
+        }
+        return current
     }
 
     private fun readLocalSibling(dir: File, stem: String): ByteArray? {
@@ -2649,6 +3063,7 @@ class LibraryStore(
     fun isFavourite(id: String): Boolean = id in _state.value.favourites
 
     fun toggleFavourite(id: String) {
+        if (Track.isEphemeralId(id) || track(id)?.isEphemeral == true) return
         val current = _state.value
         val nextFavs = if (id in current.favourites) {
             current.favourites - id
@@ -2688,8 +3103,9 @@ class LibraryStore(
     }
 
     fun addToPlaylist(trackIds: List<String>, playlistId: String) {
-        if (trackIds.isEmpty()) return
-        updatePlaylist(playlistId) { it.copy(trackIds = it.trackIds + trackIds) }
+        val eligible = trackIds.filterNot { Track.isEphemeralId(it) || track(it)?.isEphemeral == true }
+        if (eligible.isEmpty()) return
+        updatePlaylist(playlistId) { it.copy(trackIds = it.trackIds + eligible) }
     }
 
     fun removeFromPlaylist(playlistId: String, index: Int) {
@@ -2745,7 +3161,7 @@ class LibraryStore(
     )
 
     companion object {
-        private const val READER_VERSION = 3
+        private const val READER_VERSION = 4
         const val APP_FOLDER_NAME = "Musico Folder"
         private val combiningMarks = "\\p{InCombiningDiacriticalMarks}+".toRegex()
 

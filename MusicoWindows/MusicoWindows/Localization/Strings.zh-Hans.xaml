@@ -117,12 +117,22 @@
 
     <!-- LyricsPanel -->
     <sys:String x:Key="Str_Lyrics_Title">歌词</sys:String>
+    <sys:String x:Key="Str_Lyrics_SearchOnlineTooltip">在线搜索歌词</sys:String>
+    <sys:String x:Key="Str_Lyrics_SearchOnline">在线搜索...</sys:String>
     <sys:String x:Key="Str_Lyrics_ImportTooltip">导入 .lrc 或 .txt 歌词</sys:String>
+    <sys:String x:Key="Str_Lyrics_ExportSidecarTooltip">保存 .lrc 到歌曲文件夹</sys:String>
     <sys:String x:Key="Str_Lyrics_RemoveTooltip">移除已导入的歌词</sys:String>
     <sys:String x:Key="Str_Lyrics_ClosePanelTooltip">关闭面板</sys:String>
     <sys:String x:Key="Str_Lyrics_EmptyTitle">暂无歌词</sys:String>
     <sys:String x:Key="Str_Lyrics_EmptyDesc">为此歌曲导入 .lrc 或 .txt 歌词文件，或将同名歌词文件放在歌曲同级目录下。</sys:String>
     <sys:String x:Key="Str_Lyrics_ImportFromFile">从文件导入...</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_Title">在线搜索歌词</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_TitleField">标题</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_ArtistField">艺术家</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_SearchBtn">搜索</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_IncludeTranslation">包含翻译</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_AlsoExportSidecar">同时保存 .lrc 到歌曲文件夹</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_UseLyrics">使用歌词</sys:String>
 
     <!-- EqualizerDialog -->
     <sys:String x:Key="Str_Equalizer_Title">均衡器</sys:String>
@@ -226,5 +236,21 @@
     <sys:String x:Key="Str_Extensions_LogsTitle">扩展调试日志</sys:String>
     <sys:String x:Key="Str_Extensions_ClearLogs">清空日志</sys:String>
     <sys:String x:Key="Str_Extensions_LogsEmpty">暂无日志记录。</sys:String>
+    <sys:String x:Key="Str_Extensions_QrLoginTitle">二维码登录</sys:String>
+    <sys:String x:Key="Str_Extensions_QrLoginRefresh">刷新二维码</sys:String>
+    <sys:String x:Key="Str_Extensions_QrLoginClose">关闭</sys:String>
+
+    <!-- Cloud Search & Preview -->
+    <sys:String x:Key="Str_Songs_SearchButton">搜索</sys:String>
+    <sys:String x:Key="Str_Songs_KindAll">全部</sys:String>
+    <sys:String x:Key="Str_Songs_KindTracks">单曲</sys:String>
+    <sys:String x:Key="Str_Songs_KindAlbums">专辑</sys:String>
+    <sys:String x:Key="Str_Songs_KindPlaylists">歌单</sys:String>
+    <sys:String x:Key="Str_Songs_CloudRetry">重试</sys:String>
+    <sys:String x:Key="Str_Songs_LoadMore">加载更多</sys:String>
+    <sys:String x:Key="Str_Songs_CloudSearching">正在搜索...</sys:String>
+    <sys:String x:Key="Str_Songs_CloudLoadingMore">正在加载更多...</sys:String>
+    <sys:String x:Key="Str_Preview_AddAsCloudFolder">添加为云端文件夹</sys:String>
+    <sys:String x:Key="Str_Preview_PlayAll">全部播放</sys:String>
 
 </ResourceDictionary>

@@ -9,6 +9,10 @@
  *   node mock-runner.mjs <path-to-bundle-or-.musico.js> fetch-collection <url> [--cookie "..."] [--cursor "..."] [--setting k=v]
  *   node mock-runner.mjs <path-to-bundle-or-.musico.js> fetch-folder <folderId> [--path a/b] [--depth 1] [--cursor "..."]
  *   node mock-runner.mjs <path-to-bundle-or-.musico.js> resolve-stream <remoteTrackId> [--cookie "..."] [--force]
+ *   node mock-runner.mjs <path-to-bundle-or-.musico.js> search <query> [--kind all|track|playlist|album] [--limit 20] [--cursor "..."] [--cookie "..."] [--setting k=v]
+ *   node mock-runner.mjs <path-to-bundle-or-.musico.js> search-lyrics <title> [--artist "..."] [--album "..."] [--duration 213] [--setting k=v]
+ *   node mock-runner.mjs <path-to-bundle-or-.musico.js> start-qr-login [--setting k=v]
+ *   node mock-runner.mjs <path-to-bundle-or-.musico.js> poll-qr-login <sessionId> [--setting k=v]
  */
 
 import fs from 'node:fs';
@@ -25,6 +29,35 @@ const FIXTURES_DIR = path.resolve(__dirname, '../fixtures');
 const STARTER_DIR = path.resolve(__dirname, '../starter');
 const STARTER_SINGLE = path.resolve(__dirname, '../starter-single-file.musico.js');
 
+export const VALID_CAPABILITIES = new Set(['playlist', 'tree', 'stream', 'cookie', 'proxy', 'lyrics', 'search', 'qr_login']);
+export const VALID_SEARCH_KINDS = new Set(['track', 'playlist', 'album']);
+export const VALID_QR_LOGIN_STATUSES = new Set(['pending', 'scanned', 'confirmed', 'expired', 'error']);
+
+export function validateRequiredHooks(manifest, exportsObj) {
+  assert.ok(exportsObj && typeof exportsObj === 'object', 'Extension must export hooks object');
+  const caps = new Set(manifest.capabilities || []);
+  if (caps.has('playlist') || caps.has('tree')) {
+    assert.equal(typeof exportsObj.canHandle, 'function', 'Extension must export canHandle(input)');
+    assert.equal(typeof exportsObj.fetchCollection, 'function', 'Extension must export fetchCollection(ctx, req)');
+  }
+  if (caps.has('tree')) {
+    assert.equal(typeof exportsObj.fetchFolder, 'function', 'Extension must export fetchFolder(ctx, req)');
+  }
+  if (caps.has('stream')) {
+    assert.equal(typeof exportsObj.resolveStream, 'function', 'Extension must export resolveStream(ctx, req)');
+  }
+  if (caps.has('lyrics')) {
+    assert.equal(typeof exportsObj.searchLyrics, 'function', 'Extension must export searchLyrics(ctx, req)');
+  }
+  if (caps.has('search')) {
+    assert.equal(typeof exportsObj.search, 'function', 'Extension must export search(ctx, req)');
+  }
+  if (caps.has('qr_login')) {
+    assert.equal(typeof exportsObj.startQrLogin, 'function', 'Extension must export startQrLogin(ctx, req)');
+    assert.equal(typeof exportsObj.pollQrLogin, 'function', 'Extension must export pollQrLogin(ctx, req)');
+  }
+}
+
 export function validateManifest(manifest) {
   assert.ok(manifest && typeof manifest === 'object', 'manifest must be an object');
   assert.equal(manifest.apiVersion, 1, 'manifest.apiVersion must be 1');
@@ -32,9 +65,24 @@ export function validateManifest(manifest) {
   assert.ok(typeof manifest.name === 'string' && manifest.name.trim().length > 0, 'manifest.name required');
   assert.match(String(manifest.version || ''), /^\d+\.\d+\.\d+/, 'manifest.version must be SemVer');
   assert.ok(Array.isArray(manifest.capabilities) && manifest.capabilities.length > 0, 'capabilities required');
-  assert.ok(Array.isArray(manifest.urlPatterns) && manifest.urlPatterns.length > 0, 'urlPatterns required');
-  for (const pat of manifest.urlPatterns) {
+  for (const cap of manifest.capabilities) {
+    assert.ok(VALID_CAPABILITIES.has(String(cap)), `Unsupported capability: ${cap}`);
+  }
+  const requiresUrlPatterns = manifest.capabilities.includes('playlist') || manifest.capabilities.includes('tree');
+  if (requiresUrlPatterns) {
+    assert.ok(Array.isArray(manifest.urlPatterns) && manifest.urlPatterns.length > 0, 'urlPatterns required for playlist/tree extensions');
+  } else if (manifest.urlPatterns !== undefined) {
+    assert.ok(Array.isArray(manifest.urlPatterns), 'urlPatterns must be an array');
+  }
+  for (const pat of manifest.urlPatterns || []) {
+    assert.ok(typeof pat === 'string' && pat.length > 0, 'urlPattern must be a non-empty string');
     new RegExp(pat);
+  }
+  if (manifest.searchKinds !== undefined) {
+    assert.ok(Array.isArray(manifest.searchKinds), 'searchKinds must be an array');
+    for (const kind of manifest.searchKinds) {
+      assert.ok(VALID_SEARCH_KINDS.has(String(kind)), `Unsupported searchKind: ${kind}`);
+    }
   }
   assert.ok(manifest.permissions && Array.isArray(manifest.permissions.hosts) && manifest.permissions.hosts.length > 0, 'permissions.hosts required');
   for (const hostPat of manifest.permissions.hosts) {
@@ -101,6 +149,7 @@ export function loadExtension(targetPath) {
 
   validateManifest(manifest);
   const exportsObj = evaluateCommonJS(source);
+  validateRequiredHooks(manifest, exportsObj);
   return { manifest, source, exportsObj };
 }
 
@@ -119,7 +168,7 @@ export function evaluateCommonJS(source, timeoutMs = 15000) {
   return mod.exports;
 }
 
-export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = new Map(), httpResponder = null, platform = 'macos', appVersion = '1.2.0-dev' } = {}) {
+export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = new Map(), httpResponder = null, platform = 'macos', appVersion = '1.2.5-dev' } = {}) {
   const logs = [];
   const allowedHosts = manifest.permissions?.hosts || [];
   const defaultSettings = {};
@@ -160,7 +209,10 @@ export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = n
           const buf = Buffer.from(await nativeRes.arrayBuffer());
           const hdrs = {};
           nativeRes.headers.forEach((v, k) => { hdrs[k.toLowerCase()] = v; });
-          resp = { status: nativeRes.status, headers: hdrs, bodyBuffer: buf };
+          const rawSetCookies = typeof nativeRes.headers.getSetCookie === 'function'
+            ? nativeRes.headers.getSetCookie().map((c) => String(c || '').trim()).filter(Boolean)
+            : (hdrs['set-cookie'] ? [hdrs['set-cookie']] : []);
+          resp = { status: nativeRes.status, headers: hdrs, setCookies: rawSetCookies, bodyBuffer: buf };
         } finally {
           clearTimeout(timer);
         }
@@ -171,6 +223,9 @@ export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = n
       for (const [k, v] of Object.entries(resp.headers || {})) {
         lowerHeaders[k.toLowerCase()] = String(v);
       }
+      const setCookies = Array.isArray(resp.setCookies)
+        ? resp.setCookies.map((c) => String(c || '').trim()).filter(Boolean)
+        : (lowerHeaders['set-cookie'] ? [lowerHeaders['set-cookie']] : []);
 
       if (followRedirects && [301, 302, 303, 307, 308].includes(status) && lowerHeaders.location) {
         const nextUrl = new URL(lowerHeaders.location, currentUrl).toString();
@@ -196,6 +251,9 @@ export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = n
         headers: lowerHeaders,
         text: capped.toString('utf8')
       };
+      if (setCookies.length > 0) {
+        out.setCookies = setCookies;
+      }
       if (req?.returnBytes === true || capped.length <= 1024 * 1024) {
         out.bytesBase64 = capped.toString('base64');
       }
@@ -287,6 +345,104 @@ export async function runResolveStream(ext, bridge, req, timeoutMs = 15000) {
     bridge.assertAllowedUrl(fb);
   }
   return result;
+}
+
+export async function runSearch(ext, bridge, req, timeoutMs = 15000) {
+  assert.equal(typeof ext.exportsObj.search, 'function', 'Extension must export search(ctx, req)');
+  const payload = {
+    query: String(req?.query || ''),
+    kind: String(req?.kind || 'all'),
+    limit: Math.max(1, Number(req?.limit || 20)),
+    ...(req?.cursor ? { cursor: String(req.cursor) } : {}),
+    ...(req?.cookie ? { cookie: String(req.cookie) } : {})
+  };
+  const result = await invokeWithTimeout(() => ext.exportsObj.search(bridge.ctx, payload), timeoutMs);
+  if (result == null) {
+    return { items: [], nextCursor: null };
+  }
+  assert.ok(typeof result === 'object' && !Array.isArray(result), 'search() must return an object { items, nextCursor? }');
+  assert.ok(Array.isArray(result.items), 'search() result.items must be an array');
+  for (const item of result.items) {
+    assert.ok(item && typeof item === 'object', 'Each search item must be an object');
+    assert.ok(VALID_SEARCH_KINDS.has(String(item.kind)), `Invalid search item kind: ${item.kind}`);
+    assert.ok(typeof item.title === 'string' && item.title.trim().length > 0, 'Each search item requires a non-empty title');
+    if (item.kind === 'track') {
+      assert.ok(item.remoteTrackId != null && String(item.remoteTrackId).trim().length > 0, 'Track search item requires remoteTrackId');
+    } else {
+      assert.ok(item.remoteId != null && String(item.remoteId).trim().length > 0, `${item.kind} search item requires remoteId`);
+    }
+  }
+  return {
+    items: result.items,
+    nextCursor: result.nextCursor == null ? null : String(result.nextCursor)
+  };
+}
+
+export async function runSearchLyrics(ext, bridge, req, timeoutMs = 15000) {
+  assert.equal(typeof ext.exportsObj.searchLyrics, 'function', 'Extension must export searchLyrics(ctx, req)');
+  const payload = {
+    title: String(req?.title || ''),
+    artist: String(req?.artist || ''),
+    ...(req?.album ? { album: String(req.album) } : {}),
+    ...(typeof req?.durationSec === 'number' && Number.isFinite(req.durationSec) && req.durationSec > 0
+      ? { durationSec: req.durationSec }
+      : {})
+  };
+  const result = await invokeWithTimeout(() => ext.exportsObj.searchLyrics(bridge.ctx, payload), timeoutMs);
+  if (result == null) {
+    return [];
+  }
+  if (Array.isArray(result)) {
+    return result;
+  }
+  if (typeof result === 'object') {
+    if (Array.isArray(result.candidates)) return result.candidates;
+    if (Array.isArray(result.results)) return result.results;
+  }
+  throw Object.assign(new Error('searchLyrics() must return an array or { candidates | results } object'), {
+    code: 'EXTENSION_RUNTIME_ERROR'
+  });
+}
+
+export async function runStartQrLogin(ext, bridge, req = {}, timeoutMs = 15000) {
+  assert.equal(typeof ext.exportsObj.startQrLogin, 'function', 'Extension must export startQrLogin(ctx, req)');
+  const result = await invokeWithTimeout(() => ext.exportsObj.startQrLogin(bridge.ctx, req && typeof req === 'object' ? req : {}), timeoutMs);
+  assert.ok(result && typeof result === 'object' && !Array.isArray(result), 'startQrLogin() must return an object');
+  const sessionId = typeof result.sessionId === 'string' ? result.sessionId.trim() : '';
+  assert.ok(sessionId.length > 0, 'startQrLogin() requires non-empty sessionId');
+  const rawQrContent = typeof result.qrContent === 'string' && result.qrContent.trim()
+    ? result.qrContent.trim()
+    : (typeof result.qrUrl === 'string' ? result.qrUrl.trim() : '');
+  assert.ok(rawQrContent.length > 0, 'startQrLogin() requires non-empty qrContent');
+  assert.ok(Buffer.byteLength(rawQrContent, 'utf8') <= 512, 'startQrLogin() qrContent must be <= 512 UTF-8 bytes');
+  const rawPoll = typeof result.pollIntervalMs === 'number' && Number.isFinite(result.pollIntervalMs)
+    ? Math.round(result.pollIntervalMs)
+    : 2000;
+  const pollIntervalMs = Math.max(1000, Math.min(rawPoll, 10000));
+  const expiresAtMs = typeof result.expiresAtMs === 'number' && Number.isFinite(result.expiresAtMs) && result.expiresAtMs > 0
+    ? result.expiresAtMs
+    : null;
+  const message = typeof result.message === 'string' && result.message.trim() ? result.message.trim() : null;
+  return { sessionId, qrContent: rawQrContent, expiresAtMs, pollIntervalMs, message };
+}
+
+export async function runPollQrLogin(ext, bridge, req, timeoutMs = 15000) {
+  assert.equal(typeof ext.exportsObj.pollQrLogin, 'function', 'Extension must export pollQrLogin(ctx, req)');
+  const sessionId = typeof req?.sessionId === 'string' ? req.sessionId.trim() : '';
+  assert.ok(sessionId.length > 0, 'pollQrLogin() requires non-empty sessionId');
+  const result = await invokeWithTimeout(() => ext.exportsObj.pollQrLogin(bridge.ctx, { sessionId }), timeoutMs);
+  assert.ok(result && typeof result === 'object' && !Array.isArray(result), 'pollQrLogin() must return an object');
+  const status = typeof result.status === 'string' ? result.status.trim().toLowerCase() : '';
+  assert.ok(VALID_QR_LOGIN_STATUSES.has(status), `Invalid QR login status: ${result.status}`);
+  const cookie = typeof result.cookie === 'string' && result.cookie.trim() ? result.cookie.trim() : null;
+  if (status === 'confirmed' && !cookie) {
+    throw Object.assign(new Error('pollQrLogin() returned confirmed without a non-empty cookie'), {
+      code: 'EXTENSION_RUNTIME_ERROR'
+    });
+  }
+  const accountName = typeof result.accountName === 'string' && result.accountName.trim() ? result.accountName.trim() : null;
+  const message = typeof result.message === 'string' && result.message.trim() ? result.message.trim() : null;
+  return { status, cookie, accountName, message };
 }
 
 async function runSelfTest() {
@@ -500,8 +656,197 @@ async function runSelfTest() {
   const starterSingle = loadExtension(STARTER_SINGLE);
   assert.equal(starterSingle.exportsObj.canHandle({ rawText: 'https://example.org/mix/demo99' }).matched, true);
 
+  // 5. Test v1.2.3/v1.2.4 manifest rules plus in-memory lyrics & cloud-search hooks
+  const lyricsSource = `
+    var manifest = {
+      apiVersion: 1,
+      id: 'com.example.test.lyrics',
+      name: 'Test Lyrics',
+      version: '1.0.0',
+      capabilities: ['lyrics'],
+      permissions: { hosts: ['lyrics.fixture.test'] }
+    };
+    async function searchLyrics(ctx, req) {
+      if (req.title === 'envelope') {
+        return { candidates: [{ externalId: 'c1', title: req.title, artist: req.artist, plainLyrics: 'hello' }] };
+      }
+      return [{ externalId: 'c2', title: req.title, artist: req.artist, syncedLyrics: '[00:01.00]la', instrumental: false }];
+    }
+    module.exports = { manifest: manifest, searchLyrics: searchLyrics };
+  `;
+  const lyricsExports = evaluateCommonJS(lyricsSource);
+  validateManifest(lyricsExports.manifest);
+  const lyricsBridge = createHostBridge(lyricsExports.manifest);
+  const lyrArr = await runSearchLyrics({ manifest: lyricsExports.manifest, source: lyricsSource, exportsObj: lyricsExports }, lyricsBridge, {
+    title: 'Idol',
+    artist: 'YOASOBI',
+    durationSec: 213
+  });
+  assert.equal(lyrArr.length, 1);
+  assert.equal(lyrArr[0].externalId, 'c2');
+  const lyrEnv = await runSearchLyrics({ manifest: lyricsExports.manifest, source: lyricsSource, exportsObj: lyricsExports }, lyricsBridge, {
+    title: 'envelope',
+    artist: 'YOASOBI'
+  });
+  assert.equal(lyrEnv.length, 1);
+  assert.equal(lyrEnv[0].externalId, 'c1');
+
+  const searchSource = `
+    var manifest = {
+      apiVersion: 1,
+      id: 'com.example.test.search',
+      name: 'Test Search',
+      version: '1.0.0',
+      capabilities: ['search', 'stream', 'cookie'],
+      searchKinds: ['track', 'album'],
+      urlPatterns: [],
+      permissions: { hosts: ['search.fixture.test'] }
+    };
+    async function search(ctx, req) {
+      return {
+        items: [
+          { kind: 'track', remoteTrackId: 'tr-1', title: req.query + ' Song', artist: 'Singer', durationSec: 185 },
+          { kind: 'album', remoteId: 'al-1', title: req.query + ' Album', trackCount: 10, sourceUrl: 'https://search.fixture.test/album/al-1' }
+        ],
+        nextCursor: req.cookie ? 'cur-auth' : 'cur-anon'
+      };
+    }
+    module.exports = { manifest: manifest, search: search };
+  `;
+  const searchExports = evaluateCommonJS(searchSource);
+  validateManifest(searchExports.manifest);
+  const searchBridge = createHostBridge(searchExports.manifest);
+  const searchPage = await runSearch({ manifest: searchExports.manifest, source: searchSource, exportsObj: searchExports }, searchBridge, {
+    query: 'Star',
+    kind: 'all',
+    limit: 20,
+    cookie: 'sid=ok'
+  });
+  assert.equal(searchPage.items.length, 2);
+  assert.equal(searchPage.items[0].remoteTrackId, 'tr-1');
+  assert.equal(searchPage.items[1].remoteId, 'al-1');
+  assert.equal(searchPage.nextCursor, 'cur-auth');
+
+  assert.throws(() => validateManifest({
+    apiVersion: 1,
+    id: 'com.example.invalid.playlist',
+    name: 'Invalid Playlist',
+    version: '1.0.0',
+    capabilities: ['playlist', 'stream'],
+    urlPatterns: [],
+    permissions: { hosts: ['example.com'] }
+  }), /urlPatterns required/);
+
+  assert.throws(() => validateManifest({
+    apiVersion: 1,
+    id: 'com.example.invalid.cap',
+    name: 'Invalid Cap',
+    version: '1.0.0',
+    capabilities: ['unknown-cap'],
+    permissions: { hosts: ['example.com'] }
+  }), /Unsupported capability/);
+
+  assert.throws(() => validateManifest({
+    apiVersion: 1,
+    id: 'com.example.invalid.kind',
+    name: 'Invalid Kind',
+    version: '1.0.0',
+    capabilities: ['search'],
+    searchKinds: ['podcast'],
+    permissions: { hosts: ['example.com'] }
+  }), /Unsupported searchKind/);
+
+  // 6. Test qr_login hooks + setCookies HTTP bridge
+  const qrResponder = async ({ url }) => {
+    const u = new URL(url);
+    if (u.pathname === '/qr/start') {
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        text: JSON.stringify({ key: 'qr-sess-1', url: 'https://auth.fixture.test/login?codekey=qr-sess-1' })
+      };
+    }
+    if (u.pathname === '/qr/poll') {
+      const state = u.searchParams.get('state') || 'pending';
+      if (state === 'confirmed') {
+        return {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+            'set-cookie': 'NMTID=abc; Path=/; Expires=Thu, 01 Jan 2099 00:00:00 GMT, MUSIC_U=secret_u; Path=/; HttpOnly'
+          },
+          setCookies: [
+            'NMTID=abc; Path=/; Expires=Thu, 01 Jan 2099 00:00:00 GMT',
+            'MUSIC_U=secret_u; Path=/; HttpOnly'
+          ],
+          text: JSON.stringify({ status: 'confirmed', nickname: 'Tester' })
+        };
+      }
+      return {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        text: JSON.stringify({ status: state, nickname: state === 'scanned' ? 'Tester' : null })
+      };
+    }
+    return { status: 404, headers: {}, text: 'not found' };
+  };
+
+  const qrSource = `
+    var manifest = {
+      apiVersion: 1,
+      id: 'com.example.test.qr',
+      name: 'Test QR',
+      version: '1.0.0',
+      capabilities: ['qr_login'],
+      permissions: { hosts: ['auth.fixture.test'] }
+    };
+    async function startQrLogin(ctx) {
+      var res = await ctx.http.request({ method: 'GET', url: 'https://auth.fixture.test/qr/start' });
+      var data = JSON.parse(res.text);
+      return { sessionId: data.key, qrContent: data.url, pollIntervalMs: 250 };
+    }
+    async function pollQrLogin(ctx, req) {
+      var res = await ctx.http.request({ method: 'GET', url: 'https://auth.fixture.test/qr/poll?state=' + encodeURIComponent(req.sessionId) });
+      var data = JSON.parse(res.text);
+      if (data.status === 'confirmed') {
+        var cookieLine = (res.setCookies || []).find(function(c) { return c.indexOf('MUSIC_U=') === 0; }) || '';
+        var val = cookieLine.split(';')[0];
+        return { status: 'confirmed', cookie: val, accountName: data.nickname };
+      }
+      return { status: data.status, accountName: data.nickname || null };
+    }
+    module.exports = { manifest: manifest, startQrLogin: startQrLogin, pollQrLogin: pollQrLogin };
+  `;
+  const qrExports = evaluateCommonJS(qrSource);
+  validateManifest(qrExports.manifest);
+  validateRequiredHooks(qrExports.manifest, qrExports);
+  const qrExt = { manifest: qrExports.manifest, source: qrSource, exportsObj: qrExports };
+  const qrBridge = createHostBridge(qrExports.manifest, { httpResponder: qrResponder });
+  const qrStart = await runStartQrLogin(qrExt, qrBridge, {});
+  assert.equal(qrStart.sessionId, 'qr-sess-1');
+  assert.equal(qrStart.pollIntervalMs, 1000);
+  const qrPending = await runPollQrLogin(qrExt, qrBridge, { sessionId: 'pending' });
+  assert.equal(qrPending.status, 'pending');
+  const qrScanned = await runPollQrLogin(qrExt, qrBridge, { sessionId: 'scanned' });
+  assert.equal(qrScanned.status, 'scanned');
+  assert.equal(qrScanned.accountName, 'Tester');
+  const qrConfirmed = await runPollQrLogin(qrExt, qrBridge, { sessionId: 'confirmed' });
+  assert.equal(qrConfirmed.status, 'confirmed');
+  assert.equal(qrConfirmed.cookie, 'MUSIC_U=secret_u');
+  const qrExpired = await runPollQrLogin(qrExt, qrBridge, { sessionId: 'expired' });
+  assert.equal(qrExpired.status, 'expired');
+
+  assert.throws(() => validateRequiredHooks({
+    apiVersion: 1,
+    id: 'com.example.invalid.qr',
+    name: 'Invalid QR',
+    version: '1.0.0',
+    capabilities: ['qr_login'],
+    permissions: { hosts: ['auth.fixture.test'] }
+  }, { manifest: {} }), /startQrLogin/);
+
   console.log('ALL_SELF_TESTS_PASSED', {
-    testedFixtures: ['basic-playlist.musico.js', 'tree-source', 'security-and-errors.musico.js', 'starter', 'starter-single-file.musico.js'],
+    testedFixtures: ['basic-playlist.musico.js', 'tree-source', 'security-and-errors.musico.js', 'starter', 'starter-single-file.musico.js', 'in-memory-lyrics', 'in-memory-search', 'in-memory-qr-login'],
     httpRequestsExecuted: capturedRequests.length
   });
 }
@@ -512,17 +857,34 @@ async function main() {
     await runSelfTest();
     return;
   }
-  if (args.length < 3) {
-    console.error('Usage: node mock-runner.mjs [--self-test | <ext-path> <can-handle|fetch-collection|fetch-folder|resolve-stream> <target> [options]]');
+  const hasStartQrCommand = args.length >= 2 && args[1] === 'start-qr-login';
+  if (args.length < 3 && !hasStartQrCommand) {
+    console.error('Usage: node mock-runner.mjs [--self-test | <ext-path> <can-handle|fetch-collection|fetch-folder|resolve-stream|search|search-lyrics|start-qr-login|poll-qr-login> [target] [options]]');
     process.exit(2);
   }
 
-  const [extPath, command, target, ...rest] = args;
+  let extPath;
+  let command;
+  let target;
+  let rest;
+  if (hasStartQrCommand) {
+    [extPath, command, ...rest] = args;
+    if (rest.length > 0 && !rest[0].startsWith('--')) {
+      target = rest.shift();
+    }
+  } else {
+    [extPath, command, target, ...rest] = args;
+  }
   let cookie = null;
   let cursor = null;
   let depth = 1;
   let pathSegments = [];
   let forceRefresh = false;
+  let kind = 'all';
+  let limit = 20;
+  let artist = '';
+  let album = null;
+  let durationSec = null;
   const settingsOverrides = {};
 
   for (let i = 0; i < rest.length; i++) {
@@ -532,6 +894,11 @@ async function main() {
     else if (flag === '--depth' && rest[i + 1]) depth = Number(rest[++i]);
     else if (flag === '--path' && rest[i + 1]) pathSegments = rest[++i].split('/').filter(Boolean);
     else if (flag === '--force') forceRefresh = true;
+    else if (flag === '--kind' && rest[i + 1]) kind = rest[++i];
+    else if (flag === '--limit' && rest[i + 1]) limit = Number(rest[++i]);
+    else if (flag === '--artist' && rest[i + 1]) artist = rest[++i];
+    else if (flag === '--album' && rest[i + 1]) album = rest[++i];
+    else if (flag === '--duration' && rest[i + 1]) durationSec = Number(rest[++i]);
     else if (flag === '--setting' && rest[i + 1]) {
       const [k, v] = rest[++i].split('=');
       settingsOverrides[k] = v === 'true' ? true : v === 'false' ? false : v;
@@ -549,6 +916,14 @@ async function main() {
     output = await invokeWithTimeout(() => ext.exportsObj.fetchFolder(bridge.ctx, { folderId: target, pathSegments, depth, cookie, cursor }), 60000);
   } else if (command === 'resolve-stream') {
     output = await runResolveStream(ext, bridge, { remoteTrackId: target, cookie, forceRefresh }, 15000);
+  } else if (command === 'search') {
+    output = await runSearch(ext, bridge, { query: target, kind, limit, cursor, cookie }, 15000);
+  } else if (command === 'search-lyrics') {
+    output = await runSearchLyrics(ext, bridge, { title: target, artist, album, durationSec }, 15000);
+  } else if (command === 'start-qr-login') {
+    output = await runStartQrLogin(ext, bridge, {}, 15000);
+  } else if (command === 'poll-qr-login') {
+    output = await runPollQrLogin(ext, bridge, { sessionId: target }, 15000);
   } else {
     throw new Error(`Unknown command: ${command}`);
   }

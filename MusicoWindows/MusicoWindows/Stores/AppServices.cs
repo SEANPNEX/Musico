@@ -30,8 +30,9 @@ public sealed class AppServices : IDisposable
             stateDirectory: StateDirectory,
             appVersion: UpdateService.GetCurrentAppVersion().ToString());
         Extensions.BindRegistry(CloudProviders);
+        Thumbnails = new CloudThumbnailCache();
 
-        CloudExporter = new CloudExporter(CloudCache, YouTube, Bilibili, artwork, GoogleDrive, CloudProviders);
+        CloudExporter = new CloudExporter(CloudCache, YouTube, Bilibili, artwork, GoogleDrive, CloudProviders, Extensions, Thumbnails);
 
         Library = new LibraryStore(
             stateDirectory: StateDirectory,
@@ -49,6 +50,10 @@ public sealed class AppServices : IDisposable
         Queues = new QueueStore(StateDirectory);
         History = new PlayHistoryStore(StateDirectory);
         Lyrics = new LyricsStore(Path.Combine(StateDirectory, "Lyrics"));
+        CloudLyrics = new CloudLyricsService(
+            customHandler: null,
+            appVersion: UpdateService.GetCurrentAppVersion().ToString(),
+            extensionSearch: (extId, query, ct) => Extensions.SearchLyricsAsync(extId, query, proxyUrl: null, ct: ct));
         AudioEngine = new AudioEngine();
         Smtc = new SmtcBridge();
         Update = new UpdateService(stateDirectory: StateDirectory);
@@ -63,12 +68,14 @@ public sealed class AppServices : IDisposable
             youtubeClient: YouTube,
             bilibiliClient: Bilibili,
             googleDriveClient: GoogleDrive,
-            providerRegistry: CloudProviders);
+            providerRegistry: CloudProviders,
+            extensions: Extensions);
     }
 
     public string StateDirectory { get; }
     public string MusicDirectory { get; }
     public CloudAudioCache CloudCache { get; }
+    public CloudThumbnailCache Thumbnails { get; }
     public YouTubeClient YouTube { get; }
     public BilibiliClient Bilibili { get; }
     public GoogleDriveClient GoogleDrive { get; }
@@ -80,6 +87,7 @@ public sealed class AppServices : IDisposable
     public QueueStore Queues { get; }
     public PlayHistoryStore History { get; }
     public LyricsStore Lyrics { get; }
+    public CloudLyricsService CloudLyrics { get; }
     public AudioEngine AudioEngine { get; }
     public SmtcBridge Smtc { get; }
     public UpdateService Update { get; }
@@ -87,6 +95,7 @@ public sealed class AppServices : IDisposable
 
     public async Task InitializeAsync()
     {
+        Library.PruneEphemeralTracks(Queues.GetAllReferencedTrackIds());
         Player.Restore();
         await Library.RescanAsync();
         if (Player.CurrentTrack is null)

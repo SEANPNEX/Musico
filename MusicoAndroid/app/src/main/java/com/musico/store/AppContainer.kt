@@ -13,6 +13,7 @@ import com.musico.cloud.UrlConnectionCloudHttpClient
 import com.musico.cloud.YouTubeClient
 import com.musico.core.AndroidMetadataReader
 import com.musico.core.ArtworkCache
+import com.musico.core.CloudThumbnailCache
 import com.musico.core.LyricsStore
 import com.musico.core.MetadataReading
 import com.musico.extensions.CloudProviderRegistry
@@ -37,6 +38,7 @@ class AppContainer(context: Context) {
     val artworkCache: ArtworkCache = ArtworkCache(File(stateDir, "artwork"))
     val metadataReader: MetadataReading = AndroidMetadataReader(appContext)
     val cloudHttpClient: CloudHttpClient = UrlConnectionCloudHttpClient()
+    val cloudThumbnailCache: CloudThumbnailCache = CloudThumbnailCache(cloudHttpClient)
     val youTubeClient: YouTubeClient = YouTubeClient(cloudHttpClient)
     val bilibiliClient: BilibiliClient = BilibiliClient(cloudHttpClient)
     val googleDriveClient: GoogleDriveClient = GoogleDriveClient(cloudHttpClient)
@@ -72,9 +74,17 @@ class AppContainer(context: Context) {
             store.refreshAvailability()
         }
     }
-    val queueStore: QueueStore = QueueStore(stateDir)
+    val queueStore: QueueStore = QueueStore(stateDir).also { qStore ->
+        libraryStore.referencedQueueTrackIdsProvider = { qStore.allReferencedTrackIds() }
+        qStore.onReferencedTrackIdsChanged = { ids -> libraryStore.pruneEphemeralTracks(ids) }
+        libraryStore.pruneEphemeralTracks(qStore.allReferencedTrackIds())
+    }
     val historyStore: PlayHistoryStore = PlayHistoryStore(stateDir)
     val lyricsStore: LyricsStore = LyricsStore(File(stateDir, "lyrics"))
+    val cloudLyricsService: com.musico.lyrics.CloudLyricsService = com.musico.lyrics.CloudLyricsService(
+        httpClient = cloudHttpClient,
+        extensionSearch = { extId, query -> extensionStore.searchLyrics(extId, query) },
+    )
     val languageStore: LanguageStore = LanguageStore(appContext)
     val updateManager: UpdateManager = UpdateManager(appContext)
     val audioEngine: AudioEngine = AudioEngine(appContext)

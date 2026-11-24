@@ -138,6 +138,7 @@ fun SongInfoSheet(
                     artworkCache = libraryStore.artwork,
                     size = 88.dp,
                     cornerRadius = 12.dp,
+                    remoteArtworkUrl = track.remoteArtworkUrl,
                 )
                 Column(
                     modifier = Modifier.weight(1f),
@@ -150,40 +151,42 @@ fun SongInfoSheet(
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                     )
-                    OutlinedButton(
-                        onClick = {
-                            onPickImage { uri ->
-                                scope.launch {
-                                    coverError = null
-                                    val newKey = withContext(Dispatchers.IO) {
-                                        val bytes = runCatching {
-                                            context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
-                                        }.getOrNull()
-                                        if (bytes != null && bytes.isNotEmpty()) {
-                                            libraryStore.artwork.store(bytes)
+                    if (!track.isEphemeral) {
+                        OutlinedButton(
+                            onClick = {
+                                onPickImage { uri ->
+                                    scope.launch {
+                                        coverError = null
+                                        val newKey = withContext(Dispatchers.IO) {
+                                            val bytes = runCatching {
+                                                context.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                                            }.getOrNull()
+                                            if (bytes != null && bytes.isNotEmpty()) {
+                                                libraryStore.artwork.store(bytes)
+                                            } else {
+                                                null
+                                            }
+                                        }
+                                        if (newKey != null) {
+                                            libraryStore.updateTrackMetadata(
+                                                trackId = track.id,
+                                                artworkKey = newKey,
+                                            )
                                         } else {
-                                            null
+                                            coverError = strings.couldNotLoadSelectedImage
                                         }
                                     }
-                                    if (newKey != null) {
-                                        libraryStore.updateTrackMetadata(
-                                            trackId = track.id,
-                                            artworkKey = newKey,
-                                        )
-                                    } else {
-                                        coverError = strings.couldNotLoadSelectedImage
-                                    }
                                 }
-                            }
-                        },
-                    ) {
-                        Icon(
-                            imageVector = Icons.Rounded.Image,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                        )
-                        Spacer(Modifier.width(6.dp))
-                        Text(strings.changeCover)
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.Image,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(strings.changeCover)
+                        }
                     }
                     if (coverError != null) {
                         Text(
@@ -197,51 +200,59 @@ fun SongInfoSheet(
 
             OutlinedTextField(
                 value = title,
-                onValueChange = { title = it },
+                onValueChange = { if (!track.isEphemeral) title = it },
+                readOnly = track.isEphemeral,
                 label = { Text(strings.titleLabel) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
                 value = artist,
-                onValueChange = { artist = it },
+                onValueChange = { if (!track.isEphemeral) artist = it },
+                readOnly = track.isEphemeral,
                 label = { Text(strings.artistLabel) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
             OutlinedTextField(
                 value = album,
-                onValueChange = { album = it },
+                onValueChange = { if (!track.isEphemeral) album = it },
+                readOnly = track.isEphemeral,
                 label = { Text(strings.albumLabel) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )
-            OutlinedTextField(
-                value = genre,
-                onValueChange = { genre = it },
-                label = { Text(strings.genreLabel) },
-                placeholder = { Text(strings.addGenrePlaceholder) },
-                singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
-            )
+            if (!track.isEphemeral || genre.isNotBlank()) {
+                OutlinedTextField(
+                    value = genre,
+                    onValueChange = { if (!track.isEphemeral) genre = it },
+                    readOnly = track.isEphemeral,
+                    label = { Text(strings.genreLabel) },
+                    placeholder = { Text(strings.addGenrePlaceholder) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
 
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.End,
-            ) {
-                Button(
-                    enabled = hasTextEdits && title.trim().isNotEmpty(),
-                    onClick = {
-                        libraryStore.updateTrackMetadata(
-                            trackId = track.id,
-                            title = title.trim(),
-                            artist = artist.trim().ifEmpty { "Unknown Artist" },
-                            album = album.trim().ifEmpty { "Unknown Album" },
-                            genre = genre.trim(),
-                        )
-                    },
+            if (!track.isEphemeral) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.End,
                 ) {
-                    Text(strings.saveChanges)
+                    Button(
+                        enabled = hasTextEdits && title.trim().isNotEmpty(),
+                        onClick = {
+                            libraryStore.updateTrackMetadata(
+                                trackId = track.id,
+                                title = title.trim(),
+                                artist = artist.trim().ifEmpty { "Unknown Artist" },
+                                album = album.trim().ifEmpty { "Unknown Album" },
+                                genre = genre.trim(),
+                            )
+                        },
+                    ) {
+                        Text(strings.saveChanges)
+                    }
                 }
             }
 

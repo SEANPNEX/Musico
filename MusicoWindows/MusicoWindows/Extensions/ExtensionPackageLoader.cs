@@ -302,12 +302,15 @@ public static class ExtensionPackageLoader
 
     private static void AssertRequiredHooks(ObjectInstance exports, ExtensionManifest manifest)
     {
-        if (!IsFunction(exports.Get("canHandle")))
+        bool hasCollectionCap = manifest.HasCapability(ExtensionCapability.Playlist) ||
+                                manifest.HasCapability(ExtensionCapability.Tree);
+
+        if (hasCollectionCap && !IsFunction(exports.Get("canHandle")))
         {
             throw new InvalidDataException("Extension must export a 'canHandle' function.");
         }
 
-        if (!IsFunction(exports.Get("fetchCollection")))
+        if (hasCollectionCap && !IsFunction(exports.Get("fetchCollection")))
         {
             throw new InvalidDataException("Extension must export a 'fetchCollection' function.");
         }
@@ -320,6 +323,28 @@ public static class ExtensionPackageLoader
         if (manifest.HasCapability(ExtensionCapability.Stream) && !IsFunction(exports.Get("resolveStream")))
         {
             throw new InvalidDataException("Extension declares 'stream' capability and must export a 'resolveStream' function.");
+        }
+
+        if (manifest.HasCapability(ExtensionCapability.Lyrics) && !IsFunction(exports.Get("searchLyrics")))
+        {
+            throw new InvalidDataException("Extension declares 'lyrics' capability and must export a 'searchLyrics' function.");
+        }
+
+        if (manifest.HasCapability(ExtensionCapability.Search) && !IsFunction(exports.Get("search")))
+        {
+            throw new InvalidDataException("Extension declares 'search' capability and must export a 'search' function.");
+        }
+
+        if (manifest.HasCapability(ExtensionCapability.QrLogin))
+        {
+            if (!IsFunction(exports.Get("startQrLogin")))
+            {
+                throw new InvalidDataException("Extension declares 'qr_login' capability and must export a 'startQrLogin' function.");
+            }
+            if (!IsFunction(exports.Get("pollQrLogin")))
+            {
+                throw new InvalidDataException("Extension declares 'qr_login' capability and must export a 'pollQrLogin' function.");
+            }
         }
     }
 

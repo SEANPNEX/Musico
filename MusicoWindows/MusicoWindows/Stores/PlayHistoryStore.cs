@@ -27,7 +27,17 @@ public sealed class PlayHistoryStore : ObservableStore
     {
         _filePath = Path.Combine(stateDirectory, "history.json");
         var file = Persistence.Load<HistoryFile>(_filePath);
-        _entries = file?.Entries ?? new Dictionary<string, PlayHistoryEntry>();
+        _entries = new Dictionary<string, PlayHistoryEntry>();
+        if (file?.Entries is not null)
+        {
+            foreach (var kvp in file.Entries)
+            {
+                if (!Track.HasEphemeralIdPrefix(kvp.Key))
+                {
+                    _entries[kvp.Key] = kvp.Value;
+                }
+            }
+        }
         _totalPlays = file?.TotalPlays ?? 0;
         _totalSeconds = file?.TotalSeconds ?? 0;
     }
@@ -53,8 +63,18 @@ public sealed class PlayHistoryStore : ObservableStore
         }
     }
 
+    private static bool IsExcludedId(string? id) =>
+        string.IsNullOrWhiteSpace(id) || Track.HasEphemeralIdPrefix(id);
+
+    public void RecordPlay(Track track, DateTimeOffset? now = null)
+    {
+        if (track is null || track.IsEphemeral || IsExcludedId(track.Id)) return;
+        RecordPlay(track.Id, now);
+    }
+
     public void RecordPlay(string id, DateTimeOffset? now = null)
     {
+        if (IsExcludedId(id)) return;
         var timestamp = now ?? DateTimeOffset.UtcNow;
         int prevCount = _entries.TryGetValue(id, out var existing) ? existing.Count : 0;
         _entries[id] = new PlayHistoryEntry(prevCount + 1, timestamp);
@@ -63,9 +83,16 @@ public sealed class PlayHistoryStore : ObservableStore
         Save();
     }
 
+    public void MarkStarted(Track track, DateTimeOffset? now = null)
+    {
+        if (track is null || track.IsEphemeral || IsExcludedId(track.Id)) return;
+        MarkStarted(track.Id, now);
+    }
+
     /// <summary>Notes that a song started playing: it becomes "recently played" without gaining a play.</summary>
     public void MarkStarted(string id, DateTimeOffset? now = null)
     {
+        if (IsExcludedId(id)) return;
         var timestamp = now ?? DateTimeOffset.UtcNow;
         int prevCount = _entries.TryGetValue(id, out var existing) ? existing.Count : 0;
         _entries[id] = new PlayHistoryEntry(prevCount, timestamp);
@@ -74,9 +101,10 @@ public sealed class PlayHistoryStore : ObservableStore
     }
 
     /// <summary>Adds listening time in memory; callers flush with Save().</summary>
-    public void AddListening(double seconds)
+    public void AddListening(double seconds, Track? track = null)
     {
         if (seconds <= 0 || !double.IsFinite(seconds)) return;
+        if (track is not null && (track.IsEphemeral || IsExcludedId(track.Id))) return;
         TotalSeconds = _totalSeconds + seconds;
     }
 
@@ -126,6 +154,7 @@ public sealed class PlayHistoryStore : ObservableStore
     {
         foreach (var track in tracks)
         {
+            if (track.IsEphemeral || IsExcludedId(track.Id)) continue;
             if (_entries.TryGetValue(track.Id, out var entry))
             {
                 yield return (track, entry);
@@ -157,7 +186,7 @@ public sealed class PlayHistoryStore : ObservableStore
             .ToList();
 
     public IReadOnlyList<Track> NeverPlayed(IEnumerable<Track> tracks) =>
-        tracks.Where(t => GetCount(t.Id) == 0).ToList();
+        tracks.Where(t => !t.IsEphemeral && !IsExcludedId(t.Id) && GetCount(t.Id) == 0).ToList();
 
     public IReadOnlyList<Track> NotPlayedLately(IEnumerable<Track> tracks, DateTimeOffset? now = null)
     {

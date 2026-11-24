@@ -805,4 +805,182 @@ class ExtensionRuntimeTest {
         assertEquals("https://media1.cdn.fixture.test/audio.mp3", validStream.url)
         assertEquals(listOf("https://media2.cdn.fixture.test/audio.mp3"), validStream.fallbackUrls)
     }
+
+    @Test
+    fun qrLoginCapabilityRequiresStartAndPollHooks() = runBlocking {
+        val (extStore, _, _) = createHarness()
+
+        val missingPollScript = """
+            var manifest = {
+              apiVersion: 1,
+              id: 'com.musico.test.qr.nopoll',
+              name: 'Missing Poll',
+              version: '1.0.0',
+              capabilities: ['search', 'qr_login'],
+              permissions: { hosts: ['qr.fixture.test'] }
+            };
+            async function search() { return { items: [], hasMore: false }; }
+            async function startQrLogin() { return { sessionId: 's1', qrContent: 'https://qr.fixture.test/s1' }; }
+            module.exports = { manifest: manifest, search: search, startQrLogin: startQrLogin };
+        """.trimIndent()
+        val missingPollResult = extStore.stageFromBytes(
+            missingPollScript.toByteArray(Charsets.UTF_8),
+            fileNameHint = "missing-poll.musico.js",
+        )
+        assertTrue(missingPollResult.isFailure)
+        assertTrue(missingPollResult.exceptionOrNull()?.message?.contains("pollQrLogin") == true)
+
+        val missingStartScript = """
+            var manifest = {
+              apiVersion: 1,
+              id: 'com.musico.test.qr.nostart',
+              name: 'Missing Start',
+              version: '1.0.0',
+              capabilities: ['search', 'qr_login'],
+              permissions: { hosts: ['qr.fixture.test'] }
+            };
+            async function search() { return { items: [], hasMore: false }; }
+            async function pollQrLogin() { return { status: 'pending' }; }
+            module.exports = { manifest: manifest, search: search, pollQrLogin: pollQrLogin };
+        """.trimIndent()
+        val missingStartResult = extStore.stageFromBytes(
+            missingStartScript.toByteArray(Charsets.UTF_8),
+            fileNameHint = "missing-start.musico.js",
+        )
+        assertTrue(missingStartResult.isFailure)
+        assertTrue(missingStartResult.exceptionOrNull()?.message?.contains("startQrLogin") == true)
+    }
+
+    @Test
+    fun qrLoginLifecycleSetCookiesAutoPersistSearchForwardingAndRedaction() = runBlocking {
+        var checkAttempt = 0
+        val http = MockHttpTransport { call ->
+            when (call.url) {
+                "https://qr.fixture.test/qr/unikey" -> jsonReply("""{"unikey":"u-android-1"}""")
+                "https://qr.fixture.test/qr/check" -> {
+                    checkAttempt += 1
+                    when (checkAttempt) {
+                        1 -> jsonReply("""{"code":801}""")
+                        2 -> jsonReply("""{"code":802,"nickname":"TestListener"}""")
+                        3 -> MockHttpReply(
+                            statusCode = 200,
+                            headers = mapOf(
+                                "Set-Cookie" to listOf(
+                                    "MUSIC_U=secret_android_cookie_999; Max-Age=2592000; Expires=Thu, 31 Dec 2099 23:59:59 GMT; Path=/; HttpOnly",
+                                    "__csrf=csrf_abc; Expires=Thu, 31 Dec 2099 23:59:59 GMT; Path=/",
+                                ),
+                            ),
+                            bodyBytes = """{"code":803}""".toByteArray(Charsets.UTF_8),
+                        )
+                        else -> jsonReply("""{"code":803}""")
+                    }
+                }
+                else -> jsonReply("{}", 404)
+            }
+        }
+
+        val (extStore, _, _) = createHarness(httpClient = http)
+        val extId = "com.musico.test.qr.flow"
+        val script = """
+            var manifest = {
+              apiVersion: 1,
+              id: '$extId',
+              name: 'QR Fixture',
+              version: '1.0.0',
+              capabilities: ['search', 'qr_login'],
+              permissions: { hosts: ['qr.fixture.test'] }
+            };
+            async function startQrLogin(ctx) {
+              var res = await ctx.http.request({ method: 'POST', url: 'https://qr.fixture.test/qr/unikey' });
+              var body = JSON.parse(res.text);
+              return {
+                sessionId: body.unikey,
+                qrContent: 'https://music.163.com/login?codekey=' + body.unikey,
+                pollIntervalMs: 1500
+              };
+            }
+            async function pollQrLogin(ctx, req) {
+              if (req.sessionId === 'empty-cookie') {
+                return { status: 'confirmed', cookie: '   ' };
+              }
+              var res = await ctx.http.request({ method: 'POST', url: 'https://qr.fixture.test/qr/check' });
+              var body = JSON.parse(res.text);
+              if (body.code === 801) return { status: 'pending' };
+              if (body.code === 802) return { status: 'scanned', accountName: body.nickname };
+              if (body.code === 803) {
+                var list = Array.isArray(res.setCookies) && res.setCookies.length > 0 ? res.setCookies : [];
+                var musicU = '';
+                var csrf = '';
+                for (var i = 0; i < list.length; i++) {
+                  var firstPair = String(list[i]).split(';')[0].trim();
+                  if (firstPair.indexOf('MUSIC_U=') === 0) musicU = firstPair;
+                  if (firstPair.indexOf('__csrf=') === 0) csrf = firstPair;
+                }
+                var cookie = [musicU, csrf].filter(Boolean).join('; ');
+                return { status: 'confirmed', cookie: cookie, accountName: 'TestListener' };
+              }
+              return { status: 'expired' };
+            }
+            async function search(ctx, req) {
+              ctx.log.info('searching with cookie: ' + (req.cookie || 'none'));
+              return {
+                items: [
+                  {
+                    kind: 'track',
+                    title: req.cookie === 'MUSIC_U=secret_android_cookie_999; __csrf=csrf_abc' ? 'AUTHED_OK' : 'NO_AUTH',
+                    remoteTrackId: 'tr-1'
+                  }
+                ],
+                hasMore: false
+              };
+            }
+            module.exports = {
+              manifest: manifest,
+              startQrLogin: startQrLogin,
+              pollQrLogin: pollQrLogin,
+              search: search
+            };
+        """.trimIndent()
+
+        val staged = extStore.stageFromBytes(script.toByteArray(Charsets.UTF_8), "qr-flow.musico.js").getOrThrow()
+        val installed = extStore.installStaged(staged, enableImmediately = true)
+        assertTrue(installed.manifest.supportsCookieAuth)
+        assertTrue(installed.manifest.supportsQrLogin)
+
+        val session = extStore.startQrLogin(extId)
+        assertEquals("u-android-1", session.sessionId)
+        assertEquals("https://music.163.com/login?codekey=u-android-1", session.qrContent)
+        assertEquals(1500, session.pollIntervalMs)
+
+        val poll1 = extStore.pollQrLogin(extId, session.sessionId)
+        assertEquals(ExtQrLoginStatus.PENDING, poll1.status)
+        assertNull(extStore.findById(extId)?.state?.cookie)
+
+        val poll2 = extStore.pollQrLogin(extId, session.sessionId)
+        assertEquals(ExtQrLoginStatus.SCANNED, poll2.status)
+        assertEquals("TestListener", poll2.accountName)
+        assertNull(extStore.findById(extId)?.state?.cookie)
+
+        val poll3 = extStore.pollQrLogin(extId, session.sessionId)
+        assertEquals(ExtQrLoginStatus.CONFIRMED, poll3.status)
+        assertEquals("MUSIC_U=secret_android_cookie_999; __csrf=csrf_abc", poll3.cookie)
+        assertEquals(
+            "MUSIC_U=secret_android_cookie_999; __csrf=csrf_abc",
+            extStore.findById(extId)?.state?.cookie,
+        )
+
+        val page = extStore.search(extensionId = extId, query = "hello")
+        assertEquals(1, page.items.size)
+        assertEquals("AUTHED_OK", page.items[0].title)
+        val logs = extStore.logsFor(extId)
+        assertTrue(logs.none { it.message.contains("secret_android_cookie_999") || it.message.contains("csrf_abc") })
+
+        // Empty cookie on confirmed must throw
+        try {
+            extStore.pollQrLogin(extId, "empty-cookie")
+            fail("Expected confirmed without cookie to fail")
+        } catch (_: CloudSourceException) {
+            // expected
+        }
+    }
 }

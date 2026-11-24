@@ -29,17 +29,21 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import java.security.MessageDigest
 import java.util.Base64
 import javax.crypto.Mac
@@ -84,6 +88,10 @@ class QuickJsExtensionRuntime(
         val hasFetchCollection: Boolean = false,
         val hasFetchFolder: Boolean = false,
         val hasResolveStream: Boolean = false,
+        val hasSearchLyrics: Boolean = false,
+        val hasSearch: Boolean = false,
+        val hasStartQrLogin: Boolean = false,
+        val hasPollQrLogin: Boolean = false,
         val code: String? = null,
         val message: String? = null,
     )
@@ -95,8 +103,71 @@ class QuickJsExtensionRuntime(
         val hasFetchCollection: Boolean = false,
         val hasFetchFolder: Boolean = false,
         val hasResolveStream: Boolean = false,
+        val hasSearchLyrics: Boolean = false,
+        val hasSearch: Boolean = false,
+        val hasStartQrLogin: Boolean = false,
+        val hasPollQrLogin: Boolean = false,
         val code: String? = null,
         val message: String? = null,
+    )
+
+    @Serializable
+    private data class RawExtQrLoginStart(
+        val sessionId: JsonElement? = null,
+        val qrContent: String? = null,
+        val qrUrl: String? = null,
+        val expiresAtMs: Double? = null,
+        val pollIntervalMs: Double? = null,
+        val message: String? = null,
+    )
+
+    @Serializable
+    private data class RawExtQrLoginPoll(
+        val status: String? = null,
+        val cookie: String? = null,
+        val accountName: String? = null,
+        val message: String? = null,
+    )
+
+    @Serializable
+    private data class RawExtSearchResult(
+        val kind: String? = null,
+        val remoteTrackId: JsonElement? = null,
+        val remoteId: JsonElement? = null,
+        val id: JsonElement? = null,
+        val title: String? = null,
+        val artist: String? = null,
+        val album: String? = null,
+        val durationSec: Double? = null,
+        val artworkUrl: String? = null,
+        val sourceUrl: String? = null,
+        val relativePath: String? = null,
+        val trackCount: Int? = null,
+    )
+
+    @Serializable
+    private data class RawExtSearchResponse(
+        val items: List<RawExtSearchResult>? = null,
+        val nextCursor: JsonElement? = null,
+    )
+
+    @Serializable
+    data class ExtLyricsCandidateSpec(
+        val externalId: String? = null,
+        val title: String? = null,
+        val artist: String? = null,
+        val album: String? = null,
+        val durationSec: Double? = null,
+        val syncedLyrics: String? = null,
+        val plainLyrics: String? = null,
+        val translatedLyrics: String? = null,
+        val instrumental: Boolean? = null,
+    )
+
+    @Serializable
+    private data class ExtLyricsSearchEnvelope(
+        val candidates: List<ExtLyricsCandidateSpec>? = null,
+        val results: List<ExtLyricsCandidateSpec>? = null,
     )
 
     private val json = Json {
@@ -125,7 +196,11 @@ class QuickJsExtensionRuntime(
                   hasCanHandle: typeof exported.canHandle === 'function',
                   hasFetchCollection: typeof exported.fetchCollection === 'function',
                   hasFetchFolder: typeof exported.fetchFolder === 'function',
-                  hasResolveStream: typeof exported.resolveStream === 'function'
+                  hasResolveStream: typeof exported.resolveStream === 'function',
+                  hasSearchLyrics: typeof exported.searchLyrics === 'function',
+                  hasSearch: typeof exported.search === 'function',
+                  hasStartQrLogin: typeof exported.startQrLogin === 'function',
+                  hasPollQrLogin: typeof exported.pollQrLogin === 'function'
                 });
               } catch (err) {
                 return JSON.stringify({
@@ -165,6 +240,10 @@ class QuickJsExtensionRuntime(
             hasFetchCollection = parsed.hasFetchCollection,
             hasFetchFolder = parsed.hasFetchFolder,
             hasResolveStream = parsed.hasResolveStream,
+            hasSearchLyrics = parsed.hasSearchLyrics,
+            hasSearch = parsed.hasSearch,
+            hasStartQrLogin = parsed.hasStartQrLogin,
+            hasPollQrLogin = parsed.hasPollQrLogin,
         )
         return validated
     }
@@ -188,7 +267,11 @@ class QuickJsExtensionRuntime(
                   hasCanHandle: typeof exported.canHandle === 'function',
                   hasFetchCollection: typeof exported.fetchCollection === 'function',
                   hasFetchFolder: typeof exported.fetchFolder === 'function',
-                  hasResolveStream: typeof exported.resolveStream === 'function'
+                  hasResolveStream: typeof exported.resolveStream === 'function',
+                  hasSearchLyrics: typeof exported.searchLyrics === 'function',
+                  hasSearch: typeof exported.search === 'function',
+                  hasStartQrLogin: typeof exported.startQrLogin === 'function',
+                  hasPollQrLogin: typeof exported.pollQrLogin === 'function'
                 });
               } catch (err) {
                 return JSON.stringify({
@@ -225,6 +308,10 @@ class QuickJsExtensionRuntime(
             hasFetchCollection = parsed.hasFetchCollection,
             hasFetchFolder = parsed.hasFetchFolder,
             hasResolveStream = parsed.hasResolveStream,
+            hasSearchLyrics = parsed.hasSearchLyrics,
+            hasSearch = parsed.hasSearch,
+            hasStartQrLogin = parsed.hasStartQrLogin,
+            hasPollQrLogin = parsed.hasPollQrLogin,
         )
     }
 
@@ -330,6 +417,279 @@ class QuickJsExtensionRuntime(
             HostAllowlistMatcher.assertAllowed(fb, allowedHosts)
         }
         return resolved
+    }
+
+    suspend fun searchLyrics(
+        extension: InstalledExtension,
+        title: String,
+        artist: String,
+        album: String? = null,
+        durationSec: Double? = null,
+    ): List<ExtLyricsCandidateSpec> {
+        val reqJson = json.encodeToString(
+            buildJsonObject {
+                put("title", title)
+                put("artist", artist)
+                if (!album.isNullOrBlank()) put("album", album)
+                if (durationSec != null && durationSec.isFinite() && durationSec > 0.0) {
+                    put("durationSec", durationSec)
+                }
+            }
+        )
+        val raw = invokeHook(
+            extension = extension,
+            hookName = "searchLyrics",
+            requestJson = reqJson,
+            isAsync = true,
+            timeoutMs = shortTimeoutMs,
+        )
+        val envelope = runCatching { json.decodeFromString<HookEnvelope>(raw) }.getOrElse { err ->
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "Malformed extension return payload: ${err.message}",
+                err,
+            )
+        }
+        if (!envelope.ok) {
+            val code = CloudErrorCode.fromCodeString(envelope.code) ?: CloudErrorCode.EXTENSION_RUNTIME_ERROR
+            throw CloudSourceException(code, envelope.message ?: "Extension hook failed ($code)")
+        }
+        val payload = envelope.result
+        if (payload == null || payload is JsonNull) {
+            return emptyList()
+        }
+        return runCatching {
+            when (payload) {
+                is JsonArray -> json.decodeFromJsonElement(kotlinx.serialization.serializer<List<ExtLyricsCandidateSpec>>(), payload)
+                else -> {
+                    val obj = json.decodeFromJsonElement(kotlinx.serialization.serializer<ExtLyricsSearchEnvelope>(), payload)
+                    obj.candidates ?: obj.results ?: emptyList()
+                }
+            }
+        }.getOrElse { err ->
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "Invalid extension lyrics schema: ${err.message}",
+                err,
+            )
+        }
+    }
+
+    suspend fun search(
+        extension: InstalledExtension,
+        query: String,
+        kind: CloudSearchFilterKind = CloudSearchFilterKind.ALL,
+        limit: Int = DEFAULT_SEARCH_LIMIT,
+        cursor: String? = null,
+        cookie: String? = null,
+    ): ExtSearchPage {
+        if (ExtensionCapability.SEARCH !in extension.manifest.capabilities) {
+            throw CloudSourceException(
+                CloudErrorCode.PERMISSION_DENIED,
+                "${extension.manifest.name} does not declare search capability.",
+            )
+        }
+        val effectiveCookie = if (extension.manifest.supportsCookieAuth) {
+            cookie?.trim()?.takeIf { it.isNotEmpty() }
+        } else {
+            null
+        }
+        val cleanCursor = cursor?.trim()?.takeIf { it.isNotEmpty() }
+        val reqJson = json.encodeToString(
+            buildJsonObject {
+                put("query", query)
+                put("kind", kind.wireName)
+                put("limit", limit.coerceAtLeast(1))
+                if (cleanCursor != null) put("cursor", cleanCursor) else put("cursor", JsonNull)
+                if (effectiveCookie != null) put("cookie", effectiveCookie) else put("cookie", JsonNull)
+            }
+        )
+        val raw = invokeHook(
+            extension = extension,
+            hookName = "search",
+            requestJson = reqJson,
+            isAsync = true,
+            timeoutMs = shortTimeoutMs,
+        )
+        val envelope = runCatching { json.decodeFromString<HookEnvelope>(raw) }.getOrElse { err ->
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "Malformed extension return payload: ${err.message}",
+                err,
+            )
+        }
+        if (!envelope.ok) {
+            val code = CloudErrorCode.fromCodeString(envelope.code) ?: CloudErrorCode.EXTENSION_RUNTIME_ERROR
+            throw CloudSourceException(code, envelope.message ?: "Extension hook failed ($code)")
+        }
+        val payload = envelope.result
+        if (payload == null || payload is JsonNull) {
+            return ExtSearchPage(items = emptyList(), nextCursor = null)
+        }
+        val parsed = runCatching {
+            json.decodeFromJsonElement(kotlinx.serialization.serializer<RawExtSearchResponse>(), payload)
+        }.getOrElse { err ->
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "Invalid extension search schema: ${err.message}",
+                err,
+            )
+        }
+        val items = parsed.items.orEmpty().mapNotNull { item ->
+            val itemKind = item.kind?.let { ExtensionSearchKind.fromWire(it) } ?: return@mapNotNull null
+            val cleanTitle = item.title?.trim()?.takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            val cleanArtist = item.artist?.trim()?.takeIf { it.isNotEmpty() }
+            val cleanAlbum = item.album?.trim()?.takeIf { it.isNotEmpty() }
+            val cleanDuration = item.durationSec?.takeIf { it.isFinite() && it >= 0.0 }
+            val cleanArtwork = item.artworkUrl?.trim()?.takeIf { it.isNotEmpty() }
+            when (itemKind) {
+                ExtensionSearchKind.TRACK -> {
+                    val trackId = (if (item.remoteTrackId != null) {
+                        lossyScalarString(item.remoteTrackId)
+                    } else {
+                        lossyScalarString(item.id)
+                    }) ?: return@mapNotNull null
+                    ExtSearchResultItem.TrackItem(
+                        remoteTrackId = trackId,
+                        title = cleanTitle,
+                        artist = cleanArtist,
+                        album = cleanAlbum,
+                        durationSec = cleanDuration,
+                        artworkUrl = cleanArtwork,
+                        relativePath = item.relativePath?.trim()?.takeIf { it.isNotEmpty() },
+                    )
+                }
+                ExtensionSearchKind.PLAYLIST, ExtensionSearchKind.ALBUM -> {
+                    val colId = (if (item.remoteId != null) {
+                        lossyScalarString(item.remoteId)
+                    } else {
+                        lossyScalarString(item.id)
+                    }) ?: return@mapNotNull null
+                    ExtSearchResultItem.CollectionItem(
+                        kind = itemKind,
+                        remoteId = colId,
+                        title = cleanTitle,
+                        artist = cleanArtist,
+                        album = cleanAlbum,
+                        durationSec = cleanDuration,
+                        artworkUrl = cleanArtwork,
+                        sourceUrl = item.sourceUrl?.trim()?.takeIf { it.isNotEmpty() },
+                        trackCount = item.trackCount?.takeIf { it >= 0 },
+                    )
+                }
+            }
+        }
+        val next = lossyScalarString(parsed.nextCursor)
+        return ExtSearchPage(items = items, nextCursor = next)
+    }
+
+    suspend fun startQrLogin(extension: InstalledExtension): ExtQrLoginSession {
+        if (!extension.manifest.supportsQrLogin) {
+            throw CloudSourceException(
+                CloudErrorCode.PERMISSION_DENIED,
+                "${extension.manifest.name} does not declare qr_login capability.",
+            )
+        }
+        val raw = invokeHook(
+            extension = extension,
+            hookName = "startQrLogin",
+            requestJson = "{}",
+            isAsync = true,
+            timeoutMs = shortTimeoutMs,
+        )
+        val spec = decodeEnvelope<RawExtQrLoginStart>(raw)
+        val sessionId = lossyScalarString(spec.sessionId)
+            ?: throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "startQrLogin requires a non-empty sessionId.",
+            )
+        val qrContent = spec.qrContent?.trim()?.takeIf { it.isNotEmpty() }
+            ?: spec.qrUrl?.trim()?.takeIf { it.isNotEmpty() }
+            ?: throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "startQrLogin requires a non-empty qrContent.",
+            )
+        if (qrContent.toByteArray(Charsets.UTF_8).size > 512) {
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "startQrLogin qrContent exceeds 512 UTF-8 bytes.",
+            )
+        }
+        val pollIntervalMs = spec.pollIntervalMs
+            ?.takeIf { it.isFinite() }
+            ?.let { Math.round(it).toInt() }
+            ?.coerceIn(1_000, 10_000)
+            ?: 2_000
+        val expiresAtMs = spec.expiresAtMs
+            ?.takeIf { it.isFinite() && it > 0.0 }
+            ?.toLong()
+        return ExtQrLoginSession(
+            sessionId = sessionId,
+            qrContent = qrContent,
+            expiresAtMs = expiresAtMs,
+            pollIntervalMs = pollIntervalMs,
+            message = spec.message?.trim()?.takeIf { it.isNotEmpty() },
+        )
+    }
+
+    suspend fun pollQrLogin(
+        extension: InstalledExtension,
+        sessionId: String,
+    ): ExtQrLoginPollResult {
+        if (!extension.manifest.supportsQrLogin) {
+            throw CloudSourceException(
+                CloudErrorCode.PERMISSION_DENIED,
+                "${extension.manifest.name} does not declare qr_login capability.",
+            )
+        }
+        val cleanSessionId = sessionId.trim()
+        if (cleanSessionId.isEmpty()) {
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "pollQrLogin requires a non-empty sessionId.",
+            )
+        }
+        val reqJson = json.encodeToString(
+            buildJsonObject {
+                put("sessionId", cleanSessionId)
+            }
+        )
+        val raw = invokeHook(
+            extension = extension,
+            hookName = "pollQrLogin",
+            requestJson = reqJson,
+            isAsync = true,
+            timeoutMs = shortTimeoutMs,
+        )
+        val spec = decodeEnvelope<RawExtQrLoginPoll>(raw)
+        val status = ExtQrLoginStatus.fromWire(spec.status)
+            ?: throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "Unsupported QR login status: ${spec.status}",
+            )
+        val cookie = spec.cookie?.trim()?.takeIf { it.isNotEmpty() }
+        if (status == ExtQrLoginStatus.CONFIRMED && cookie == null) {
+            throw CloudSourceException(
+                CloudErrorCode.EXTENSION_RUNTIME_ERROR,
+                "pollQrLogin returned confirmed without a cookie.",
+            )
+        }
+        return ExtQrLoginPollResult(
+            status = status,
+            cookie = cookie,
+            accountName = spec.accountName?.trim()?.takeIf { it.isNotEmpty() },
+            message = spec.message?.trim()?.takeIf { it.isNotEmpty() },
+        )
+    }
+
+    private fun lossyScalarString(element: JsonElement?): String? {
+        val prim = element as? JsonPrimitive ?: return null
+        if (prim is JsonNull) return null
+        if (prim.isString) return prim.content.trim().takeIf { it.isNotEmpty() }
+        if (prim.booleanOrNull != null) return null
+        val num = prim.doubleOrNull ?: return null
+        if (!num.isFinite()) return null
+        return prim.content.trim().takeIf { it.isNotEmpty() }
     }
 
     private suspend fun invokeHook(
@@ -640,6 +1000,13 @@ class QuickJsExtensionRuntime(
                             if (resp.bytesBase64 != null) {
                                 put("bytesBase64", resp.bytesBase64)
                             }
+                            if (resp.setCookies.isNotEmpty()) {
+                                putJsonArray("setCookies") {
+                                    for (entry in resp.setCookies) {
+                                        add(entry)
+                                    }
+                                }
+                            }
                         },
                     )
                 }
@@ -764,8 +1131,17 @@ class QuickJsExtensionRuntime(
         hasFetchCollection: Boolean,
         hasFetchFolder: Boolean,
         hasResolveStream: Boolean,
+        hasSearchLyrics: Boolean,
+        hasSearch: Boolean,
+        hasStartQrLogin: Boolean = false,
+        hasPollQrLogin: Boolean = false,
     ) {
-        require(hasCanHandle) { "Extension must export canHandle(input) function" }
+        val requiresSourceHooks = manifest.capabilities.any {
+            it == ExtensionCapability.PLAYLIST || it == ExtensionCapability.TREE
+        }
+        if (requiresSourceHooks) {
+            require(hasCanHandle) { "Extension must export canHandle(input) function" }
+        }
         if (ExtensionCapability.PLAYLIST in manifest.capabilities || ExtensionCapability.TREE in manifest.capabilities) {
             require(hasFetchCollection) { "Extension declaring playlist/tree capability must export fetchCollection(ctx, req)" }
         }
@@ -774,6 +1150,16 @@ class QuickJsExtensionRuntime(
         }
         if (ExtensionCapability.STREAM in manifest.capabilities) {
             require(hasResolveStream) { "Extension declaring stream capability must export resolveStream(ctx, req)" }
+        }
+        if (ExtensionCapability.LYRICS in manifest.capabilities) {
+            require(hasSearchLyrics) { "Extension declaring lyrics capability must export searchLyrics(ctx, req)" }
+        }
+        if (ExtensionCapability.SEARCH in manifest.capabilities) {
+            require(hasSearch) { "Extension declaring search capability must export search(ctx, req)" }
+        }
+        if (ExtensionCapability.QR_LOGIN in manifest.capabilities) {
+            require(hasStartQrLogin) { "Extension declaring qr_login capability must export startQrLogin(ctx, req)" }
+            require(hasPollQrLogin) { "Extension declaring qr_login capability must export pollQrLogin(ctx, req)" }
         }
     }
 
@@ -803,6 +1189,7 @@ class QuickJsExtensionRuntime(
         const val MAX_STACK_SIZE_BYTES = 1024L * 1024L
         const val DEFAULT_SHORT_TIMEOUT_MS = 15_000L
         const val DEFAULT_LONG_TIMEOUT_MS = 60_000L
+        const val DEFAULT_SEARCH_LIMIT = 20
         private const val HEX_CHARS = "0123456789abcdef"
         private val threadCounter = AtomicInteger(1)
         private val daemonDispatcher = Executors.newCachedThreadPool { runnable ->

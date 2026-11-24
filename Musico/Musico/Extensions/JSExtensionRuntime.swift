@@ -110,6 +110,84 @@ struct JSStreamResolution: Codable, Equatable, Sendable {
     var contentLength: Int64?
 }
 
+struct JSLyricsCandidateSpec: Codable, Equatable, Sendable {
+    var externalId: String?
+    var title: String?
+    var artist: String?
+    var album: String?
+    var durationSec: Double?
+    var syncedLyrics: String?
+    var plainLyrics: String?
+    var translatedLyrics: String?
+    var instrumental: Bool?
+}
+
+private struct JSLyricsSearchEnvelope: Codable {
+    var candidates: [JSLyricsCandidateSpec]?
+    var results: [JSLyricsCandidateSpec]?
+}
+
+private struct JSLossyString: Codable, Equatable, Sendable {
+    var value: String
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let str = try? container.decode(String.self) {
+            value = str
+        } else if let intVal = try? container.decode(Int64.self) {
+            value = String(intVal)
+        } else if let dblVal = try? container.decode(Double.self), dblVal.isFinite {
+            if dblVal.rounded() == dblVal, let i = Int64(exactly: dblVal) {
+                value = String(i)
+            } else {
+                value = String(dblVal)
+            }
+        } else {
+            throw DecodingError.typeMismatch(String.self, .init(codingPath: decoder.codingPath, debugDescription: "Expected string or number"))
+        }
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        try container.encode(value)
+    }
+}
+
+private struct JSSearchItemSpec: Codable {
+    var kind: String?
+    var remoteTrackId: JSLossyString?
+    var remoteId: JSLossyString?
+    var title: String?
+    var artist: String?
+    var album: String?
+    var durationSec: Double?
+    var artworkUrl: String?
+    var sourceUrl: String?
+    var relativePath: String?
+    var trackCount: Int?
+}
+
+private struct JSSearchEnvelope: Codable {
+    var items: [JSSearchItemSpec]?
+    var nextCursor: JSLossyString?
+}
+
+private struct JSQRLoginStartSpec: Codable {
+    var sessionId: JSLossyString?
+    var qrContent: String?
+    var qrUrl: String?
+    var expiresAtMs: Double?
+    var pollIntervalMs: Double?
+    var message: String?
+}
+
+private struct JSQRLoginPollSpec: Codable {
+    var status: String?
+    var cookie: String?
+    var accountName: String?
+    var message: String?
+}
+
 protocol ExtensionRuntimeHostDelegate: AnyObject, Sendable {
     func kvGet(extensionID: String, key: String) -> String?
     func kvSet(extensionID: String, key: String, value: String, ttlSeconds: Double?)
@@ -314,7 +392,11 @@ final class JSExtensionRuntime: @unchecked Sendable {
                 canHandle: typeof exp.canHandle === 'function',
                 fetchCollection: typeof exp.fetchCollection === 'function',
                 fetchFolder: typeof exp.fetchFolder === 'function',
-                resolveStream: typeof exp.resolveStream === 'function'
+                resolveStream: typeof exp.resolveStream === 'function',
+                searchLyrics: typeof exp.searchLyrics === 'function',
+                search: typeof exp.search === 'function',
+                startQrLogin: typeof exp.startQrLogin === 'function',
+                pollQrLogin: typeof exp.pollQrLogin === 'function'
               });
             })()
         """
@@ -322,7 +404,8 @@ final class JSExtensionRuntime: @unchecked Sendable {
               let flags = try? JSONDecoder().decode([String: Bool].self, from: Data(jsonStr.utf8)) else {
             throw ExtensionImportError.invalidPackage("Could not inspect exported extension hooks.")
         }
-        guard flags["canHandle"] == true else {
+        let requiresSourceHooks = manifest.capabilities.contains(where: { $0 == .playlist || $0 == .tree })
+        if requiresSourceHooks && flags["canHandle"] != true {
             throw ExtensionImportError.invalidPackage("Extension must export canHandle(input).")
         }
         if (manifest.capabilities.contains(.playlist) || manifest.capabilities.contains(.tree)),
@@ -334,6 +417,20 @@ final class JSExtensionRuntime: @unchecked Sendable {
         }
         if manifest.capabilities.contains(.stream), flags["resolveStream"] != true {
             throw ExtensionImportError.invalidPackage("Stream-capable extension must export resolveStream(ctx, req).")
+        }
+        if manifest.capabilities.contains(.lyrics), flags["searchLyrics"] != true {
+            throw ExtensionImportError.invalidPackage("Lyrics-capable extension must export searchLyrics(ctx, req).")
+        }
+        if manifest.capabilities.contains(.search), flags["search"] != true {
+            throw ExtensionImportError.invalidPackage("Search-capable extension must export search(ctx, req).")
+        }
+        if manifest.capabilities.contains(.qrLogin) {
+            if flags["startQrLogin"] != true {
+                throw ExtensionImportError.invalidPackage("QR-login extension must export startQrLogin(ctx, req).")
+            }
+            if flags["pollQrLogin"] != true {
+                throw ExtensionImportError.invalidPackage("QR-login extension must export pollQrLogin(ctx, req).")
+            }
         }
     }
 
@@ -484,6 +581,183 @@ final class JSExtensionRuntime: @unchecked Sendable {
             try assertAllowedURL(fallback)
         }
         return resolution
+    }
+
+    func searchLyrics(
+        title: String,
+        artist: String,
+        album: String?,
+        durationSec: Double?
+    ) async throws -> [JSLyricsCandidateSpec] {
+        var req: [String: Any] = [
+            "title": title,
+            "artist": artist
+        ]
+        if let album, !album.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            req["album"] = album
+        }
+        if let durationSec, durationSec.isFinite, durationSec > 0 {
+            req["durationSec"] = durationSec
+        }
+        let json = try await invokeAsyncHook(name: "searchLyrics", requestObject: req, timeoutMs: shortTimeoutMs)
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "null" {
+            return []
+        }
+        let data = Data(trimmed.utf8)
+        if trimmed.hasPrefix("[") {
+            return try JSONDecoder().decode([JSLyricsCandidateSpec].self, from: data)
+        }
+        let envelope = try JSONDecoder().decode(JSLyricsSearchEnvelope.self, from: data)
+        return envelope.candidates ?? envelope.results ?? []
+    }
+
+    func search(
+        query: String,
+        kind: String = "all",
+        limit: Int = 20,
+        cursor: String? = nil,
+        cookie: String? = nil
+    ) async throws -> CloudSearchPage {
+        var req: [String: Any] = [
+            "query": query,
+            "kind": kind,
+            "limit": max(1, limit)
+        ]
+        if let cursor, !cursor.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            req["cursor"] = cursor
+        }
+        if let cookie, !cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            req["cookie"] = cookie
+        }
+
+        let json = try await invokeAsyncHook(name: "search", requestObject: req, timeoutMs: shortTimeoutMs)
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty || trimmed == "null" {
+            return CloudSearchPage(items: [], nextCursor: nil)
+        }
+        let data = Data(trimmed.utf8)
+        let envelope = try JSONDecoder().decode(JSSearchEnvelope.self, from: data)
+        let extID = manifest.id
+        let items: [CloudSearchResult] = (envelope.items ?? []).compactMap { spec in
+            guard let kindStr = spec.kind?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased(),
+                  let kind = ExtensionSearchKind(rawValue: kindStr) else {
+                return nil
+            }
+            let title = (spec.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !title.isEmpty else { return nil }
+
+            let cleanTrackID = Self.trimmedNonEmpty(spec.remoteTrackId?.value)
+            let cleanRemoteID = Self.trimmedNonEmpty(spec.remoteId?.value)
+            switch kind {
+            case .track:
+                guard cleanTrackID != nil else { return nil }
+            case .playlist, .album:
+                guard cleanRemoteID != nil else { return nil }
+            }
+
+            return CloudSearchResult(
+                extensionID: extID,
+                kind: kind,
+                remoteTrackID: cleanTrackID,
+                remoteId: cleanRemoteID,
+                title: title,
+                artist: Self.trimmedNonEmpty(spec.artist),
+                album: Self.trimmedNonEmpty(spec.album),
+                durationSec: spec.durationSec.flatMap { ($0.isFinite && $0 > 0) ? $0 : nil },
+                artworkUrl: Self.trimmedNonEmpty(spec.artworkUrl),
+                sourceUrl: Self.trimmedNonEmpty(spec.sourceUrl),
+                relativePath: Self.trimmedNonEmpty(spec.relativePath),
+                trackCount: spec.trackCount.flatMap { $0 >= 0 ? $0 : nil }
+            )
+        }
+        let nextCursor = Self.trimmedNonEmpty(envelope.nextCursor?.value)
+        return CloudSearchPage(items: items, nextCursor: nextCursor)
+    }
+
+    func startQRLogin() async throws -> ExtensionQRLoginSession {
+        let json = try await invokeAsyncHook(name: "startQrLogin", requestObject: [:], timeoutMs: shortTimeoutMs)
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "null" else {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "startQrLogin must return an object."
+            )
+        }
+        let spec = try JSONDecoder().decode(JSQRLoginStartSpec.self, from: Data(trimmed.utf8))
+        guard let sessionId = Self.trimmedNonEmpty(spec.sessionId?.value) else {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "startQrLogin requires a non-empty sessionId."
+            )
+        }
+        guard let qrContent = Self.trimmedNonEmpty(spec.qrContent) ?? Self.trimmedNonEmpty(spec.qrUrl),
+              qrContent.utf8.count <= 512 else {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "startQrLogin requires a non-empty qrContent (<= 512 bytes)."
+            )
+        }
+        let rawInterval = spec.pollIntervalMs.flatMap { $0.isFinite ? Int($0.rounded()) : nil } ?? 2_000
+        let pollIntervalMs = min(10_000, max(1_000, rawInterval))
+        let expiresAtMs = spec.expiresAtMs.flatMap { ($0.isFinite && $0 > 0) ? $0 : nil }
+        return ExtensionQRLoginSession(
+            sessionId: sessionId,
+            qrContent: qrContent,
+            expiresAtMs: expiresAtMs,
+            pollIntervalMs: pollIntervalMs,
+            message: Self.trimmedNonEmpty(spec.message)
+        )
+    }
+
+    func pollQRLogin(sessionID: String) async throws -> ExtensionQRLoginPollResult {
+        let cleanSessionID = sessionID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanSessionID.isEmpty else {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "pollQrLogin requires a non-empty sessionId."
+            )
+        }
+        let json = try await invokeAsyncHook(
+            name: "pollQrLogin",
+            requestObject: ["sessionId": cleanSessionID],
+            timeoutMs: shortTimeoutMs
+        )
+        let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "null" else {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "pollQrLogin must return an object."
+            )
+        }
+        let spec = try JSONDecoder().decode(JSQRLoginPollSpec.self, from: Data(trimmed.utf8))
+        let statusRaw = spec.status?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        guard let status = ExtensionQRLoginStatus(rawValue: statusRaw) else {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "Unsupported QR login status '\(spec.status ?? "")'."
+            )
+        }
+        let cookie = Self.trimmedNonEmpty(spec.cookie)
+        if status == .confirmed, cookie == nil {
+            throw CloudSourceError.extensionRuntimeError(
+                code: "EXTENSION_RUNTIME_ERROR",
+                message: "pollQrLogin returned confirmed without a cookie."
+            )
+        }
+        return ExtensionQRLoginPollResult(
+            status: status,
+            cookie: cookie,
+            accountName: Self.trimmedNonEmpty(spec.accountName),
+            message: Self.trimmedNonEmpty(spec.message)
+        )
+    }
+
+    private static func trimmedNonEmpty(_ raw: String?) -> String? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return nil
+        }
+        return trimmed
     }
 
     // MARK: - Async Hook Execution Engine
@@ -1134,12 +1408,19 @@ private final class AsyncInvocationSession: @unchecked Sendable {
 
             let capped = response.data.prefix(JSExtensionRuntime.maxHTTPBodyBytes)
             let text = String(data: capped, encoding: .utf8) ?? String(decoding: capped, as: UTF8.self)
+            let effectiveFinalURL = response.finalURL ?? currentURL
+            let parsedSetCookies = HTTPCookie
+                .cookies(withResponseHeaderFields: response.headers, for: effectiveFinalURL)
+                .map { "\($0.name)=\($0.value)" }
             var out: [String: Any] = [
                 "status": response.statusCode,
-                "finalUrl": response.finalURL?.absoluteString ?? currentURL.absoluteString,
+                "finalUrl": effectiveFinalURL.absoluteString,
                 "headers": lowerHeaders,
                 "text": text
             ]
+            if !parsedSetCookies.isEmpty {
+                out["setCookies"] = parsedSetCookies
+            }
             if returnBytes || capped.count <= JSExtensionRuntime.maxInlineBase64Bytes {
                 out["bytesBase64"] = capped.base64EncodedString()
             }

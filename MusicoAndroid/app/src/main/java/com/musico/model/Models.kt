@@ -196,9 +196,10 @@ data class Track(
     val cloudSource: String? = null,
     val remoteTrackId: String? = null,
     val remoteArtworkUrl: String? = null,
+    val isEphemeral: Boolean = false,
 ) {
     val isCloud: Boolean
-        get() = cloudSource != null
+        get() = cloudSource != null || isEphemeral
     /** Folder part of [relativePath] (empty string for files directly in the root). */
     val folderPath: String
         get() {
@@ -213,10 +214,26 @@ data class Track(
         }
 
     companion object {
+        const val EPHEMERAL_ID_PREFIX = "extsearch:"
+
         fun makeId(rootId: String, relativePath: String): String {
             val input = "$rootId/$relativePath".toByteArray(Charsets.UTF_8)
             val digest = MessageDigest.getInstance("SHA-256").digest(input)
             return digest.joinToString("") { "%02x".format(it) }
+        }
+
+        fun makeEphemeralId(extensionId: String, remoteTrackId: String): String =
+            "$EPHEMERAL_ID_PREFIX$extensionId:$remoteTrackId"
+
+        fun isEphemeralId(trackId: String?): Boolean =
+            trackId != null && trackId.startsWith(EPHEMERAL_ID_PREFIX)
+
+        fun extensionIdFromEphemeralId(trackId: String?): String? {
+            if (trackId == null || !trackId.startsWith(EPHEMERAL_ID_PREFIX)) return null
+            val rest = trackId.removePrefix(EPHEMERAL_ID_PREFIX)
+            val sep = rest.indexOf(':')
+            if (sep <= 0) return null
+            return rest.substring(0, sep).takeIf { it.isNotEmpty() }
         }
     }
 }
@@ -342,6 +359,7 @@ data class Lyrics(
 enum class LyricsSource {
     IMPORTED,
     SIDECAR,
+    FOLDER_MATCH,
     EMBEDDED,
 }
 

@@ -23,8 +23,9 @@ enum CloudSourceError: LocalizedError, Equatable {
         case .rateLimited: "RATE_LIMITED"
         case .networkError: "NETWORK_ERROR"
         case .permissionDenied: "PERMISSION_DENIED"
+        case .extensionUnavailable: "EXTENSION_UNAVAILABLE"
         case .extensionRuntimeError(let code, _): code
-        case .unsupportedSource, .extensionUnavailable, .apiError: nil
+        case .unsupportedSource, .apiError: nil
         }
     }
 
@@ -418,9 +419,13 @@ final class LiveCloudService: CloudPlaylistFetching, CloudProviderPlaylistFetchi
             throw CloudSourceError.unsupportedSource
         }
 
-        if targetProvider.rootKind == .cloudExtension,
-           let matched = targetProvider.canHandle(rawText: sourceURL, extractedURL: extracted) {
-            return try await targetProvider.fetchCollection(sourceURL: matched.normalizedURL, cookie: cookie)
+        if targetProvider.rootKind == .cloudExtension {
+            guard targetProvider.supportsCollection else {
+                throw CloudSourceError.unsupportedSource
+            }
+            if let matched = targetProvider.canHandle(rawText: sourceURL, extractedURL: extracted) {
+                return try await targetProvider.fetchCollection(sourceURL: matched.normalizedURL, cookie: cookie)
+            }
         }
         return try await targetProvider.fetchCollection(sourceURL: extracted, cookie: cookie)
     }
@@ -540,7 +545,8 @@ final class LiveCloudService: CloudPlaylistFetching, CloudProviderPlaylistFetchi
         }
         guard let provider = registry.provider(forID: providerID) else {
             if providerID.hasPrefix("ext.") {
-                throw CloudSourceError.extensionUnavailable(name: root?.name ?? providerID)
+                let displayName = root?.name ?? ExtensionStore.shared.installedName(forProviderID: providerID) ?? providerID
+                throw CloudSourceError.extensionUnavailable(name: displayName)
             }
             throw CloudSourceError.unsupportedSource
         }

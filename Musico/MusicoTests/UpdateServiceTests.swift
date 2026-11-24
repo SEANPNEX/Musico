@@ -40,7 +40,7 @@ final class UpdateServiceTests: XCTestCase {
           "body": "- Bug fixes\\n- Updater",
           "draft": false,
           "prerelease": false,
-          "html_url": "https://github.com/SEANPNEX/local_music_player/releases/tag/v1.2.0",
+          "html_url": "https://github.com/SEANPNEX/Musico/releases/tag/v1.2.0",
           "published_at": "2026-11-21T10:00:00Z",
           "assets": [
             {
@@ -106,12 +106,12 @@ final class UpdateServiceTests: XCTestCase {
           "body": null,
           "draft": false,
           "prerelease": false,
-          "html_url": "https://github.com/SEANPNEX/local_music_player/releases/tag/V.1.3.0",
+          "html_url": "https://github.com/SEANPNEX/Musico/releases/tag/V.1.3.0",
           "assets": []
         }
         """
         let checker = UpdateChecker { request in
-            XCTAssertEqual(request.url?.absoluteString, "https://api.github.com/repos/SEANPNEX/local_music_player/releases/latest")
+            XCTAssertEqual(request.url?.absoluteString, "https://api.github.com/repos/SEANPNEX/Musico/releases/latest")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Accept"), "application/vnd.github+json")
             let response = HTTPURLResponse(url: request.url!, statusCode: 200, httpVersion: nil, headerFields: nil)!
             return (Data(payload.utf8), response)
@@ -175,7 +175,7 @@ final class UpdateServiceTests: XCTestCase {
           "body": "Notes",
           "draft": false,
           "prerelease": false,
-          "html_url": "https://github.com/SEANPNEX/local_music_player/releases/tag/v1.2.0",
+          "html_url": "https://github.com/SEANPNEX/Musico/releases/tag/v1.2.0",
           "assets": [
             {
               "name": "Musico-1.2.0-macOS.dmg",
@@ -248,7 +248,7 @@ final class UpdateServiceTests: XCTestCase {
           "body": "Release notes",
           "draft": false,
           "prerelease": false,
-          "html_url": "https://github.com/SEANPNEX/local_music_player/releases/tag/v1.2.0",
+          "html_url": "https://github.com/SEANPNEX/Musico/releases/tag/v1.2.0",
           "assets": [
             {
               "name": "Musico-1.2.0-macOS.dmg",
@@ -355,7 +355,7 @@ final class UpdateServiceTests: XCTestCase {
           "body": "Self updater",
           "draft": false,
           "prerelease": false,
-          "html_url": "https://github.com/SEANPNEX/local_music_player/releases/tag/v1.2.0",
+          "html_url": "https://github.com/SEANPNEX/Musico/releases/tag/v1.2.0",
           "assets": [
             {
               "name": "Musico-1.2.0-macOS.dmg",

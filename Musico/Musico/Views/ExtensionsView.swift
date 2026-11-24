@@ -315,6 +315,7 @@ struct ExtensionDetailView: View {
 
     @State private var showReviewSheet = false
     @State private var confirmUninstall = false
+    @State private var showQRLoginSheet = false
 
     init(extensionID: String, extensionStore: ExtensionStore? = nil) {
         self.extensionID = extensionID
@@ -383,6 +384,44 @@ struct ExtensionDetailView: View {
                 )
             }
 
+            if ext.manifest.supportsCookieAuth {
+                Section {
+                    if ext.manifest.supportsQRLogin {
+                        Button {
+                            showQRLoginSheet = true
+                        } label: {
+                            Label(L10n.tr("Sign In with QR Code…"), systemImage: "qrcode")
+                        }
+                        .disabled(!ext.isActive)
+                    }
+                    LabeledContent(L10n.tr("Cookie (optional)")) {
+                        SecureField(
+                            L10n.tr("Cookie (optional)"),
+                            text: Binding(
+                                get: { ext.state.cookie ?? "" },
+                                set: { extensionStore.updateCookie(extensionID: ext.id, cookie: $0) }
+                            )
+                        )
+                        .multilineTextAlignment(.trailing)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled()
+                    }
+                    if !(ext.state.cookie ?? "").isEmpty {
+                        Button(L10n.tr("Clear Cookie"), role: .destructive) {
+                            extensionStore.updateCookie(extensionID: ext.id, cookie: nil)
+                        }
+                    }
+                } header: {
+                    Text(L10n.tr("Authentication"))
+                } footer: {
+                    if ext.manifest.supportsQRLogin && !ext.isActive {
+                        Text(L10n.tr("Enable this extension first to sign in with a QR code. Folder-specific cookies still take precedence."))
+                    } else {
+                        Text(L10n.tr("Saved locally for search and playback with this extension. Folder-specific cookies still take precedence."))
+                    }
+                }
+            }
+
             if let settings = ext.manifest.settings, !settings.isEmpty {
                 Section(L10n.tr("Settings")) {
                     ForEach(settings) { spec in
@@ -412,6 +451,15 @@ struct ExtensionDetailView: View {
                     Text(ext.manifest.capabilities.map(\.rawValue).joined(separator: ", "))
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                }
+                if ext.manifest.capabilities.contains(.search) {
+                    HStack {
+                        Text(L10n.tr("Search Kinds"))
+                        Spacer()
+                        Text(ext.manifest.effectiveSearchKinds.map(\.localizedTitle).joined(separator: ", "))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Button(L10n.tr("Review Permissions…")) {
                     showReviewSheet = true
@@ -465,6 +513,12 @@ struct ExtensionDetailView: View {
         }
         .sheet(isPresented: $showReviewSheet) {
             ExtensionPermissionReviewSheet(extensionItem: ext, extensionStore: extensionStore)
+                .environment(\.extensionStore, extensionStore)
+                .environment(\.languageManager, languageManager)
+                .environment(\.locale, languageManager.effectiveLocale)
+        }
+        .sheet(isPresented: $showQRLoginSheet) {
+            ExtensionQRLoginSheet(extensionItem: ext, extensionStore: extensionStore)
                 .environment(\.extensionStore, extensionStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)

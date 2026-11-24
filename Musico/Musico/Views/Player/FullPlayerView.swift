@@ -30,6 +30,7 @@ struct FullPlayerView: View {
     @Environment(PlayHistoryStore.self) private var history: PlayHistoryStore?
     @Environment(\.appNavigation) private var navigation
     @Environment(\.lyricsStore) private var lyricsStore
+    @Environment(\.extensionStore) private var extensionStore
     @Environment(\.languageManager) private var languageManager
 
     var body: some View {
@@ -68,6 +69,7 @@ struct FullPlayerView: View {
             sheetContent(for: panel)
                 .environment(\.appNavigation, navigation)
                 .environment(\.lyricsStore, lyricsStore)
+                .environment(\.extensionStore, extensionStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
         }
@@ -154,7 +156,7 @@ private struct PlayerPage: View {
                     .keyboardShortcut(.cancelAction)
             }
             if let track = player.currentTrack {
-                ArtworkView(artworkKey: track.artworkKey)
+                ArtworkView(artworkKey: track.artworkKey, remoteArtworkURL: track.remoteArtworkURL)
                     .id(track.id)
                     .transition(.opacity)
                     .animation(.easeInOut(duration: 0.25), value: track.id)
@@ -182,23 +184,25 @@ private struct PlayerPage: View {
                     }
                     .animation(.easeInOut(duration: 0.2), value: track.id)
                     Spacer()
-                    let isFavourite = library.isFavourite(track.id)
-                    Button {
-                        library.toggleFavourite(track.id)
-                    } label: {
-                        Image(systemName: isFavourite ? "heart.fill" : "heart")
-                            .font(.title2)
-                            .foregroundStyle(isFavourite ? Color.red : Color.secondary)
-                            .frame(width: 36, height: 36)
-                            .contentShape(Rectangle())
+                    if !track.isEphemeral {
+                        let isFavourite = library.isFavourite(track.id)
+                        Button {
+                            library.toggleFavourite(track.id)
+                        } label: {
+                            Image(systemName: isFavourite ? "heart.fill" : "heart")
+                                .font(.title2)
+                                .foregroundStyle(isFavourite ? Color.red : Color.secondary)
+                                .frame(width: 36, height: 36)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.borderless)
+                        .contentTransition(.symbolEffect(.replace))
+                        .symbolEffect(.bounce, value: isFavourite)
+                        .accessibilityLabel(L10n.tr("Favourite"))
                     }
-                    .buttonStyle(.borderless)
-                    .contentTransition(.symbolEffect(.replace))
-                    .symbolEffect(.bounce, value: isFavourite)
-                    .accessibilityLabel(L10n.tr("Favourite"))
 
                     Menu {
-                        TrackMenuItems(ids: [track.id], favouriteID: track.id)
+                        TrackMenuItems(ids: [track.id], favouriteID: track.isEphemeral ? nil : track.id)
                     } label: {
                         Image(systemName: "ellipsis.circle")
                             .font(.title2)
@@ -463,6 +467,8 @@ private struct AmbientPlayerBackdrop: View {
 
     var body: some View {
         let key = player.currentTrack?.artworkKey
+        let remoteURL = player.currentTrack?.remoteArtworkURL
+        let taskID = "\(key ?? "")|\(remoteURL ?? "")"
         Group {
             if let image {
                 Image(uiImage: image)
@@ -478,11 +484,26 @@ private struct AmbientPlayerBackdrop: View {
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-        .animation(.easeInOut(duration: 0.6), value: key)
-        .task(id: key) {
-            guard let key else { image = nil; return }
-            let cache = library.artwork
-            image = await Task.detached { cache.image(forKey: key) }.value
+        .animation(.easeInOut(duration: 0.6), value: taskID)
+        .task(id: taskID) {
+            if let key {
+                let cache = library.artwork
+                image = await Task.detached { cache.image(forKey: key) }.value
+                return
+            }
+            if let remoteURL {
+                if let cached = CloudThumbnailCache.shared.cachedImage(for: remoteURL) {
+                    image = cached
+                    return
+                }
+                image = nil
+                let loaded = await CloudThumbnailCache.shared.loadImage(from: remoteURL)
+                if !Task.isCancelled {
+                    image = loaded
+                }
+                return
+            }
+            image = nil
         }
     }
 }

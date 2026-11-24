@@ -26,7 +26,7 @@ object CloudProviderIds {
     const val GOOGLE_DRIVE = "builtin.gdrive"
 
     fun extensionProviderId(extensionId: String): String =
-        if (extensionId.startsWith("ext.")) extensionId else "ext.$extensionId"
+        "ext.$extensionId"
 
     fun extensionIdFromProviderId(providerId: String?): String? =
         providerId?.takeIf { it.startsWith("ext.") }?.removePrefix("ext.")?.takeIf { it.isNotEmpty() }
@@ -82,6 +82,10 @@ interface CloudSourceProvider {
     val supportsTree: Boolean
     val supportsCookie: Boolean
     val usesFlatCloudListing: Boolean
+    val supportsCollections: Boolean
+        get() = true
+    val supportsStream: Boolean
+        get() = true
 
     fun canHandle(rawInput: String): CloudUrlMatch?
 
@@ -269,6 +273,9 @@ class CloudProviderRegistry(
     @Volatile
     var extensionStatusLookup: ((String) -> CloudProviderAvailability)? = null
 
+    @Volatile
+    var extensionCookieLookup: ((String) -> String?)? = null
+
     private val _providers = MutableStateFlow<List<CloudSourceProvider>>(builtinsById.values.toList())
     val providers: StateFlow<List<CloudSourceProvider>> = _providers.asStateFlow()
 
@@ -306,6 +313,12 @@ class CloudProviderRegistry(
         return extensionStatusLookup?.invoke(providerId) ?: CloudProviderAvailability.MISSING
     }
 
+    fun extensionCookieFor(providerId: String?): String? {
+        val pid = providerId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        if (CloudProviderIds.isBuiltin(pid)) return null
+        return extensionCookieLookup?.invoke(pid)?.trim()?.takeIf { it.isNotEmpty() }
+    }
+
     fun providerForId(providerId: String?): CloudSourceProvider? {
         val resolved = CloudProviderIds.fromLegacySlug(providerId) ?: providerId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
         return builtinsById[resolved] ?: extensionProvidersMap[resolved]
@@ -334,6 +347,7 @@ class CloudProviderRegistry(
             if (root.kind == RootKind.CLOUD_EXTENSION) return null
         }
         val trackPid = CloudProviderIds.fromLegacySlug(track.cloudSource)
+            ?: Track.extensionIdFromEphemeralId(track.id)?.let { CloudProviderIds.extensionProviderId(it) }
         return providerForId(trackPid) ?: root?.let { providerForKind(it.kind, it.resolvedProviderId) }
     }
 

@@ -50,6 +50,7 @@ final class LibraryStore {
         var metadataOverrides: [String: TrackMetadataOverride]?
         var folderSortOrders: [String: FolderOrderState]?
         var knownAppFolders: [String]?
+        var ephemeralTracks: [String: Track]?
     }
     /// Raised when tag reading improves, so songs indexed by an older build are read again.
     private static let readerVersion = 3
@@ -63,6 +64,7 @@ final class LibraryStore {
 
     private(set) var roots: [LibraryRoot] = []
     private(set) var tracks: [Track] = [] { didSet { rebuildIndex() } }
+    private(set) var ephemeralTracks: [String: Track] = [:]
     private(set) var albums: [Album] = []
     private(set) var artists: [String] = []
     private(set) var playlists: [Playlist] = []
@@ -185,6 +187,11 @@ final class LibraryStore {
             knownAppFolders = Self.existingSubfolderNames(in: documentsURL)
         }
         tracks = loadedTracks.map { applyOverride(to: $0) }
+        ephemeralTracks = (file?.ephemeralTracks ?? [:]).mapValues { item in
+            var copy = item
+            copy.isEphemeral = true
+            return copy
+        }
         rebuildIndex()
 
         let lists = Persistence.load(PlaylistFile.self, from: playlistsURL)
@@ -206,7 +213,8 @@ final class LibraryStore {
                 appFolderRemoved: appFolderRemoved ? true : nil,
                 metadataOverrides: metadataOverrides.isEmpty ? nil : metadataOverrides,
                 folderSortOrders: folderOrders.isEmpty ? nil : folderOrders,
-                knownAppFolders: Array(knownAppFolders).sorted()
+                knownAppFolders: Array(knownAppFolders).sorted(),
+                ephemeralTracks: ephemeralTracks.isEmpty ? nil : ephemeralTracks
             ),
             to: libraryURL
         )
@@ -1915,15 +1923,85 @@ final class LibraryStore {
         artists = Set(tracks.map(\.artist)).sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
-    func track(_ id: String) -> Track? { byID[id] }
+    func track(_ id: String) -> Track? { byID[id] ?? ephemeralTracks[id] }
     func tracks(_ ids: [String]) -> [Track] { ids.compactMap { byID[$0] } }
+
+    func registerEphemeralTracks(_ items: [Track]) {
+        guard !items.isEmpty else { return }
+        var changed = false
+        for item in items {
+            guard item.isEphemeral || item.id.hasPrefix(Track.ephemeralIDPrefix) else { continue }
+            var normalized = item
+            normalized.isEphemeral = true
+            if ephemeralTracks[normalized.id] != normalized {
+                ephemeralTracks[normalized.id] = normalized
+                changed = true
+            }
+        }
+        if changed {
+            saveLibrary()
+        }
+    }
+
+    func pruneEphemeralTracks(keeping referencedIDs: Set<String>) {
+        guard !ephemeralTracks.isEmpty else { return }
+        let staleKeys = ephemeralTracks.keys.filter { !referencedIDs.contains($0) }
+        guard !staleKeys.isEmpty else { return }
+        for key in staleKeys {
+            ephemeralTracks.removeValue(forKey: key)
+        }
+        saveLibrary()
+    }
+
+    var defaultLocalSaveDirectory: URL { documentsURL }
+
+    @discardableResult
+    func saveCloudTrack(
+        _ track: Track,
+        toFolder folderURL: URL? = nil,
+        cache: CloudAudioCache = .shared,
+        artworkData: Data? = nil,
+        thumbnailCache: CloudThumbnailCache = .shared
+    ) async throws -> URL {
+        let targetFolder = folderURL ?? defaultLocalSaveDirectory
+        let savedURL = try await CloudExporter.exportTrack(
+            track,
+            root: root(track.rootID),
+            toFolder: targetFolder,
+            cache: cache,
+            artworkData: artworkData,
+            thumbnailCache: thumbnailCache
+        )
+        if containsLocalURL(savedURL) {
+            await rescan()
+        }
+        return savedURL
+    }
+
+    func hasCloudRoot(providerID: String, remoteID: String) -> Bool {
+        let cleanRemote = remoteID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanRemote.isEmpty else { return false }
+        return roots.contains {
+            $0.kind == .cloudExtension
+                && $0.resolvedProviderID == providerID
+                && $0.remoteID == cleanRemote
+        }
+    }
 
     /// The file's current location, or nil while its folder is unavailable.
     func url(for track: Track) -> URL? {
-        rootURLs[track.rootID].map { FolderScanner.url(root: $0, relativePath: track.relativePath) }
+        guard !track.isEphemeral else { return nil }
+        return rootURLs[track.rootID].map { FolderScanner.url(root: $0, relativePath: track.relativePath) }
     }
 
     func isAvailable(_ track: Track) -> Bool {
+        if track.isEphemeral || track.id.hasPrefix(Track.ephemeralIDPrefix) {
+            if let pid = CloudProviderRegistry.providerID(for: track, root: nil) {
+                return extensionAvailabilityProvider(pid) == .available
+                    || CloudAudioCache.shared.hasCachedFileSync(for: track.id)
+            }
+            return false
+        }
         if track.isCloud {
             if let root = self.root(track.rootID), root.kind == .cloudExtension {
                 return isAvailable(root) || CloudAudioCache.shared.hasCachedFileSync(for: track.id)

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using MusicoWindows.Extensions;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 
@@ -33,4 +34,5 @@ public sealed class ViewContext
     public Action<Track>? OpenSongInfo { get; init; }
     public Action<string, SearchField>? OpenSearch { get; init; }
     public Action? OpenExtensions { get; init; }
+    public Action<string, string, ExtSearchResultItem, bool>? OpenCollectionPreview { get; init; }
 }

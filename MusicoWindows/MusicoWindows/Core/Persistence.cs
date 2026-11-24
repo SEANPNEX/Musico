@@ -113,4 +113,32 @@ public static class Persistence
             // Ignore backup errors if the file is locked or already removed.
         }
     }
+
+    /// <summary>
+    /// Converts a track ID into a safe single filename component across Windows/POSIX filesystems.
+    /// Existing local/cloud SHA-256 hex IDs pass through unchanged, while ephemeral IDs such as
+    /// <c>extsearch:&lt;extId&gt;:&lt;remoteId&gt;</c> (which contain <c>:</c>) are hashed cleanly.
+    /// </summary>
+    public static string SafeTrackFileKey(string trackId)
+    {
+        if (string.IsNullOrWhiteSpace(trackId)) return "empty";
+
+        bool isSafe = true;
+        foreach (char c in trackId)
+        {
+            if (!(char.IsAsciiLetterOrDigit(c) || c == '-' || c == '_' || c == '.'))
+            {
+                isSafe = false;
+                break;
+            }
+        }
+
+        if (isSafe && !trackId.Contains("..", StringComparison.Ordinal))
+        {
+            return trackId;
+        }
+
+        byte[] hash = System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(trackId));
+        return "ext_" + Convert.ToHexString(hash).ToLowerInvariant();
+    }
 }

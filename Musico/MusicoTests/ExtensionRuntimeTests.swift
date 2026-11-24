@@ -811,6 +811,168 @@ final class ExtensionRuntimeTests: XCTestCase {
         XCTAssertFalse(HostAllowlistMatcher.isAllowed(urlString: "file:///etc/passwd", patterns: patterns))
         XCTAssertFalse(HostAllowlistMatcher.isAllowed(urlString: "javascript:alert(1)", patterns: patterns))
     }
+
+    @MainActor
+    func testQRLoginManifestRequiresBothHooks() async {
+        let missingPollScript = """
+        var manifest = {
+          apiVersion: 1,
+          id: 'com.example.qr.missingpoll',
+          name: 'Missing Poll',
+          version: '1.0.0',
+          capabilities: ['qr_login'],
+          permissions: { hosts: ['auth.fixture.test'] }
+        };
+        async function startQrLogin() {
+          return { sessionId: 's1', qrContent: 'https://auth.fixture.test/qr/s1' };
+        }
+        module.exports = { manifest: manifest, startQrLogin: startQrLogin };
+        """
+        do {
+            _ = try await JSExtensionRuntime.extractManifest(from: missingPollScript)
+            XCTFail("Expected missing pollQrLogin validation error")
+        } catch {
+            XCTAssertTrue(error is ExtensionImportError, "Unexpected error: \(error)")
+        }
+    }
+
+    @MainActor
+    func testQRLoginLifecycleSetCookiesAndAutoPersist() async throws {
+        let script = """
+        'use strict';
+        var manifest = {
+          apiVersion: 1,
+          id: 'com.example.qr.liveflow',
+          name: 'QR Flow',
+          version: '1.0.0',
+          capabilities: ['search', 'qr_login'],
+          searchKinds: ['track'],
+          permissions: { hosts: ['auth.fixture.test'] }
+        };
+        async function startQrLogin(ctx) {
+          var res = await ctx.http.request({ method: 'GET', url: 'https://auth.fixture.test/qr/start' });
+          var data = JSON.parse(res.text || '{}');
+          return { sessionId: data.key, qrContent: data.url, pollIntervalMs: 300 };
+        }
+        async function pollQrLogin(ctx, req) {
+          var res = await ctx.http.request({
+            method: 'GET',
+            url: 'https://auth.fixture.test/qr/poll?key=' + encodeURIComponent(req.sessionId)
+          });
+          var data = JSON.parse(res.text || '{}');
+          if (data.status === 'confirmed') {
+            var setCookies = Array.isArray(res.setCookies) ? res.setCookies : [];
+            var musicU = '';
+            for (var i = 0; i < setCookies.length; i++) {
+              if (String(setCookies[i]).indexOf('MUSIC_U=') === 0) {
+                musicU = String(setCookies[i]).split(';')[0];
+                break;
+              }
+            }
+            return { status: 'confirmed', cookie: musicU, accountName: data.nickname };
+          }
+          return { status: data.status, accountName: data.nickname || null, message: data.message || null };
+        }
+        async function search(ctx, req) {
+          return {
+            items: [{
+              kind: 'track',
+              remoteTrackId: 't-qr-1',
+              title: (req.cookie === 'MUSIC_U=qr_secret_token_99') ? 'authed' : 'anon',
+              artist: 'Tester'
+            }],
+            nextCursor: null
+          };
+        }
+        module.exports = {
+          manifest: manifest,
+          startQrLogin: startQrLogin,
+          pollQrLogin: pollQrLogin,
+          search: search
+        };
+        """
+
+        let pollIndex = NSLockBox(0)
+        let transport = FixtureTransport { req in
+            let url = req.url!
+            if url.path == "/qr/start" {
+                return HTTPResponseData(
+                    statusCode: 200,
+                    headers: ["Content-Type": "application/json"],
+                    data: Data("{\"key\":\"sess-abc\",\"url\":\"https://music.163.com/login?codekey=test-uuid-1234567890\"}".utf8),
+                    finalURL: url
+                )
+            }
+            if url.path == "/qr/poll" {
+                let idx = pollIndex.withLock { val -> Int in
+                    let cur = val
+                    val += 1
+                    return cur
+                }
+                if idx == 0 {
+                    return HTTPResponseData(
+                        statusCode: 200,
+                        headers: ["Content-Type": "application/json"],
+                        data: Data("{\"status\":\"pending\"}".utf8),
+                        finalURL: url
+                    )
+                }
+                if idx == 1 {
+                    return HTTPResponseData(
+                        statusCode: 200,
+                        headers: ["Content-Type": "application/json"],
+                        data: Data("{\"status\":\"scanned\",\"nickname\":\"QR Tester\"}".utf8),
+                        finalURL: url
+                    )
+                }
+                return HTTPResponseData(
+                    statusCode: 200,
+                    headers: [
+                        "Content-Type": "application/json",
+                        "Set-Cookie": "NMTID=n1; Path=/; Expires=Thu, 01 Jan 2099 00:00:00 GMT, MUSIC_U=qr_secret_token_99; Path=/; HttpOnly"
+                    ],
+                    data: Data("{\"status\":\"confirmed\",\"nickname\":\"QR Tester\"}".utf8),
+                    finalURL: url
+                )
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: url)
+        }
+
+        let dir = makeTempDir()
+        let store = ExtensionStore(baseDirectory: dir, registry: CloudProviderRegistry(builtIns: []), transport: transport)
+        let installed = try await store.importPackageData(Data(script.utf8), fileName: "qr.musico.js", sourceURL: nil)
+        store.approvePermissionsAndEnable(id: installed.id)
+
+        let session = try await store.startQRLogin(extensionID: installed.id)
+        XCTAssertEqual(session.sessionId, "sess-abc")
+        XCTAssertEqual(session.pollIntervalMs, 1000)
+
+        let qrImage = try XCTUnwrap(ExtensionQRLoginSheet.makeQRCodeImage(from: session.qrContent))
+        let ciImage = try XCTUnwrap(CIImage(image: qrImage))
+        let detector = try XCTUnwrap(CIDetector(ofType: CIDetectorTypeQRCode, context: nil, options: [CIDetectorAccuracy: CIDetectorAccuracyHigh]))
+        let decodedQR = detector.features(in: ciImage).compactMap { ($0 as? CIQRCodeFeature)?.messageString }.first
+        XCTAssertEqual(decodedQR, "https://music.163.com/login?codekey=test-uuid-1234567890")
+
+        let pending = try await store.pollQRLogin(extensionID: installed.id, sessionID: session.sessionId)
+        XCTAssertEqual(pending.status, .pending)
+        XCTAssertNil(store.cookie(forExtensionID: installed.id))
+
+        let scanned = try await store.pollQRLogin(extensionID: installed.id, sessionID: session.sessionId)
+        XCTAssertEqual(scanned.status, .scanned)
+        XCTAssertEqual(scanned.accountName, "QR Tester")
+
+        let confirmed = try await store.pollQRLogin(extensionID: installed.id, sessionID: session.sessionId)
+        XCTAssertEqual(confirmed.status, .confirmed)
+        XCTAssertEqual(confirmed.cookie, "MUSIC_U=qr_secret_token_99")
+        XCTAssertEqual(store.cookie(forExtensionID: installed.id), "MUSIC_U=qr_secret_token_99")
+        XCTAssertEqual(store.extension(forID: installed.id)?.state.cookie, "MUSIC_U=qr_secret_token_99")
+
+        let searchPage = try await store.search(extensionID: installed.id, query: "test", kind: .track, limit: 10, cursor: nil)
+        XCTAssertEqual(searchPage.items.first?.title, "authed")
+
+        let logsText = (store.extension(forID: installed.id)?.logs ?? []).map(\.message).joined(separator: "\n")
+        XCTAssertFalse(logsText.contains("qr_secret_token_99"))
+    }
 }
 
 private final class NSLockBox<Value>: @unchecked Sendable {

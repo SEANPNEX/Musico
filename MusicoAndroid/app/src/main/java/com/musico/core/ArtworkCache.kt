@@ -2,9 +2,13 @@ package com.musico.core
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
+import android.os.Build
 import android.util.LruCache
+import androidx.annotation.RequiresApi
 import java.io.File
 import java.io.FileOutputStream
+import java.nio.ByteBuffer
 import java.security.MessageDigest
 import kotlin.math.max
 import kotlin.math.roundToInt
@@ -30,30 +34,36 @@ class ArtworkCache(
         val outFile = targetFile(key)
         if (outFile.exists()) return key
 
+        val imageBytes = EmbeddedArtworkExtractor.normalizeImageBytes(bytes) ?: bytes
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, bounds)
         val rawW = bounds.outWidth
         val rawH = bounds.outHeight
-        if (rawW <= 0 || rawH <= 0) return null
 
-        var sampleSize = 1
-        while (max(rawW / sampleSize, rawH / sampleSize) > MAX_DIMENSION * 2) {
-            sampleSize *= 2
+        var decoded: Bitmap? = null
+        if (rawW > 0 && rawH > 0) {
+            var sampleSize = 1
+            while (max(rawW / sampleSize, rawH / sampleSize) > MAX_DIMENSION * 2) {
+                sampleSize *= 2
+            }
+            val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
+            decoded = BitmapFactory.decodeByteArray(imageBytes, 0, imageBytes.size, decodeOpts)
         }
+        if (decoded == null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
+            decoded = decodeWithImageDecoder(imageBytes)
+        }
+        val bitmap = decoded ?: return null
 
-        val decodeOpts = BitmapFactory.Options().apply { inSampleSize = sampleSize }
-        val decoded = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, decodeOpts) ?: return null
-
-        val longest = max(decoded.width, decoded.height)
+        val longest = max(bitmap.width, bitmap.height)
         val finalBitmap = if (longest > MAX_DIMENSION) {
             val scale = MAX_DIMENSION.toFloat() / longest.toFloat()
-            val targetW = max(1, (decoded.width * scale).roundToInt())
-            val targetH = max(1, (decoded.height * scale).roundToInt())
-            Bitmap.createScaledBitmap(decoded, targetW, targetH, true).also {
-                if (it !== decoded) decoded.recycle()
+            val targetW = max(1, (bitmap.width * scale).roundToInt())
+            val targetH = max(1, (bitmap.height * scale).roundToInt())
+            Bitmap.createScaledBitmap(bitmap, targetW, targetH, true).also {
+                if (it !== bitmap) bitmap.recycle()
             }
         } else {
-            decoded
+            bitmap
         }
 
         if (!directory.exists()) directory.mkdirs()
@@ -75,6 +85,26 @@ class ArtworkCache(
             runCatching { tempFile.delete() }
             null
         }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.P)
+    private fun decodeWithImageDecoder(bytes: ByteArray): Bitmap? {
+        return runCatching {
+            val source = ImageDecoder.createSource(ByteBuffer.wrap(bytes))
+            ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
+                decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
+                val w = info.size.width
+                val h = info.size.height
+                val longest = max(w, h)
+                if (longest > MAX_DIMENSION) {
+                    val scale = MAX_DIMENSION.toFloat() / longest.toFloat()
+                    decoder.setTargetSize(
+                        max(1, (w * scale).roundToInt()),
+                        max(1, (h * scale).roundToInt()),
+                    )
+                }
+            }
+        }.getOrNull()
     }
 
     fun bitmap(key: String?): Bitmap? {

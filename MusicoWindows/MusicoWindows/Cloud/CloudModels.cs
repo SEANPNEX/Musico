@@ -19,6 +19,9 @@ public static class CloudSources
     public const string YouTube = "youtube";
     public const string Bilibili = "bilibili";
     public const string GoogleDrive = "gdrive";
+
+    public static string Extension(string extensionId) =>
+        $"ext.{(extensionId ?? string.Empty).Trim()}";
 }
 
 public enum CloudErrorCode
@@ -125,6 +128,7 @@ public sealed class ExtensionHttpResponse
     public int Status { get; set; }
     public string FinalUrl { get; set; } = string.Empty;
     public Dictionary<string, string> Headers { get; set; } = new(StringComparer.Ordinal);
+    public List<string> SetCookies { get; set; } = [];
     public string Text { get; set; } = string.Empty;
     public string? BytesBase64 { get; set; }
 }
@@ -549,6 +553,7 @@ internal static class CloudHttpHelper
                     Status = statusCode,
                     FinalUrl = currentUri.AbsoluteUri,
                     Headers = lowerHeaders,
+                    SetCookies = ExtractSetCookies(resp),
                     Text = Encoding.UTF8.GetString(cappedBytes),
                     BytesBase64 = request.ReturnBytes || cappedBytes.Length <= InlineBase64ThresholdBytes
                         ? Convert.ToBase64String(cappedBytes)
@@ -558,6 +563,32 @@ internal static class CloudHttpHelper
         }
 
         throw new CloudServiceException(CloudErrorCode.NetworkError, "Too many HTTP redirects.");
+    }
+
+    private static List<string> ExtractSetCookies(HttpResponseMessage resp)
+    {
+        var list = new List<string>();
+        if (resp.Headers.TryGetValues("Set-Cookie", out var headerValues))
+        {
+            foreach (string value in headerValues)
+            {
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    list.Add(value);
+                }
+            }
+        }
+        if (resp.Content?.Headers.TryGetValues("Set-Cookie", out var contentValues) == true)
+        {
+            foreach (string value in contentValues)
+            {
+                if (!string.IsNullOrWhiteSpace(value))
+                {
+                    list.Add(value);
+                }
+            }
+        }
+        return list;
     }
 
     private static Dictionary<string, string> ExtractLowercaseHeaders(HttpResponseMessage resp)

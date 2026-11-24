@@ -276,7 +276,8 @@ struct QueuesView: View {
                         }
                     }
                     .contextMenu {
-                        TrackMenuItems(ids: [id], favouriteID: id)
+                        let isEphemeral = library.track(id)?.isEphemeral == true || id.hasPrefix(Track.ephemeralIDPrefix)
+                        TrackMenuItems(ids: [id], favouriteID: isEphemeral ? nil : id)
                         Divider()
                         Button(L10n.tr("Remove from Queue"), systemImage: "minus.circle", role: .destructive) {
                             player.removeFromQueue(at: index)
@@ -500,7 +501,8 @@ private struct MacQueueTrackRow: View {
             isDropTargeted = targeted
         }
         .contextMenu {
-            TrackMenuItems(ids: [trackID], favouriteID: trackID)
+            let isEphemeral = track?.isEphemeral == true || trackID.hasPrefix(Track.ephemeralIDPrefix)
+            TrackMenuItems(ids: [trackID], favouriteID: isEphemeral ? nil : trackID)
             Divider()
             Button(L10n.tr("Remove from Queue"), systemImage: "minus.circle", role: .destructive, action: onRemove)
         }

@@ -229,6 +229,8 @@ class CloudDownloadManager(
         targetUri: Uri,
     ): String = launchTrackExportJob(
         track = track,
+        targetDir = if (targetUri.scheme == "file" && targetUri.path != null) File(targetUri.path!!) else null,
+        targetUri = targetUri,
         runExport = { onProgress ->
             cloudExporter.exportTrack(
                 track = track,
@@ -246,6 +248,8 @@ class CloudDownloadManager(
         targetDir: File,
     ): String = launchTrackExportJob(
         track = track,
+        targetDir = targetDir,
+        targetUri = null,
         runExport = { onProgress ->
             cloudExporter.exportTrack(
                 track = track,
@@ -257,8 +261,19 @@ class CloudDownloadManager(
         isInsideIndexedRoot = { libraryStore.isDirectoryInsideIndexedRoot(targetDir) },
     )
 
+    fun startTrackExportToAppFolder(
+        track: Track,
+        root: LibraryRoot? = null,
+    ): String = startTrackExport(
+        track = track,
+        root = root,
+        targetDir = libraryStore.appFolderDirectory(),
+    )
+
     private fun launchTrackExportJob(
         track: Track,
+        targetDir: File?,
+        targetUri: Uri?,
         runExport: suspend (onProgress: (CloudExportProgress) -> Unit) -> String,
         isInsideIndexedRoot: () -> Boolean,
     ): String {
@@ -279,6 +294,12 @@ class CloudDownloadManager(
                 var libUpdated = false
                 if (isInsideIndexedRoot()) {
                     libraryStore.rescan()
+                    libraryStore.applyFallbackMetadataForSavedFile(
+                        savedFileName = fileName,
+                        sourceTrack = track,
+                        targetDir = targetDir,
+                        targetUri = targetUri,
+                    )
                     libUpdated = true
                 }
                 updateJob(jobId) { cur ->

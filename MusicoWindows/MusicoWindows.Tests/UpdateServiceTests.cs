@@ -45,7 +45,7 @@ public sealed class UpdateServiceTests
           "tag_name": "{{tagName}}",
           "name": "Musico {{tagName}}",
           "body": "{{body}}",
-          "html_url": "https://github.com/SEANPNEX/local_music_player/releases/tag/{{tagName}}",
+          "html_url": "https://github.com/SEANPNEX/Musico/releases/tag/{{tagName}}",
           "draft": {{(draft ? "true" : "false")}},
           "prerelease": {{(prerelease ? "true" : "false")}},
           "published_at": "2026-11-22T00:00:00Z",

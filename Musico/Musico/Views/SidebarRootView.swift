@@ -18,6 +18,7 @@ struct SidebarRootView: View {
     @Environment(\.appNavigation) private var navigation
     @Environment(\.downloadManager) private var downloadManager
     @Environment(\.extensionStore) private var extensionStore
+    @Environment(\.lyricsStore) private var lyricsStore
     @Environment(\.languageManager) private var languageManager
     #if targetEnvironment(macCatalyst)
     @Environment(\.updateManager) private var updateManager
@@ -118,6 +119,7 @@ struct SidebarRootView: View {
                 .environment(\.appNavigation, navigation)
                 .environment(\.downloadManager, downloadManager)
                 .environment(\.extensionStore, extensionStore)
+                .environment(\.lyricsStore, lyricsStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
         }

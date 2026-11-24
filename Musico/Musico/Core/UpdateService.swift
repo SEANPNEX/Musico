@@ -298,7 +298,7 @@ enum SHA256SumsParser {
 
 /// Fetches and parses the latest release metadata from GitHub Releases.
 struct UpdateChecker: Sendable {
-    static let defaultEndpoint = URL(string: "https://api.github.com/repos/SEANPNEX/local_music_player/releases/latest")!
+    static let defaultEndpoint = URL(string: "https://api.github.com/repos/SEANPNEX/Musico/releases/latest")!
     typealias DataLoader = @Sendable (URLRequest) async throws -> (Data, URLResponse)
 
     private struct GitHubReleaseDTO: Decodable {
@@ -626,7 +626,7 @@ final class UpdateManager {
     }
 
     func openReleasePage() async {
-        let fallback = URL(string: "https://github.com/SEANPNEX/local_music_player/releases")!
+        let fallback = URL(string: "https://github.com/SEANPNEX/Musico/releases")!
         _ = await openURL(activeRelease?.htmlURL ?? fallback)
     }
 

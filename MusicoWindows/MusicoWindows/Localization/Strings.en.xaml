@@ -117,12 +117,22 @@
 
     <!-- LyricsPanel -->
     <sys:String x:Key="Str_Lyrics_Title">Lyrics</sys:String>
+    <sys:String x:Key="Str_Lyrics_SearchOnlineTooltip">Search online lyrics</sys:String>
+    <sys:String x:Key="Str_Lyrics_SearchOnline">Search Online...</sys:String>
     <sys:String x:Key="Str_Lyrics_ImportTooltip">Import .lrc or .txt lyrics</sys:String>
+    <sys:String x:Key="Str_Lyrics_ExportSidecarTooltip">Save .lrc to song folder</sys:String>
     <sys:String x:Key="Str_Lyrics_RemoveTooltip">Remove imported lyrics</sys:String>
     <sys:String x:Key="Str_Lyrics_ClosePanelTooltip">Close panel</sys:String>
     <sys:String x:Key="Str_Lyrics_EmptyTitle">No Lyrics</sys:String>
     <sys:String x:Key="Str_Lyrics_EmptyDesc">Import a .lrc or .txt file for this song, or place one with the same name next to it.</sys:String>
     <sys:String x:Key="Str_Lyrics_ImportFromFile">Import from File...</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_Title">Search Cloud Lyrics</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_TitleField">Title</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_ArtistField">Artist</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_SearchBtn">Search</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_IncludeTranslation">Include translation</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_AlsoExportSidecar">Also save .lrc to song folder</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_UseLyrics">Use Lyrics</sys:String>
 
     <!-- EqualizerDialog -->
     <sys:String x:Key="Str_Equalizer_Title">Equalizer</sys:String>
@@ -226,5 +236,21 @@
     <sys:String x:Key="Str_Extensions_LogsTitle">Extension Debug Logs</sys:String>
     <sys:String x:Key="Str_Extensions_ClearLogs">Clear Logs</sys:String>
     <sys:String x:Key="Str_Extensions_LogsEmpty">No log entries yet.</sys:String>
+    <sys:String x:Key="Str_Extensions_QrLoginTitle">Sign In with QR Code</sys:String>
+    <sys:String x:Key="Str_Extensions_QrLoginRefresh">Refresh QR Code</sys:String>
+    <sys:String x:Key="Str_Extensions_QrLoginClose">Close</sys:String>
+
+    <!-- Cloud Search & Preview -->
+    <sys:String x:Key="Str_Songs_SearchButton">Search</sys:String>
+    <sys:String x:Key="Str_Songs_KindAll">All</sys:String>
+    <sys:String x:Key="Str_Songs_KindTracks">Songs</sys:String>
+    <sys:String x:Key="Str_Songs_KindAlbums">Albums</sys:String>
+    <sys:String x:Key="Str_Songs_KindPlaylists">Playlists</sys:String>
+    <sys:String x:Key="Str_Songs_CloudRetry">Retry</sys:String>
+    <sys:String x:Key="Str_Songs_LoadMore">Load More</sys:String>
+    <sys:String x:Key="Str_Songs_CloudSearching">Searching...</sys:String>
+    <sys:String x:Key="Str_Songs_CloudLoadingMore">Loading more...</sys:String>
+    <sys:String x:Key="Str_Preview_AddAsCloudFolder">Add as Cloud Folder</sys:String>
+    <sys:String x:Key="Str_Preview_PlayAll">Play All</sys:String>
 
 </ResourceDictionary>

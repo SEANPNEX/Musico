@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
@@ -17,6 +18,8 @@ public partial class ExtensionsView : UserControl
 {
     private ViewContext? _ctx;
     private string? _reviewExtensionId;
+    private string? _qrExtensionId;
+    private CancellationTokenSource? _qrLoginCts;
     private string? _activeLogExtensionId;
     private bool _isBusy;
 
@@ -26,7 +29,9 @@ public partial class ExtensionsView : UserControl
         Unloaded += (_, _) => Detach();
     }
 
-    public bool IsReviewOpen => PermissionReviewOverlay.Visibility == Visibility.Visible;
+    public bool IsReviewOpen =>
+        PermissionReviewOverlay.Visibility == Visibility.Visible ||
+        QrLoginOverlay.Visibility == Visibility.Visible;
 
     public void Bind(ViewContext ctx)
     {
@@ -40,7 +45,12 @@ public partial class ExtensionsView : UserControl
 
     public bool HandleEscape()
     {
-        if (IsReviewOpen)
+        if (QrLoginOverlay.Visibility == Visibility.Visible)
+        {
+            CloseQrLoginModal();
+            return true;
+        }
+        if (PermissionReviewOverlay.Visibility == Visibility.Visible)
         {
             ClosePermissionReview();
             return true;
@@ -50,6 +60,9 @@ public partial class ExtensionsView : UserControl
 
     private void Detach()
     {
+        CancelQrLogin();
+        QrLoginOverlay.Visibility = Visibility.Collapsed;
+        _qrExtensionId = null;
         LocalizationManager.LanguageChanged -= OnLanguageChanged;
         if (_ctx is null) return;
         _ctx.Services.Extensions.Changed -= OnExtensionsChanged;
@@ -68,8 +81,29 @@ public partial class ExtensionsView : UserControl
             {
                 RefreshLogsDrawer();
             }
+            if (IsKeyboardFocusInsideExtensionsList())
+            {
+                return;
+            }
             Refresh();
         });
+    }
+
+    private bool IsKeyboardFocusInsideExtensionsList()
+    {
+        if (Keyboard.FocusedElement is DependencyObject focused)
+        {
+            DependencyObject? cur = focused;
+            while (cur is not null)
+            {
+                if (ReferenceEquals(cur, ExtensionsStack))
+                {
+                    return true;
+                }
+                cur = VisualTreeHelper.GetParent(cur);
+            }
+        }
+        return false;
     }
 
     private void Refresh()
@@ -255,6 +289,12 @@ public partial class ExtensionsView : UserControl
         permTb.SetResourceReference(TextBlock.ForegroundProperty, "TextTertiaryBrush");
         rootPanel.Children.Add(permTb);
 
+        // Extension Auth Section (Cookie editor and/or QR code login)
+        if (ext.Manifest.SupportsCookieAuth)
+        {
+            rootPanel.Children.Add(BuildCookieSection(ext, store));
+        }
+
         // Dynamic Settings Editor
         if (ext.Manifest.Settings is { Count: > 0 } settings)
         {
@@ -292,6 +332,109 @@ public partial class ExtensionsView : UserControl
 
         card.Child = rootPanel;
         return card;
+    }
+
+    private Border BuildCookieSection(InstalledExtension ext, ExtensionStore store)
+    {
+        var border = new Border
+        {
+            Margin = new Thickness(44, 12, 0, 0),
+            BorderThickness = new Thickness(0, 1, 0, 0),
+            Padding = new Thickness(0, 10, 0, 0)
+        };
+        border.SetResourceReference(Border.BorderBrushProperty, "DividerBrush");
+
+        var panel = new StackPanel();
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+        var labelTb = new TextBlock
+        {
+            Text = L.Get("Extensions_CookieLabel"),
+            FontFamily = (FontFamily)FindResource("Win10Font"),
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 0)
+        };
+        labelTb.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+        Grid.SetColumn(labelTb, 0);
+        row.Children.Add(labelTb);
+
+        string currentCookie = store.GetCookie(ext.Id) ?? string.Empty;
+        var passwordBox = new PasswordBox
+        {
+            Style = (Style)FindResource("Win10PasswordBoxStyle"),
+            Height = 32,
+            MaxWidth = 360,
+            HorizontalAlignment = HorizontalAlignment.Stretch,
+            Password = currentCookie
+        };
+        passwordBox.ToolTip = L.Get("Extensions_CookiePlaceholder");
+
+        passwordBox.LostFocus += (_, _) => store.SetCookie(ext.Id, passwordBox.Password);
+        passwordBox.KeyDown += (_, e) =>
+        {
+            if (e.Key == Key.Enter)
+            {
+                e.Handled = true;
+                store.SetCookie(ext.Id, passwordBox.Password);
+                Keyboard.ClearFocus();
+            }
+        };
+
+        Grid.SetColumn(passwordBox, 1);
+        row.Children.Add(passwordBox);
+
+        var clearBtn = new Button
+        {
+            Style = (Style)FindResource("Win10ButtonStyle"),
+            Content = L.Get("Extensions_CookieClear"),
+            Margin = new Thickness(8, 0, 0, 0),
+            IsEnabled = !string.IsNullOrEmpty(currentCookie)
+        };
+        clearBtn.Click += (_, _) =>
+        {
+            passwordBox.Password = string.Empty;
+            store.SetCookie(ext.Id, null);
+        };
+        passwordBox.PasswordChanged += (_, _) =>
+        {
+            clearBtn.IsEnabled = !string.IsNullOrEmpty(passwordBox.Password);
+        };
+        Grid.SetColumn(clearBtn, 2);
+        row.Children.Add(clearBtn);
+
+        panel.Children.Add(row);
+
+        var hintTb = new TextBlock
+        {
+            Text = L.Get("Extensions_CookieSavedHint"),
+            FontFamily = (FontFamily)FindResource("Win10Font"),
+            FontSize = 11,
+            Margin = new Thickness(220, 4, 0, 0)
+        };
+        hintTb.SetResourceReference(TextBlock.ForegroundProperty, "TextTertiaryBrush");
+        panel.Children.Add(hintTb);
+
+        if (ext.Manifest.SupportsQrLogin)
+        {
+            var qrBtn = new Button
+            {
+                Style = (Style)FindResource("Win10ButtonStyle"),
+                Content = L.Get("Extensions_SignInQr"),
+                Margin = new Thickness(220, 8, 0, 0),
+                HorizontalAlignment = HorizontalAlignment.Left,
+                IsEnabled = ext.IsEnabled,
+                ToolTip = ext.IsEnabled ? null : L.Get("Extensions_QrLogin_EnableFirst")
+            };
+            qrBtn.Click += (_, _) => OpenQrLoginModal(ext);
+            panel.Children.Add(qrBtn);
+        }
+
+        border.Child = panel;
+        return border;
     }
 
     private Grid BuildSettingRow(string extensionId, ExtensionSettingSpec spec, ExtensionStore store)
@@ -541,6 +684,9 @@ public partial class ExtensionsView : UserControl
         ExtensionCapability.Stream => L.Get("Extensions_Capability_Stream"),
         ExtensionCapability.Cookie => L.Get("Extensions_Capability_Cookie"),
         ExtensionCapability.Proxy => L.Get("Extensions_Capability_Proxy"),
+        ExtensionCapability.Lyrics => L.Get("Extensions_Capability_Lyrics"),
+        ExtensionCapability.Search => L.Get("Extensions_Capability_Search"),
+        ExtensionCapability.QrLogin => L.Get("Extensions_Capability_QrLogin"),
         _ => cap.ToString()
     };
 
@@ -660,4 +806,198 @@ public partial class ExtensionsView : UserControl
         _activeLogExtensionId = null;
         Refresh();
     }
+
+    private void OpenQrLoginModal(InstalledExtension ext)
+    {
+        _qrExtensionId = ext.Id;
+        QrSubtitleText.Text = L.Format("Extensions_QrLogin_Subtitle", ext.Manifest.Name);
+        QrLoginOverlay.Visibility = Visibility.Visible;
+        _ = StartQrSessionAsync(ext.Id);
+    }
+
+    private void CloseQrLoginModal()
+    {
+        CancelQrLogin();
+        _qrExtensionId = null;
+        QrCodeImage.Source = null;
+        QrLoginOverlay.Visibility = Visibility.Collapsed;
+    }
+
+    private void CancelQrLogin()
+    {
+        CancellationTokenSource? cts = _qrLoginCts;
+        _qrLoginCts = null;
+        if (cts is not null)
+        {
+            try
+            {
+                cts.Cancel();
+            }
+            catch
+            {
+                // Ignore cancellation exceptions.
+            }
+            cts.Dispose();
+        }
+    }
+
+    private async Task StartQrSessionAsync(string extensionId)
+    {
+        if (_ctx is null) return;
+
+        CancelQrLogin();
+        var cts = new CancellationTokenSource();
+        _qrLoginCts = cts;
+        CancellationToken ct = cts.Token;
+
+        QrCodeImage.Source = null;
+        QrLoadingPlaceholderText.Text = L.Get("Extensions_QrLogin_Loading");
+        QrLoadingPlaceholderText.Visibility = Visibility.Visible;
+        QrStatusText.Text = L.Get("Extensions_QrLogin_Loading");
+        UpdateQrMessage(null);
+        QrRefreshButton.IsEnabled = false;
+
+        try
+        {
+            ExtQrLoginSession session = await _ctx.Services.Extensions.StartQrLoginAsync(extensionId, ct: ct);
+            ct.ThrowIfCancellationRequested();
+
+            QrCodeMatrix matrix = QrCodeEncoder.Encode(session.QrContent);
+            QrCodeImage.Source = RenderQrCodeImage(matrix);
+            QrLoadingPlaceholderText.Visibility = Visibility.Collapsed;
+            QrStatusText.Text = L.Get("Extensions_QrLogin_WaitingScan");
+            UpdateQrMessage(session.Message);
+            QrRefreshButton.IsEnabled = true;
+
+            while (!ct.IsCancellationRequested)
+            {
+                if (session.ExpiresAtMs is long exp && DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() >= exp)
+                {
+                    QrStatusText.Text = L.Get("Extensions_QrLogin_Expired");
+                    UpdateQrMessage(null);
+                    break;
+                }
+
+                await Task.Delay(session.PollIntervalMs, ct);
+
+                ExtQrLoginPollResult poll = await _ctx.Services.Extensions.PollQrLoginAsync(
+                    extensionId,
+                    session.SessionId,
+                    ct: ct);
+                ct.ThrowIfCancellationRequested();
+
+                switch (poll.Status)
+                {
+                    case ExtQrLoginStatus.Pending:
+                        QrStatusText.Text = L.Get("Extensions_QrLogin_WaitingScan");
+                        UpdateQrMessage(poll.Message);
+                        break;
+                    case ExtQrLoginStatus.Scanned:
+                        QrStatusText.Text = string.IsNullOrWhiteSpace(poll.AccountName)
+                            ? L.Get("Extensions_QrLogin_Scanned")
+                            : L.Format("Extensions_QrLogin_ScannedAs", poll.AccountName);
+                        UpdateQrMessage(poll.Message);
+                        break;
+                    case ExtQrLoginStatus.Confirmed:
+                        QrStatusText.Text = string.IsNullOrWhiteSpace(poll.AccountName)
+                            ? L.Get("Extensions_QrLogin_Confirmed")
+                            : L.Format("Extensions_QrLogin_ConfirmedAs", poll.AccountName);
+                        UpdateQrMessage(poll.Message);
+                        Refresh();
+                        await Task.Delay(900, ct);
+                        if (!ct.IsCancellationRequested)
+                        {
+                            CloseQrLoginModal();
+                        }
+                        return;
+                    case ExtQrLoginStatus.Expired:
+                        QrStatusText.Text = L.Get("Extensions_QrLogin_Expired");
+                        UpdateQrMessage(poll.Message);
+                        return;
+                    case ExtQrLoginStatus.Error:
+                        QrStatusText.Text = poll.Message ?? L.Get("Extensions_QrLogin_Expired");
+                        UpdateQrMessage(null);
+                        return;
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // Cancelled cleanly on close, refresh, or unload.
+        }
+        catch (Exception ex)
+        {
+            if (!ct.IsCancellationRequested)
+            {
+                QrLoadingPlaceholderText.Visibility = Visibility.Collapsed;
+                QrStatusText.Text = ex.Message;
+                UpdateQrMessage(null);
+                QrRefreshButton.IsEnabled = true;
+            }
+        }
+    }
+
+    private void UpdateQrMessage(string? message)
+    {
+        if (string.IsNullOrWhiteSpace(message))
+        {
+            QrMessageText.Text = string.Empty;
+            QrMessageText.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            QrMessageText.Text = message;
+            QrMessageText.Visibility = Visibility.Visible;
+        }
+    }
+
+    private static DrawingImage RenderQrCodeImage(QrCodeMatrix matrix)
+    {
+        const int quietModules = 4;
+        int totalModules = matrix.Size + quietModules * 2;
+        var group = new DrawingGroup();
+        group.Children.Add(new GeometryDrawing(
+            Brushes.White,
+            null,
+            new RectangleGeometry(new Rect(0, 0, totalModules, totalModules))));
+
+        var darkGeometry = new StreamGeometry();
+        using (StreamGeometryContext ctx = darkGeometry.Open())
+        {
+            for (int r = 0; r < matrix.Size; r++)
+            {
+                for (int c = 0; c < matrix.Size; c++)
+                {
+                    if (!matrix.Get(r, c)) continue;
+                    double x = c + quietModules;
+                    double y = r + quietModules;
+                    ctx.BeginFigure(new Point(x, y), isFilled: true, isClosed: true);
+                    ctx.LineTo(new Point(x + 1, y), isStroked: false, isSmoothJoin: false);
+                    ctx.LineTo(new Point(x + 1, y + 1), isStroked: false, isSmoothJoin: false);
+                    ctx.LineTo(new Point(x, y + 1), isStroked: false, isSmoothJoin: false);
+                }
+            }
+        }
+        darkGeometry.Freeze();
+        group.Children.Add(new GeometryDrawing(Brushes.Black, null, darkGeometry));
+        group.Freeze();
+
+        var image = new DrawingImage(group);
+        image.Freeze();
+        return image;
+    }
+
+    private void RefreshQrLogin_Click(object sender, RoutedEventArgs e)
+    {
+        if (!string.IsNullOrWhiteSpace(_qrExtensionId))
+        {
+            _ = StartQrSessionAsync(_qrExtensionId);
+        }
+    }
+
+    private void CloseQrLogin_Click(object sender, RoutedEventArgs e) => CloseQrLoginModal();
+
+    private void QrOverlay_MouseDown(object sender, MouseButtonEventArgs e) => CloseQrLoginModal();
+
+    private void QrCard_MouseDown(object sender, MouseButtonEventArgs e) => e.Handled = true;
 }

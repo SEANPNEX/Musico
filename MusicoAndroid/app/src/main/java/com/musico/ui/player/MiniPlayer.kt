@@ -79,6 +79,7 @@ fun MiniPlayer(
                 ArtworkImage(
                     artworkKey = track.artworkKey,
                     artworkCache = artworkCache,
+                    remoteArtworkUrl = track.remoteArtworkUrl,
                     size = 48.dp,
                     cornerRadius = 8.dp
                 )

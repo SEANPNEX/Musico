@@ -313,5 +313,120 @@
                 </Grid>
             </Border>
         </Grid>
+
+        <!-- QR Code Login Modal Overlay -->
+        <Grid x:Name="QrLoginOverlay"
+              Grid.RowSpan="3"
+              Background="{DynamicResource DialogOverlayBrush}"
+              Visibility="Collapsed"
+              MouseDown="QrOverlay_MouseDown">
+            <Border Width="420"
+                    MaxHeight="560"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource DialogSurfaceBrush}"
+                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="0"
+                    Padding="24"
+                    MouseDown="QrCard_MouseDown">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="Auto" />
+                    </Grid.RowDefinitions>
+
+                    <StackPanel Grid.Row="0" Margin="0,0,0,16">
+                        <Grid>
+                            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                <TextBlock Text="&#xED14;"
+                                           FontFamily="{StaticResource Win10GlyphFont}"
+                                           FontSize="18"
+                                           Foreground="{DynamicResource AccentBrush}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,10,0" />
+                                <TextBlock Text="{DynamicResource Str_Extensions_QrLoginTitle}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="19"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                            <Button Style="{StaticResource Win10IconButtonStyle}"
+                                    Content="&#xE711;"
+                                    HorizontalAlignment="Right"
+                                    Click="CloseQrLogin_Click" />
+                        </Grid>
+                        <TextBlock x:Name="QrSubtitleText"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,8,0,0" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Row="1" HorizontalAlignment="Center" Margin="0,0,0,18">
+                        <Border Width="220"
+                                Height="220"
+                                Background="#FFFFFF"
+                                BorderBrush="{DynamicResource ControlBorderBrush}"
+                                BorderThickness="1"
+                                Padding="10"
+                                Margin="0,0,0,14">
+                            <Grid>
+                                <Image x:Name="QrCodeImage"
+                                       Stretch="Uniform"
+                                       RenderOptions.BitmapScalingMode="NearestNeighbor" />
+                                <TextBlock x:Name="QrLoadingPlaceholderText"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="12"
+                                           Foreground="#444444"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           TextAlignment="Center"
+                                           TextWrapping="Wrap"
+                                           Visibility="Collapsed" />
+                            </Grid>
+                        </Border>
+
+                        <TextBlock x:Name="QrStatusText"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="QrMessageText"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   HorizontalAlignment="Center"
+                                   TextAlignment="Center"
+                                   TextWrapping="Wrap"
+                                   Margin="0,6,0,0"
+                                   Visibility="Collapsed" />
+                    </StackPanel>
+
+                    <Grid Grid.Row="2">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="QrRefreshButton"
+                                Grid.Column="0"
+                                Style="{StaticResource Win10ButtonStyle}"
+                                Content="{DynamicResource Str_Extensions_QrLoginRefresh}"
+                                Click="RefreshQrLogin_Click" />
+                        <Button Grid.Column="2"
+                                Style="{StaticResource Win10PrimaryButtonStyle}"
+                                Content="{DynamicResource Str_Extensions_QrLoginClose}"
+                                Click="CloseQrLogin_Click" />
+                    </Grid>
+                </Grid>
+            </Border>
+        </Grid>
     </Grid>
 </UserControl>

@@ -93,6 +93,7 @@ public sealed class ExtensionStore : IExtensionHostServices
     {
         ArgumentNullException.ThrowIfNull(registry);
         _registry = registry;
+        _registry.ExtensionCookieResolver = GetCookie;
         SyncToRegistry();
     }
 
@@ -104,13 +105,290 @@ public sealed class ExtensionStore : IExtensionHostServices
         List<InstalledExtension> enabled;
         lock (_stateLock)
         {
-            enabled = _extensions.Where(e => e.IsEnabled).ToList();
+            enabled = _extensions
+                .Where(e => e.IsEnabled && (
+                    e.Manifest.HasCapability(ExtensionCapability.Playlist) ||
+                    e.Manifest.HasCapability(ExtensionCapability.Tree) ||
+                    e.Manifest.HasCapability(ExtensionCapability.Stream)))
+                .ToList();
         }
 
         var providers = enabled
             .Select(ext => (ICloudSourceProvider)new JsExtensionCloudProvider(ext, this, _runtime))
             .ToList();
         registry.SyncExtensionProviders(providers);
+    }
+
+    public IReadOnlyList<CloudSearchExtensionDescriptor> ActiveSearchExtensions => GetActiveSearchExtensions();
+
+    public List<CloudSearchExtensionDescriptor> GetActiveSearchExtensions()
+    {
+        lock (_stateLock)
+        {
+            return _extensions
+                .Where(e => e.IsEnabled && e.Manifest.HasCapability(ExtensionCapability.Search))
+                .Select(e => new CloudSearchExtensionDescriptor(
+                    ExtensionId: e.Id,
+                    DisplayName: e.Manifest.EffectiveBadgeLabel,
+                    SearchKinds: e.Manifest.EffectiveSearchKinds,
+                    SupportsStream: e.Manifest.HasCapability(ExtensionCapability.Stream),
+                    SupportsCookie: e.Manifest.SupportsCookieAuth,
+                    SupportsCollectionImport:
+                        e.Manifest.HasCapability(ExtensionCapability.Playlist) ||
+                        e.Manifest.HasCapability(ExtensionCapability.Tree)))
+                .ToList();
+        }
+    }
+
+    public async Task<ExtSearchPage> SearchAsync(
+        string extensionId,
+        string query,
+        ExtensionSearchKind? kind = null,
+        string? cursor = null,
+        int limit = 30,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        InstalledExtension? ext;
+        string? cookie;
+        lock (_stateLock)
+        {
+            ext = _extensions.FirstOrDefault(e =>
+                string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase) &&
+                e.IsEnabled &&
+                e.Manifest.HasCapability(ExtensionCapability.Search));
+            cookie = ext is not null && ext.Manifest.SupportsCookieAuth
+                ? ext.State.Cookie
+                : null;
+        }
+
+        if (ext is null)
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionUnavailable,
+                $"Search extension '{extensionId}' is unavailable or disabled.");
+        }
+
+        string script = ReadScriptSource(ext);
+        var req = new ExtSearchRequest
+        {
+            Query = (query ?? string.Empty).Trim(),
+            Kind = kind?.ToWireString(),
+            Cursor = string.IsNullOrWhiteSpace(cursor) ? null : cursor.Trim(),
+            Limit = limit > 0 ? limit : 30,
+            Cookie = string.IsNullOrWhiteSpace(cookie) ? null : cookie
+        };
+
+        return await _runtime.SearchAsync(
+            ext.Manifest,
+            script,
+            req,
+            proxyUrl: proxyUrl,
+            host: this,
+            ct: ct).ConfigureAwait(false);
+    }
+
+    public async Task<CloudPlaylistResult> FetchCollectionPreviewAsync(
+        string extensionId,
+        string collectionUrl,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        InstalledExtension? ext;
+        string? cookie;
+        lock (_stateLock)
+        {
+            ext = _extensions.FirstOrDefault(e =>
+                string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase) &&
+                e.IsEnabled);
+            cookie = ext is not null && ext.Manifest.SupportsCookieAuth
+                ? ext.State.Cookie
+                : null;
+        }
+
+        if (ext is null)
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionUnavailable,
+                $"Extension '{extensionId}' is unavailable or disabled.");
+        }
+
+        var provider = _registry?.GetById(CloudSources.Extension(ext.Id))
+                       ?? new JsExtensionCloudProvider(ext, this, _runtime);
+        return await provider.FetchPlaylistAsync(
+            collectionUrl,
+            string.IsNullOrWhiteSpace(cookie) ? null : cookie,
+            proxyUrl,
+            ct).ConfigureAwait(false);
+    }
+
+    public string? GetCookie(string extensionId)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId)) return null;
+        lock (_stateLock)
+        {
+            var ext = _extensions.FirstOrDefault(e => string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase));
+            return string.IsNullOrWhiteSpace(ext?.State.Cookie) ? null : ext!.State.Cookie;
+        }
+    }
+
+    public void SetCookie(string extensionId, string? cookie)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId)) return;
+        string? normalized = string.IsNullOrWhiteSpace(cookie) ? null : cookie.Trim();
+        lock (_stateLock)
+        {
+            int idx = FindIndexLocked(extensionId);
+            if (idx < 0) return;
+
+            string? current = string.IsNullOrWhiteSpace(_extensions[idx].State.Cookie) ? null : _extensions[idx].State.Cookie;
+            if (string.Equals(current, normalized, StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            _extensions[idx].State.Cookie = normalized;
+            SaveStateLocked();
+        }
+        Changed?.Invoke();
+    }
+
+    public async Task<ExtQrLoginSession> StartQrLoginAsync(
+        string extensionId,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        InstalledExtension? ext;
+        lock (_stateLock)
+        {
+            ext = _extensions.FirstOrDefault(e =>
+                string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase) &&
+                e.IsEnabled &&
+                e.Manifest.SupportsQrLogin);
+        }
+        if (ext is null)
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionUnavailable,
+                $"QR login is unavailable or extension '{extensionId}' is disabled.");
+        }
+
+        string script = ReadScriptSource(ext);
+        return await _runtime.StartQrLoginAsync(
+            ext.Manifest,
+            script,
+            proxyUrl: proxyUrl,
+            host: this,
+            ct: ct).ConfigureAwait(false);
+    }
+
+    public async Task<ExtQrLoginPollResult> PollQrLoginAsync(
+        string extensionId,
+        string sessionId,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        InstalledExtension? ext;
+        lock (_stateLock)
+        {
+            ext = _extensions.FirstOrDefault(e =>
+                string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase) &&
+                e.IsEnabled &&
+                e.Manifest.SupportsQrLogin);
+        }
+        if (ext is null)
+        {
+            throw new CloudServiceException(
+                CloudErrorCode.ExtensionUnavailable,
+                $"QR login is unavailable or extension '{extensionId}' is disabled.");
+        }
+
+        string script = ReadScriptSource(ext);
+        ExtQrLoginPollResult result = await _runtime.PollQrLoginAsync(
+            ext.Manifest,
+            script,
+            sessionId,
+            proxyUrl: proxyUrl,
+            host: this,
+            ct: ct).ConfigureAwait(false);
+
+        if (result.Status == ExtQrLoginStatus.Confirmed && !string.IsNullOrWhiteSpace(result.Cookie))
+        {
+            SetCookie(ext.Id, result.Cookie);
+        }
+
+        return result;
+    }
+
+    public List<CloudLyricsExtensionDescriptor> GetActiveLyricsExtensions()
+    {
+        lock (_stateLock)
+        {
+            return _extensions
+                .Where(e => e.IsEnabled && e.Manifest.HasCapability(ExtensionCapability.Lyrics))
+                .Select(e => new CloudLyricsExtensionDescriptor(e.Id, e.Manifest.EffectiveBadgeLabel))
+                .ToList();
+        }
+    }
+
+    public async Task<List<CloudLyricsCandidate>> SearchLyricsAsync(
+        string extensionId,
+        CloudLyricsQuery query,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        InstalledExtension? ext;
+        lock (_stateLock)
+        {
+            ext = _extensions.FirstOrDefault(e =>
+                string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase) &&
+                e.IsEnabled &&
+                e.Manifest.HasCapability(ExtensionCapability.Lyrics));
+        }
+        if (ext is null)
+        {
+            throw CloudLyricsException.ProviderUnavailable(extensionId);
+        }
+
+        string script = File.ReadAllText(ext.EntryScriptPath, Encoding.UTF8);
+        List<JintExtensionRuntime.ExtLyricsCandidateSpec> specs = await _runtime.SearchLyricsAsync(
+            ext.Manifest,
+            script,
+            query,
+            proxyUrl: proxyUrl,
+            host: this,
+            ct: ct).ConfigureAwait(false);
+
+        var candidates = new List<CloudLyricsCandidate>(specs.Count);
+        for (int i = 0; i < specs.Count; i++)
+        {
+            var s = specs[i];
+            string title = (s.Title ?? string.Empty).Trim();
+            string artist = (s.Artist ?? string.Empty).Trim();
+            string? synced = string.IsNullOrWhiteSpace(s.SyncedLyrics) ? null : s.SyncedLyrics.Trim();
+            string? plain = string.IsNullOrWhiteSpace(s.PlainLyrics) ? null : s.PlainLyrics.Trim();
+            string? trans = string.IsNullOrWhiteSpace(s.TranslatedLyrics) ? null : s.TranslatedLyrics.Trim();
+            bool isInst = s.Instrumental == true;
+            string itemId = string.IsNullOrWhiteSpace(s.ExternalId) ? $"row-{i}" : s.ExternalId.Trim();
+
+            var cand = new CloudLyricsCandidate(
+                Id: $"ext.{ext.Id}:{itemId}",
+                ProviderId: $"ext.{ext.Id}",
+                SourceName: ext.Manifest.EffectiveBadgeLabel,
+                Title: title.Length > 0 ? title : query.TrimmedTitle,
+                Artist: artist.Length > 0 ? artist : query.TrimmedArtist,
+                Album: string.IsNullOrWhiteSpace(s.Album) ? null : s.Album.Trim(),
+                DurationSec: s.DurationSec,
+                IsInstrumental: isInst,
+                SyncedLyrics: synced,
+                PlainLyrics: plain,
+                TranslatedLyrics: trans);
+            if (cand.HasUsableContent)
+            {
+                candidates.Add(cand);
+            }
+        }
+        return candidates;
     }
 
     public async Task<InstalledExtension> ImportFromFileAsync(string filePath, CancellationToken ct = default)
@@ -185,6 +463,7 @@ public sealed class ExtensionStore : IExtensionHostServices
                 Format = pkg.Format,
                 SourceLocation = sourceLocation,
                 InstalledUtc = DateTimeOffset.UtcNow,
+                Cookie = pkg.Manifest.SupportsCookieAuth ? existing?.State.Cookie : null,
                 Settings = settings
             };
 
@@ -422,10 +701,11 @@ public sealed class ExtensionStore : IExtensionHostServices
     public void AppendLog(string extensionId, ExtensionLogLevel level, string message)
     {
         if (string.IsNullOrWhiteSpace(extensionId)) return;
+        string sanitized = RedactCookieFromMessage(extensionId, message ?? string.Empty);
         var entry = new ExtensionLogEntry(
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
             level,
-            message ?? string.Empty);
+            sanitized);
 
         lock (_logsLock)
         {
@@ -467,6 +747,21 @@ public sealed class ExtensionStore : IExtensionHostServices
         {
             LogsChanged?.Invoke(extensionId);
         }
+    }
+
+    private string RedactCookieFromMessage(string extensionId, string message)
+    {
+        if (string.IsNullOrEmpty(message)) return string.Empty;
+        string? cookie = GetCookie(extensionId);
+        if (string.IsNullOrWhiteSpace(cookie) || cookie.Length < 3) return message;
+
+        string redacted = message.Replace(cookie, "[REDACTED]", StringComparison.Ordinal);
+        string escaped = Uri.EscapeDataString(cookie);
+        if (!string.Equals(escaped, cookie, StringComparison.Ordinal) && escaped.Length >= 3)
+        {
+            redacted = redacted.Replace(escaped, "[REDACTED]", StringComparison.OrdinalIgnoreCase);
+        }
+        return redacted;
     }
 
     private void LoadFromDisk()

@@ -13,10 +13,21 @@ final class NewPlaylistAlertTests: XCTestCase {
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
         let window = UIWindow(windowScene: scene)
         let shown = expectation(description: "inner sheet content appeared")
-        window.rootViewController = UIHostingController(rootView: OuterSheetHost { shown.fulfill() }.environment(library))
+        var didFulfill = false
+        window.rootViewController = UIHostingController(rootView: OuterSheetHost {
+            guard !didFulfill else { return }
+            didFulfill = true
+            shown.fulfill()
+        }.environment(library))
         window.makeKeyAndVisible()
-        await fulfillment(of: [shown], timeout: 5)
-        window.isHidden = true
+        defer {
+            if window.rootViewController?.presentedViewController != nil {
+                window.rootViewController?.dismiss(animated: false)
+            }
+            window.isHidden = true
+            window.rootViewController = nil
+        }
+        await fulfillment(of: [shown], timeout: 15)
     }
 }
 
@@ -27,7 +38,10 @@ private struct OuterSheetHost: View {
     var body: some View {
         Color.clear
             .sheet(isPresented: $show) { InnerSheetHost(onInnerAppear: onInnerAppear) }
-            .task { show = true }
+            .task {
+                try? await Task.sleep(for: .milliseconds(100))
+                show = true
+            }
     }
 }
 

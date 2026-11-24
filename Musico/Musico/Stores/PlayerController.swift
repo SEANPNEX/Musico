@@ -70,6 +70,10 @@ final class PlayerController {
         library.onTracksRemoved = { [weak self] ids in self?.tracksRemoved(ids) }
         library.onTrackUpdated = { [weak self] track in self?.trackUpdated(track) }
         library.onFolderAdded = { [weak self] name, trackIDs in self?.syncFolderQueue(name: name, trackIDs: trackIDs) }
+        queues.onQueuesChanged = { [weak library] referencedIDs in
+            library?.pruneEphemeralTracks(keeping: referencedIDs)
+        }
+        library.pruneEphemeralTracks(keeping: queues.allReferencedTrackIDs)
         configureAudioSession { try $0.setCategory(.playback, mode: .default) }
         observeSystem()
         registerRemoteCommands()
@@ -283,7 +287,7 @@ final class PlayerController {
                 return
             } catch {
                 guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
-                self.handleCloudTrackFailure(track: track, autoplay: autoplay, failures: failures)
+                self.handleCloudTrackFailure(track: track, autoplay: autoplay, failures: failures, error: error)
             }
         }
     }
@@ -388,11 +392,11 @@ final class PlayerController {
                         return
                     } catch {
                         guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
-                        self.handleCloudTrackFailure(track: track, autoplay: autoplay, failures: failures)
+                        self.handleCloudTrackFailure(track: track, autoplay: autoplay, failures: failures, error: error)
                     }
                 }
             } else {
-                self.handleCloudTrackFailure(track: track, autoplay: autoplay, failures: failures)
+                self.handleCloudTrackFailure(track: track, autoplay: autoplay, failures: failures, error: nil)
             }
         }
 
@@ -414,7 +418,7 @@ final class PlayerController {
         updateNowPlaying()
     }
 
-    private func handleCloudTrackFailure(track: Track, autoplay: Bool, failures: Int) {
+    private func handleCloudTrackFailure(track: Track, autoplay: Bool, failures: Int, error: Error? = nil) {
         isBuffering = false
         bufferingProgress = nil
         let nextFailures = failures + 1
@@ -427,9 +431,13 @@ final class PlayerController {
         } else {
             engine.unload()
             isPlaying = false
-            errorMessage = nextFailures > 1
-                ? L10n.tr("Playback stopped: %@ songs in a row could not be played.", String(nextFailures))
-                : L10n.tr("“%@” could not be played.", track.title)
+            if let cloudErr = error as? CloudSourceError, case .extensionUnavailable = cloudErr {
+                errorMessage = cloudErr.localizedDescription
+            } else {
+                errorMessage = nextFailures > 1
+                    ? L10n.tr("Playback stopped: %@ songs in a row could not be played.", String(nextFailures))
+                    : L10n.tr("“%@” could not be played.", track.title)
+            }
             updateNowPlaying()
         }
     }
@@ -608,6 +616,7 @@ final class PlayerController {
     func noteListening(_ seconds: TimeInterval) {
         guard isLoaded, let track = currentTrack else { return }
         listened += seconds
+        guard !track.isEphemeral, !PlayHistoryStore.isEphemeralTrackID(track.id) else { return }
         history.addListening(seconds)
         if !markedRecent, listened >= Self.recentAfter {
             markedRecent = true
@@ -617,6 +626,7 @@ final class PlayerController {
     }
 
     private func countPlay(_ track: Track) {
+        guard !track.isEphemeral, !PlayHistoryStore.isEphemeralTrackID(track.id) else { return }
         playCounted = true
         markedRecent = true
         history.recordPlay(track.id)
@@ -672,7 +682,12 @@ final class PlayerController {
     }
 
     func sortActiveQueue(by order: TrackSortOrder) {
-        let map = Dictionary(library.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var map = Dictionary(library.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for id in queues.active.trackIDs where map[id] == nil {
+            if let track = library.track(id) {
+                map[id] = track
+            }
+        }
         let history = self.history
         queues.updateActive {
             $0.sort(
@@ -725,6 +740,7 @@ final class PlayerController {
 
     /// Shows the saved queue's track, paused at its saved position, after launch.
     func restore() {
+        library.pruneEphemeralTracks(keeping: queues.allReferencedTrackIDs)
         if let id = queues.active.currentTrackID, let track = library.track(id), track.isCloud {
             cancelCloudLoad()
             isLoaded = false

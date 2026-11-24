@@ -15,7 +15,7 @@ struct PlayerBar: View {
         let barContent = HStack(spacing: 16) {
             Button(action: onOpen) {
                 HStack(spacing: 12) {
-                    ArtworkView(artworkKey: track?.artworkKey, size: 46)
+                    ArtworkView(artworkKey: track?.artworkKey, remoteArtworkURL: track?.remoteArtworkURL, size: 46)
                         .id(track?.id)
                         .transition(.opacity)
                         .animation(.easeInOut(duration: 0.2), value: track?.id)
@@ -51,7 +51,7 @@ struct PlayerBar: View {
             .accessibilityLabel(L10n.tr("Open Now Playing"))
             .contextMenu {
                 if let track {
-                    TrackMenuItems(ids: [track.id], favouriteID: track.id)
+                    TrackMenuItems(ids: [track.id], favouriteID: track.isEphemeral ? nil : track.id)
                 }
             }
 
@@ -65,7 +65,7 @@ struct PlayerBar: View {
             HStack(spacing: 4) {
                 if let track {
                     Menu {
-                        TrackMenuItems(ids: [track.id], favouriteID: track.id)
+                        TrackMenuItems(ids: [track.id], favouriteID: track.isEphemeral ? nil : track.id)
                     } label: {
                         Image(systemName: "ellipsis.circle")
                             .font(.body)

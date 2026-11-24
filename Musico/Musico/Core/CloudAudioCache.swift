@@ -408,7 +408,8 @@ actor CloudAudioCache {
     }
 
     private nonisolated func fileURL(trackID: String, ext: String) -> URL {
-        directory.appendingPathComponent("\(trackID).\(ext)")
+        let stem = Track.safeCacheStem(for: trackID)
+        return directory.appendingPathComponent("\(stem).\(ext)")
     }
 
     private func sanitizeExtension(_ ext: String) -> String {

@@ -9,6 +9,7 @@ final class QueueStore {
     private(set) var queues: [PlayQueue]
     private(set) var activeID: UUID
     @ObservationIgnored private let fileURL: URL
+    @ObservationIgnored var onQueuesChanged: ((Set<String>) -> Void)?
 
     init(directory: URL) {
         fileURL = directory.appendingPathComponent("queues.json")
@@ -23,8 +24,12 @@ final class QueueStore {
     }
 
     var active: PlayQueue { queues.first { $0.id == activeID } ?? queues[0] }
+    var allReferencedTrackIDs: Set<String> { Set(queues.flatMap(\.trackIDs)) }
 
-    func save() { try? Persistence.save(QueueFile(queues: queues, activeID: activeID), to: fileURL) }
+    func save() {
+        try? Persistence.save(QueueFile(queues: queues, activeID: activeID), to: fileURL)
+        onQueuesChanged?(allReferencedTrackIDs)
+    }
 
     func update(_ id: UUID, _ body: (inout PlayQueue) -> Void) {
         guard let index = queues.firstIndex(where: { $0.id == id }) else { return }
