@@ -2,6 +2,11 @@ import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 
+private struct BatchExtensionReviewSelection: Identifiable {
+    let id = UUID()
+    let extensions: [InstalledExtension]
+}
+
 struct ExtensionsView: View {
     private let explicitStore: ExtensionStore?
     private let showDoneButton: Bool
@@ -13,6 +18,7 @@ struct ExtensionsView: View {
     @State private var showURLImporter = false
     @State private var importError: String?
     @State private var reviewTarget: InstalledExtension?
+    @State private var batchReviewSelection: BatchExtensionReviewSelection?
     @State private var updateReviewTarget: PendingExtensionUpdate?
 
     init(extensionStore: ExtensionStore? = nil, showDoneButton: Bool = false) {
@@ -45,7 +51,7 @@ struct ExtensionsView: View {
                     ContentUnavailableView {
                         Label(L10n.tr("No Extensions Installed"), systemImage: "puzzlepiece.extension")
                     } description: {
-                        Text(L10n.tr("Import a .musicoext bundle or .musico.js script to add custom cloud music sources."))
+                        Text(L10n.tr("Import a .musicoext bundle, .musico.js script, or multi-extension .zip pack to add custom cloud music sources."))
                     } actions: {
                         HStack(spacing: 12) {
                             Button(L10n.tr("Import File…")) {
@@ -133,17 +139,17 @@ struct ExtensionsView: View {
         .fileImporter(
             isPresented: $showFileImporter,
             allowedContentTypes: Self.supportedImportTypes,
-            allowsMultipleSelection: false
+            allowsMultipleSelection: true
         ) { result in
             switch result {
             case .failure(let error):
                 importError = error.localizedDescription
             case .success(let urls):
-                guard let url = urls.first else { return }
+                guard !urls.isEmpty else { return }
                 Task {
                     do {
-                        let installed = try await extensionStore.importFromFile(at: url)
-                        reviewTarget = installed
+                        let installed = try await extensionStore.importPackagesFromFiles(at: urls)
+                        presentImportedExtensions(installed)
                     } catch {
                         importError = error.localizedDescription
                     }
@@ -152,7 +158,7 @@ struct ExtensionsView: View {
         }
         .sheet(isPresented: $showURLImporter) {
             ImportExtensionURLSheet(extensionStore: extensionStore) { installed in
-                reviewTarget = installed
+                presentImportedExtensions(installed)
             }
             .environment(\.extensionStore, extensionStore)
             .environment(\.languageManager, languageManager)
@@ -160,6 +166,12 @@ struct ExtensionsView: View {
         }
         .sheet(item: $reviewTarget) { target in
             ExtensionPermissionReviewSheet(extensionItem: target, extensionStore: extensionStore)
+                .environment(\.extensionStore, extensionStore)
+                .environment(\.languageManager, languageManager)
+                .environment(\.locale, languageManager.effectiveLocale)
+        }
+        .sheet(item: $batchReviewSelection) { selection in
+            ExtensionBatchPermissionReviewSheet(extensions: selection.extensions, extensionStore: extensionStore)
                 .environment(\.extensionStore, extensionStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
@@ -177,6 +189,14 @@ struct ExtensionsView: View {
             Button(L10n.tr("OK"), role: .cancel) {}
         } message: {
             Text(importError ?? "")
+        }
+    }
+
+    private func presentImportedExtensions(_ installed: [InstalledExtension]) {
+        if installed.count == 1, let single = installed.first {
+            reviewTarget = single
+        } else if installed.count > 1 {
+            batchReviewSelection = BatchExtensionReviewSelection(extensions: installed)
         }
     }
 
@@ -367,6 +387,93 @@ struct ExtensionPermissionReviewSheet: View {
                         extensionStore.approvePermissionsAndEnable(id: extensionItem.id)
                         dismiss()
                     }
+                }
+            }
+        }
+    }
+}
+
+struct ExtensionBatchPermissionReviewSheet: View {
+    let extensions: [InstalledExtension]
+    private let explicitStore: ExtensionStore?
+    @Environment(\.extensionStore) private var envExtensionStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var selectedIDs: Set<String>
+
+    init(extensions: [InstalledExtension], extensionStore: ExtensionStore? = nil) {
+        self.extensions = extensions
+        self.explicitStore = extensionStore
+        self._selectedIDs = State(initialValue: Set(extensions.map(\.id)))
+    }
+
+    private var extensionStore: ExtensionStore {
+        explicitStore ?? envExtensionStore
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(L10n.tr("Select the extensions you want to approve and enable. Unselected extensions remain disabled until reviewed."))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                ForEach(extensions) { ext in
+                    Section {
+                        Button {
+                            if selectedIDs.contains(ext.id) {
+                                selectedIDs.remove(ext.id)
+                            } else {
+                                selectedIDs.insert(ext.id)
+                            }
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: selectedIDs.contains(ext.id) ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(selectedIDs.contains(ext.id) ? Color.accentColor : .secondary)
+                                    .font(.title3)
+                                ExtensionIconView(iconData: ext.iconData, size: 36)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(ext.manifest.name)
+                                        .font(.headline)
+                                        .foregroundStyle(.primary)
+                                    Text("\(ext.manifest.id) · v\(ext.manifest.version)")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                            }
+                        }
+                        .buttonStyle(.plain)
+
+                        if !ext.manifest.capabilities.isEmpty {
+                            Text(ext.manifest.capabilities.map(\.localizedTitle).joined(separator: " · "))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        if !ext.manifest.permissions.hosts.isEmpty {
+                            Text(ext.manifest.permissions.hosts.joined(separator: ", "))
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+            .navigationTitle(L10n.tr("Review %@ Extensions", String(extensions.count)))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L10n.tr("Keep Disabled")) {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L10n.tr("Allow & Enable (%@)", String(selectedIDs.count))) {
+                        let chosenIDs = extensions.map(\.id).filter { selectedIDs.contains($0) }
+                        extensionStore.approvePermissionsAndEnable(ids: chosenIDs)
+                        dismiss()
+                    }
+                    .disabled(selectedIDs.isEmpty)
                 }
             }
         }
@@ -942,7 +1049,7 @@ struct ExtensionUpdateReviewSheet: View {
 
 private struct ImportExtensionURLSheet: View {
     let extensionStore: ExtensionStore
-    let onImported: (InstalledExtension) -> Void
+    let onImported: ([InstalledExtension]) -> Void
     @Environment(\.dismiss) private var dismiss
 
     @State private var urlText = ""
@@ -960,7 +1067,7 @@ private struct ImportExtensionURLSheet: View {
                 } header: {
                     Text(L10n.tr("Extension Package URL"))
                 } footer: {
-                    Text(L10n.tr("Enter an HTTPS link to a .musicoext bundle or .musico.js file."))
+                    Text(L10n.tr("Enter an HTTPS link to a .musicoext bundle, .musico.js script, or multi-extension .zip pack."))
                 }
 
                 if let errorMessage {
@@ -995,7 +1102,7 @@ private struct ImportExtensionURLSheet: View {
         let target = urlText
         Task {
             do {
-                let installed = try await extensionStore.importFromURL(target)
+                let installed = try await extensionStore.importPackagesFromURL(target)
                 dismiss()
                 onImported(installed)
             } catch {

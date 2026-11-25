@@ -223,13 +223,13 @@ class ExtensionRuntimeTest {
         }
 
         val manyEntries = LinkedHashMap<String, ByteArray>()
-        for (i in 0..256) {
+        for (i in 0..ExtensionPackageLoader.MAX_ZIP_ENTRIES) {
             manyEntries["file_$i.txt"] = "x".toByteArray(Charsets.UTF_8)
         }
         val tooManyZip = zipEntriesToBytes(manyEntries)
         assertTrue(extStore.stageFromBytes(tooManyZip, fileNameHint = "many.musicoext").isFailure)
 
-        val oversizedPayload = ByteArray(16 * 1024 * 1024 + 64) { 'a'.code.toByte() }
+        val oversizedPayload = ByteArray(ExtensionPackageLoader.MAX_UNCOMPRESSED_BYTES + 64) { 'a'.code.toByte() }
         val hugeZip = zipEntriesToBytes(
             mapOf(
                 "manifest.json" to "{}".toByteArray(Charsets.UTF_8),

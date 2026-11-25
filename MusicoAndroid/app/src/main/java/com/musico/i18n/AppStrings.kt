@@ -174,6 +174,9 @@ interface AppStrings {
     val allowedHostsLabel: String
     val capabilitiesLabel: String
     val installAndEnable: String
+    fun batchPermissionReviewTitle(count: Int): String
+    val batchPermissionReviewSubtitle: String
+    fun installAndEnableCount(count: Int): String
     val extensionSettingsTitle: String
     val resetDefaults: String
     val extensionLogsTitle: String
@@ -743,9 +746,9 @@ object EnStrings : AppStrings {
     override val importExtensionUrlTitle = "Import Extension from URL"
     override val extensionUrlLabel = "Extension HTTPS URL"
     override val extensionUrlPlaceholder = "https://example.com/source.musicoext"
-    override val extensionUrlSupportingText = "Supports .musicoext bundles and .musico.js scripts over HTTPS."
+    override val extensionUrlSupportingText = "Supports .musicoext bundles, .musico.js scripts, or .zip packs over HTTPS."
     override val noExtensionsTitle = "No Extensions Installed"
-    override val noExtensionsDesc = "Import a .musicoext bundle or .musico.js script to add custom cloud music sources."
+    override val noExtensionsDesc = "Import .musicoext bundles, .musico.js scripts, or a multi-plugin .zip pack to add custom cloud music sources."
     override val extensionImportSuccess = "Extension installed and enabled."
     override val extensionImportFailedTitle = "Couldn’t Import Extension"
     override val extensionImportFailedFallback = "The selected extension could not be loaded."
@@ -754,6 +757,9 @@ object EnStrings : AppStrings {
     override val allowedHostsLabel = "Allowed Hosts"
     override val capabilitiesLabel = "Capabilities"
     override val installAndEnable = "Install & Enable"
+    override fun batchPermissionReviewTitle(count: Int) = "Review Imported Extensions ($count)"
+    override val batchPermissionReviewSubtitle = "Select which extensions to install and enable. Network requests are restricted to each extension's listed hosts."
+    override fun installAndEnableCount(count: Int) = "Install & Enable ($count)"
     override val extensionSettingsTitle = "Extension Settings"
     override val resetDefaults = "Reset to Defaults"
     override val extensionLogsTitle = "Extension Logs"
@@ -1318,10 +1324,10 @@ object ZhHansStrings : AppStrings {
     override val importFromUrl = "从链接导入"
     override val importExtensionUrlTitle = "从链接导入扩展"
     override val extensionUrlLabel = "扩展 HTTPS 链接"
-    override val extensionUrlPlaceholder = "输入 .musicoext 或 .musico.js 下载链接"
-    override val extensionUrlSupportingText = "支持通过 HTTPS 导入 .musicoext 扩展包和 .musico.js 单文件脚本。"
+    override val extensionUrlPlaceholder = "输入 .musicoext、.musico.js 或 .zip 下载链接"
+    override val extensionUrlSupportingText = "支持通过 HTTPS 导入 .musicoext 扩展包、.musico.js 单文件脚本或多扩展 .zip 合集。"
     override val noExtensionsTitle = "尚未安装扩展"
-    override val noExtensionsDesc = "导入 .musicoext 扩展包或 .musico.js 脚本即可添加自定义云端音乐来源。"
+    override val noExtensionsDesc = "导入 .musicoext 扩展包、.musico.js 脚本或多扩展 .zip 合集即可添加自定义云端音乐来源。"
     override val extensionImportSuccess = "扩展已安装并启用。"
     override val extensionImportFailedTitle = "无法导入扩展"
     override val extensionImportFailedFallback = "无法加载所选扩展。"
@@ -1330,6 +1336,9 @@ object ZhHansStrings : AppStrings {
     override val allowedHostsLabel = "允许访问的主机"
     override val capabilitiesLabel = "声明的能力"
     override val installAndEnable = "安装并启用"
+    override fun batchPermissionReviewTitle(count: Int) = "审查导入的扩展（$count）"
+    override val batchPermissionReviewSubtitle = "勾选要安装并启用的扩展。各扩展的网络请求将被严格限制在各自列出的主机范围内。"
+    override fun installAndEnableCount(count: Int) = "安装并启用（$count）"
     override val extensionSettingsTitle = "扩展设置"
     override val resetDefaults = "恢复默认设置"
     override val extensionLogsTitle = "扩展日志"

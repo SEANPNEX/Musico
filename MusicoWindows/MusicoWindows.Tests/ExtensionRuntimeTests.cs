@@ -734,17 +734,17 @@ public sealed class ExtensionRuntimeTests
             ("/etc/passwd", Encoding.UTF8.GetBytes("bad")));
         Assert.Throws<InvalidDataException>(() => ExtensionPackageLoader.LoadFromFile(absZip));
 
-        // 3. > 256 entries
+        // 3. > MaxArchiveEntries (512 entries)
         var manyEntries = new List<(string, byte[])> { ("manifest.json", dummyManifest), ("index.js", dummyIndex) };
-        for (int i = 0; i < 256; i++)
+        for (int i = 0; i < ExtensionPackageLoader.MaxArchiveEntries; i++)
         {
             manyEntries.Add(($"extra/{i}.txt", [(byte)'a']));
         }
         string tooManyZip = CreateZipArchive(Path.Combine(tempDir, "many.musicoext"), manyEntries.ToArray());
         Assert.Throws<InvalidDataException>(() => ExtensionPackageLoader.LoadFromFile(tooManyZip));
 
-        // 4. > 16 MB uncompressed
-        byte[] bigPayload = new byte[(16 * 1024 * 1024) + 1024];
+        // 4. > MaxUncompressedBytes (32 MB uncompressed)
+        byte[] bigPayload = new byte[(int)ExtensionPackageLoader.MaxUncompressedBytes + 1024];
         string hugeZip = CreateZipArchive(
             Path.Combine(tempDir, "huge.musicoext"),
             ("manifest.json", dummyManifest),

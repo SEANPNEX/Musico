@@ -44,6 +44,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Button
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -111,7 +112,7 @@ import java.util.Date
 @Composable
 fun ExtensionsScreen(
     extensionStore: ExtensionStore,
-    onPickExtensionFile: ((Uri) -> Unit) -> Unit,
+    onPickExtensionFiles: ((List<Uri>) -> Unit) -> Unit,
     onBack: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -129,6 +130,7 @@ fun ExtensionsScreen(
 
     var isStaging by remember { mutableStateOf(false) }
     var stagedForReview by remember { mutableStateOf<StagedExtensionPackage?>(null) }
+    var stagedBatchForReview by remember { mutableStateOf<List<StagedExtensionPackage>?>(null) }
     var reviewUpdateTarget by remember { mutableStateOf<PendingExtensionUpdate?>(null) }
     var showImportUrlDialog by remember { mutableStateOf(false) }
     var importError by remember { mutableStateOf<String?>(null) }
@@ -140,14 +142,22 @@ fun ExtensionsScreen(
 
     BackHandler(onBack = onBack)
 
+    fun presentStagedPackages(staged: List<StagedExtensionPackage>) {
+        when {
+            staged.size == 1 -> stagedForReview = staged.first()
+            staged.size > 1 -> stagedBatchForReview = staged
+        }
+    }
+
     fun launchFileImport() {
-        onPickExtensionFile { uri ->
+        onPickExtensionFiles { uris ->
+            if (uris.isEmpty()) return@onPickExtensionFiles
             isStaging = true
             scope.launch {
-                val res = extensionStore.stageFromUri(context, uri)
+                val res = extensionStore.stagePackagesFromUris(context, uris)
                 isStaging = false
                 res.onSuccess { staged ->
-                    stagedForReview = staged
+                    presentStagedPackages(staged)
                 }.onFailure { err ->
                     importError = err.message ?: strings.extensionImportFailedFallback
                 }
@@ -346,10 +356,10 @@ fun ExtensionsScreen(
     if (showImportUrlDialog) {
         ImportExtensionUrlDialog(
             onDismiss = { showImportUrlDialog = false },
-            onImport = { url -> extensionStore.stageFromUrl(url) },
+            onImport = { url -> extensionStore.stagePackagesFromUrl(url) },
             onStaged = { staged ->
                 showImportUrlDialog = false
-                stagedForReview = staged
+                presentStagedPackages(staged)
             },
         )
     }
@@ -364,6 +374,19 @@ fun ExtensionsScreen(
             onConfirmInstall = {
                 extensionStore.installStaged(pendingReview, enableImmediately = true)
                 stagedForReview = null
+            },
+        )
+    }
+
+    val pendingBatchReview = stagedBatchForReview
+    if (pendingBatchReview != null) {
+        BatchPermissionReviewDialog(
+            packages = pendingBatchReview,
+            strings = strings,
+            onDismiss = { stagedBatchForReview = null },
+            onConfirmInstall = { selected ->
+                extensionStore.installStagedBatch(selected, enableImmediately = true)
+                stagedBatchForReview = null
             },
         )
     }
@@ -870,8 +893,8 @@ internal fun ReviewExtensionUpdateDialog(
 @Composable
 private fun ImportExtensionUrlDialog(
     onDismiss: () -> Unit,
-    onImport: suspend (String) -> Result<StagedExtensionPackage>,
-    onStaged: (StagedExtensionPackage) -> Unit,
+    onImport: suspend (String) -> Result<List<StagedExtensionPackage>>,
+    onStaged: (List<StagedExtensionPackage>) -> Unit,
 ) {
     val strings = LocalStrings.current
     val scope = rememberCoroutineScope()
@@ -933,6 +956,136 @@ private fun ImportExtensionUrlDialog(
         },
         dismissButton = {
             TextButton(enabled = !isLoading, onClick = onDismiss) {
+                Text(strings.cancel)
+            }
+        },
+    )
+}
+
+@OptIn(ExperimentalLayoutApi::class)
+@Composable
+private fun BatchPermissionReviewDialog(
+    packages: List<StagedExtensionPackage>,
+    strings: AppStrings,
+    onDismiss: () -> Unit,
+    onConfirmInstall: (List<StagedExtensionPackage>) -> Unit,
+) {
+    var selectedIds by remember(packages) {
+        mutableStateOf(packages.map { it.manifest.id }.toSet())
+    }
+    val selectedPackages = packages.filter { selectedIds.contains(it.manifest.id) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Rounded.Security, contentDescription = null) },
+        title = { Text(strings.batchPermissionReviewTitle(packages.size)) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 440.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text(
+                    text = strings.batchPermissionReviewSubtitle,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+
+                packages.forEach { pkg ->
+                    val manifest = pkg.manifest
+                    val isChecked = selectedIds.contains(manifest.id)
+                    ElevatedCard(
+                        colors = CardDefaults.elevatedCardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                        ),
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable {
+                                    selectedIds = if (isChecked) {
+                                        selectedIds - manifest.id
+                                    } else {
+                                        selectedIds + manifest.id
+                                    }
+                                }
+                                .padding(10.dp),
+                            verticalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Checkbox(
+                                    checked = isChecked,
+                                    onCheckedChange = { checked ->
+                                        selectedIds = if (checked) {
+                                            selectedIds + manifest.id
+                                        } else {
+                                            selectedIds - manifest.id
+                                        }
+                                    },
+                                )
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = manifest.name,
+                                        style = MaterialTheme.typography.titleSmall,
+                                        fontWeight = FontWeight.SemiBold,
+                                    )
+                                    Text(
+                                        text = "${strings.extensionVersionAuthor(manifest.version, manifest.author)} · ${manifest.id}",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                            if (manifest.capabilities.isNotEmpty()) {
+                                FlowRow(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                                ) {
+                                    manifest.capabilities.forEach { cap ->
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.primaryContainer,
+                                            shape = MaterialTheme.shapes.small,
+                                        ) {
+                                            Text(
+                                                text = capabilityLabel(cap, strings),
+                                                style = MaterialTheme.typography.labelSmall,
+                                                color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                            if (manifest.permissions.hosts.isNotEmpty()) {
+                                Text(
+                                    text = manifest.permissions.hosts.joinToString(", "),
+                                    style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                enabled = selectedPackages.isNotEmpty(),
+                onClick = { onConfirmInstall(selectedPackages) },
+            ) {
+                Text(strings.installAndEnableCount(selectedPackages.size))
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
                 Text(strings.cancel)
             }
         },

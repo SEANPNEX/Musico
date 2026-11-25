@@ -773,17 +773,17 @@ final class ExtensionRuntimeTests: XCTestCase {
         ])
         XCTAssertThrowsError(try ExtensionArchiveReader.extractEntries(from: absZip))
 
-        // 3. >256 entries
-        let tooMany = (0..<257).map { i in
+        // 3. >maxEntries
+        let tooMany = (0..<(ExtensionArchiveReader.maxEntries + 1)).map { i in
             TestZipBuilder.Entry(name: "f\(i).txt", data: Data("a".utf8), deflate: false)
         }
         let manyZip = try TestZipBuilder.buildArchive(entries: tooMany)
         XCTAssertThrowsError(try ExtensionArchiveReader.extractEntries(from: manyZip)) { error in
-            XCTAssertEqual(error as? ExtensionArchiveError, .tooManyEntries(256))
+            XCTAssertEqual(error as? ExtensionArchiveError, .tooManyEntries(ExtensionArchiveReader.maxEntries))
         }
 
-        // 4. >16 MB uncompressed size
-        let hugeData = Data(repeating: 0x41, count: 16 * 1024 * 1024 + 1)
+        // 4. >maxUncompressedBytes uncompressed size
+        let hugeData = Data(repeating: 0x41, count: ExtensionArchiveReader.maxUncompressedBytes + 1)
         let oversizeZip = try TestZipBuilder.buildArchive(entries: [
             .init(name: "huge.txt", data: hugeData, deflate: true)
         ])
@@ -1375,6 +1375,152 @@ final class ExtensionRuntimeTests: XCTestCase {
 
         let streamTrackOverride = try await provider.resolveStream(track: track, root: rootOverride, purpose: .stream, qualityID: "highest", forceRefresh: true)
         XCTAssertEqual(streamTrackOverride.url.absoluteString, "https://q.test/audio/tr1?q=highest&p=stream")
+    }
+
+    private func makeMultiFixtureScript(id: String, name: String) -> String {
+        """
+        'use strict';
+        var manifest = {
+          apiVersion: 1,
+          id: '\(id)',
+          name: '\(name)',
+          version: '1.0.0',
+          author: 'Fixture',
+          updateUrl: 'https://updates.fixture.test/\(id).musicoext',
+          capabilities: ['playlist'],
+          urlPatterns: ['^https://fixture\\\\.test/'],
+          permissions: { hosts: ['fixture.test'] }
+        };
+        function canHandle(url) { return String(url).indexOf('https://fixture.test/') === 0; }
+        async function fetchCollection() {
+          return { remoteId: 'c1', title: '\(name)', tracks: [] };
+        }
+        module.exports = { manifest: manifest, canHandle: canHandle, fetchCollection: fetchCollection };
+        """
+    }
+
+    private func makeMultiFixtureManifestJSON(id: String, name: String) -> String {
+        """
+        {
+          "apiVersion": 1,
+          "id": "\(id)",
+          "name": "\(name)",
+          "version": "1.0.0",
+          "author": "Fixture",
+          "entry": "index.js",
+          "updateUrl": "https://updates.fixture.test/\(id).musicoext",
+          "capabilities": ["playlist"],
+          "urlPatterns": ["^https://fixture\\\\.test/"],
+          "permissions": { "hosts": ["fixture.test"] }
+        }
+        """
+    }
+
+    private func makeMultiFixtureMusicoext(id: String, name: String) throws -> Data {
+        try TestZipBuilder.buildArchive(entries: [
+            .init(name: "manifest.json", data: Data(makeMultiFixtureManifestJSON(id: id, name: name).utf8)),
+            .init(name: "index.js", data: Data(makeMultiFixtureScript(id: id, name: name).utf8)),
+            .init(name: "icon.png", data: Data([0x89, 0x50, 0x4E, 0x47]))
+        ])
+    }
+
+    @MainActor
+    func testMultiPluginImportNestedMusicoextAndBatchEnable() async throws {
+        let packData = try TestZipBuilder.buildArchive(entries: [
+            .init(name: "alpha.musicoext", data: try makeMultiFixtureMusicoext(id: "com.example.alpha", name: "Alpha Plugin")),
+            .init(name: "nested/beta.musicoext", data: try makeMultiFixtureMusicoext(id: "com.example.beta", name: "Beta Plugin")),
+            .init(name: "__MACOSX/._alpha.musicoext", data: Data("appledouble".utf8)),
+            .init(name: ".DS_Store", data: Data("junk".utf8))
+        ])
+
+        let tempDir = makeTempDir()
+        let packURL = tempDir.appendingPathComponent("musico-plugins-all.zip")
+        try packData.write(to: packURL)
+
+        let registry = CloudProviderRegistry()
+        let store = ExtensionStore(baseDirectory: makeTempDir(), registry: registry)
+
+        // Single-package API must reject multi-extension archive.
+        do {
+            _ = try await store.importFromFile(at: packURL)
+            XCTFail("Expected single-package importFromFile to reject multi-plugin ZIP")
+        } catch {}
+
+        let installed = try await store.importPackagesFromFile(at: packURL)
+        XCTAssertEqual(installed.map(\.id), ["com.example.alpha", "com.example.beta"])
+        XCTAssertTrue(installed.allSatisfy { !$0.isActive && !$0.state.permissionApproved && $0.iconData != nil })
+        XCTAssertNil(registry.provider(forID: "ext.com.example.alpha"))
+
+        store.approvePermissionsAndEnable(ids: installed.map(\.id))
+        XCTAssertNotNil(registry.provider(forID: "ext.com.example.alpha"))
+        XCTAssertNotNil(registry.provider(forID: "ext.com.example.beta"))
+    }
+
+    @MainActor
+    func testMultiPluginSubdirsNestedScriptsAndValidationErrors() async throws {
+        let registry = CloudProviderRegistry()
+        let store = ExtensionStore(baseDirectory: makeTempDir(), registry: registry)
+
+        let subdirPack = try TestZipBuilder.buildArchive(entries: [
+            .init(name: "__MACOSX/pkg-one/._manifest.json", data: Data("appledouble".utf8)),
+            .init(name: "pkg-one/.DS_Store", data: Data("junk".utf8)),
+            .init(name: "pkg-one/manifest.json", data: Data(makeMultiFixtureManifestJSON(id: "com.example.one", name: "One").utf8)),
+            .init(name: "pkg-one/index.js", data: Data(makeMultiFixtureScript(id: "com.example.one", name: "One").utf8)),
+            .init(name: "pkg-two/manifest.json", data: Data(makeMultiFixtureManifestJSON(id: "com.example.two", name: "Two").utf8)),
+            .init(name: "pkg-two/index.js", data: Data(makeMultiFixtureScript(id: "com.example.two", name: "Two").utf8))
+        ])
+        let subdirInstalled = try await store.importPackagesData(subdirPack, fileName: "subdirs.zip", sourceURL: nil)
+        XCTAssertEqual(subdirInstalled.map(\.id).sorted(), ["com.example.one", "com.example.two"])
+
+        let scriptPack = try TestZipBuilder.buildArchive(entries: [
+            .init(name: "scripts/jsone.musico.js", data: Data(makeMultiFixtureScript(id: "com.example.jsone", name: "JS One").utf8)),
+            .init(name: "scripts/jstwo.musico.js", data: Data(makeMultiFixtureScript(id: "com.example.jstwo", name: "JS Two").utf8)),
+            .init(name: "__MACOSX/scripts/._jsone.musico.js", data: Data("appledouble".utf8))
+        ])
+        let scriptInstalled = try await store.importPackagesData(scriptPack, fileName: "scripts.zip", sourceURL: nil)
+        XCTAssertEqual(scriptInstalled.map(\.id).sorted(), ["com.example.jsone", "com.example.jstwo"])
+
+        let duplicatePack = try TestZipBuilder.buildArchive(entries: [
+            .init(name: "a.musicoext", data: try makeMultiFixtureMusicoext(id: "com.example.dup", name: "First")),
+            .init(name: "b.musicoext", data: try makeMultiFixtureMusicoext(id: "com.example.dup", name: "Second"))
+        ])
+        do {
+            _ = try await store.importPackagesData(duplicatePack, fileName: "dup.zip", sourceURL: nil)
+            XCTFail("Expected duplicate extension ID rejection")
+        } catch {}
+
+        let emptyPack = try TestZipBuilder.buildArchive(entries: [
+            .init(name: "README.md", data: Data("not an extension".utf8)),
+            .init(name: "__MACOSX/._README.md", data: Data("appledouble".utf8))
+        ])
+        do {
+            _ = try await store.importPackagesData(emptyPack, fileName: "empty.zip", sourceURL: nil)
+            XCTFail("Expected empty pack rejection")
+        } catch {}
+    }
+
+    @MainActor
+    func testMultiPluginURLImportClearsSourceURLOnPackButKeepsSingle() async throws {
+        let singleData = try makeMultiFixtureMusicoext(id: "com.example.single", name: "Single")
+        let multiData = try TestZipBuilder.buildArchive(entries: [
+            .init(name: "alpha.musicoext", data: try makeMultiFixtureMusicoext(id: "com.example.ualpha", name: "UAlpha")),
+            .init(name: "beta.musicoext", data: try makeMultiFixtureMusicoext(id: "com.example.ubeta", name: "UBeta"))
+        ])
+
+        let transport = FixtureTransport { req in
+            let url = req.url!
+            let payload = url.path.hasSuffix("single.musicoext") ? singleData : multiData
+            return HTTPResponseData(statusCode: 200, headers: [:], data: payload, finalURL: url)
+        }
+        let store = ExtensionStore(baseDirectory: makeTempDir(), registry: CloudProviderRegistry(), transport: transport)
+
+        let single = try await store.importPackagesFromURL("https://updates.fixture.test/single.musicoext")
+        XCTAssertEqual(single.count, 1)
+        XCTAssertEqual(single.first?.state.sourceURL, "https://updates.fixture.test/single.musicoext")
+
+        let multi = try await store.importPackagesFromURL("https://updates.fixture.test/musico-plugins-all.zip")
+        XCTAssertEqual(multi.count, 2)
+        XCTAssertTrue(multi.allSatisfy { $0.state.sourceURL == nil })
     }
 }
 

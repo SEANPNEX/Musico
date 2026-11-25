@@ -221,12 +221,12 @@
 
     <!-- ExtensionsView -->
     <sys:String x:Key="Str_Extensions_Title">扩展</sys:String>
-    <sys:String x:Key="Str_Extensions_Subtitle">安装 JavaScript 来源扩展（.musicoext 或 .musico.js）以添加自定义云端音乐来源</sys:String>
+    <sys:String x:Key="Str_Extensions_Subtitle">安装 JavaScript 来源扩展（.musicoext、.musico.js 或 .zip 扩展包合集）以添加自定义云端音乐来源</sys:String>
     <sys:String x:Key="Str_Extensions_ImportFile">导入文件...</sys:String>
     <sys:String x:Key="Str_Extensions_UrlPlaceholder">https://example.com/extension.musicoext</sys:String>
     <sys:String x:Key="Str_Extensions_ImportUrl">从链接导入</sys:String>
     <sys:String x:Key="Str_Extensions_EmptyTitle">尚未安装扩展</sys:String>
-    <sys:String x:Key="Str_Extensions_EmptyDesc">从本地文件或 HTTPS 链接导入 .musicoext 扩展包或 .musico.js 脚本，以添加自定义云端来源。</sys:String>
+    <sys:String x:Key="Str_Extensions_EmptyDesc">从本地文件或 HTTPS 链接导入 .musicoext 扩展包、.musico.js 脚本或多扩展 .zip 合集，以添加自定义云端来源。</sys:String>
     <sys:String x:Key="Str_Extensions_ReviewTitle">权限审查</sys:String>
     <sys:String x:Key="Str_Extensions_ReviewSubtitle">在启用此扩展前，请审查其请求的权限与允许访问的主机域名。</sys:String>
     <sys:String x:Key="Str_Extensions_CapabilitiesLabel">声明能力</sys:String>

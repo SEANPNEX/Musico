@@ -311,68 +311,72 @@
 
                     <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Margin="0,0,0,16">
                         <StackPanel>
-                            <Border Background="{DynamicResource CardBackgroundBrush}"
-                                    BorderBrush="{DynamicResource ControlBorderBrush}"
-                                    BorderThickness="1"
-                                    Padding="12,10"
-                                    Margin="0,0,0,12">
-                                <StackPanel>
-                                    <TextBlock x:Name="ReviewExtNameText"
-                                               FontFamily="{StaticResource Win10Font}"
-                                               FontSize="15"
-                                               FontWeight="SemiBold"
-                                               Foreground="{DynamicResource TextPrimaryBrush}" />
-                                    <TextBlock x:Name="ReviewExtMetaText"
-                                               FontFamily="{StaticResource Win10Font}"
-                                               FontSize="12"
-                                               Foreground="{DynamicResource TextSecondaryBrush}"
-                                               Margin="0,2,0,0" />
-                                    <TextBlock x:Name="ReviewExtDescText"
-                                               FontFamily="{StaticResource Win10Font}"
-                                               FontSize="12"
-                                               Foreground="{DynamicResource TextSecondaryBrush}"
-                                               TextWrapping="Wrap"
-                                               Margin="0,6,0,0" />
-                                </StackPanel>
-                            </Border>
-
-                            <StackPanel x:Name="ReviewEscalationSection"
-                                        Visibility="Collapsed"
+                            <StackPanel x:Name="SingleReviewContent">
+                                <Border Background="{DynamicResource CardBackgroundBrush}"
+                                        BorderBrush="{DynamicResource ControlBorderBrush}"
+                                        BorderThickness="1"
+                                        Padding="12,10"
                                         Margin="0,0,0,12">
-                                <TextBlock x:Name="ReviewNewPermissionsHeader"
+                                    <StackPanel>
+                                        <TextBlock x:Name="ReviewExtNameText"
+                                                   FontFamily="{StaticResource Win10Font}"
+                                                   FontSize="15"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock x:Name="ReviewExtMetaText"
+                                                   FontFamily="{StaticResource Win10Font}"
+                                                   FontSize="12"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                                   Margin="0,2,0,0" />
+                                        <TextBlock x:Name="ReviewExtDescText"
+                                                   FontFamily="{StaticResource Win10Font}"
+                                                   FontSize="12"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                                   TextWrapping="Wrap"
+                                                   Margin="0,6,0,0" />
+                                    </StackPanel>
+                                </Border>
+
+                                <StackPanel x:Name="ReviewEscalationSection"
+                                            Visibility="Collapsed"
+                                            Margin="0,0,0,12">
+                                    <TextBlock x:Name="ReviewNewPermissionsHeader"
+                                               FontFamily="{StaticResource Win10Font}"
+                                               FontSize="12"
+                                               FontWeight="SemiBold"
+                                               Foreground="{DynamicResource WarningTextBrush}"
+                                               Margin="0,0,0,6" />
+                                    <Border Background="{DynamicResource WarningBannerBrush}"
+                                            BorderBrush="{DynamicResource WarningTextBrush}"
+                                            BorderThickness="1"
+                                            Padding="10,8">
+                                        <StackPanel x:Name="ReviewNewPermissionsPanel" />
+                                    </Border>
+                                </StackPanel>
+
+                                <TextBlock Text="{DynamicResource Str_Extensions_CapabilitiesLabel}"
                                            FontFamily="{StaticResource Win10Font}"
                                            FontSize="12"
                                            FontWeight="SemiBold"
-                                           Foreground="{DynamicResource WarningTextBrush}"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
                                            Margin="0,0,0,6" />
-                                <Border Background="{DynamicResource WarningBannerBrush}"
-                                        BorderBrush="{DynamicResource WarningTextBrush}"
+                                <WrapPanel x:Name="ReviewCapabilitiesPanel" Margin="0,0,0,12" />
+
+                                <TextBlock Text="{DynamicResource Str_Extensions_HostsLabel}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="12"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           Margin="0,0,0,6" />
+                                <Border Background="{DynamicResource CardBackgroundBrush}"
+                                        BorderBrush="{DynamicResource ControlBorderBrush}"
                                         BorderThickness="1"
                                         Padding="10,8">
-                                    <StackPanel x:Name="ReviewNewPermissionsPanel" />
+                                    <StackPanel x:Name="ReviewHostsPanel" />
                                 </Border>
                             </StackPanel>
 
-                            <TextBlock Text="{DynamicResource Str_Extensions_CapabilitiesLabel}"
-                                       FontFamily="{StaticResource Win10Font}"
-                                       FontSize="12"
-                                       FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextPrimaryBrush}"
-                                       Margin="0,0,0,6" />
-                            <WrapPanel x:Name="ReviewCapabilitiesPanel" Margin="0,0,0,12" />
-
-                            <TextBlock Text="{DynamicResource Str_Extensions_HostsLabel}"
-                                       FontFamily="{StaticResource Win10Font}"
-                                       FontSize="12"
-                                       FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextPrimaryBrush}"
-                                       Margin="0,0,0,6" />
-                            <Border Background="{DynamicResource CardBackgroundBrush}"
-                                    BorderBrush="{DynamicResource ControlBorderBrush}"
-                                    BorderThickness="1"
-                                    Padding="10,8">
-                                <StackPanel x:Name="ReviewHostsPanel" />
-                            </Border>
+                            <StackPanel x:Name="BatchReviewPanel" Visibility="Collapsed" />
                         </StackPanel>
                     </ScrollViewer>
 

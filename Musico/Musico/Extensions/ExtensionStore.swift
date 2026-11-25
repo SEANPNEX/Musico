@@ -345,16 +345,55 @@ final class ExtensionStore {
 
     @discardableResult
     func importFromFile(at fileURL: URL) async throws -> InstalledExtension {
+        let installed = try await importPackagesFromFile(at: fileURL)
+        guard installed.count == 1, let single = installed.first else {
+            throw ExtensionImportError.invalidPackage(
+                "Archive contains \(installed.count) extensions; expected a single extension package."
+            )
+        }
+        return single
+    }
+
+    @discardableResult
+    func importPackagesFromFile(at fileURL: URL) async throws -> [InstalledExtension] {
         let scoped = fileURL.startAccessingSecurityScopedResource()
         defer {
             if scoped { fileURL.stopAccessingSecurityScopedResource() }
         }
         let data = try Data(contentsOf: fileURL)
-        return try await importPackageData(data, fileName: fileURL.lastPathComponent, sourceURL: nil)
+        return try await importPackagesData(data, fileName: fileURL.lastPathComponent, sourceURL: nil)
+    }
+
+    @discardableResult
+    func importPackagesFromFiles(at fileURLs: [URL]) async throws -> [InstalledExtension] {
+        var byID: [String: InstalledExtension] = [:]
+        var orderedIDs: [String] = []
+        for fileURL in fileURLs {
+            let batch = try await importPackagesFromFile(at: fileURL)
+            for item in batch {
+                let key = item.id.lowercased()
+                if byID[key] == nil {
+                    orderedIDs.append(key)
+                }
+                byID[key] = item
+            }
+        }
+        return orderedIDs.compactMap { byID[$0] }
     }
 
     @discardableResult
     func importFromURL(_ rawURLString: String) async throws -> InstalledExtension {
+        let installed = try await importPackagesFromURL(rawURLString)
+        guard installed.count == 1, let single = installed.first else {
+            throw ExtensionImportError.invalidPackage(
+                "Archive contains \(installed.count) extensions; expected a single extension package."
+            )
+        }
+        return single
+    }
+
+    @discardableResult
+    func importPackagesFromURL(_ rawURLString: String) async throws -> [InstalledExtension] {
         let trimmed = rawURLString.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let url = URL(string: trimmed), let scheme = url.scheme?.lowercased() else {
             throw ExtensionImportError.invalidURL
@@ -367,7 +406,7 @@ final class ExtensionStore {
         }
 
         let data = try await downloadPackageData(from: url)
-        return try await importPackageData(data, fileName: url.lastPathComponent, sourceURL: url.absoluteString)
+        return try await importPackagesData(data, fileName: url.lastPathComponent, sourceURL: url.absoluteString)
     }
 
     private func downloadPackageData(from url: URL) async throws -> Data {
@@ -391,10 +430,67 @@ final class ExtensionStore {
         return response.data
     }
 
+    private typealias ParsedPackage = (manifest: ExtensionManifest, scriptSource: String, iconData: Data?)
+
+    private static func isIgnoredMacOSMetadataPath(_ path: String) -> Bool {
+        let normalized = path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        if normalized.isEmpty { return true }
+        let lower = normalized.lowercased()
+        if lower == "__macosx" || lower.hasPrefix("__macosx/") {
+            return true
+        }
+        let fileName = (normalized as NSString).lastPathComponent
+        return fileName == ".DS_Store" || fileName.hasPrefix("._")
+    }
+
+    private func parseSingleArchiveEntries(_ entries: [String: Data]) throws -> ParsedPackage {
+        guard let manifestData = entries["manifest.json"] else {
+            throw ExtensionImportError.invalidPackage("Missing manifest.json in archive.")
+        }
+        let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: manifestData)
+        try manifest.validate()
+
+        let entryPath = try ExtensionArchiveReader.validateAndNormalizeEntryPath(manifest.effectiveEntry, isDirectory: false)
+        guard let scriptData = entries[entryPath],
+              let decodedScript = String(data: scriptData, encoding: .utf8),
+              !decodedScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ExtensionImportError.missingEntryScript(manifest.effectiveEntry)
+        }
+        return (manifest, decodedScript, entries["icon.png"])
+    }
+
+    private func parseSingleScriptData(_ data: Data) async throws -> ParsedPackage {
+        guard data.count <= ExtensionArchiveReader.maxUncompressedBytes else {
+            throw ExtensionArchiveError.archiveTooLarge(ExtensionArchiveReader.maxUncompressedBytes / (1024 * 1024))
+        }
+        guard let decodedScript = String(data: data, encoding: .utf8),
+              !decodedScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw ExtensionImportError.invalidPackage("Extension script is not valid UTF-8.")
+        }
+        var extractedManifest = try await JSExtensionRuntime.extractManifest(from: decodedScript)
+        // Single-file scripts always execute from saved index.js.
+        extractedManifest.entry = "index.js"
+        try extractedManifest.validate()
+        return (extractedManifest, decodedScript, nil)
+    }
+
     private func parsePackageData(
         _ data: Data,
         fileName: String
-    ) async throws -> (manifest: ExtensionManifest, scriptSource: String, iconData: Data?) {
+    ) async throws -> ParsedPackage {
+        let packages = try await parsePackagesData(data, fileName: fileName)
+        guard packages.count == 1, let single = packages.first else {
+            throw ExtensionImportError.invalidPackage(
+                "Archive contains \(packages.count) extensions; expected a single extension package."
+            )
+        }
+        return single
+    }
+
+    private func parsePackagesData(
+        _ data: Data,
+        fileName: String
+    ) async throws -> [ParsedPackage] {
         let lowerName = fileName.lowercased()
         let hasZipMagic = data.count >= 4
             && data[data.startIndex] == 0x50
@@ -403,33 +499,87 @@ final class ExtensionStore {
             && data[data.startIndex + 3] == 0x04
 
         if hasZipMagic || lowerName.hasSuffix(".musicoext") || lowerName.hasSuffix(".zip") {
-            let entries = try ExtensionArchiveReader.extractEntries(from: data)
-            guard let manifestData = entries["manifest.json"] else {
-                throw ExtensionImportError.invalidPackage("Missing manifest.json in archive.")
-            }
-            let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: manifestData)
-            try manifest.validate()
+            let rawEntries = try ExtensionArchiveReader.extractEntries(from: data)
+            let entries = rawEntries.filter { !Self.isIgnoredMacOSMetadataPath($0.key) }
 
-            let entryPath = try ExtensionArchiveReader.validateAndNormalizeEntryPath(manifest.effectiveEntry, isDirectory: false)
-            guard let scriptData = entries[entryPath],
-                  let decodedScript = String(data: scriptData, encoding: .utf8),
-                  !decodedScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                throw ExtensionImportError.missingEntryScript(manifest.effectiveEntry)
+            if entries["manifest.json"] != nil {
+                return [try parseSingleArchiveEntries(entries)]
             }
-            return (manifest, decodedScript, entries["icon.png"])
+
+            // Collect subdirectory extension bundles (`<dir>/manifest.json`).
+            var parsed: [ParsedPackage] = []
+            var seenIDs = Set<String>()
+            var subdirPrefixes: [String] = []
+
+            let manifestPaths = entries.keys
+                .filter { $0.lowercased().hasSuffix("/manifest.json") }
+                .sorted()
+            for manifestPath in manifestPaths {
+                let prefix = String(manifestPath.dropLast("manifest.json".count))
+                // Skip nested manifest.json inside an already-matched bundle root.
+                if subdirPrefixes.contains(where: { prefix.hasPrefix($0) }) {
+                    continue
+                }
+                subdirPrefixes.append(prefix)
+                var subEntries: [String: Data] = [:]
+                for (key, value) in entries where key.hasPrefix(prefix) {
+                    let relative = String(key.dropFirst(prefix.count))
+                    if !relative.isEmpty {
+                        subEntries[relative] = value
+                    }
+                }
+                let pkg = try parseSingleArchiveEntries(subEntries)
+                let key = pkg.manifest.id.lowercased()
+                guard seenIDs.insert(key).inserted else {
+                    throw ExtensionImportError.invalidPackage("Archive contains duplicate extension ID '\(pkg.manifest.id)'.")
+                }
+                parsed.append(pkg)
+            }
+
+            // Collect nested `.musicoext` bundles (depth = 1; no recursive packs).
+            let nestedBundlePaths = entries.keys
+                .filter { path in
+                    path.lowercased().hasSuffix(".musicoext")
+                        && !subdirPrefixes.contains(where: { path.hasPrefix($0) })
+                }
+                .sorted()
+            for bundlePath in nestedBundlePaths {
+                guard let bundleData = entries[bundlePath] else { continue }
+                let rawNested = try ExtensionArchiveReader.extractEntries(from: bundleData)
+                let nestedEntries = rawNested.filter { !Self.isIgnoredMacOSMetadataPath($0.key) }
+                let pkg = try parseSingleArchiveEntries(nestedEntries)
+                let key = pkg.manifest.id.lowercased()
+                guard seenIDs.insert(key).inserted else {
+                    throw ExtensionImportError.invalidPackage("Archive contains duplicate extension ID '\(pkg.manifest.id)'.")
+                }
+                parsed.append(pkg)
+            }
+
+            // Collect standalone `.musico.js` scripts not owned by a subdirectory bundle.
+            let nestedScriptPaths = entries.keys
+                .filter { path in
+                    path.lowercased().hasSuffix(".musico.js")
+                        && !subdirPrefixes.contains(where: { path.hasPrefix($0) })
+                }
+                .sorted()
+            for scriptPath in nestedScriptPaths {
+                guard let scriptData = entries[scriptPath] else { continue }
+                let pkg = try await parseSingleScriptData(scriptData)
+                let key = pkg.manifest.id.lowercased()
+                guard seenIDs.insert(key).inserted else {
+                    throw ExtensionImportError.invalidPackage("Archive contains duplicate extension ID '\(pkg.manifest.id)'.")
+                }
+                parsed.append(pkg)
+            }
+
+            guard !parsed.isEmpty else {
+                throw ExtensionImportError.invalidPackage(
+                    "Archive does not contain any valid extension bundles (.musicoext, manifest.json, or .musico.js)."
+                )
+            }
+            return parsed
         } else {
-            guard data.count <= ExtensionArchiveReader.maxUncompressedBytes else {
-                throw ExtensionArchiveError.archiveTooLarge(ExtensionArchiveReader.maxUncompressedBytes / (1024 * 1024))
-            }
-            guard let decodedScript = String(data: data, encoding: .utf8),
-                  !decodedScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                throw ExtensionImportError.invalidPackage("Extension script is not valid UTF-8.")
-            }
-            var extractedManifest = try await JSExtensionRuntime.extractManifest(from: decodedScript)
-            // Single-file scripts always execute from saved index.js.
-            extractedManifest.entry = "index.js"
-            try extractedManifest.validate()
-            return (extractedManifest, decodedScript, nil)
+            return [try await parseSingleScriptData(data)]
         }
     }
 
@@ -448,6 +598,31 @@ final class ExtensionStore {
         pendingUpdates.removeValue(forKey: installed.id)
         updateStatusByID.removeValue(forKey: installed.id)
         return installed
+    }
+
+    @discardableResult
+    func importPackagesData(_ data: Data, fileName: String, sourceURL: String?) async throws -> [InstalledExtension] {
+        let parsedPackages = try await parsePackagesData(data, fileName: fileName)
+        // Multi-plugin packs should not overwrite individual extension update URLs with the pack archive URL.
+        let effectiveSourceURL = parsedPackages.count > 1 ? nil : sourceURL
+        let now = Date()
+        var installedList: [InstalledExtension] = []
+        installedList.reserveCapacity(parsedPackages.count)
+        for parsed in parsedPackages {
+            let installed = try writeExtensionPackage(
+                manifest: parsed.manifest,
+                scriptSource: parsed.scriptSource,
+                iconData: parsed.iconData,
+                sourceURL: effectiveSourceURL,
+                isEnabled: false,
+                permissionApproved: false,
+                now: now
+            )
+            pendingUpdates.removeValue(forKey: installed.id)
+            updateStatusByID.removeValue(forKey: installed.id)
+            installedList.append(installed)
+        }
+        return installedList
     }
 
     @discardableResult
@@ -673,12 +848,23 @@ final class ExtensionStore {
     // MARK: - Lifecycle, Settings & Logs
 
     func approvePermissionsAndEnable(id: String) {
-        guard let idx = extensions.firstIndex(where: { $0.id == id }) else { return }
-        extensions[idx].state.permissionApproved = true
-        extensions[idx].state.isEnabled = true
-        extensions[idx].state.updatedAt = Date()
-        saveState(for: extensions[idx])
-        syncAll()
+        approvePermissionsAndEnable(ids: [id])
+    }
+
+    func approvePermissionsAndEnable(ids: [String]) {
+        let idSet = Set(ids)
+        let now = Date()
+        var changed = false
+        for idx in extensions.indices where idSet.contains(extensions[idx].id) {
+            extensions[idx].state.permissionApproved = true
+            extensions[idx].state.isEnabled = true
+            extensions[idx].state.updatedAt = now
+            saveState(for: extensions[idx])
+            changed = true
+        }
+        if changed {
+            syncAll()
+        }
     }
 
     /// Returns `false` if enabling was blocked because the user has not yet approved permissions.

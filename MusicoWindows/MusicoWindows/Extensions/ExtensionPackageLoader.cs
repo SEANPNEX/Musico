@@ -21,11 +21,31 @@ public sealed record LoadedExtensionPackage(
 
 public static class ExtensionPackageLoader
 {
-    public const int MaxArchiveEntries = 256;
-    public const long MaxUncompressedBytes = 16L * 1024 * 1024;
+    public const int MaxArchiveEntries = 512;
+    public const long MaxUncompressedBytes = 32L * 1024 * 1024;
     private const long ValidationMemoryLimitBytes = 32_000_000;
 
     public static LoadedExtensionPackage LoadFromFile(string filePath)
+    {
+        IReadOnlyList<LoadedExtensionPackage> packages = LoadPackagesFromFile(filePath);
+        if (packages.Count != 1)
+        {
+            throw new InvalidDataException($"Archive contains {packages.Count} extensions; expected a single extension package.");
+        }
+        return packages[0];
+    }
+
+    public static LoadedExtensionPackage LoadFromBytes(byte[] bytes, string? fileNameHint = null)
+    {
+        IReadOnlyList<LoadedExtensionPackage> packages = LoadPackagesFromBytes(bytes, fileNameHint);
+        if (packages.Count != 1)
+        {
+            throw new InvalidDataException($"Archive contains {packages.Count} extensions; expected a single extension package.");
+        }
+        return packages[0];
+    }
+
+    public static IReadOnlyList<LoadedExtensionPackage> LoadPackagesFromFile(string filePath)
     {
         if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
         {
@@ -33,10 +53,10 @@ public static class ExtensionPackageLoader
         }
 
         byte[] bytes = ReadBoundedFileBytes(filePath);
-        return LoadFromBytes(bytes, filePath);
+        return LoadPackagesFromBytes(bytes, filePath);
     }
 
-    public static LoadedExtensionPackage LoadFromBytes(byte[] bytes, string? fileNameHint = null)
+    public static IReadOnlyList<LoadedExtensionPackage> LoadPackagesFromBytes(byte[] bytes, string? fileNameHint = null)
     {
         ArgumentNullException.ThrowIfNull(bytes);
         if (bytes.Length == 0)
@@ -50,19 +70,30 @@ public static class ExtensionPackageLoader
 
         bool looksLikeZip = (bytes.Length >= 4 && bytes[0] == 0x50 && bytes[1] == 0x4B && bytes[2] == 0x03 && bytes[3] == 0x04) ||
                             (!string.IsNullOrWhiteSpace(fileNameHint) &&
-                             fileNameHint.EndsWith(".musicoext", StringComparison.OrdinalIgnoreCase));
+                             (fileNameHint.EndsWith(".musicoext", StringComparison.OrdinalIgnoreCase) ||
+                              fileNameHint.EndsWith(".zip", StringComparison.OrdinalIgnoreCase)));
 
         if (looksLikeZip)
         {
             using var ms = new MemoryStream(bytes, writable: false);
-            return LoadZipBundle(ms);
+            return LoadZipPackages(ms, allowNestedPacks: true);
         }
 
         string source = Encoding.UTF8.GetString(bytes);
-        return LoadSingleFileScript(source);
+        return [LoadSingleFileScript(source)];
     }
 
     public static LoadedExtensionPackage LoadZipBundle(Stream zipStream)
+    {
+        IReadOnlyList<LoadedExtensionPackage> packages = LoadZipPackages(zipStream, allowNestedPacks: false);
+        if (packages.Count != 1)
+        {
+            throw new InvalidDataException($"Extension archive contains {packages.Count} extensions; expected a single extension package.");
+        }
+        return packages[0];
+    }
+
+    public static IReadOnlyList<LoadedExtensionPackage> LoadZipPackages(Stream zipStream, bool allowNestedPacks = true)
     {
         ArgumentNullException.ThrowIfNull(zipStream);
 
@@ -79,7 +110,7 @@ public static class ExtensionPackageLoader
         foreach (ZipArchiveEntry entry in archive.Entries)
         {
             string normalizedPath = ValidateAndNormalizeEntryPath(entry.FullName, out bool isDirectory);
-            if (isDirectory) continue;
+            if (isDirectory || IsIgnoredArchiveMetadata(normalizedPath)) continue;
 
             if (entry.Length < 0)
             {
@@ -99,6 +130,102 @@ public static class ExtensionPackageLoader
             entriesByPath[normalizedPath] = data;
         }
 
+        if (entriesByPath.ContainsKey("manifest.json"))
+        {
+            return [ParseBundleFromEntries(entriesByPath)];
+        }
+
+        if (!allowNestedPacks)
+        {
+            throw new InvalidDataException("Extension archive is missing manifest.json.");
+        }
+
+        var packages = new List<LoadedExtensionPackage>();
+        var claimedPrefixes = new List<string>();
+        List<string> sortedPaths = entriesByPath.Keys.OrderBy(p => p, StringComparer.OrdinalIgnoreCase).ToList();
+
+        foreach (string path in sortedPaths)
+        {
+            if (!path.EndsWith("/manifest.json", StringComparison.OrdinalIgnoreCase)) continue;
+            string prefix = path[..^"manifest.json".Length];
+            if (IsUnderClaimedPrefix(path, claimedPrefixes)) continue;
+
+            claimedPrefixes.Add(prefix);
+            var subEntries = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
+            foreach (var kvp in entriesByPath)
+            {
+                if (kvp.Key.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                {
+                    string rel = kvp.Key[prefix.Length..];
+                    if (!string.IsNullOrEmpty(rel))
+                    {
+                        subEntries[rel] = kvp.Value;
+                    }
+                }
+            }
+            packages.Add(ParseBundleFromEntries(subEntries));
+        }
+
+        foreach (string path in sortedPaths)
+        {
+            if (IsUnderClaimedPrefix(path, claimedPrefixes)) continue;
+
+            if (path.EndsWith(".musicoext", StringComparison.OrdinalIgnoreCase))
+            {
+                using var innerMs = new MemoryStream(entriesByPath[path], writable: false);
+                IReadOnlyList<LoadedExtensionPackage> nested = LoadZipPackages(innerMs, allowNestedPacks: false);
+                packages.AddRange(nested);
+            }
+            else if (path.EndsWith(".musico.js", StringComparison.OrdinalIgnoreCase))
+            {
+                string scriptSource = Encoding.UTF8.GetString(entriesByPath[path]);
+                packages.Add(LoadSingleFileScript(scriptSource));
+            }
+        }
+
+        if (packages.Count == 0)
+        {
+            throw new InvalidDataException("Archive does not contain a valid Musico extension (manifest.json, .musicoext, or .musico.js).");
+        }
+
+        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (LoadedExtensionPackage pkg in packages)
+        {
+            if (!seenIds.Add(pkg.Manifest.Id))
+            {
+                throw new InvalidDataException($"Archive contains duplicate extension id '{pkg.Manifest.Id}'.");
+            }
+        }
+
+        return packages;
+    }
+
+    private static bool IsUnderClaimedPrefix(string path, IReadOnlyList<string> claimedPrefixes)
+    {
+        foreach (string prefix in claimedPrefixes)
+        {
+            if (path.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool IsIgnoredArchiveMetadata(string normalizedPath)
+    {
+        if (normalizedPath.Equals("__MACOSX", StringComparison.OrdinalIgnoreCase) ||
+            normalizedPath.StartsWith("__MACOSX/", StringComparison.OrdinalIgnoreCase))
+        {
+            return true;
+        }
+        string fileName = normalizedPath.Split('/')[^1];
+        return fileName.Equals(".DS_Store", StringComparison.OrdinalIgnoreCase) ||
+               fileName.StartsWith("._", StringComparison.Ordinal);
+    }
+
+    private static LoadedExtensionPackage ParseBundleFromEntries(IReadOnlyDictionary<string, byte[]> entriesByPath)
+    {
         if (!entriesByPath.TryGetValue("manifest.json", out byte[]? manifestBytes))
         {
             throw new InvalidDataException("Extension archive is missing manifest.json.");

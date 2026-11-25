@@ -571,6 +571,41 @@ public sealed class ExtensionStore : IExtensionHostServices
         return StageImportedPackage(pkg, sourceLocation: filePath, sourceUrl: null);
     }
 
+    public async Task<IReadOnlyList<InstalledExtension>> ImportPackagesFromFileAsync(string filePath, CancellationToken ct = default)
+    {
+        IReadOnlyList<LoadedExtensionPackage> packages = await Task.Run(() => ExtensionPackageLoader.LoadPackagesFromFile(filePath), ct)
+            .ConfigureAwait(false);
+        var installed = new List<InstalledExtension>(packages.Count);
+        foreach (LoadedExtensionPackage pkg in packages)
+        {
+            installed.Add(StageImportedPackage(pkg, sourceLocation: filePath, sourceUrl: null));
+        }
+        return installed;
+    }
+
+    public async Task<IReadOnlyList<InstalledExtension>> ImportPackagesFromFilesAsync(
+        IEnumerable<string> filePaths,
+        CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(filePaths);
+        var byId = new Dictionary<string, InstalledExtension>(StringComparer.OrdinalIgnoreCase);
+        var orderedIds = new List<string>();
+        foreach (string path in filePaths)
+        {
+            if (string.IsNullOrWhiteSpace(path)) continue;
+            IReadOnlyList<InstalledExtension> batch = await ImportPackagesFromFileAsync(path, ct).ConfigureAwait(false);
+            foreach (InstalledExtension ext in batch)
+            {
+                if (!byId.ContainsKey(ext.Id))
+                {
+                    orderedIds.Add(ext.Id);
+                }
+                byId[ext.Id] = ext;
+            }
+        }
+        return orderedIds.Select(id => byId[id]).ToList();
+    }
+
     public async Task<InstalledExtension> ImportFromUrlAsync(
         string url,
         string? proxyUrl = null,
@@ -583,6 +618,26 @@ public sealed class ExtensionStore : IExtensionHostServices
 
         LoadedExtensionPackage pkg = await DownloadPackageAsync(normalizedUrl, proxyUrl, ct).ConfigureAwait(false);
         return StageImportedPackage(pkg, sourceLocation: normalizedUrl, sourceUrl: normalizedUrl);
+    }
+
+    public async Task<IReadOnlyList<InstalledExtension>> ImportPackagesFromUrlAsync(
+        string url,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        if (!TryNormalizeHttpsUrl(url, out string? normalizedUrl) || normalizedUrl is null)
+        {
+            throw new ArgumentException("Extension URL must be a valid https:// URL.", nameof(url));
+        }
+
+        IReadOnlyList<LoadedExtensionPackage> packages = await DownloadPackagesAsync(normalizedUrl, proxyUrl, ct).ConfigureAwait(false);
+        string? singleSourceUrl = packages.Count == 1 ? normalizedUrl : null;
+        var installed = new List<InstalledExtension>(packages.Count);
+        foreach (LoadedExtensionPackage pkg in packages)
+        {
+            installed.Add(StageImportedPackage(pkg, sourceLocation: normalizedUrl, sourceUrl: singleSourceUrl));
+        }
+        return installed;
     }
 
     public async Task<ExtensionUpdateCheckSummary> CheckForUpdatesIfDueAsync(
@@ -823,6 +878,19 @@ public sealed class ExtensionStore : IExtensionHostServices
         string? proxyUrl,
         CancellationToken ct)
     {
+        IReadOnlyList<LoadedExtensionPackage> packages = await DownloadPackagesAsync(httpsUrl, proxyUrl, ct).ConfigureAwait(false);
+        if (packages.Count != 1)
+        {
+            throw new InvalidDataException($"Downloaded archive contains {packages.Count} extensions; expected a single extension package.");
+        }
+        return packages[0];
+    }
+
+    private async Task<IReadOnlyList<LoadedExtensionPackage>> DownloadPackagesAsync(
+        string httpsUrl,
+        string? proxyUrl,
+        CancellationToken ct)
+    {
         if (!TryNormalizeHttpsUrl(httpsUrl, out string? normalized) || normalized is null ||
             !Uri.TryCreate(normalized, UriKind.Absolute, out var uri))
         {
@@ -858,7 +926,7 @@ public sealed class ExtensionStore : IExtensionHostServices
 
         byte[] bytes = ms.ToArray();
         string? hint = Path.GetFileName((resp.RequestMessage?.RequestUri ?? uri).AbsolutePath);
-        return await Task.Run(() => ExtensionPackageLoader.LoadFromBytes(bytes, hint), ct)
+        return await Task.Run(() => ExtensionPackageLoader.LoadPackagesFromBytes(bytes, hint), ct)
             .ConfigureAwait(false);
     }
 
@@ -972,6 +1040,35 @@ public sealed class ExtensionStore : IExtensionHostServices
 
         SyncToRegistry();
         Changed?.Invoke();
+    }
+
+    public void ApproveAndEnableBatch(IEnumerable<string> extensionIds)
+    {
+        ArgumentNullException.ThrowIfNull(extensionIds);
+        bool anyChanged = false;
+        lock (_stateLock)
+        {
+            foreach (string rawId in extensionIds)
+            {
+                if (string.IsNullOrWhiteSpace(rawId)) continue;
+                int idx = FindIndexLocked(rawId);
+                if (idx < 0) continue;
+                var ext = _extensions[idx];
+                ext.State.PendingPermissionReview = false;
+                ext.State.Enabled = true;
+                anyChanged = true;
+            }
+            if (anyChanged)
+            {
+                SaveStateLocked();
+            }
+        }
+
+        if (anyChanged)
+        {
+            SyncToRegistry();
+            Changed?.Invoke();
+        }
     }
 
     public void SetEnabled(string extensionId, bool enabled)

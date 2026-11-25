@@ -534,8 +534,11 @@ public static class L
         ["TrackRow_DragToReorder"] = "Drag to reorder",
 
         // ExtensionsView
-        ["Extensions_ImportDialogTitle"] = "Import Musico Extension",
-        ["Extensions_ImportDialogFilter"] = "Musico Extensions (*.musicoext;*.musico.js)|*.musicoext;*.musico.js|All Files (*.*)|*.*",
+        ["Extensions_ImportDialogTitle"] = "Import Musico Extensions",
+        ["Extensions_ImportDialogFilter"] = "Musico Extensions (*.musicoext;*.musico.js;*.zip)|*.musicoext;*.musico.js;*.zip|All Files (*.*)|*.*",
+        ["Extensions_ReviewBatchTitle"] = "Review Imported Extensions ({0})",
+        ["Extensions_ReviewBatchSubtitle"] = "Review the capabilities and network hosts requested by each imported extension before enabling them.",
+        ["Extensions_ApproveEnableSelected"] = "Approve & Enable Selected ({0})",
         ["Extensions_ImportFailedTitle"] = "Couldn't Import Extension",
         ["Extensions_StatusEnabled"] = "Enabled",
         ["Extensions_StatusDisabled"] = "Disabled",
@@ -1060,7 +1063,10 @@ public static class L
 
         // ExtensionsView
         ["Extensions_ImportDialogTitle"] = "导入 Musico 扩展",
-        ["Extensions_ImportDialogFilter"] = "Musico 扩展 (*.musicoext;*.musico.js)|*.musicoext;*.musico.js|所有文件 (*.*)|*.*",
+        ["Extensions_ImportDialogFilter"] = "Musico 扩展 (*.musicoext;*.musico.js;*.zip)|*.musicoext;*.musico.js;*.zip|所有文件 (*.*)|*.*",
+        ["Extensions_ReviewBatchTitle"] = "审查导入的扩展（{0}）",
+        ["Extensions_ReviewBatchSubtitle"] = "启用前请审查每个导入扩展请求的权限与允许访问的主机域名。",
+        ["Extensions_ApproveEnableSelected"] = "批准并启用所选（{0}）",
         ["Extensions_ImportFailedTitle"] = "无法导入扩展",
         ["Extensions_StatusEnabled"] = "已启用",
         ["Extensions_StatusDisabled"] = "已禁用",

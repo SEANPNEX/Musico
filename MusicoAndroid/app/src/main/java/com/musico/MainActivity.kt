@@ -20,7 +20,7 @@ class MainActivity : ComponentActivity() {
     private var pendingFolderCallback: ((Uri) -> Unit)? = null
     private var pendingLyricsCallback: ((Uri) -> Unit)? = null
     private var pendingImageCallback: ((Uri) -> Unit)? = null
-    private var pendingExtensionCallback: ((Uri) -> Unit)? = null
+    private var pendingExtensionCallback: ((List<Uri>) -> Unit)? = null
 
     private val openDocumentTreeLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
@@ -66,12 +66,12 @@ class MainActivity : ComponentActivity() {
     }
 
     private val openExtensionDocumentLauncher = registerForActivityResult(
-        ActivityResultContracts.OpenDocument()
-    ) { uri: Uri? ->
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris: List<Uri> ->
         val callback = pendingExtensionCallback
         pendingExtensionCallback = null
-        if (uri != null) {
-            callback?.invoke(uri)
+        if (uris.isNotEmpty()) {
+            callback?.invoke(uris)
         }
     }
 
@@ -104,7 +104,7 @@ class MainActivity : ComponentActivity() {
                         pendingImageCallback = onPicked
                         pickImageLauncher.launch("image/*")
                     },
-                    onPickExtensionFile = { onPicked ->
+                    onPickExtensionFiles = { onPicked ->
                         pendingExtensionCallback = onPicked
                         openExtensionDocumentLauncher.launch(arrayOf("*/*"))
                     },

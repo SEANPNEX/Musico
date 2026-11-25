@@ -29,8 +29,8 @@ enum ExtensionArchiveError: LocalizedError, Equatable {
 
 /// Pure-Swift ZIP reader supporting stored (method 0) and raw-deflate (method 8) entries via `Compression`.
 enum ExtensionArchiveReader {
-    static let maxEntries = 256
-    static let maxUncompressedBytes = 16 * 1024 * 1024
+    static let maxEntries = 512
+    static let maxUncompressedBytes = 32 * 1024 * 1024
     static let maxArchiveBytes = 32 * 1024 * 1024
 
     private static let eocdSignature: UInt32 = 0x0605_4b50

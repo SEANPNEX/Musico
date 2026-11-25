@@ -101,7 +101,7 @@ fun MusicoApp(
     onPickFolder: ((Uri) -> Unit) -> Unit,
     onPickLyricsFile: ((Uri) -> Unit) -> Unit,
     onPickImage: ((Uri) -> Unit) -> Unit,
-    onPickExtensionFile: ((Uri) -> Unit) -> Unit = {},
+    onPickExtensionFiles: ((List<Uri>) -> Unit) -> Unit = {},
 ) {
     val languageStore = appContainer.languageStore
     val selectedLanguage by languageStore.language.collectAsStateWithLifecycle()
@@ -123,7 +123,7 @@ fun MusicoApp(
             onPickFolder = onPickFolder,
             onPickLyricsFile = onPickLyricsFile,
             onPickImage = onPickImage,
-            onPickExtensionFile = onPickExtensionFile,
+            onPickExtensionFiles = onPickExtensionFiles,
         )
     }
 }
@@ -134,7 +134,7 @@ private fun MusicoAppContent(
     onPickFolder: ((Uri) -> Unit) -> Unit,
     onPickLyricsFile: ((Uri) -> Unit) -> Unit,
     onPickImage: ((Uri) -> Unit) -> Unit,
-    onPickExtensionFile: ((Uri) -> Unit) -> Unit,
+    onPickExtensionFiles: ((List<Uri>) -> Unit) -> Unit,
 ) {
     val strings = LocalStrings.current
     val libraryStore = appContainer.libraryStore
@@ -245,7 +245,7 @@ private fun MusicoAppContent(
                     pendingSearchRequest = pendingSearchRequest,
                     onConsumeSearchRequest = { pendingSearchRequest = null },
                     onPickFolder = onPickFolder,
-                    onPickExtensionFile = onPickExtensionFile,
+                    onPickExtensionFiles = onPickExtensionFiles,
                     isCompact = isCompact,
                     modifier = Modifier
                         .fillMaxSize()
@@ -294,7 +294,7 @@ private fun MusicoAppContent(
                         pendingSearchRequest = pendingSearchRequest,
                         onConsumeSearchRequest = { pendingSearchRequest = null },
                         onPickFolder = onPickFolder,
-                        onPickExtensionFile = onPickExtensionFile,
+                        onPickExtensionFiles = onPickExtensionFiles,
                         isCompact = isCompact,
                         modifier = Modifier
                             .weight(1f)
@@ -484,7 +484,7 @@ private fun DestinationContent(
     pendingSearchRequest: SearchRequest?,
     onConsumeSearchRequest: () -> Unit,
     onPickFolder: ((Uri) -> Unit) -> Unit,
-    onPickExtensionFile: ((Uri) -> Unit) -> Unit,
+    onPickExtensionFiles: ((List<Uri>) -> Unit) -> Unit,
     isCompact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
@@ -511,7 +511,7 @@ private fun DestinationContent(
                     providerRegistry = appContainer.cloudProviderRegistry,
                     isCompact = isCompact,
                     onPickFolder = onPickFolder,
-                    onPickExtensionFile = onPickExtensionFile,
+                    onPickExtensionFiles = onPickExtensionFiles,
                     modifier = Modifier.fillMaxSize()
                 )
                 TopDestination.LIBRARY -> LibraryScreen(

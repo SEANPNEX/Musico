@@ -16,8 +16,16 @@ class ExtensionPackageLoader(
     }
 
     suspend fun loadFromFile(file: File, sourceUrl: String? = null): StagedExtensionPackage {
+        val packages = loadPackagesFromFile(file = file, sourceUrl = sourceUrl)
+        require(packages.size == 1) {
+            "Archive contains ${packages.size} extensions; expected a single extension package."
+        }
+        return packages.first()
+    }
+
+    suspend fun loadPackagesFromFile(file: File, sourceUrl: String? = null): List<StagedExtensionPackage> {
         val bytes = file.inputStream().use { readBoundedBytes(it, MAX_UNCOMPRESSED_BYTES) }
-        return loadFromBytes(bytes = bytes, fileNameHint = file.name, sourceUrl = sourceUrl)
+        return loadPackagesFromBytes(bytes = bytes, fileNameHint = file.name, sourceUrl = sourceUrl)
     }
 
     suspend fun loadFromStream(
@@ -25,8 +33,20 @@ class ExtensionPackageLoader(
         fileNameHint: String? = null,
         sourceUrl: String? = null,
     ): StagedExtensionPackage {
+        val packages = loadPackagesFromStream(input = input, fileNameHint = fileNameHint, sourceUrl = sourceUrl)
+        require(packages.size == 1) {
+            "Archive contains ${packages.size} extensions; expected a single extension package."
+        }
+        return packages.first()
+    }
+
+    suspend fun loadPackagesFromStream(
+        input: InputStream,
+        fileNameHint: String? = null,
+        sourceUrl: String? = null,
+    ): List<StagedExtensionPackage> {
         val bytes = readBoundedBytes(input, MAX_UNCOMPRESSED_BYTES)
-        return loadFromBytes(bytes = bytes, fileNameHint = fileNameHint, sourceUrl = sourceUrl)
+        return loadPackagesFromBytes(bytes = bytes, fileNameHint = fileNameHint, sourceUrl = sourceUrl)
     }
 
     suspend fun loadFromBytes(
@@ -34,6 +54,18 @@ class ExtensionPackageLoader(
         fileNameHint: String? = null,
         sourceUrl: String? = null,
     ): StagedExtensionPackage {
+        val packages = loadPackagesFromBytes(bytes = bytes, fileNameHint = fileNameHint, sourceUrl = sourceUrl)
+        require(packages.size == 1) {
+            "Archive contains ${packages.size} extensions; expected a single extension package."
+        }
+        return packages.first()
+    }
+
+    suspend fun loadPackagesFromBytes(
+        bytes: ByteArray,
+        fileNameHint: String? = null,
+        sourceUrl: String? = null,
+    ): List<StagedExtensionPackage> {
         require(bytes.isNotEmpty()) { "Extension package is empty." }
         require(bytes.size <= MAX_UNCOMPRESSED_BYTES) {
             "Extension package exceeds maximum size of ${MAX_UNCOMPRESSED_BYTES / (1024 * 1024)} MB."
@@ -54,16 +86,17 @@ class ExtensionPackageLoader(
         }
 
         return if (treatAsBundle) {
-            loadBundle(bytes = bytes, sourceUrl = sourceUrl)
+            loadZipPackages(bytes = bytes, sourceUrl = sourceUrl, allowNestedPacks = true)
         } else {
-            loadSingleFile(bytes = bytes, sourceUrl = sourceUrl)
+            listOf(loadSingleFile(bytes = bytes, sourceUrl = sourceUrl))
         }
     }
 
-    private suspend fun loadBundle(
+    private suspend fun loadZipPackages(
         bytes: ByteArray,
         sourceUrl: String?,
-    ): StagedExtensionPackage {
+        allowNestedPacks: Boolean,
+    ): List<StagedExtensionPackage> {
         val entries = linkedMapOf<String, ByteArray>()
         var entryCount = 0
         var totalUncompressed = 0L
@@ -79,7 +112,7 @@ class ExtensionPackageLoader(
 
                     val rawName = entry.name
                     val normalizedName = sanitizeZipEntryPath(rawName, isDirectory = entry.isDirectory)
-                    if (entry.isDirectory) {
+                    if (entry.isDirectory || isIgnoredArchiveMetadata(normalizedName)) {
                         continue
                     }
 
@@ -101,6 +134,77 @@ class ExtensionPackageLoader(
             }
         }
 
+        if (entries.containsKey(MANIFEST_FILE_NAME)) {
+            return listOf(parseBundleFromEntries(entries = entries, sourceUrl = sourceUrl))
+        }
+
+        if (!allowNestedPacks) {
+            throw IllegalArgumentException("Extension bundle is missing $MANIFEST_FILE_NAME.")
+        }
+
+        val sortedPaths = entries.keys.sortedBy { it.lowercase() }
+        val claimedPrefixes = mutableListOf<String>()
+        val packages = mutableListOf<StagedExtensionPackage>()
+
+        for (path in sortedPaths) {
+            if (!path.endsWith("/$MANIFEST_FILE_NAME", ignoreCase = true)) continue
+            if (isUnderClaimedPrefix(path, claimedPrefixes)) continue
+            val prefix = path.dropLast(MANIFEST_FILE_NAME.length)
+            claimedPrefixes.add(prefix)
+
+            val subEntries = linkedMapOf<String, ByteArray>()
+            for ((k, v) in entries) {
+                if (k.startsWith(prefix, ignoreCase = true)) {
+                    val rel = k.substring(prefix.length)
+                    if (rel.isNotEmpty()) {
+                        subEntries[rel] = v
+                    }
+                }
+            }
+            packages.add(parseBundleFromEntries(entries = subEntries, sourceUrl = null))
+        }
+
+        for (path in sortedPaths) {
+            if (isUnderClaimedPrefix(path, claimedPrefixes)) continue
+            val lower = path.lowercase()
+            when {
+                lower.endsWith(".musicoext") -> {
+                    val nested = loadZipPackages(
+                        bytes = entries.getValue(path),
+                        sourceUrl = null,
+                        allowNestedPacks = false,
+                    )
+                    packages.addAll(nested)
+                }
+                lower.endsWith(".musico.js") -> {
+                    packages.add(loadSingleFile(bytes = entries.getValue(path), sourceUrl = null))
+                }
+            }
+        }
+
+        require(packages.isNotEmpty()) {
+            "Archive does not contain a valid Musico extension (manifest.json, .musicoext, or .musico.js)."
+        }
+
+        val seenIds = HashSet<String>(packages.size)
+        for (pkg in packages) {
+            val key = pkg.manifest.id.lowercase()
+            require(seenIds.add(key)) {
+                "Archive contains duplicate extension id '${pkg.manifest.id}'."
+            }
+        }
+
+        return if (packages.size == 1 && sourceUrl != null) {
+            listOf(packages.first().copy(sourceUrl = sourceUrl))
+        } else {
+            packages
+        }
+    }
+
+    private suspend fun parseBundleFromEntries(
+        entries: Map<String, ByteArray>,
+        sourceUrl: String?,
+    ): StagedExtensionPackage {
         val manifestBytes = entries[MANIFEST_FILE_NAME]
             ?: throw IllegalArgumentException("Extension bundle is missing $MANIFEST_FILE_NAME.")
         val rawManifest = json.decodeFromString<ExtensionManifest>(manifestBytes.toString(Charsets.UTF_8))
@@ -143,9 +247,22 @@ class ExtensionPackageLoader(
     companion object {
         const val MANIFEST_FILE_NAME = "manifest.json"
         const val ICON_FILE_NAME = "icon.png"
-        const val MAX_ZIP_ENTRIES = 256
-        const val MAX_UNCOMPRESSED_BYTES = 16 * 1024 * 1024
+        const val MAX_ZIP_ENTRIES = 512
+        const val MAX_UNCOMPRESSED_BYTES = 32 * 1024 * 1024
         const val MAX_ICON_BYTES = 2 * 1024 * 1024
+
+        private fun isUnderClaimedPrefix(path: String, claimedPrefixes: List<String>): Boolean =
+            claimedPrefixes.any { prefix -> path.startsWith(prefix, ignoreCase = true) }
+
+        private fun isIgnoredArchiveMetadata(normalizedPath: String): Boolean {
+            if (normalizedPath.equals("__MACOSX", ignoreCase = true) ||
+                normalizedPath.startsWith("__MACOSX/", ignoreCase = true)
+            ) {
+                return true
+            }
+            val fileName = normalizedPath.substringAfterLast('/')
+            return fileName.equals(".DS_Store", ignoreCase = true) || fileName.startsWith("._")
+        }
 
         internal fun sanitizeZipEntryPath(rawName: String, isDirectory: Boolean): String {
             require(!rawName.contains('\u0000')) { "Unsafe ZIP entry name: $rawName" }

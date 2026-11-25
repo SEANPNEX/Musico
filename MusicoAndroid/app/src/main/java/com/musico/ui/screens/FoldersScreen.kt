@@ -235,7 +235,7 @@ fun FoldersScreen(
     providerRegistry: CloudProviderRegistry = libraryStore.providerRegistry,
     isCompact: Boolean = false,
     onPickFolder: ((Uri) -> Unit) -> Unit,
-    onPickExtensionFile: ((Uri) -> Unit) -> Unit = {},
+    onPickExtensionFiles: ((List<Uri>) -> Unit) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val strings = LocalStrings.current
@@ -255,7 +255,7 @@ fun FoldersScreen(
     if (showExtensionsScreen && extensionStore != null) {
         ExtensionsScreen(
             extensionStore = extensionStore,
-            onPickExtensionFile = onPickExtensionFile,
+            onPickExtensionFiles = onPickExtensionFiles,
             onBack = { showExtensionsScreen = false },
             modifier = modifier,
         )

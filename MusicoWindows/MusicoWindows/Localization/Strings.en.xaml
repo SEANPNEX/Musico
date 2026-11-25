@@ -221,12 +221,12 @@
 
     <!-- ExtensionsView -->
     <sys:String x:Key="Str_Extensions_Title">Extensions</sys:String>
-    <sys:String x:Key="Str_Extensions_Subtitle">Install JavaScript source extensions (.musicoext or .musico.js) to add custom cloud sources</sys:String>
+    <sys:String x:Key="Str_Extensions_Subtitle">Install JavaScript source extensions (.musicoext, .musico.js, or .zip packs) to add custom cloud sources</sys:String>
     <sys:String x:Key="Str_Extensions_ImportFile">Import File...</sys:String>
     <sys:String x:Key="Str_Extensions_UrlPlaceholder">https://example.com/extension.musicoext</sys:String>
     <sys:String x:Key="Str_Extensions_ImportUrl">Import URL</sys:String>
     <sys:String x:Key="Str_Extensions_EmptyTitle">No Extensions Installed</sys:String>
-    <sys:String x:Key="Str_Extensions_EmptyDesc">Import a .musicoext bundle or .musico.js script from a local file or HTTPS URL to add custom cloud sources.</sys:String>
+    <sys:String x:Key="Str_Extensions_EmptyDesc">Import a .musicoext bundle, .musico.js script, or multi-plugin .zip pack from local files or an HTTPS URL to add custom cloud sources.</sys:String>
     <sys:String x:Key="Str_Extensions_ReviewTitle">Permission Review</sys:String>
     <sys:String x:Key="Str_Extensions_ReviewSubtitle">Review the capabilities and network hosts requested by this extension before enabling it.</sys:String>
     <sys:String x:Key="Str_Extensions_CapabilitiesLabel">Capabilities</sys:String>

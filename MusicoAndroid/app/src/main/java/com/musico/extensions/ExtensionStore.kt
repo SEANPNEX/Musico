@@ -345,9 +345,36 @@ class ExtensionStore(
         }
     }
 
+    suspend fun stagePackagesFromBytes(
+        bytes: ByteArray,
+        fileNameHint: String? = null,
+        sourceUrl: String? = null,
+    ): Result<List<StagedExtensionPackage>> = withContext(Dispatchers.IO) {
+        try {
+            val packages = packageLoader.loadPackagesFromBytes(bytes, fileNameHint, sourceUrl)
+            Result.success(
+                if (packages.size > 1) packages.map { it.copy(sourceUrl = null) } else packages
+            )
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (err: Exception) {
+            Result.failure(err)
+        }
+    }
+
     suspend fun stageFromFile(file: File): Result<StagedExtensionPackage> = withContext(Dispatchers.IO) {
         try {
             Result.success(packageLoader.loadFromFile(file))
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (err: Exception) {
+            Result.failure(err)
+        }
+    }
+
+    suspend fun stagePackagesFromFile(file: File): Result<List<StagedExtensionPackage>> = withContext(Dispatchers.IO) {
+        try {
+            Result.success(packageLoader.loadPackagesFromFile(file))
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (err: Exception) {
@@ -362,6 +389,43 @@ class ExtensionStore(
                 packageLoader.loadFromStream(input, fileNameHint = fileName)
             } ?: throw IOException("Could not open selected extension file.")
             Result.success(staged)
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (err: Exception) {
+            Result.failure(err)
+        }
+    }
+
+    suspend fun stagePackagesFromUri(context: Context, uri: Uri): Result<List<StagedExtensionPackage>> = withContext(Dispatchers.IO) {
+        try {
+            val fileName = resolveDisplayName(context, uri) ?: uri.lastPathSegment
+            val staged = context.contentResolver.openInputStream(uri)?.use { input ->
+                packageLoader.loadPackagesFromStream(input, fileNameHint = fileName)
+            } ?: throw IOException("Could not open selected extension file.")
+            Result.success(staged)
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (err: Exception) {
+            Result.failure(err)
+        }
+    }
+
+    suspend fun stagePackagesFromUris(
+        context: Context,
+        uris: List<Uri>,
+    ): Result<List<StagedExtensionPackage>> = withContext(Dispatchers.IO) {
+        try {
+            val byId = linkedMapOf<String, StagedExtensionPackage>()
+            for (uri in uris) {
+                val fileName = resolveDisplayName(context, uri) ?: uri.lastPathSegment
+                val batch = context.contentResolver.openInputStream(uri)?.use { input ->
+                    packageLoader.loadPackagesFromStream(input, fileNameHint = fileName)
+                } ?: throw IOException("Could not open selected extension file.")
+                for (pkg in batch) {
+                    byId[pkg.manifest.id.lowercase()] = pkg
+                }
+            }
+            Result.success(byId.values.toList())
         } catch (cancel: CancellationException) {
             throw cancel
         } catch (err: Exception) {
@@ -399,6 +463,46 @@ class ExtensionStore(
             Result.failure(err)
         }
     }
+
+    suspend fun stagePackagesFromUrl(rawUrl: String): Result<List<StagedExtensionPackage>> = withContext(Dispatchers.IO) {
+        try {
+            val cleanUrl = rawUrl.trim()
+            requireHttpsUrl(cleanUrl)
+            val resp = httpClient.request(
+                request = CloudHttpRequest(
+                    method = "GET",
+                    url = cleanUrl,
+                    followRedirects = true,
+                    timeoutMs = 20_000,
+                    returnBytes = true,
+                ),
+                urlValidator = { hop -> requireHttpsUrl(hop) },
+            )
+            if (resp.status !in 200..299) {
+                throw CloudSourceException(
+                    CloudErrorCode.NETWORK_ERROR,
+                    "Extension download failed (HTTP ${resp.status}).",
+                )
+            }
+            val bytes = resp.bytesBase64?.let { Base64.getDecoder().decode(it) }
+                ?: resp.text.toByteArray(Charsets.UTF_8)
+            val hint = extractFileNameHint(resp.headers["content-disposition"], resp.finalUrl.ifBlank { cleanUrl })
+            val loaded = packageLoader.loadPackagesFromBytes(bytes, fileNameHint = hint, sourceUrl = cleanUrl)
+            Result.success(
+                if (loaded.size > 1) loaded.map { it.copy(sourceUrl = null) } else loaded
+            )
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (err: Exception) {
+            Result.failure(err)
+        }
+    }
+
+    fun installStagedBatch(
+        packages: List<StagedExtensionPackage>,
+        enableImmediately: Boolean = true,
+    ): List<InstalledExtension> =
+        packages.map { installStaged(it, enableImmediately = enableImmediately) }
 
     fun installStaged(
         staged: StagedExtensionPackage,

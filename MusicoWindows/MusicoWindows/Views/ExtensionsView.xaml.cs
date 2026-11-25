@@ -19,6 +19,7 @@ public partial class ExtensionsView : UserControl
     private ViewContext? _ctx;
     private string? _reviewExtensionId;
     private bool _isUpdateReview;
+    private List<(string ExtensionId, CheckBox Check)> _batchReviewItems = new();
     private string? _qrExtensionId;
     private CancellationTokenSource? _qrLoginCts;
     private string? _activeLogExtensionId;
@@ -746,6 +747,11 @@ public partial class ExtensionsView : UserControl
 
         _isUpdateReview = false;
         _reviewExtensionId = ext.Id;
+        _batchReviewItems.Clear();
+        SingleReviewContent.Visibility = Visibility.Visible;
+        BatchReviewPanel.Visibility = Visibility.Collapsed;
+        BatchReviewPanel.Children.Clear();
+        ReviewPrimaryButton.IsEnabled = true;
         ReviewTitleText.Text = (string)FindResource("Str_Extensions_ReviewTitle");
         ReviewSubtitleText.Text = (string)FindResource("Str_Extensions_ReviewSubtitle");
         ReviewPrimaryButton.Content = (string)FindResource("Str_Extensions_ApproveEnable");
@@ -778,6 +784,11 @@ public partial class ExtensionsView : UserControl
 
         _isUpdateReview = true;
         _reviewExtensionId = pending.ExtensionId;
+        _batchReviewItems.Clear();
+        SingleReviewContent.Visibility = Visibility.Visible;
+        BatchReviewPanel.Visibility = Visibility.Collapsed;
+        BatchReviewPanel.Children.Clear();
+        ReviewPrimaryButton.IsEnabled = true;
         var nextManifest = pending.Package.Manifest;
 
         ReviewTitleText.Text = L.Get("Extensions_ReviewUpdateTitle");
@@ -877,10 +888,99 @@ public partial class ExtensionsView : UserControl
         }
     }
 
+    private void OpenBatchPermissionReview(IReadOnlyList<InstalledExtension> imported)
+    {
+        if (_ctx is null || imported.Count == 0) return;
+
+        _isUpdateReview = false;
+        _reviewExtensionId = null;
+        _batchReviewItems.Clear();
+        SingleReviewContent.Visibility = Visibility.Collapsed;
+        BatchReviewPanel.Visibility = Visibility.Visible;
+        BatchReviewPanel.Children.Clear();
+
+        ReviewTitleText.Text = L.Format("Extensions_ReviewBatchTitle", imported.Count);
+        ReviewSubtitleText.Text = L.Get("Extensions_ReviewBatchSubtitle");
+        ReviewSecondaryButton.Content = (string)FindResource("Str_Extensions_KeepDisabled");
+
+        foreach (InstalledExtension ext in imported)
+        {
+            var card = new Border
+            {
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(0),
+                Padding = new Thickness(12, 10, 12, 10),
+                Margin = new Thickness(0, 0, 0, 10)
+            };
+            card.SetResourceReference(Border.BackgroundProperty, "CardBackgroundBrush");
+            card.SetResourceReference(Border.BorderBrushProperty, "ControlBorderBrush");
+
+            var stack = new StackPanel();
+            var check = new CheckBox
+            {
+                Style = (Style)FindResource("Win10CheckBoxStyle"),
+                Content = $"{ext.Manifest.Name} (v{ext.Manifest.Version})",
+                IsChecked = true,
+                FontWeight = FontWeights.SemiBold
+            };
+            check.Checked += (_, _) => UpdateBatchReviewButton();
+            check.Unchecked += (_, _) => UpdateBatchReviewButton();
+            stack.Children.Add(check);
+
+            string caps = string.Join(", ", ext.Manifest.Capabilities.Select(FormatCapability));
+            var capTb = new TextBlock
+            {
+                Text = caps,
+                FontFamily = (FontFamily)FindResource("Win10Font"),
+                FontSize = 11.5,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(28, 4, 0, 0)
+            };
+            capTb.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+            stack.Children.Add(capTb);
+
+            string hosts = ext.Manifest.Permissions.Hosts.Count == 0
+                ? L.Get("Extensions_NoHosts")
+                : string.Join(", ", ext.Manifest.Permissions.Hosts);
+            string hostsLabel = TryFindResource("Str_Extensions_HostsLabel") as string ?? "Allowed Network Hosts";
+            var hostsTb = new TextBlock
+            {
+                Text = $"{hostsLabel}: {hosts}",
+                FontFamily = (FontFamily)FindResource("Win10Font"),
+                FontSize = 11,
+                TextWrapping = TextWrapping.Wrap,
+                Margin = new Thickness(28, 2, 0, 0)
+            };
+            hostsTb.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+            stack.Children.Add(hostsTb);
+
+            card.Child = stack;
+            BatchReviewPanel.Children.Add(card);
+            _batchReviewItems.Add((ext.Id, check));
+        }
+
+        UpdateBatchReviewButton();
+        PermissionReviewOverlay.Visibility = Visibility.Visible;
+        Win10Animations.AnimateModalOpen(PermissionReviewOverlay, PermissionReviewCard);
+    }
+
+    private void UpdateBatchReviewButton()
+    {
+        if (_batchReviewItems.Count == 0) return;
+        int selectedCount = _batchReviewItems.Count(item => item.Check.IsChecked == true);
+        ReviewPrimaryButton.Content = L.Format("Extensions_ApproveEnableSelected", selectedCount);
+        ReviewPrimaryButton.IsEnabled = selectedCount > 0;
+    }
+
     private void ClosePermissionReview()
     {
         _reviewExtensionId = null;
         _isUpdateReview = false;
+        _batchReviewItems.Clear();
+        BatchReviewPanel.Children.Clear();
+        BatchReviewPanel.Visibility = Visibility.Collapsed;
+        SingleReviewContent.Visibility = Visibility.Visible;
+        ReviewPrimaryButton.IsEnabled = true;
         PermissionReviewOverlay.Visibility = Visibility.Collapsed;
     }
 
@@ -979,11 +1079,12 @@ public partial class ExtensionsView : UserControl
         var dlg = new OpenFileDialog
         {
             Title = L.Get("Extensions_ImportDialogTitle"),
-            Filter = L.Get("Extensions_ImportDialogFilter")
+            Filter = L.Get("Extensions_ImportDialogFilter"),
+            Multiselect = true
         };
-        if (dlg.ShowDialog() != true) return;
+        if (dlg.ShowDialog() != true || dlg.FileNames.Length == 0) return;
 
-        await RunImportAsync(() => _ctx.Services.Extensions.ImportFromFileAsync(dlg.FileName));
+        await RunImportAsync(() => _ctx.Services.Extensions.ImportPackagesFromFilesAsync(dlg.FileNames));
     }
 
     private async void ImportUrl_Click(object sender, RoutedEventArgs e) => await ImportUrlAsync();
@@ -994,23 +1095,30 @@ public partial class ExtensionsView : UserControl
         string url = UrlImportBox.Text.Trim();
         if (string.IsNullOrWhiteSpace(url)) return;
 
-        var imported = await RunImportAsync(() => _ctx.Services.Extensions.ImportFromUrlAsync(url));
-        if (imported is not null)
+        var imported = await RunImportAsync(() => _ctx.Services.Extensions.ImportPackagesFromUrlAsync(url));
+        if (imported is { Count: > 0 })
         {
             UrlImportBox.Text = string.Empty;
         }
     }
 
-    private async Task<InstalledExtension?> RunImportAsync(Func<Task<InstalledExtension>> importer)
+    private async Task<IReadOnlyList<InstalledExtension>?> RunImportAsync(Func<Task<IReadOnlyList<InstalledExtension>>> importer)
     {
         SetBusy(true);
         ErrorBanner.Visibility = Visibility.Collapsed;
         try
         {
-            var ext = await importer();
+            IReadOnlyList<InstalledExtension> imported = await importer();
             Refresh();
-            OpenPermissionReview(ext.Id);
-            return ext;
+            if (imported.Count == 1)
+            {
+                OpenPermissionReview(imported[0].Id);
+            }
+            else if (imported.Count > 1)
+            {
+                OpenBatchPermissionReview(imported);
+            }
+            return imported;
         }
         catch (Exception ex)
         {
@@ -1168,7 +1276,22 @@ public partial class ExtensionsView : UserControl
 
     private void ApproveReview_Click(object sender, RoutedEventArgs e)
     {
-        if (_ctx is null || string.IsNullOrWhiteSpace(_reviewExtensionId)) return;
+        if (_ctx is null) return;
+        if (_batchReviewItems.Count > 0)
+        {
+            var selectedIds = _batchReviewItems
+                .Where(item => item.Check.IsChecked == true)
+                .Select(item => item.ExtensionId)
+                .ToList();
+            ClosePermissionReview();
+            if (selectedIds.Count > 0)
+            {
+                _ctx.Services.Extensions.ApproveAndEnableBatch(selectedIds);
+            }
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(_reviewExtensionId)) return;
         string id = _reviewExtensionId;
         bool isUpdate = _isUpdateReview;
         ClosePermissionReview();
