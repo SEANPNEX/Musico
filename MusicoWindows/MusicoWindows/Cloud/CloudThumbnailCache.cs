@@ -106,7 +106,33 @@ public sealed class CloudThumbnailCache
         return false;
     }
 
-    public async Task<byte[]?> GetBytesAsync(string? url, CancellationToken ct = default)
+    public static string? InferReferer(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        string host = uri.Host.ToLowerInvariant();
+        if (host.Equals("hdslb.com", StringComparison.Ordinal) ||
+            host.EndsWith(".hdslb.com", StringComparison.Ordinal) ||
+            host.Equals("bilivideo.com", StringComparison.Ordinal) ||
+            host.EndsWith(".bilivideo.com", StringComparison.Ordinal) ||
+            host.Equals("bilibili.com", StringComparison.Ordinal) ||
+            host.EndsWith(".bilibili.com", StringComparison.Ordinal) ||
+            host.Equals("biliimg.com", StringComparison.Ordinal) ||
+            host.EndsWith(".biliimg.com", StringComparison.Ordinal))
+        {
+            return BilibiliClient.DefaultReferer;
+        }
+
+        return null;
+    }
+
+    public Task<byte[]?> GetBytesAsync(string? url, CancellationToken ct = default) =>
+        GetBytesAsync(url, referer: null, ct);
+
+    public async Task<byte[]?> GetBytesAsync(string? url, string? referer, CancellationToken ct = default)
     {
         if (!IsAllowedHttpsUrl(url))
         {
@@ -133,7 +159,7 @@ public sealed class CloudThumbnailCache
             if (!_inFlight.TryGetValue(key, out sharedTask!))
             {
                 startedNew = true;
-                sharedTask = DownloadAndStoreAsync(key);
+                sharedTask = DownloadAndStoreAsync(key, referer);
                 _inFlight[key] = sharedTask;
             }
         }
@@ -260,12 +286,19 @@ public sealed class CloudThumbnailCache
         }
     }
 
-    private async Task<byte[]?> DownloadAndStoreAsync(string url)
+    private async Task<byte[]?> DownloadAndStoreAsync(string url, string? referer = null)
     {
         try
         {
             using var client = CloudHttpHelper.CreateClient(proxyUrl: null, _handler, TimeSpan.FromSeconds(15));
-            using var resp = await client.GetAsync(url, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None)
+            using var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.TryAddWithoutValidation("User-Agent", BilibiliClient.DefaultUserAgent);
+            string? effectiveReferer = string.IsNullOrWhiteSpace(referer) ? InferReferer(url) : referer.Trim();
+            if (!string.IsNullOrEmpty(effectiveReferer))
+            {
+                req.Headers.TryAddWithoutValidation("Referer", effectiveReferer);
+            }
+            using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None)
                 .ConfigureAwait(false);
 
             if (!resp.IsSuccessStatusCode)

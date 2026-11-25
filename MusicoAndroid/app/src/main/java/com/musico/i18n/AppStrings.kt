@@ -214,8 +214,22 @@ interface AppStrings {
     val qrLoginScannedConfirm: String
     val qrLoginWaiting: String
     val qrLoginRefresh: String
+    val autoUpdateExtensions: String
+    val autoUpdateExtensionsDesc: String
+    val checkingExtensionUpdates: String
+    val extensionUpToDate: String
+    val reviewUpdateAction: String
+    val updateAction: String
+    val approveAndUpdate: String
+    val extensionUpdateReviewTitle: String
+    val extensionUpdateEscalationWarning: String
+    val newCapabilitiesLabel: String
+    val newAllowedHostsLabel: String
     fun qrLoginScanPrompt(sourceName: String): String
     fun qrLoginCookieSaved(extensionName: String): String
+    fun extensionVersionTransition(fromVersion: String, toVersion: String): String
+    fun extensionUpdatedTo(version: String): String
+    fun extensionBatchUpdateSummary(checked: Int, applied: Int, reviewRequired: Int, failed: Int): String
 
     // Songs screen & cloud search
     val searchPlaceholder: String
@@ -766,8 +780,44 @@ object EnStrings : AppStrings {
     override val qrLoginScannedConfirm = "Scanned — Confirm on Your Phone"
     override val qrLoginWaiting = "Waiting for QR code scan…"
     override val qrLoginRefresh = "Refresh QR Code"
+    override val autoUpdateExtensions = "Auto-update extensions"
+    override val autoUpdateExtensionsDesc = "Check for extension updates on launch (every 6 hours)"
+    override val checkingExtensionUpdates = "Checking for extension updates…"
+    override val extensionUpToDate = "Up to date"
+    override val reviewUpdateAction = "Review Update"
+    override val updateAction = "Update"
+    override val approveAndUpdate = "Approve & Update"
+    override val extensionUpdateReviewTitle = "Review Extension Update"
+    override val extensionUpdateEscalationWarning =
+        "This update requests additional permissions. Review the new capabilities and hosts before applying."
+    override val newCapabilitiesLabel = "New Capabilities"
+    override val newAllowedHostsLabel = "New Allowed Hosts"
     override fun qrLoginScanPrompt(sourceName: String) = "Scan with $sourceName App"
     override fun qrLoginCookieSaved(extensionName: String) = "Session cookie saved to $extensionName."
+    override fun extensionVersionTransition(fromVersion: String, toVersion: String) =
+        "v$fromVersion → v$toVersion"
+    override fun extensionUpdatedTo(version: String) = "Updated to v$version"
+    override fun extensionBatchUpdateSummary(
+        checked: Int,
+        applied: Int,
+        reviewRequired: Int,
+        failed: Int,
+    ): String = buildString {
+        if (checked == 0) {
+            append("No extensions with an update URL.")
+        } else {
+            val parts = buildList {
+                if (applied > 0) add("$applied updated")
+                if (reviewRequired > 0) add("$reviewRequired awaiting review")
+                if (failed > 0) add("$failed failed")
+            }
+            if (parts.isEmpty()) {
+                append("All extensions up to date.")
+            } else {
+                append(parts.joinToString(" · "))
+            }
+        }
+    }
 
     override val searchPlaceholder = "Songs, artists, albums, genres"
     override val clearSearch = "Clear search"
@@ -1292,8 +1342,44 @@ object ZhHansStrings : AppStrings {
     override val qrLoginScannedConfirm = "已扫码 — 请在手机上确认"
     override val qrLoginWaiting = "等待扫描二维码…"
     override val qrLoginRefresh = "刷新二维码"
+    override val autoUpdateExtensions = "自动更新扩展"
+    override val autoUpdateExtensionsDesc = "启动时自动检查扩展更新（每 6 小时一次）"
+    override val checkingExtensionUpdates = "正在检查扩展更新…"
+    override val extensionUpToDate = "已是最新"
+    override val reviewUpdateAction = "审核更新"
+    override val updateAction = "更新"
+    override val approveAndUpdate = "批准并更新"
+    override val extensionUpdateReviewTitle = "审核扩展更新"
+    override val extensionUpdateEscalationWarning =
+        "此更新请求了额外权限。应用前请确认新增的功能与主机访问权限。"
+    override val newCapabilitiesLabel = "新增功能权限"
+    override val newAllowedHostsLabel = "新增允许的主机"
     override fun qrLoginScanPrompt(sourceName: String) = "请使用 $sourceName 客户端扫码"
     override fun qrLoginCookieSaved(extensionName: String) = "会话 Cookie 已保存到 $extensionName。"
+    override fun extensionVersionTransition(fromVersion: String, toVersion: String) =
+        "v$fromVersion → v$toVersion"
+    override fun extensionUpdatedTo(version: String) = "已更新至 v$version"
+    override fun extensionBatchUpdateSummary(
+        checked: Int,
+        applied: Int,
+        reviewRequired: Int,
+        failed: Int,
+    ): String = buildString {
+        if (checked == 0) {
+            append("没有可检查更新的扩展。")
+        } else {
+            val parts = buildList {
+                if (applied > 0) add("已更新 $applied 个")
+                if (reviewRequired > 0) add("$reviewRequired 个待审核")
+                if (failed > 0) add("$failed 个失败")
+            }
+            if (parts.isEmpty()) {
+                append("所有扩展均为最新版本。")
+            } else {
+                append(parts.joinToString(" · "))
+            }
+        }
+    }
 
     override val searchPlaceholder = "搜索歌曲、艺术家、专辑、流派"
     override val clearSearch = "清除搜索"

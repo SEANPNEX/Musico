@@ -34,6 +34,7 @@ import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Security
+import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.Tune
 import androidx.compose.material.icons.rounded.UploadFile
 import androidx.compose.material.icons.rounded.Visibility
@@ -88,7 +89,9 @@ import com.musico.extensions.ExtensionManifest
 import com.musico.extensions.ExtensionSettingSpec
 import com.musico.extensions.ExtensionSettingType
 import com.musico.extensions.ExtensionStore
+import com.musico.extensions.ExtensionUpdateCheckOutcome
 import com.musico.extensions.InstalledExtension
+import com.musico.extensions.PendingExtensionUpdate
 import com.musico.extensions.StagedExtensionPackage
 import com.musico.i18n.AppStrings
 import com.musico.i18n.LocalStrings
@@ -117,9 +120,15 @@ fun ExtensionsScreen(
 
     val extensions by extensionStore.extensions.collectAsStateWithLifecycle()
     val allLogs by extensionStore.logs.collectAsStateWithLifecycle()
+    val autoUpdateEnabled by extensionStore.autoUpdateEnabled.collectAsStateWithLifecycle()
+    val isCheckingUpdates by extensionStore.isCheckingUpdates.collectAsStateWithLifecycle()
+    val pendingUpdates by extensionStore.pendingUpdates.collectAsStateWithLifecycle()
+    val updateOutcomes by extensionStore.updateOutcomes.collectAsStateWithLifecycle()
+    val lastBatchSummary by extensionStore.lastBatchUpdateSummary.collectAsStateWithLifecycle()
 
     var isStaging by remember { mutableStateOf(false) }
     var stagedForReview by remember { mutableStateOf<StagedExtensionPackage?>(null) }
+    var reviewUpdateTarget by remember { mutableStateOf<PendingExtensionUpdate?>(null) }
     var showImportUrlDialog by remember { mutableStateOf(false) }
     var importError by remember { mutableStateOf<String?>(null) }
     var settingsTargetId by remember { mutableStateOf<String?>(null) }
@@ -158,6 +167,12 @@ fun ExtensionsScreen(
                 title = { Text(strings.extensionsTitle) },
                 actions = {
                     IconButton(
+                        enabled = !isStaging && !isCheckingUpdates && extensions.isNotEmpty(),
+                        onClick = { scope.launch { extensionStore.checkAllForUpdates(manual = true) } },
+                    ) {
+                        Icon(Icons.Rounded.SystemUpdate, contentDescription = strings.checkForUpdates)
+                    }
+                    IconButton(
                         enabled = !isStaging,
                         onClick = { showImportUrlDialog = true },
                     ) {
@@ -178,7 +193,7 @@ fun ExtensionsScreen(
                 .fillMaxSize()
                 .padding(innerPadding),
         ) {
-            if (isStaging) {
+            if (isStaging || isCheckingUpdates) {
                 LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
             }
 
@@ -214,14 +229,106 @@ fun ExtensionsScreen(
                     contentPadding = PaddingValues(16.dp),
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
+                    item(key = "extension_auto_update_header") {
+                        ElevatedCard(modifier = Modifier.fillMaxWidth()) {
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable { extensionStore.setAutoUpdateEnabled(!autoUpdateEnabled) },
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Column(
+                                        modifier = Modifier
+                                            .weight(1f)
+                                            .padding(end = 12.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                                    ) {
+                                        Text(
+                                            text = strings.autoUpdateExtensions,
+                                            style = MaterialTheme.typography.titleSmall,
+                                            fontWeight = FontWeight.SemiBold,
+                                        )
+                                        Text(
+                                            text = strings.autoUpdateExtensionsDesc,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        )
+                                    }
+                                    Switch(
+                                        checked = autoUpdateEnabled,
+                                        onCheckedChange = { extensionStore.setAutoUpdateEnabled(it) },
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    val statusMsg = when {
+                                        isCheckingUpdates -> strings.checkingExtensionUpdates
+                                        lastBatchSummary != null -> {
+                                            val s = lastBatchSummary!!
+                                            strings.extensionBatchUpdateSummary(
+                                                checked = s.checkedCount,
+                                                applied = s.appliedCount,
+                                                reviewRequired = s.reviewRequiredCount,
+                                                failed = s.failedCount,
+                                            )
+                                        }
+                                        else -> null
+                                    }
+                                    Text(
+                                        text = statusMsg.orEmpty(),
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    FilledTonalButton(
+                                        enabled = !isCheckingUpdates && !isStaging,
+                                        onClick = { scope.launch { extensionStore.checkAllForUpdates(manual = true) } },
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.SystemUpdate,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(16.dp),
+                                        )
+                                        Spacer(Modifier.width(6.dp))
+                                        Text(strings.checkForUpdates)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
                     items(extensions, key = { it.id }) { ext ->
                         val extLogs = allLogs[ext.id].orEmpty()
+                        val hasUpdateUrl = extensionStore.effectiveUpdateUrl(ext) != null
+                        val pendingUpdate = pendingUpdates[ext.id]
+                        val outcome = updateOutcomes[ext.id]
                         ExtensionItemCard(
                             extension = ext,
                             logCount = extLogs.size,
+                            hasUpdateUrl = hasUpdateUrl,
+                            pendingUpdate = pendingUpdate,
+                            updateOutcome = outcome,
                             strings = strings,
                             onToggleEnabled = { enabled ->
                                 extensionStore.setEnabled(ext.id, enabled)
+                            },
+                            onCheckUpdate = {
+                                scope.launch { extensionStore.checkForUpdate(ext.id) }
+                            },
+                            onReviewUpdate = {
+                                if (pendingUpdate != null) {
+                                    reviewUpdateTarget = pendingUpdate
+                                }
                             },
                             onOpenPermissions = { permissionsTarget = ext.manifest },
                             onOpenSettings = { settingsTargetId = ext.id },
@@ -256,6 +363,19 @@ fun ExtensionsScreen(
             onConfirmInstall = {
                 extensionStore.installStaged(pendingReview, enableImmediately = true)
                 stagedForReview = null
+            },
+        )
+    }
+
+    val pendingEscalation = reviewUpdateTarget
+    if (pendingEscalation != null) {
+        ReviewExtensionUpdateDialog(
+            pending = pendingEscalation,
+            strings = strings,
+            onDismiss = { reviewUpdateTarget = null },
+            onApprove = {
+                extensionStore.approvePendingUpdate(pendingEscalation.installed.id)
+                reviewUpdateTarget = null
             },
         )
     }
@@ -349,8 +469,13 @@ fun ExtensionsScreen(
 private fun ExtensionItemCard(
     extension: InstalledExtension,
     logCount: Int,
+    hasUpdateUrl: Boolean,
+    pendingUpdate: PendingExtensionUpdate?,
+    updateOutcome: ExtensionUpdateCheckOutcome?,
     strings: AppStrings,
     onToggleEnabled: (Boolean) -> Unit,
+    onCheckUpdate: () -> Unit,
+    onReviewUpdate: () -> Unit,
     onOpenPermissions: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenQrLogin: () -> Unit,
@@ -358,6 +483,7 @@ private fun ExtensionItemCard(
     onRequestUninstall: () -> Unit,
 ) {
     val manifest = extension.manifest
+    val isCheckingThis = updateOutcome is ExtensionUpdateCheckOutcome.Checking
     ElevatedCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier
@@ -429,6 +555,67 @@ private fun ExtensionItemCard(
                 )
             }
 
+            if (pendingUpdate != null) {
+                ElevatedCard(
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                    ),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .weight(1f)
+                                .padding(end = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Rounded.WarningAmber,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                                modifier = Modifier.size(18.dp),
+                            )
+                            Text(
+                                text = strings.extensionVersionTransition(
+                                    pendingUpdate.installed.manifest.version,
+                                    pendingUpdate.staged.manifest.version,
+                                ),
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onTertiaryContainer,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                        FilledTonalButton(onClick = onReviewUpdate) {
+                            Text(strings.reviewUpdateAction)
+                        }
+                    }
+                }
+            } else {
+                val outcomeText = when (updateOutcome) {
+                    ExtensionUpdateCheckOutcome.UpToDate -> strings.extensionUpToDate
+                    is ExtensionUpdateCheckOutcome.Applied -> strings.extensionUpdatedTo(updateOutcome.toVersion)
+                    is ExtensionUpdateCheckOutcome.Error -> updateOutcome.message
+                    else -> null
+                }
+                if (outcomeText != null) {
+                    Text(
+                        text = outcomeText,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (updateOutcome is ExtensionUpdateCheckOutcome.Error) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.primary
+                        },
+                    )
+                }
+            }
+
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp),
@@ -456,6 +643,29 @@ private fun ExtensionItemCard(
                         Icon(Icons.Rounded.Security, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
                         Text(strings.permissionsLabel)
+                    }
+                    if (pendingUpdate != null) {
+                        TextButton(onClick = onReviewUpdate) {
+                            Icon(Icons.Rounded.SystemUpdate, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(strings.reviewUpdateAction)
+                        }
+                    } else if (hasUpdateUrl) {
+                        TextButton(
+                            enabled = !isCheckingThis,
+                            onClick = onCheckUpdate,
+                        ) {
+                            if (isCheckingThis) {
+                                CircularProgressIndicator(
+                                    modifier = Modifier.size(14.dp),
+                                    strokeWidth = 2.dp,
+                                )
+                            } else {
+                                Icon(Icons.Rounded.SystemUpdate, contentDescription = null, modifier = Modifier.size(16.dp))
+                            }
+                            Spacer(Modifier.width(4.dp))
+                            Text(strings.updateAction)
+                        }
                     }
                     if (manifest.settings.isNotEmpty() || manifest.supportsCookieAuth) {
                         TextButton(onClick = onOpenSettings) {
@@ -487,6 +697,166 @@ private fun ExtensionItemCard(
             }
         }
     }
+}
+
+@Composable
+internal fun ReviewExtensionUpdateDialog(
+    pending: PendingExtensionUpdate,
+    strings: AppStrings,
+    onDismiss: () -> Unit,
+    onApprove: () -> Unit,
+) {
+    val oldManifest = pending.installed.manifest
+    val newManifest = pending.staged.manifest
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        icon = { Icon(Icons.Rounded.Security, contentDescription = null) },
+        title = { Text(strings.extensionUpdateReviewTitle) },
+        text = {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 440.dp)
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text(
+                        text = newManifest.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = strings.extensionVersionTransition(oldManifest.version, newManifest.version),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = newManifest.id,
+                        style = MaterialTheme.typography.labelSmall.copy(fontFamily = FontFamily.Monospace),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+
+                ElevatedCard(
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = MaterialTheme.colorScheme.tertiaryContainer,
+                    ),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.WarningAmber,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                            modifier = Modifier.size(18.dp),
+                        )
+                        Text(
+                            text = strings.extensionUpdateEscalationWarning,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        )
+                    }
+                }
+
+                if (pending.diff.addedCapabilities.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = strings.newCapabilitiesLabel,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        pending.diff.addedCapabilities.forEach { cap ->
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                Surface(
+                                    color = MaterialTheme.colorScheme.errorContainer,
+                                    shape = MaterialTheme.shapes.small,
+                                ) {
+                                    Text(
+                                        text = capabilityLabel(cap, strings),
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                                    )
+                                }
+                                Text(
+                                    text = capabilityDescription(cap, strings),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                if (pending.diff.addedHosts.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = strings.newAllowedHostsLabel,
+                            style = MaterialTheme.typography.labelLarge,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        pending.diff.addedHosts.forEach { host ->
+                            Surface(
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                shape = MaterialTheme.shapes.small,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Text(
+                                    text = host,
+                                    style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                                )
+                            }
+                        }
+                    }
+                }
+
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(
+                        text = strings.allowedHostsLabel,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    newManifest.permissions.hosts.forEach { host ->
+                        Surface(
+                            color = MaterialTheme.colorScheme.surfaceContainerHighest,
+                            shape = MaterialTheme.shapes.small,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = host,
+                                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            Button(onClick = onApprove) {
+                Text(strings.approveAndUpdate)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(strings.later)
+            }
+        },
+    )
 }
 
 @Composable

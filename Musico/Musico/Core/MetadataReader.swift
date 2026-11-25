@@ -78,7 +78,41 @@ struct MetadataReader: MetadataReading {
             result.lyrics = result.lyrics ?? text("LYRICS", "UNSYNCEDLYRICS")
             result.artwork = result.artwork ?? flac.picture
         }
+        if result.artwork == nil {
+            result.artwork = Self.loadSiblingArtwork(for: url)
+        }
         return result
+    }
+
+    private static let siblingArtworkExtensions = ["jpg", "jpeg", "png", "webp"]
+
+    /// Loads `<stem>.jpg` / `<stem>.jpeg` / `<stem>.png` / `<stem>.webp` next to an audio file when embedded art is absent.
+    static func loadSiblingArtwork(for audioURL: URL) -> Data? {
+        let dir = audioURL.deletingLastPathComponent()
+        let stem = audioURL.deletingPathExtension().lastPathComponent
+        guard !stem.isEmpty else { return nil }
+        let fm = FileManager.default
+        for ext in siblingArtworkExtensions {
+            let candidate = dir.appendingPathComponent("\(stem).\(ext)")
+            if fm.fileExists(atPath: candidate.path),
+               let data = try? Data(contentsOf: candidate),
+               !data.isEmpty {
+                return data
+            }
+        }
+        guard let entries = try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]) else {
+            return nil
+        }
+        for entry in entries {
+            let ext = entry.pathExtension.lowercased()
+            guard siblingArtworkExtensions.contains(ext) else { continue }
+            if entry.deletingPathExtension().lastPathComponent == stem,
+               let data = try? Data(contentsOf: entry),
+               !data.isEmpty {
+                return data
+            }
+        }
+        return nil
     }
 
     private static func cleanGenre(_ value: String??) -> String? {

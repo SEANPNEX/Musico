@@ -79,8 +79,9 @@ struct AlbumDetailView: View {
             }
             .frame(maxWidth: .infinity)
             .listRowSeparator(.hidden)
-            PlayShuffleButtons(ids: album.trackIDs)
-            TrackRows(tracks: tracks) { track in
+            let queueName = "Album: \(album.title)"
+            PlayShuffleButtons(ids: album.trackIDs, queueName: queueName)
+            TrackRows(tracks: tracks, queueName: queueName) { track in
                 let artist = L10n.displayArtist(track.artist)
                 return track.trackNumber.map { "\($0) · \(artist)" } ?? artist
             }
@@ -126,15 +127,16 @@ struct ArtistDetailView: View {
     var body: some View {
         let tracks = library.tracks(byArtist: artist)
         let albums = library.albums(byArtist: artist)
+        let queueName = "Artist: \(artist)"
         List {
-            PlayShuffleButtons(ids: tracks.map(\.id))
+            PlayShuffleButtons(ids: tracks.map(\.id), queueName: queueName)
             if !albums.isEmpty {
                 Section(L10n.tr("Albums")) {
                     AlbumGrid(albums: albums).listRowSeparator(.hidden)
                 }
             }
             Section(L10n.tr("Songs")) {
-                TrackRows(tracks: tracks) { L10n.displayAlbum($0.album) }
+                TrackRows(tracks: tracks, queueName: queueName) { L10n.displayAlbum($0.album) }
             }
         }
         .listStyle(.plain)

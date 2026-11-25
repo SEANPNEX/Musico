@@ -60,7 +60,10 @@ private infix fun ByteArray?.contentEqualsSafe(other: ByteArray?): Boolean {
 
 interface MetadataReading {
     suspend fun read(uri: Uri, fileNameHint: String? = null): TrackMetadata
-    suspend fun read(file: File): TrackMetadata = read(Uri.fromFile(file), file.name)
+    suspend fun read(file: File): TrackMetadata {
+        val uri = Uri.fromFile(file) ?: Uri.parse(file.toURI().toString())
+        return read(uri, file.name)
+    }
 }
 
 class AndroidMetadataReader(
@@ -144,6 +147,10 @@ class AndroidMetadataReader(
             lyrics = lyrics ?: extracted.lyrics
         }
 
+        if (artwork == null && uri.scheme == "file" && uri.path != null) {
+            artwork = readSiblingArtwork(File(uri.path!!))
+        }
+
         TrackMetadata(
             title = title,
             artist = artist,
@@ -190,6 +197,35 @@ class AndroidMetadataReader(
                 needArtwork = false,
                 needLyrics = true,
             ).lyrics
+        }
+
+        fun findSiblingArtworkFile(audioFile: File): File? {
+            val parent = audioFile.parentFile ?: return null
+            if (!parent.isDirectory) return null
+            val stem = audioFile.name.substringBeforeLast('.', audioFile.name)
+            if (stem.isEmpty()) return null
+            val allowedExts = AudioTagWriter.sidecarImageExtensions()
+            for (ext in allowedExts) {
+                val exact = File(parent, "$stem.$ext")
+                if (exact.isFile && exact.canRead()) return exact
+            }
+            val children = parent.listFiles() ?: return null
+            for (ext in allowedExts) {
+                val match = children.firstOrNull { child ->
+                    child.isFile &&
+                        child.canRead() &&
+                        child.name.substringBeforeLast('.', child.name).equals(stem, ignoreCase = true) &&
+                        child.extension.equals(ext, ignoreCase = true)
+                }
+                if (match != null) return match
+            }
+            return null
+        }
+
+        internal fun readSiblingArtwork(audioFile: File): ByteArray? {
+            val sibling = findSiblingArtworkFile(audioFile) ?: return null
+            val bytes = runCatching { sibling.readBytes() }.getOrNull() ?: return null
+            return EmbeddedArtworkExtractor.normalizeImageBytes(bytes)
         }
     }
 }

@@ -74,6 +74,7 @@ public partial class AlbumDetailView : UserControl
 
         TracksStack.Children.Clear();
         var ids = live.TrackIds.ToList();
+        string queueName = FormatAlbumQueueName(live);
         for (int i = 0; i < tracks.Count; i++)
         {
             int idx = i;
@@ -91,7 +92,7 @@ public partial class AlbumDetailView : UserControl
                 isCurrent,
                 isPlaying,
                 lib.IsAvailable(track),
-                () => _ctx.Services.Player.Play(ids, idx),
+                () => _ctx.Services.Player.PlayInNamedQueue(queueName, ids, startAt: idx),
                 _ctx.OpenTextPrompt,
                 null,
                 _ctx.OpenSaveCloudTrack,
@@ -100,20 +101,25 @@ public partial class AlbumDetailView : UserControl
         }
     }
 
+    private static string FormatAlbumQueueName(AlbumInfo album) =>
+        $"Album: {L.DisplayAlbum(album.Title)}";
+
     private void Back_Click(object sender, RoutedEventArgs e) => BackRequested?.Invoke();
 
     private void PlayAll_Click(object sender, RoutedEventArgs e)
     {
         if (_ctx is null || _album is null || _album.TrackIds.Count == 0) return;
-        if (_ctx.Services.Queues.Active.Shuffle) _ctx.Services.Player.ToggleShuffle();
-        _ctx.Services.Player.Play(_album.TrackIds, 0);
+        _ctx.Services.Player.PlayInNamedQueue(FormatAlbumQueueName(_album), _album.TrackIds, startAt: 0, shuffle: false);
     }
 
     private void ShuffleAll_Click(object sender, RoutedEventArgs e)
     {
         if (_ctx is null || _album is null || _album.TrackIds.Count == 0) return;
-        if (!_ctx.Services.Queues.Active.Shuffle) _ctx.Services.Player.ToggleShuffle();
-        _ctx.Services.Player.Play(_album.TrackIds, Random.Shared.Next(_album.TrackIds.Count));
+        _ctx.Services.Player.PlayInNamedQueue(
+            FormatAlbumQueueName(_album),
+            _album.TrackIds,
+            startAt: Random.Shared.Next(_album.TrackIds.Count),
+            shuffle: true);
     }
 
     private void More_Click(object sender, RoutedEventArgs e)

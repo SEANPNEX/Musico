@@ -25,7 +25,7 @@ struct SidebarRootView: View {
     #endif
     @State private var sidePanel: SidePanel?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
-    @State private var lastValidSelection: SidebarItem = .songs
+    @State private var lastValidSelection: SidebarItem = .queues
     @State private var showDownloadsSheet = false
     @State private var renamingPlaylist: Playlist?
 
@@ -43,7 +43,7 @@ struct SidebarRootView: View {
             )
         }
         .onAppear {
-            lastValidSelection = navigation.sidebarSelection ?? .songs
+            lastValidSelection = navigation.sidebarSelection ?? .queues
         }
         .onChange(of: navigation.sidebarSelection) { oldValue, newValue in
             guard let newValue else {
@@ -129,6 +129,7 @@ struct SidebarRootView: View {
         VStack(spacing: 0) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2) {
+                    sidebarRow(.queues, L10n.tr("Queues"), "list.bullet")
                     sidebarRow(.folders, L10n.tr("Folders"), "folder")
 
                     sidebarSectionHeader(L10n.tr("Library"))
@@ -198,7 +199,6 @@ struct SidebarRootView: View {
                         .padding(.vertical, 6)
                         .padding(.horizontal, 8)
 
-                    sidebarRow(.queues, L10n.tr("Queues"), "list.bullet")
                     sidebarRow(.stats, L10n.tr("Stats"), "chart.bar")
                     sidebarRow(.extensions, L10n.tr("Extensions"), "puzzlepiece.extension")
                 }

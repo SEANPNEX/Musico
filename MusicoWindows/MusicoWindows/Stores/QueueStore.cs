@@ -17,6 +17,7 @@ public sealed class QueueStore : ObservableStore
     private readonly string _filePath;
     private List<PlayQueue> _queues;
     private Guid _activeId;
+    private Guid _viewedId;
 
     public QueueStore(string stateDirectory)
     {
@@ -33,6 +34,7 @@ public sealed class QueueStore : ObservableStore
             _queues = [first];
             _activeId = first.Id;
         }
+        _viewedId = _activeId;
     }
 
     public event Action? QueuesChanged;
@@ -40,6 +42,19 @@ public sealed class QueueStore : ObservableStore
     public IReadOnlyList<PlayQueue> Queues => _queues;
     public Guid ActiveId => _activeId;
     public PlayQueue Active => _queues.FirstOrDefault(q => q.Id == _activeId) ?? _queues[0];
+    public Guid ViewedQueueId => _viewedId;
+    public PlayQueue Viewed => _queues.FirstOrDefault(q => q.Id == _viewedId) ?? Active;
+
+    public PlayQueue? GetById(Guid id) => _queues.FirstOrDefault(q => q.Id == id);
+
+    public void SelectViewedQueue(Guid id)
+    {
+        if (_queues.All(q => q.Id != id)) return;
+        if (_viewedId == id) return;
+        _viewedId = id;
+        OnPropertyChanged(nameof(ViewedQueueId));
+        OnPropertyChanged(nameof(Viewed));
+    }
 
     public HashSet<string> GetAllReferencedTrackIds()
     {
@@ -90,6 +105,10 @@ public sealed class QueueStore : ObservableStore
         if (id == _activeId)
         {
             OnPropertyChanged(nameof(Active));
+        }
+        if (id == _viewedId)
+        {
+            OnPropertyChanged(nameof(Viewed));
         }
         QueuesChanged?.Invoke();
     }
@@ -149,6 +168,10 @@ public sealed class QueueStore : ObservableStore
             if (_activeId == existing.Id)
             {
                 OnPropertyChanged(nameof(Active));
+            }
+            if (_viewedId == existing.Id)
+            {
+                OnPropertyChanged(nameof(Viewed));
             }
             QueuesChanged?.Invoke();
             return (existing.Id, wasActive);
@@ -246,6 +269,13 @@ public sealed class QueueStore : ObservableStore
             OnPropertyChanged(nameof(Active));
         }
 
+        if (_viewedId == id)
+        {
+            _viewedId = _queues[Math.Min(index, _queues.Count - 1)].Id;
+            OnPropertyChanged(nameof(ViewedQueueId));
+            OnPropertyChanged(nameof(Viewed));
+        }
+
         Save();
         OnPropertyChanged(nameof(Queues));
         QueuesChanged?.Invoke();
@@ -274,6 +304,7 @@ public sealed class QueueStore : ObservableStore
         Save();
         OnPropertyChanged(nameof(Queues));
         OnPropertyChanged(nameof(Active));
+        OnPropertyChanged(nameof(Viewed));
         QueuesChanged?.Invoke();
     }
 
@@ -293,6 +324,7 @@ public sealed class QueueStore : ObservableStore
         Save();
         OnPropertyChanged(nameof(Queues));
         OnPropertyChanged(nameof(Active));
+        OnPropertyChanged(nameof(Viewed));
         QueuesChanged?.Invoke();
     }
 }

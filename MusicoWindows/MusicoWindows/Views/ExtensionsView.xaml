@@ -62,8 +62,43 @@
             </Grid>
         </Border>
 
-        <!-- Busy / Error Banner -->
+        <!-- Auto-Update Bar + Busy / Error / Update Status Banners -->
         <StackPanel Grid.Row="1">
+            <Border x:Name="UpdateToolbar"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource DividerBrush}"
+                    BorderThickness="0,0,0,1"
+                    Padding="24,10">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <TextBlock Text="{DynamicResource Str_Extensions_AutoUpdate}"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="13"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,12,0" />
+                        <CheckBox x:Name="AutoUpdateToggle"
+                                  Style="{StaticResource Win10ToggleSwitchStyle}"
+                                  VerticalAlignment="Center"
+                                  Checked="AutoUpdateToggle_Changed"
+                                  Unchecked="AutoUpdateToggle_Changed" />
+                    </StackPanel>
+                    <Button x:Name="CheckUpdatesButton"
+                            Grid.Column="1"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            Height="32"
+                            Click="CheckUpdates_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE895;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
+                            <TextBlock Text="{DynamicResource Str_Extensions_CheckUpdates}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                </Grid>
+            </Border>
             <Border x:Name="BusyBanner"
                     Background="{DynamicResource CardBackgroundBrush}"
                     BorderBrush="{DynamicResource DividerBrush}"
@@ -71,6 +106,33 @@
                     Padding="24,10"
                     Visibility="Collapsed">
                 <ProgressBar Style="{StaticResource Win10ProgressBarStyle}" IsIndeterminate="True" />
+            </Border>
+            <Border x:Name="UpdateStatusBanner"
+                    Background="{DynamicResource CardBackgroundBrush}"
+                    BorderBrush="{DynamicResource DividerBrush}"
+                    BorderThickness="0,0,0,1"
+                    Padding="24,10"
+                    Visibility="Collapsed">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="UpdateStatusBannerText"
+                               Grid.Column="0"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               TextWrapping="Wrap"
+                               VerticalAlignment="Center" />
+                    <Button Grid.Column="1"
+                            Style="{StaticResource Win10IconButtonStyle}"
+                            Content="&#xE711;"
+                            Width="26"
+                            Height="26"
+                            FontSize="11"
+                            Click="DismissUpdateStatus_Click" />
+                </Grid>
             </Border>
             <Border x:Name="ErrorBanner"
                     Background="{DynamicResource WarningBannerBrush}"
@@ -225,7 +287,8 @@
                                            Foreground="{DynamicResource AccentBrush}"
                                            VerticalAlignment="Center"
                                            Margin="0,0,10,0" />
-                                <TextBlock Text="{DynamicResource Str_Extensions_ReviewTitle}"
+                                <TextBlock x:Name="ReviewTitleText"
+                                           Text="{DynamicResource Str_Extensions_ReviewTitle}"
                                            FontFamily="{StaticResource Win10Font}"
                                            FontSize="19"
                                            FontWeight="SemiBold"
@@ -237,7 +300,8 @@
                                     HorizontalAlignment="Right"
                                     Click="KeepDisabledReview_Click" />
                         </Grid>
-                        <TextBlock Text="{DynamicResource Str_Extensions_ReviewSubtitle}"
+                        <TextBlock x:Name="ReviewSubtitleText"
+                                   Text="{DynamicResource Str_Extensions_ReviewSubtitle}"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="12"
                                    Foreground="{DynamicResource TextSecondaryBrush}"
@@ -272,6 +336,23 @@
                                 </StackPanel>
                             </Border>
 
+                            <StackPanel x:Name="ReviewEscalationSection"
+                                        Visibility="Collapsed"
+                                        Margin="0,0,0,12">
+                                <TextBlock x:Name="ReviewNewPermissionsHeader"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="12"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource WarningTextBrush}"
+                                           Margin="0,0,0,6" />
+                                <Border Background="{DynamicResource WarningBannerBrush}"
+                                        BorderBrush="{DynamicResource WarningTextBrush}"
+                                        BorderThickness="1"
+                                        Padding="10,8">
+                                    <StackPanel x:Name="ReviewNewPermissionsPanel" />
+                                </Border>
+                            </StackPanel>
+
                             <TextBlock Text="{DynamicResource Str_Extensions_CapabilitiesLabel}"
                                        FontFamily="{StaticResource Win10Font}"
                                        FontSize="12"
@@ -301,11 +382,13 @@
                             <ColumnDefinition Width="8" />
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
-                        <Button Grid.Column="0"
+                        <Button x:Name="ReviewPrimaryButton"
+                                Grid.Column="0"
                                 Style="{StaticResource Win10PrimaryButtonStyle}"
                                 Content="{DynamicResource Str_Extensions_ApproveEnable}"
                                 Click="ApproveReview_Click" />
-                        <Button Grid.Column="2"
+                        <Button x:Name="ReviewSecondaryButton"
+                                Grid.Column="2"
                                 Style="{StaticResource Win10ButtonStyle}"
                                 Content="{DynamicResource Str_Extensions_KeepDisabled}"
                                 Click="KeepDisabledReview_Click" />

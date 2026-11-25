@@ -8,22 +8,28 @@ final class QueueStore {
 
     private(set) var queues: [PlayQueue]
     private(set) var activeID: UUID
+    private(set) var viewedQueueID: UUID
     @ObservationIgnored private let fileURL: URL
     @ObservationIgnored var onQueuesChanged: ((Set<String>) -> Void)?
 
     init(directory: URL) {
         fileURL = directory.appendingPathComponent("queues.json")
+        let initialActiveID: UUID
         if let file = Persistence.load(QueueFile.self, from: fileURL), !file.queues.isEmpty {
             queues = file.queues
-            activeID = file.queues.contains { $0.id == file.activeID } ? file.activeID : file.queues[0].id
+            initialActiveID = file.queues.contains { $0.id == file.activeID } ? file.activeID : file.queues[0].id
         } else {
             let first = PlayQueue(name: "Queue 1")
             queues = [first]
-            activeID = first.id
+            initialActiveID = first.id
         }
+        activeID = initialActiveID
+        viewedQueueID = initialActiveID
     }
 
+    var playingQueueID: UUID { activeID }
     var active: PlayQueue { queues.first { $0.id == activeID } ?? queues[0] }
+    var viewed: PlayQueue { queues.first { $0.id == viewedQueueID } ?? active }
     var allReferencedTrackIDs: Set<String> { Set(queues.flatMap(\.trackIDs)) }
 
     func save() {
@@ -97,8 +103,15 @@ final class QueueStore {
     func delete(_ id: UUID) {
         guard queues.count > 1, let index = queues.firstIndex(where: { $0.id == id }) else { return }
         queues.remove(at: index)
-        if activeID == id { activeID = queues[min(index, queues.count - 1)].id }
+        let fallbackID = queues[min(index, queues.count - 1)].id
+        if activeID == id { activeID = fallbackID }
+        if viewedQueueID == id { viewedQueueID = fallbackID }
         save()
+    }
+
+    func selectViewedQueue(_ id: UUID) {
+        guard queues.contains(where: { $0.id == id }) else { return }
+        viewedQueueID = id
     }
 
     func setActive(_ id: UUID) {

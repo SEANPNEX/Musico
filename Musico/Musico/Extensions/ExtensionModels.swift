@@ -380,6 +380,25 @@ enum HostAllowlistMatcher {
         return false
     }
 
+    /// Returns `true` if `pattern` is already equal to or strictly narrower than a pattern in `allowedPatterns`.
+    static func isPatternCovered(_ pattern: String, by allowedPatterns: [String]) -> Bool {
+        guard let candidate = try? validatePattern(pattern) else { return false }
+        let normalizedAllowed = allowedPatterns.compactMap { try? validatePattern($0) }
+        for allowed in normalizedAllowed {
+            if allowed == candidate {
+                return true
+            }
+            if allowed.hasPrefix("*.") {
+                let allowedDomain = String(allowed.dropFirst(2))
+                let candidateDomain = candidate.hasPrefix("*.") ? String(candidate.dropFirst(2)) : candidate
+                if candidateDomain.hasSuffix("." + allowedDomain), candidateDomain.count > allowedDomain.count + 1 {
+                    return true
+                }
+            }
+        }
+        return false
+    }
+
     static func extractedHost(from urlString: String) -> String {
         if let url = URL(string: urlString),
            let host = URLComponents(url: url, resolvingAgainstBaseURL: true)?.host ?? url.host,
@@ -397,6 +416,7 @@ enum ExtensionManifestError: LocalizedError, Equatable {
     case invalidVersion(String)
     case invalidHostPattern(String)
     case invalidURLPattern(String)
+    case invalidUpdateURL(String)
     case invalidEntryPath(String)
     case missingRequiredField(String)
 
@@ -414,11 +434,76 @@ enum ExtensionManifestError: LocalizedError, Equatable {
             L10n.trNonisolated("Invalid host permission pattern “%@”.", pattern)
         case .invalidURLPattern(let pattern):
             L10n.trNonisolated("Invalid URL pattern “%@”.", pattern)
+        case .invalidUpdateURL(let url):
+            L10n.trNonisolated("Invalid extension update URL “%@”.", url)
         case .invalidEntryPath(let entry):
             L10n.trNonisolated("Invalid extension entry path “%@”.", entry)
         case .missingRequiredField(let field):
             L10n.trNonisolated("Extension manifest is missing required field “%@”.", field)
         }
+    }
+}
+
+/// Semantic version comparison supporting `major.minor.patch[-prerelease][+build]`.
+struct ExtensionSemVer: Comparable, Equatable, Hashable, Sendable {
+    let major: Int
+    let minor: Int
+    let patch: Int
+    let prerelease: [String]
+
+    init?(_ raw: String) {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let withoutBuild = trimmed.split(separator: "+", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? trimmed
+        let parts = withoutBuild.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        let coreParts = parts[0].split(separator: ".", omittingEmptySubsequences: false)
+        guard coreParts.count == 3,
+              coreParts.allSatisfy({ !$0.isEmpty && $0.allSatisfy { $0.isASCII && $0.isNumber } }),
+              let major = Int(coreParts[0]), major >= 0,
+              let minor = Int(coreParts[1]), minor >= 0,
+              let patch = Int(coreParts[2]), patch >= 0 else {
+            return nil
+        }
+
+        let pre: [String]
+        if parts.count == 2 {
+            let rawPre = parts[1]
+            guard !rawPre.isEmpty else { return nil }
+            let preParts = rawPre.split(separator: ".", omittingEmptySubsequences: false).map(String.init)
+            guard preParts.allSatisfy({ !$0.isEmpty }) else { return nil }
+            pre = preParts
+        } else {
+            pre = []
+        }
+
+        self.major = major
+        self.minor = minor
+        self.patch = patch
+        self.prerelease = pre
+    }
+
+    static func < (lhs: ExtensionSemVer, rhs: ExtensionSemVer) -> Bool {
+        if (lhs.major, lhs.minor, lhs.patch) != (rhs.major, rhs.minor, rhs.patch) {
+            return (lhs.major, lhs.minor, lhs.patch) < (rhs.major, rhs.minor, rhs.patch)
+        }
+        if lhs.prerelease.isEmpty && rhs.prerelease.isEmpty { return false }
+        if lhs.prerelease.isEmpty { return false }
+        if rhs.prerelease.isEmpty { return true }
+        for (l, r) in zip(lhs.prerelease, rhs.prerelease) {
+            if l == r { continue }
+            let lNum = Int(l), rNum = Int(r)
+            switch (lNum, rNum) {
+            case (.some(let ln), .some(let rn)):
+                return ln < rn
+            case (.some, .none):
+                return true
+            case (.none, .some):
+                return false
+            case (.none, .none):
+                return l < r
+            }
+        }
+        return lhs.prerelease.count < rhs.prerelease.count
     }
 }
 
@@ -432,6 +517,7 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
     var description: String? = nil
     var badgeLabel: String? = nil
     var entry: String? = nil
+    var updateUrl: String? = nil
     var capabilities: [ExtensionCapability]
     var urlPatterns: [String] = []
     var permissions: ExtensionPermissions
@@ -439,10 +525,26 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
     var searchKinds: [ExtensionSearchKind]? = nil
 
     enum CodingKeys: String, CodingKey {
-        case apiVersion, id, name, version, author, description, badgeLabel, entry, capabilities, urlPatterns, permissions, settings, searchKinds
+        case apiVersion, id, name, version, author, description, badgeLabel, entry, updateUrl, capabilities, urlPatterns, permissions, settings, searchKinds
     }
 
     var providerID: String { "ext.\(id)" }
+
+    var validatedUpdateURL: URL? {
+        Self.validateHTTPSURL(updateUrl)
+    }
+
+    static func validateHTTPSURL(_ raw: String?) -> URL? {
+        guard let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !trimmed.isEmpty,
+              let url = URL(string: trimmed),
+              url.scheme?.lowercased() == "https",
+              let host = url.host,
+              !host.isEmpty else {
+            return nil
+        }
+        return url
+    }
 
     var supportsCookieAuth: Bool {
         capabilities.contains(.cookie) || capabilities.contains(.qrLogin)
@@ -518,6 +620,12 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
             throw ExtensionManifestError.invalidEntryPath(effectiveEntry)
         }
 
+        if let rawUpdateUrl = updateUrl {
+            guard Self.validateHTTPSURL(rawUpdateUrl) != nil else {
+                throw ExtensionManifestError.invalidUpdateURL(rawUpdateUrl)
+            }
+        }
+
         if let settings {
             var seenKeys = Set<String>()
             for spec in settings {
@@ -547,6 +655,7 @@ extension ExtensionManifest {
         self.description = try c.decodeIfPresent(String.self, forKey: .description)
         self.badgeLabel = try c.decodeIfPresent(String.self, forKey: .badgeLabel)
         self.entry = try c.decodeIfPresent(String.self, forKey: .entry)
+        self.updateUrl = try c.decodeIfPresent(String.self, forKey: .updateUrl)
         self.capabilities = try c.decode([ExtensionCapability].self, forKey: .capabilities)
         self.urlPatterns = try c.decodeIfPresent([String].self, forKey: .urlPatterns) ?? []
         self.permissions = try c.decode(ExtensionPermissions.self, forKey: .permissions)
@@ -629,6 +738,47 @@ enum ExtensionImportError: LocalizedError, Equatable {
             L10n.trNonisolated("Could not download extension: %@", message)
         case .missingEntryScript(let path):
             L10n.trNonisolated("Extension package is missing entry script “%@”.", path)
+        }
+    }
+}
+
+/// Staged extension update waiting for explicit user review because permissions expanded.
+struct PendingExtensionUpdate: Identifiable, Equatable, Sendable {
+    var id: String { manifest.id }
+    var installedVersion: String
+    var manifest: ExtensionManifest
+    var scriptSource: String
+    var iconData: Data?
+    var sourceURL: String
+    var addedHosts: [String]
+    var addedCapabilities: [ExtensionCapability]
+    var checkedAt: Date
+}
+
+enum ExtensionUpdateStatus: Equatable, Sendable {
+    case checking
+    case upToDate
+    case updated(toVersion: String)
+    case pendingReview(version: String)
+    case error(String)
+}
+
+enum ExtensionUpdateError: LocalizedError, Equatable {
+    case noUpdateURL
+    case insecureUpdateURL
+    case mismatchedID(expected: String, actual: String)
+    case invalidVersion(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .noUpdateURL:
+            L10n.trNonisolated("This extension has no update URL configured.")
+        case .insecureUpdateURL:
+            L10n.trNonisolated("Extension update URLs must use HTTPS.")
+        case .mismatchedID(let expected, let actual):
+            L10n.trNonisolated("Update rejected: expected extension ID “%@”, got “%@”.", expected, actual)
+        case .invalidVersion(let version):
+            L10n.trNonisolated("Invalid extension version “%@”.", version)
         }
     }
 }

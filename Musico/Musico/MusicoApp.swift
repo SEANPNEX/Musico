@@ -79,6 +79,9 @@ struct MusicoApp: App {
                     // Tracks whose folder was unreachable at launch may be playable now.
                     if model.player.currentTrack == nil { model.player.restore() }
                 }
+                .task {
+                    await model.extensions.checkForUpdatesIfNeeded()
+                }
         }
         .onChange(of: scenePhase) { _, phase in
             if phase != .active { model.player.persistPosition() }

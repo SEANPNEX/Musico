@@ -18,6 +18,27 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 import kotlin.math.roundToInt
 
+data class ResolvedCoverImage(
+    val bytes: ByteArray,
+    val mimeType: String,
+    val fileExtension: String,
+) {
+    override fun equals(other: Any?): Boolean {
+        if (this === other) return true
+        if (other !is ResolvedCoverImage) return false
+        return mimeType == other.mimeType &&
+            fileExtension == other.fileExtension &&
+            bytes.contentEquals(other.bytes)
+    }
+
+    override fun hashCode(): Int {
+        var result = bytes.contentHashCode()
+        result = 31 * result + mimeType.hashCode()
+        result = 31 * result + fileExtension.hashCode()
+        return result
+    }
+}
+
 /**
  * In-memory LRU thumbnail loader (`https://` URLs only) for cloud search and preview rows.
  * Never writes browsed thumbnails to disk [ArtworkCache].
@@ -59,7 +80,8 @@ class CloudThumbnailCache(
 
         return try {
             val loaded = withContext(Dispatchers.IO) {
-                fetchAndDecode(cleanUrl, headers)
+                val rawBytes = fetchRawBytesWithClient(httpClient, cleanUrl, headers) ?: return@withContext null
+                bitmapDecoder(rawBytes)
             }
             if (loaded != null) {
                 memory.put(cleanUrl, loaded)
@@ -77,50 +99,99 @@ class CloudThumbnailCache(
         }
     }
 
-    private suspend fun fetchAndDecode(
-        initialUrl: String,
-        headers: Map<String, String>,
-    ): Bitmap? {
-        var currentUrl = initialUrl
-        for (hop in 0..MAX_REDIRECTS) {
-            if (!isAllowedUrl(currentUrl)) return null
-            val resp = httpClient.get(
-                url = currentUrl,
-                headers = headers,
-                followRedirects = false,
-            )
-            if (resp.statusCode in REDIRECT_CODES) {
-                val location = resp.headers.entries
-                    .firstOrNull { it.key.equals("Location", ignoreCase = true) }
-                    ?.value
-                    ?.firstOrNull()
-                    ?.takeIf { it.isNotBlank() }
-                    ?: return null
-                val nextUrl = runCatching { URL(URL(currentUrl), location).toString() }.getOrNull()
-                    ?: return null
-                if (!isAllowedUrl(nextUrl)) return null
-                currentUrl = nextUrl
-                continue
-            }
-            if (resp.statusCode !in 200..299 || resp.bodyBytes.isEmpty()) {
-                return null
-            }
-            val bytes = if (resp.bodyBytes.size > MAX_IMAGE_BYTES) {
-                return null
-            } else {
-                resp.bodyBytes
-            }
-            return bitmapDecoder(bytes)
-        }
-        return null
-    }
+    suspend fun fetchImageBytes(
+        url: String?,
+        headers: Map<String, String> = emptyMap(),
+    ): ResolvedCoverImage? = fetchImageBytesWithClient(httpClient, url, headers)
 
     companion object {
         const val DEFAULT_MAX_ENTRIES = 120
         const val MAX_DIMENSION = 320
+        const val DEFAULT_USER_AGENT =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         private const val MAX_REDIRECTS = 5
-        private const val MAX_IMAGE_BYTES = 4 * 1024 * 1024
+        private const val MAX_IMAGE_BYTES = 8 * 1024 * 1024
         private val REDIRECT_CODES = setOf(301, 302, 303, 307, 308)
+
+        fun defaultArtworkHeadersForUrl(url: String): Map<String, String> {
+            val host = runCatching { URL(url).host.lowercase() }.getOrNull().orEmpty()
+            val headers = linkedMapOf("User-Agent" to DEFAULT_USER_AGENT)
+            if (host.endsWith("hdslb.com") ||
+                host.endsWith("bilivideo.com") ||
+                host.endsWith("bilibili.com") ||
+                host.endsWith("biliapi.net")
+            ) {
+                headers["Referer"] = "https://www.bilibili.com/"
+            }
+            return headers
+        }
+
+        fun mergeArtworkHeaders(url: String, callerHeaders: Map<String, String>): Map<String, String> {
+            val defaults = defaultArtworkHeadersForUrl(url)
+            if (callerHeaders.isEmpty()) return defaults
+            val merged = LinkedHashMap<String, String>(defaults.size + callerHeaders.size)
+            for ((k, v) in defaults) {
+                merged[k] = v
+            }
+            for ((k, v) in callerHeaders) {
+                val existingKey = merged.keys.firstOrNull { it.equals(k, ignoreCase = true) }
+                if (existingKey != null && existingKey != k) {
+                    merged.remove(existingKey)
+                }
+                merged[k] = v
+            }
+            return merged
+        }
+
+        private suspend fun fetchRawBytesWithClient(
+            client: CloudHttpClient,
+            url: String?,
+            headers: Map<String, String> = emptyMap(),
+        ): ByteArray? {
+            val initialUrl = normalizeHttpsUrlOrNull(url) ?: return null
+            var currentUrl = initialUrl
+            for (hop in 0..MAX_REDIRECTS) {
+                if (!isAllowedUrl(currentUrl)) return null
+                val requestHeaders = mergeArtworkHeaders(currentUrl, headers)
+                val resp = client.get(
+                    url = currentUrl,
+                    headers = requestHeaders,
+                    followRedirects = false,
+                )
+                if (resp.statusCode in REDIRECT_CODES) {
+                    val location = resp.headers.entries
+                        .firstOrNull { it.key.equals("Location", ignoreCase = true) }
+                        ?.value
+                        ?.firstOrNull()
+                        ?.takeIf { it.isNotBlank() }
+                        ?: return null
+                    val nextUrl = runCatching { URL(URL(currentUrl), location).toString() }.getOrNull()
+                        ?: return null
+                    if (!isAllowedUrl(nextUrl)) return null
+                    currentUrl = nextUrl
+                    continue
+                }
+                if (resp.statusCode !in 200..299 || resp.bodyBytes.isEmpty() || resp.bodyBytes.size > MAX_IMAGE_BYTES) {
+                    return null
+                }
+                return resp.bodyBytes
+            }
+            return null
+        }
+
+        suspend fun fetchImageBytesWithClient(
+            client: CloudHttpClient,
+            url: String?,
+            headers: Map<String, String> = emptyMap(),
+        ): ResolvedCoverImage? {
+            val rawBytes = fetchRawBytesWithClient(client, url, headers) ?: return null
+            val detected = AudioTagWriter.detectImage(rawBytes) ?: return null
+            return ResolvedCoverImage(
+                bytes = detected.bytes,
+                mimeType = detected.mimeType,
+                fileExtension = detected.extension,
+            )
+        }
 
         fun isAllowedUrl(rawUrl: String?): Boolean = normalizeHttpsUrlOrNull(rawUrl) != null
 

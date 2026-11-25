@@ -223,8 +223,11 @@ fun FoldersScreen(
     val downloadJobs by cloudDownloadManager.jobs.collectAsStateWithLifecycle()
     val activeDownloadCount = remember(downloadJobs) { downloadJobs.count { it.isActive } }
     val activeProviders by providerRegistry.providers.collectAsStateWithLifecycle()
-    if (extensionStore != null) {
+    val pendingExtUpdateCount = if (extensionStore != null) {
         extensionStore.extensions.collectAsStateWithLifecycle().value
+        extensionStore.pendingUpdates.collectAsStateWithLifecycle().value.size
+    } else {
+        0
     }
 
     var showExtensionsScreen by remember { mutableStateOf(false) }
@@ -327,7 +330,15 @@ fun FoldersScreen(
                             }
                             if (extensionStore != null) {
                                 IconButton(onClick = { showExtensionsScreen = true }) {
-                                    Icon(Icons.Rounded.Extension, contentDescription = strings.extensionsTitle)
+                                    BadgedBox(
+                                        badge = {
+                                            if (pendingExtUpdateCount > 0) {
+                                                Badge()
+                                            }
+                                        }
+                                    ) {
+                                        Icon(Icons.Rounded.Extension, contentDescription = strings.extensionsTitle)
+                                    }
                                 }
                             }
                             Box {
@@ -424,7 +435,15 @@ fun FoldersScreen(
                             }
                             if (extensionStore != null) {
                                 IconButton(onClick = { showExtensionsScreen = true }) {
-                                    Icon(Icons.Rounded.Extension, contentDescription = strings.extensionsTitle)
+                                    BadgedBox(
+                                        badge = {
+                                            if (pendingExtUpdateCount > 0) {
+                                                Badge()
+                                            }
+                                        }
+                                    ) {
+                                        Icon(Icons.Rounded.Extension, contentDescription = strings.extensionsTitle)
+                                    }
                                 }
                             }
                             IconButton(

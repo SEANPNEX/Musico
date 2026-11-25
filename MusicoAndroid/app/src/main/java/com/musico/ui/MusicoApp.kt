@@ -150,13 +150,18 @@ private fun MusicoAppContent(
     LaunchedEffect(updateManager) {
         updateManager.checkForUpdates(silent = true)
     }
+    LaunchedEffect(extensionStore) {
+        extensionStore.checkForUpdatesOnLaunch()
+    }
 
     val libraryState by libraryStore.state.collectAsStateWithLifecycle()
     val queueState by queueStore.state.collectAsStateWithLifecycle()
     val historyState by historyStore.state.collectAsStateWithLifecycle()
     val playerState by playerController.state.collectAsStateWithLifecycle()
+    val pendingExtensionUpdates by extensionStore.pendingUpdates.collectAsStateWithLifecycle()
 
-    var selectedDestination by rememberSaveable { mutableStateOf(TopDestination.LIBRARY) }
+    var selectedDestination by rememberSaveable { mutableStateOf(TopDestination.QUEUES) }
+    var dismissedExtensionReviewIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showFullPlayer by rememberSaveable { mutableStateOf(false) }
     var sidePanel by rememberSaveable { mutableStateOf<SidePanel?>(null) }
     var pendingSearchRequest by remember { mutableStateOf<SearchRequest?>(null) }
@@ -426,6 +431,23 @@ private fun MusicoAppContent(
         playlists = libraryState.playlists,
         historyState = historyState,
     )
+
+    val pendingExtensionPrompt = pendingExtensionUpdates.values.firstOrNull {
+        it.installed.id !in dismissedExtensionReviewIds
+    }
+    if (pendingExtensionPrompt != null) {
+        ReviewExtensionUpdateDialog(
+            pending = pendingExtensionPrompt,
+            strings = strings,
+            onDismiss = {
+                dismissedExtensionReviewIds = dismissedExtensionReviewIds + pendingExtensionPrompt.installed.id
+            },
+            onApprove = {
+                extensionStore.approvePendingUpdate(pendingExtensionPrompt.installed.id)
+                dismissedExtensionReviewIds = dismissedExtensionReviewIds - pendingExtensionPrompt.installed.id
+            },
+        )
+    }
 
     val errorMsg = playerState.errorMessage
     val structuredError = playerState.playbackError

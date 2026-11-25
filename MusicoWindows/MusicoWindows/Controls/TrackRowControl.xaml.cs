@@ -41,7 +41,8 @@ public partial class TrackRowControl : UserControl
         Action<string, string, string, string, Action<string>> openTextPrompt,
         Action<ContextMenu>? extraMenuItems = null,
         Action<Track, string>? openSaveCloudTrack = null,
-        Action<Track>? openSongInfo = null)
+        Action<Track>? openSongInfo = null,
+        Guid? targetQueueId = null)
     {
         _onClick = onClick;
         _isAvailable = isAvailable;
@@ -78,7 +79,8 @@ public partial class TrackRowControl : UserControl
             extraMenuItems,
             openSaveCloudTrack,
             openSongInfo,
-            explicitTrack: track);
+            explicitTrack: track,
+            targetQueueId: targetQueueId);
     }
 
     public void EnableDragReorder(string scopeKey, int index, int itemCount, Action<int, int> onDropReorder)

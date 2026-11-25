@@ -57,6 +57,9 @@ class AppContainer(context: Context) {
         context = appContext,
         cloudResolver = cloudStreamResolver,
         providerRegistry = cloudProviderRegistry,
+        artworkCache = artworkCache,
+        thumbnailCache = cloudThumbnailCache,
+        httpClient = cloudHttpClient,
     )
     val libraryStore: LibraryStore = LibraryStore(
         directory = stateDir,

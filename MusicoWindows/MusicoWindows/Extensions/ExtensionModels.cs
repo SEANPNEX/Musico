@@ -256,6 +256,7 @@ public sealed class ExtensionManifest
     public string? Description { get; set; }
     public string? BadgeLabel { get; set; }
     public string? Entry { get; set; }
+    public string? UpdateUrl { get; set; }
     public List<ExtensionCapability> Capabilities { get; set; } = new();
     public List<ExtensionSearchKind>? SearchKinds { get; set; }
     public List<string> UrlPatterns { get; set; } = new();
@@ -446,6 +447,16 @@ public static class ExtensionManifestValidator
             throw new InvalidDataException($"Invalid extension version '{manifest.Version}'. Expected SemVer (MAJOR.MINOR.PATCH).");
         }
 
+        if (!string.IsNullOrWhiteSpace(manifest.UpdateUrl))
+        {
+            if (!Uri.TryCreate(manifest.UpdateUrl.Trim(), UriKind.Absolute, out var updateUri) ||
+                !string.Equals(updateUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"Invalid extension updateUrl '{manifest.UpdateUrl}'. Expected an https:// URL.");
+            }
+        }
+
         string entry = manifest.EffectiveEntry.Replace('\\', '/');
         if (entry.StartsWith('/') ||
             entry.Contains(':', StringComparison.Ordinal) ||
@@ -540,9 +551,219 @@ public sealed class ExtensionStateRecord
     public bool PendingPermissionReview { get; set; }
     public ExtensionPackageFormat Format { get; set; }
     public string? SourceLocation { get; set; }
+    public string? SourceUrl { get; set; }
     public DateTimeOffset InstalledUtc { get; set; }
     public string? Cookie { get; set; }
     public Dictionary<string, JsonElement> Settings { get; set; } = new(StringComparer.Ordinal);
+}
+
+public enum ExtensionUpdateOutcome
+{
+    UpToDate,
+    AppliedSilently,
+    StagedForReview,
+    SkippedNoUrl,
+    Failed
+}
+
+public sealed record ExtensionUpdateItemResult(
+    string ExtensionId,
+    string? UpdateUrl,
+    ExtensionUpdateOutcome Outcome,
+    string? InstalledVersion = null,
+    string? RemoteVersion = null,
+    string? ErrorMessage = null);
+
+public sealed record ExtensionUpdateCheckSummary(
+    bool WasSkippedByThrottleOrSetting,
+    IReadOnlyList<ExtensionUpdateItemResult> Results);
+
+public sealed record ExtensionPermissionEscalation(
+    IReadOnlyList<ExtensionCapability> AddedCapabilities,
+    IReadOnlyList<string> AddedHosts)
+{
+    public bool HasEscalation => AddedCapabilities.Count > 0 || AddedHosts.Count > 0;
+}
+
+public static class ExtensionPermissionAnalyzer
+{
+    public static ExtensionPermissionEscalation AnalyzeEscalation(
+        ExtensionManifest current,
+        ExtensionManifest next)
+    {
+        ArgumentNullException.ThrowIfNull(current);
+        ArgumentNullException.ThrowIfNull(next);
+
+        var currentCaps = new HashSet<ExtensionCapability>(current.Capabilities ?? []);
+        var addedCaps = (next.Capabilities ?? [])
+            .Distinct()
+            .Where(c => !currentCaps.Contains(c))
+            .ToList();
+
+        var currentHosts = (current.Permissions?.Hosts ?? [])
+            .Select(NormalizeHostPattern)
+            .Where(h => h.Length > 0)
+            .ToList();
+
+        var addedHosts = new List<string>();
+        var seenAdded = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string rawHost in next.Permissions?.Hosts ?? [])
+        {
+            string normalized = NormalizeHostPattern(rawHost);
+            if (normalized.Length == 0 || !seenAdded.Add(normalized))
+            {
+                continue;
+            }
+
+            if (!IsHostCoveredByAny(normalized, currentHosts))
+            {
+                addedHosts.Add(normalized);
+            }
+        }
+
+        return new ExtensionPermissionEscalation(addedCaps, addedHosts);
+    }
+
+    private static string NormalizeHostPattern(string? pattern) =>
+        string.IsNullOrWhiteSpace(pattern)
+            ? string.Empty
+            : pattern.Trim().ToLowerInvariant().TrimEnd('.');
+
+    private static bool IsHostCoveredByAny(string candidate, IReadOnlyList<string> existingPatterns)
+    {
+        foreach (string existing in existingPatterns)
+        {
+            if (string.Equals(candidate, existing, StringComparison.Ordinal))
+            {
+                return true;
+            }
+
+            if (existing.StartsWith("*.", StringComparison.Ordinal))
+            {
+                string domain = existing[2..];
+                if (domain.Length == 0) continue;
+
+                if (candidate.StartsWith("*.", StringComparison.Ordinal))
+                {
+                    string candDomain = candidate[2..];
+                    if (candDomain.EndsWith("." + domain, StringComparison.Ordinal) &&
+                        candDomain.Length > domain.Length + 1)
+                    {
+                        return true;
+                    }
+                }
+                else if (candidate.EndsWith("." + domain, StringComparison.Ordinal) &&
+                         candidate.Length > domain.Length + 1)
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+}
+
+public static class ExtensionVersionComparer
+{
+    private static readonly Regex StrictSemVerRegex = new(
+        @"^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+([0-9A-Za-z.-]+))?$",
+        RegexOptions.Compiled);
+
+    public static bool TryParse(
+        string? raw,
+        out (int Major, int Minor, int Patch, string? PreRelease) parsed)
+    {
+        parsed = default;
+        if (string.IsNullOrWhiteSpace(raw)) return false;
+        Match m = StrictSemVerRegex.Match(raw.Trim());
+        if (!m.Success) return false;
+
+        if (!int.TryParse(m.Groups[1].Value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int major) ||
+            !int.TryParse(m.Groups[2].Value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int minor) ||
+            !int.TryParse(m.Groups[3].Value, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int patch))
+        {
+            return false;
+        }
+
+        string? pre = m.Groups[4].Success ? m.Groups[4].Value : null;
+        parsed = (major, minor, patch, pre);
+        return true;
+    }
+
+    public static int Compare(string? left, string? right)
+    {
+        if (!TryParse(left, out var l))
+            throw new FormatException($"Invalid SemVer '{left}'.");
+        if (!TryParse(right, out var r))
+            throw new FormatException($"Invalid SemVer '{right}'.");
+
+        int cmp = l.Major.CompareTo(r.Major);
+        if (cmp != 0) return cmp;
+        cmp = l.Minor.CompareTo(r.Minor);
+        if (cmp != 0) return cmp;
+        cmp = l.Patch.CompareTo(r.Patch);
+        if (cmp != 0) return cmp;
+
+        bool lHasPre = !string.IsNullOrEmpty(l.PreRelease);
+        bool rHasPre = !string.IsNullOrEmpty(r.PreRelease);
+        if (!lHasPre && !rHasPre) return 0;
+        if (!lHasPre) return 1;
+        if (!rHasPre) return -1;
+
+        return ComparePreRelease(l.PreRelease!, r.PreRelease!);
+    }
+
+    public static bool IsStrictlyNewer(string? remoteVersion, string? installedVersion)
+    {
+        if (!TryParse(remoteVersion, out _) || !TryParse(installedVersion, out _))
+        {
+            return false;
+        }
+        return Compare(remoteVersion, installedVersion) > 0;
+    }
+
+    private static int ComparePreRelease(string left, string right)
+    {
+        string[] lp = left.Split('.');
+        string[] rp = right.Split('.');
+        int count = Math.Min(lp.Length, rp.Length);
+
+        for (int i = 0; i < count; i++)
+        {
+            string l = lp[i];
+            string r = rp[i];
+            bool lNum = int.TryParse(l, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int li) && IsAsciiDigits(l);
+            bool rNum = int.TryParse(r, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int ri) && IsAsciiDigits(r);
+
+            if (lNum && rNum)
+            {
+                int nc = li.CompareTo(ri);
+                if (nc != 0) return nc;
+            }
+            else if (lNum != rNum)
+            {
+                return lNum ? -1 : 1;
+            }
+            else
+            {
+                int sc = string.CompareOrdinal(l, r);
+                if (sc != 0) return sc;
+            }
+        }
+
+        return lp.Length.CompareTo(rp.Length);
+    }
+
+    private static bool IsAsciiDigits(string s)
+    {
+        if (s.Length == 0) return false;
+        foreach (char c in s)
+        {
+            if (c is < '0' or > '9') return false;
+        }
+        return true;
+    }
 }
 
 public enum ExtensionLogLevel

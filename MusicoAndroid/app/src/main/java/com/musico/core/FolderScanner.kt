@@ -15,6 +15,7 @@ data class ScannedFile(
     val fileSize: Long,
     val modifiedEpochMs: Long,
     val uriString: String? = null,
+    val siblingArtworkUriString: String? = null,
 )
 
 data class LocalCloudDiscovery(
@@ -27,11 +28,27 @@ object FolderScanner {
         "mp3", "m4a", "aac", "flac", "wav", "aif", "aiff", "caf", "alac", "ogg", "opus", "webm",
     )
 
+    private val ARTWORK_EXTENSION_PRIORITY = mapOf(
+        "jpg" to 0,
+        "jpeg" to 1,
+        "png" to 2,
+        "webp" to 3,
+    )
+
     fun isAudioFileName(name: String): Boolean {
         val dot = name.lastIndexOf('.')
         if (dot < 0 || dot == name.lastIndex) return false
         return name.substring(dot + 1).lowercase() in AUDIO_EXTENSIONS
     }
+
+    private fun artworkPriority(name: String): Int? {
+        val dot = name.lastIndexOf('.')
+        if (dot < 0 || dot == name.lastIndex) return null
+        return ARTWORK_EXTENSION_PRIORITY[name.substring(dot + 1).lowercase()]
+    }
+
+    private fun stemLower(name: String): String =
+        normalizePath(name.substringBeforeLast('.', name)).lowercase()
 
     fun normalizePath(path: String): String =
         Normalizer.normalize(path, Normalizer.Form.NFC)
@@ -49,6 +66,8 @@ object FolderScanner {
     }
 
     private fun scanLocalRecursive(entries: Array<File>, prefix: String, out: MutableList<ScannedFile>) {
+        val bestArtworkByStem = HashMap<String, Pair<Int, String>>()
+        val audioEntries = mutableListOf<Pair<File, String>>()
         for (entry in entries) {
             val name = entry.name
             if (name.startsWith(".")) continue
@@ -56,16 +75,33 @@ object FolderScanner {
             if (entry.isDirectory) {
                 val children = entry.listFiles() ?: continue
                 scanLocalRecursive(children, rel, out)
-            } else if (entry.isFile && isAudioFileName(name)) {
-                out.add(
-                    ScannedFile(
-                        relativePath = rel,
-                        fileSize = entry.length(),
-                        modifiedEpochMs = entry.lastModified(),
-                        uriString = runCatching { Uri.fromFile(entry)?.toString() }.getOrNull(),
-                    )
-                )
+            } else if (entry.isFile) {
+                if (isAudioFileName(name)) {
+                    audioEntries.add(entry to rel)
+                } else {
+                    val prio = artworkPriority(name)
+                    if (prio != null) {
+                        val uriStr = runCatching { Uri.fromFile(entry)?.toString() }.getOrNull()
+                            ?: entry.toURI().toString()
+                        val key = stemLower(name)
+                        val prev = bestArtworkByStem[key]
+                        if (prev == null || prio < prev.first) {
+                            bestArtworkByStem[key] = prio to uriStr
+                        }
+                    }
+                }
             }
+        }
+        for ((entry, rel) in audioEntries) {
+            out.add(
+                ScannedFile(
+                    relativePath = rel,
+                    fileSize = entry.length(),
+                    modifiedEpochMs = entry.lastModified(),
+                    uriString = runCatching { Uri.fromFile(entry)?.toString() }.getOrNull(),
+                    siblingArtworkUriString = bestArtworkByStem[stemLower(entry.name)]?.second,
+                )
+            )
         }
     }
 
@@ -113,6 +149,8 @@ object FolderScanner {
         } ?: return false
 
         val subDirs = mutableListOf<Pair<String, String>>()
+        val bestArtworkByStem = HashMap<String, Pair<Int, String>>()
+        val audioRows = mutableListOf<Triple<String, String, Triple<Long, Long, Uri>>>()
         cursor.use { c ->
             val idIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
             val nameIdx = c.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
@@ -132,16 +170,30 @@ object FolderScanner {
                     val size = if (sizeIdx >= 0 && !c.isNull(sizeIdx)) c.getLong(sizeIdx) else 0L
                     val mod = if (modIdx >= 0 && !c.isNull(modIdx)) c.getLong(modIdx) else 0L
                     val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
-                    out.add(
-                        ScannedFile(
-                            relativePath = rel,
-                            fileSize = size,
-                            modifiedEpochMs = mod,
-                            uriString = docUri.toString(),
-                        )
-                    )
+                    audioRows.add(Triple(name, rel, Triple(size, mod, docUri)))
+                } else {
+                    val prio = artworkPriority(name)
+                    if (prio != null) {
+                        val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId).toString()
+                        val key = stemLower(name)
+                        val prev = bestArtworkByStem[key]
+                        if (prev == null || prio < prev.first) {
+                            bestArtworkByStem[key] = prio to docUri
+                        }
+                    }
                 }
             }
+        }
+        for ((name, rel, meta) in audioRows) {
+            out.add(
+                ScannedFile(
+                    relativePath = rel,
+                    fileSize = meta.first,
+                    modifiedEpochMs = meta.second,
+                    uriString = meta.third.toString(),
+                    siblingArtworkUriString = bestArtworkByStem[stemLower(name)]?.second,
+                )
+            )
         }
 
         for ((subId, subRel) in subDirs) {
@@ -151,22 +203,39 @@ object FolderScanner {
     }
 
     private fun scanDocFileRecursive(dir: DocumentFile, prefix: String, out: MutableList<ScannedFile>) {
+        val bestArtworkByStem = HashMap<String, Pair<Int, String>>()
+        val audioDocs = mutableListOf<Triple<DocumentFile, String, String>>()
         for (child in dir.listFiles()) {
             val name = child.name ?: continue
             if (name.startsWith(".")) continue
             val rel = normalizePath(if (prefix.isEmpty()) name else "$prefix/$name")
             if (child.isDirectory) {
                 scanDocFileRecursive(child, rel, out)
-            } else if (child.isFile && isAudioFileName(name)) {
-                out.add(
-                    ScannedFile(
-                        relativePath = rel,
-                        fileSize = child.length(),
-                        modifiedEpochMs = child.lastModified(),
-                        uriString = child.uri.toString(),
-                    )
-                )
+            } else if (child.isFile) {
+                if (isAudioFileName(name)) {
+                    audioDocs.add(Triple(child, name, rel))
+                } else {
+                    val prio = artworkPriority(name)
+                    if (prio != null) {
+                        val key = stemLower(name)
+                        val prev = bestArtworkByStem[key]
+                        if (prev == null || prio < prev.first) {
+                            bestArtworkByStem[key] = prio to child.uri.toString()
+                        }
+                    }
+                }
             }
+        }
+        for ((child, name, rel) in audioDocs) {
+            out.add(
+                ScannedFile(
+                    relativePath = rel,
+                    fileSize = child.length(),
+                    modifiedEpochMs = child.lastModified(),
+                    uriString = child.uri.toString(),
+                    siblingArtworkUriString = bestArtworkByStem[stemLower(name)]?.second,
+                )
+            )
         }
     }
 

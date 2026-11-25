@@ -694,16 +694,14 @@ public partial class SongsView : UserControl
     {
         if (_ctx is null || _displayedTracks.Count == 0) return;
         var ids = _displayedTracks.Select(t => t.Id).ToList();
-        if (_ctx.Services.Queues.Active.Shuffle) _ctx.Services.Player.ToggleShuffle();
-        _ctx.Services.Player.Play(ids, 0);
+        _ctx.Services.Player.PlayInNamedQueue("Songs", ids, startAt: 0, shuffle: false);
     }
 
     private void ShuffleAll_Click(object sender, RoutedEventArgs e)
     {
         if (_ctx is null || _displayedTracks.Count == 0) return;
         var ids = _displayedTracks.Select(t => t.Id).ToList();
-        if (!_ctx.Services.Queues.Active.Shuffle) _ctx.Services.Player.ToggleShuffle();
-        _ctx.Services.Player.Play(ids, Random.Shared.Next(ids.Count));
+        _ctx.Services.Player.PlayInNamedQueue("Songs", ids, startAt: Random.Shared.Next(ids.Count), shuffle: true);
     }
 
     private void SongsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -789,7 +787,7 @@ public partial class SongsView : UserControl
         }
         else
         {
-            _ctx.Services.Player.Play(localIds, item.Index);
+            _ctx.Services.Player.PlayInNamedQueue("Songs", localIds, startAt: item.Index);
         }
     }
 

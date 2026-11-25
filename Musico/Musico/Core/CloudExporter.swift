@@ -117,6 +117,8 @@ enum CloudExporter {
         toParentFolder parentURL: URL,
         folderName: String,
         cache: CloudAudioCache = .shared,
+        artworkCache: ArtworkCache = .shared,
+        thumbnailCache: CloudThumbnailCache = .shared,
         onProgress: (@MainActor @Sendable (Int, Int, String) -> Void)? = nil
     ) async throws -> ExportSummary {
         try await performExportPlaylist(
@@ -125,6 +127,8 @@ enum CloudExporter {
             toParentFolder: parentURL,
             folderName: folderName,
             cache: cache,
+            artworkCache: artworkCache,
+            thumbnailCache: thumbnailCache,
             onDetailedProgress: onProgress.map { callback in
                 { @MainActor progress in
                     callback(progress.completedTracks, progress.totalTracks, progress.currentTrackTitle)
@@ -139,6 +143,8 @@ enum CloudExporter {
         toParentFolder parentURL: URL,
         folderName: String,
         cache: CloudAudioCache = .shared,
+        artworkCache: ArtworkCache = .shared,
+        thumbnailCache: CloudThumbnailCache = .shared,
         onDetailedProgress: @escaping @MainActor @Sendable (ExportProgress) -> Void
     ) async throws -> ExportSummary {
         try await performExportPlaylist(
@@ -147,6 +153,8 @@ enum CloudExporter {
             toParentFolder: parentURL,
             folderName: folderName,
             cache: cache,
+            artworkCache: artworkCache,
+            thumbnailCache: thumbnailCache,
             onDetailedProgress: onDetailedProgress
         )
     }
@@ -157,6 +165,8 @@ enum CloudExporter {
         toParentFolder parentURL: URL,
         folderName: String,
         cache: CloudAudioCache,
+        artworkCache: ArtworkCache,
+        thumbnailCache: CloudThumbnailCache,
         onDetailedProgress: (@MainActor @Sendable (ExportProgress) -> Void)?
     ) async throws -> ExportSummary {
         try Task.checkCancellation()
@@ -205,6 +215,13 @@ enum CloudExporter {
                 let ext = cachedURL.pathExtension.isEmpty ? "m4a" : cachedURL.pathExtension
                 let targetURL = uniqueFileURL(in: destinationURL, baseName: track.title, fileExtension: ext)
                 try FileManager.default.copyItem(at: cachedURL, to: targetURL)
+                await writeMetadataAndArtwork(
+                    for: track,
+                    to: targetURL,
+                    suppliedArtworkData: nil,
+                    artworkCache: artworkCache,
+                    thumbnailCache: thumbnailCache
+                )
                 let trackKey = track.remoteTrackID ?? track.relativePath
                 if !trackKey.isEmpty {
                     trackedMap[trackKey] = targetURL.lastPathComponent
@@ -272,6 +289,8 @@ enum CloudExporter {
         folderURL: URL,
         fetcher: any CloudPlaylistFetching = LiveCloudService.shared,
         cache: CloudAudioCache = .shared,
+        artworkCache: ArtworkCache = .shared,
+        thumbnailCache: CloudThumbnailCache = .shared,
         sourceURLOverride: String? = nil,
         cookieOverride: String? = nil,
         kindHintOverride: LibraryRoot.Kind? = nil,
@@ -283,6 +302,8 @@ enum CloudExporter {
             folderURL: folderURL,
             fetcher: fetcher,
             cache: cache,
+            artworkCache: artworkCache,
+            thumbnailCache: thumbnailCache,
             sourceURLOverride: sourceURLOverride,
             cookieOverride: cookieOverride,
             kindHintOverride: kindHintOverride,
@@ -300,6 +321,8 @@ enum CloudExporter {
         folderURL: URL,
         fetcher: any CloudPlaylistFetching = LiveCloudService.shared,
         cache: CloudAudioCache = .shared,
+        artworkCache: ArtworkCache = .shared,
+        thumbnailCache: CloudThumbnailCache = .shared,
         sourceURLOverride: String? = nil,
         cookieOverride: String? = nil,
         kindHintOverride: LibraryRoot.Kind? = nil,
@@ -311,6 +334,8 @@ enum CloudExporter {
             folderURL: folderURL,
             fetcher: fetcher,
             cache: cache,
+            artworkCache: artworkCache,
+            thumbnailCache: thumbnailCache,
             sourceURLOverride: sourceURLOverride,
             cookieOverride: cookieOverride,
             kindHintOverride: kindHintOverride,
@@ -324,6 +349,8 @@ enum CloudExporter {
         folderURL: URL,
         fetcher: any CloudPlaylistFetching,
         cache: CloudAudioCache,
+        artworkCache: ArtworkCache,
+        thumbnailCache: CloudThumbnailCache,
         sourceURLOverride: String?,
         cookieOverride: String?,
         kindHintOverride: LibraryRoot.Kind?,
@@ -429,6 +456,8 @@ enum CloudExporter {
                     root: cloudLookupRoot,
                     toFolder: folderURL,
                     cache: cache,
+                    artworkCache: artworkCache,
+                    thumbnailCache: thumbnailCache,
                     onProgress: onDetailedProgress.map { callback in
                         { @MainActor dlProgress in
                             callback(ExportProgress(
@@ -479,6 +508,59 @@ enum CloudExporter {
         )
     }
 
+    /// Resolves cover art in priority order: supplied bytes -> disk ArtworkCache -> remote HTTPS fetch.
+    static func resolveArtworkData(
+        for track: Track,
+        suppliedData: Data? = nil,
+        artworkCache: ArtworkCache = .shared,
+        thumbnailCache: CloudThumbnailCache = .shared
+    ) async -> Data? {
+        if let suppliedData, !suppliedData.isEmpty {
+            return suppliedData
+        }
+        if let key = track.artworkKey,
+           let cachedDisk = artworkCache.data(forKey: key),
+           !cachedDisk.isEmpty {
+            return cachedDisk
+        }
+        if let remoteURL = track.remoteArtworkURL,
+           let fetched = await thumbnailCache.loadImageData(from: remoteURL),
+           !fetched.isEmpty {
+            return fetched
+        }
+        return nil
+    }
+
+    private static func writeMetadataAndArtwork(
+        for track: Track,
+        to targetURL: URL,
+        suppliedArtworkData: Data?,
+        artworkCache: ArtworkCache,
+        thumbnailCache: CloudThumbnailCache
+    ) async {
+        let resolvedArtwork = await resolveArtworkData(
+            for: track,
+            suppliedData: suppliedArtworkData,
+            artworkCache: artworkCache,
+            thumbnailCache: thumbnailCache
+        )
+        let payload = AudioTagWriter.Payload(
+            title: track.title,
+            artist: track.artist,
+            album: track.album,
+            genre: track.displayGenre,
+            artworkData: resolvedArtwork
+        )
+        if AudioTagWriter.supportsEmbeddedArtwork(for: targetURL) {
+            let wrote = await AudioTagWriter.write(payload, to: targetURL)
+            if !wrote, let resolvedArtwork {
+                _ = AudioTagWriter.writeArtworkSidecar(resolvedArtwork, alongside: targetURL)
+            }
+        } else if let resolvedArtwork {
+            _ = AudioTagWriter.writeArtworkSidecar(resolvedArtwork, alongside: targetURL)
+        }
+    }
+
     /// Downloads/reuses cached audio for a single cloud `track` and copies it into `folderURL`.
     @discardableResult
     static func exportTrack(
@@ -487,6 +569,7 @@ enum CloudExporter {
         toFolder folderURL: URL,
         cache: CloudAudioCache = .shared,
         artworkData: Data? = nil,
+        artworkCache: ArtworkCache = .shared,
         thumbnailCache: CloudThumbnailCache = .shared,
         onProgress: (@MainActor @Sendable (CloudDownloadProgress) -> Void)? = nil
     ) async throws -> URL {
@@ -508,22 +591,13 @@ enum CloudExporter {
         let targetURL = uniqueFileURL(in: folderURL, baseName: track.title, fileExtension: ext)
         try FileManager.default.copyItem(at: cachedURL, to: targetURL)
 
-        if track.isEphemeral || artworkData != nil {
-            let resolvedArtwork: Data?
-            if let artworkData {
-                resolvedArtwork = artworkData
-            } else {
-                resolvedArtwork = await thumbnailCache.loadImageData(from: track.remoteArtworkURL)
-            }
-            let payload = AudioTagWriter.Payload(
-                title: track.title,
-                artist: track.artist,
-                album: track.album,
-                genre: track.displayGenre,
-                artworkData: resolvedArtwork
-            )
-            _ = await AudioTagWriter.write(payload, to: targetURL)
-        }
+        await writeMetadataAndArtwork(
+            for: track,
+            to: targetURL,
+            suppliedArtworkData: artworkData,
+            artworkCache: artworkCache,
+            thumbnailCache: thumbnailCache
+        )
         return targetURL
     }
 }

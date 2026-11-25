@@ -1768,7 +1768,10 @@ class LibraryStore(
                     localFile != null -> reader.read(localFile)
                     else -> TrackMetadata()
                 }
-                val artKey = meta.artwork?.let { artwork.store(it) }
+                val resolvedArtBytes = meta.artwork ?: item.file.siblingArtworkUriString?.let { artUriStr ->
+                    readImageBytesFromUriString(artUriStr)
+                }
+                val artKey = resolvedArtBytes?.let { artwork.store(it) }
                 meta to artKey
             }
 
@@ -2053,6 +2056,19 @@ class LibraryStore(
         return FolderScanner.scanTree(ctx, uri)
     }
 
+    private fun readImageBytesFromUriString(uriStr: String): ByteArray? {
+        fileFromUriString(uriStr)?.let { file ->
+            val raw = runCatching { if (file.isFile && file.canRead()) file.readBytes() else null }.getOrNull()
+            return raw?.let { com.musico.core.EmbeddedArtworkExtractor.normalizeImageBytes(it) }
+        }
+        val ctx = context ?: return null
+        val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: return null
+        val raw = runCatching {
+            ctx.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+        }.getOrNull() ?: return null
+        return com.musico.core.EmbeddedArtworkExtractor.normalizeImageBytes(raw)
+    }
+
     private fun resolveFileUri(root: LibraryRoot, relativePath: String): Uri? {
         val local = resolveLocalFile(root, relativePath) ?: return null
         return runCatching { Uri.fromFile(local) }.getOrNull()
@@ -2221,12 +2237,12 @@ class LibraryStore(
                         val providerHeaders = providerRegistry.providerForTrack(sourceTrack, null)
                             ?.artworkHeaders()
                             .orEmpty()
-                        val resp = cloudHttpClient.get(url, headers = providerHeaders)
-                        if (resp.statusCode in 200..299 && resp.bodyBytes.isNotEmpty()) {
-                            artwork.store(resp.bodyBytes)
-                        } else {
-                            null
-                        }
+                        val resolved = CloudThumbnailCache.fetchImageBytesWithClient(
+                            client = cloudHttpClient,
+                            url = url,
+                            headers = providerHeaders,
+                        )
+                        resolved?.bytes?.let { artwork.store(it) }
                     }.getOrNull()
                 }
             }
@@ -3161,7 +3177,7 @@ class LibraryStore(
     )
 
     companion object {
-        private const val READER_VERSION = 4
+        private const val READER_VERSION = 5
         const val APP_FOLDER_NAME = "Musico Folder"
         private val combiningMarks = "\\p{InCombiningDiacriticalMarks}+".toRegex()
 

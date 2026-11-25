@@ -27,7 +27,7 @@ public partial class MainWindow : Window
 
     private bool _navExpanded = true;
     private SidePanelKind? _sidePanel;
-    private string _activeRoute = "songs";
+    private string _activeRoute = "queues";
     private Guid? _activePlaylistId;
     private bool _closeRequestPending;
     private WindowState _restoreWindowState = WindowState.Normal;
@@ -110,7 +110,8 @@ public partial class MainWindow : Window
         UpdateThemeButton();
         RebuildDynamicPlaylists();
         RefreshDownloadsFooter();
-        NavigateTo("songs");
+        NavQueues.IsChecked = true;
+        NavigateTo("queues");
     }
 
     private void OnThemeChanged(bool isDark)
@@ -653,6 +654,15 @@ public partial class MainWindow : Window
         catch
         {
             // Startup check is silent.
+        }
+
+        try
+        {
+            await _services.Extensions.CheckForUpdatesIfDueAsync();
+        }
+        catch
+        {
+            // Startup extension update check is silent.
         }
     }
 

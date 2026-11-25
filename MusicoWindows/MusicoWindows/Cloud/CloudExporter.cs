@@ -105,7 +105,7 @@ public sealed class CloudExporter
         _googleDrive = googleDriveClient ?? new GoogleDriveClient();
         _providerRegistry = providerRegistry ?? new CloudProviderRegistry(_youtube, _bilibili, _googleDrive);
         _extensions = extensions;
-        _thumbnailCache = thumbnailCache;
+        _thumbnailCache = thumbnailCache ?? new CloudThumbnailCache(maxEntries: 16);
     }
 
     public CloudExporter(
@@ -122,7 +122,7 @@ public sealed class CloudExporter
         _googleDrive = _providerRegistry.GoogleDrive;
         _artworkCache = artworkCache;
         _extensions = extensions;
-        _thumbnailCache = thumbnailCache;
+        _thumbnailCache = thumbnailCache ?? new CloudThumbnailCache(maxEntries: 16);
     }
 
     public static string SanitizeFileName(string? raw, string fallback = "Untitled")
@@ -537,13 +537,22 @@ public sealed class CloudExporter
         LibraryRoot? root,
         string destinationDirectory,
         CancellationToken ct = default) =>
-        ExportTrackAsync(track, root, destinationDirectory, progress: null, ct: ct);
+        ExportTrackAsync(track, root, destinationDirectory, progress: null, suppliedArtworkBytes: null, ct: ct);
+
+    public Task<string> ExportTrackAsync(
+        Track track,
+        LibraryRoot? root,
+        string destinationDirectory,
+        IProgress<CloudExportProgress>? progress,
+        CancellationToken ct = default) =>
+        ExportTrackAsync(track, root, destinationDirectory, progress, suppliedArtworkBytes: null, ct: ct);
 
     public async Task<string> ExportTrackAsync(
         Track track,
         LibraryRoot? root,
         string destinationDirectory,
         IProgress<CloudExportProgress>? progress,
+        byte[]? suppliedArtworkBytes,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(track);
@@ -617,14 +626,8 @@ public sealed class CloudExporter
             throw;
         }
 
-        byte[]? fallbackArtBytes = null;
-        if (string.IsNullOrEmpty(_artworkCache?.GetImagePath(track.ArtworkKey)) &&
-            CloudThumbnailCache.IsAllowedHttpsUrl(track.RemoteArtworkUrl))
-        {
-            fallbackArtBytes = await TryFetchRemoteArtworkBytesAsync(track.RemoteArtworkUrl!, ct).ConfigureAwait(false);
-        }
-
-        TryWriteTags(destPath, track, fallbackArtBytes);
+        byte[]? resolvedArtBytes = await ResolveCoverBytesAsync(track, root, suppliedArtworkBytes, ct).ConfigureAwait(false);
+        TryWriteTagsAndSidecar(destPath, track, resolvedArtBytes);
 
         if (progress is not null)
         {
@@ -646,12 +649,56 @@ public sealed class CloudExporter
         return destPath;
     }
 
-    private async Task<byte[]?> TryFetchRemoteArtworkBytesAsync(string artworkUrl, CancellationToken ct)
+    private async Task<byte[]?> ResolveCoverBytesAsync(
+        Track track,
+        LibraryRoot? root,
+        byte[]? suppliedArtworkBytes,
+        CancellationToken ct)
     {
+        if (suppliedArtworkBytes is { Length: > 0 })
+        {
+            return suppliedArtworkBytes;
+        }
+
+        string? artPath = _artworkCache?.GetImagePath(track.ArtworkKey);
+        if (!string.IsNullOrEmpty(artPath) && File.Exists(artPath))
+        {
+            try
+            {
+                byte[] diskBytes = await File.ReadAllBytesAsync(artPath, ct).ConfigureAwait(false);
+                if (diskBytes.Length > 0)
+                {
+                    return diskBytes;
+                }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch
+            {
+                // Fall through to remote fetch.
+            }
+        }
+
+        string? normalizedUrl = CloudHttpHelper.NormalizeImageUrl(track.RemoteArtworkUrl);
+        if (!CloudThumbnailCache.IsAllowedHttpsUrl(normalizedUrl))
+        {
+            return null;
+        }
+
+        string? referer = root?.Kind == RootKind.CloudBilibili ||
+                          string.Equals(track.CloudSource, CloudSources.Bilibili, StringComparison.OrdinalIgnoreCase)
+            ? BilibiliClient.DefaultReferer
+            : null;
+
         try
         {
-            var cache = _thumbnailCache ?? new CloudThumbnailCache(maxEntries: 4);
-            return await cache.GetBytesAsync(artworkUrl, ct).ConfigureAwait(false);
+            return await _thumbnailCache!.GetBytesAsync(normalizedUrl!, referer, ct).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch
         {
@@ -689,8 +736,25 @@ public sealed class CloudExporter
     private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct) =>
         CloudStreamResolver.ResolveAsync(_providerRegistry, track, root, _extensions, forceRefresh: false, ct: ct);
 
-    private void TryWriteTags(string destPath, Track track, byte[]? fallbackArtBytes = null)
+    private static bool IsNonEmbeddableContainer(string filePath)
     {
+        string ext = Path.GetExtension(filePath);
+        return string.Equals(ext, ".webm", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(ext, ".weba", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void TryWriteTagsAndSidecar(string destPath, Track track, byte[]? artBytes)
+    {
+        if (IsNonEmbeddableContainer(destPath))
+        {
+            if (artBytes is { Length: > 0 })
+            {
+                WriteSiblingCoverSidecar(destPath, artBytes);
+            }
+            return;
+        }
+
+        bool embeddedCoverOk = false;
         try
         {
             using var file = TagLib.File.Create(destPath);
@@ -719,33 +783,54 @@ public sealed class CloudExporter
                 file.Tag.Disc = (uint)dn;
             }
 
-            byte[]? artBytes = null;
-            string? artPath = _artworkCache?.GetImagePath(track.ArtworkKey);
-            if (!string.IsNullOrEmpty(artPath) && File.Exists(artPath))
-            {
-                artBytes = File.ReadAllBytes(artPath);
-            }
-            else if (fallbackArtBytes is { Length: > 0 })
-            {
-                artBytes = fallbackArtBytes;
-            }
-
             if (artBytes is { Length: > 0 })
             {
+                string mimeType = ImageFormatHelper.DetectMimeType(artBytes);
                 var picture = new TagLib.Picture(new TagLib.ByteVector(artBytes))
                 {
                     Type = TagLib.PictureType.FrontCover,
-                    MimeType = "image/jpeg",
+                    MimeType = mimeType,
                     Description = "Cover"
                 };
                 file.Tag.Pictures = [picture];
             }
 
             file.Save();
+            embeddedCoverOk = artBytes is { Length: > 0 };
         }
         catch
         {
-            // Best-effort tagging only; keep the exported audio file intact.
+            // Fall through to sidecar fallback if cover art could not be embedded.
+        }
+
+        if (artBytes is { Length: > 0 } && !embeddedCoverOk)
+        {
+            WriteSiblingCoverSidecar(destPath, artBytes);
+        }
+    }
+
+    private static void WriteSiblingCoverSidecar(string audioFilePath, byte[] artBytes)
+    {
+        if (artBytes.Length == 0) return;
+
+        string? dir = Path.GetDirectoryName(audioFilePath);
+        string stem = Path.GetFileNameWithoutExtension(audioFilePath);
+        if (string.IsNullOrWhiteSpace(stem)) return;
+
+        string imgExt = ImageFormatHelper.DetectSidecarExtension(artBytes);
+        string sidecarPath = string.IsNullOrEmpty(dir)
+            ? $"{stem}{imgExt}"
+            : Path.Combine(dir, $"{stem}{imgExt}");
+        string tempPath = $"{sidecarPath}.{Guid.NewGuid():N}.tmp";
+
+        try
+        {
+            File.WriteAllBytes(tempPath, artBytes);
+            File.Move(tempPath, sidecarPath, overwrite: true);
+        }
+        catch
+        {
+            try { if (File.Exists(tempPath)) File.Delete(tempPath); } catch { /* best effort */ }
         }
     }
 

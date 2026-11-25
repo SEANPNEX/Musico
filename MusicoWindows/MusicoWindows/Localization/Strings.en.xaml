@@ -249,6 +249,8 @@
     <sys:String x:Key="Str_Extensions_QrLoginTitle">Sign In with QR Code</sys:String>
     <sys:String x:Key="Str_Extensions_QrLoginRefresh">Refresh QR Code</sys:String>
     <sys:String x:Key="Str_Extensions_QrLoginClose">Close</sys:String>
+    <sys:String x:Key="Str_Extensions_AutoUpdate">Auto-update extensions</sys:String>
+    <sys:String x:Key="Str_Extensions_CheckUpdates">Check for Updates</sys:String>
 
     <!-- Cloud Search & Preview -->
     <sys:String x:Key="Str_Songs_SearchButton">Search</sys:String>

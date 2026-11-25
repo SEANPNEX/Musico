@@ -27,7 +27,8 @@ public static class TrackMenuHelper
         Action<ContextMenu>? appendExtra = null,
         Action<Track, string>? openSaveCloudTrack = null,
         Action<Track>? openSongInfo = null,
-        Track? explicitTrack = null)
+        Track? explicitTrack = null,
+        Guid? targetQueueId = null)
     {
         var menu = new ContextMenu();
         var ids = trackIds.ToList();
@@ -43,6 +44,8 @@ public static class TrackMenuHelper
             }
         }
 
+        Guid resolvedTargetQueueId = targetQueueId ?? services.Queues.ActiveId;
+
         var playNext = CreateItem(L.Get("Menu_PlayNext"), "\uE8B2", () =>
         {
             EnsureEphemeralRegistered();
@@ -51,7 +54,7 @@ public static class TrackMenuHelper
         var addToQueue = CreateItem(L.Get("Menu_AddToQueue"), "\uE710", () =>
         {
             EnsureEphemeralRegistered();
-            services.Player.AddToQueue(ids, null);
+            services.Player.AddToQueue(ids, targetQueueId);
         }, hasTracks);
         menu.Items.Add(playNext);
         menu.Items.Add(addToQueue);
@@ -64,7 +67,7 @@ public static class TrackMenuHelper
                 Icon = CreateGlyph("\uE90B"),
                 IsEnabled = hasTracks
             };
-            foreach (var queue in services.Queues.Queues.Where(q => q.Id != services.Queues.ActiveId))
+            foreach (var queue in services.Queues.Queues.Where(q => q.Id != resolvedTargetQueueId))
             {
                 Guid queueId = queue.Id;
                 otherQueues.Items.Add(CreateItem(queue.Name, null, () =>

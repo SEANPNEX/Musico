@@ -19,6 +19,8 @@ import com.musico.lyrics.CloudLyricsExtensionDescriptor
 import com.musico.lyrics.CloudLyricsQuery
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -60,6 +62,9 @@ class ExtensionStore(
     }
 
     private val storeLock = Any()
+    private val updateMutex = Mutex()
+    private val updatePrefsFile = File(extensionsDir, UPDATE_PREFS_FILE)
+    private var updatePrefs: ExtensionUpdatePrefs = ExtensionUpdatePrefs()
     private val kvMap = ConcurrentHashMap<String, MutableMap<String, ExtensionKvEntry>>()
     private val logsMap = ConcurrentHashMap<String, ArrayDeque<ExtensionLogEntry>>()
 
@@ -69,14 +74,40 @@ class ExtensionStore(
     private val _logs = MutableStateFlow<Map<String, List<ExtensionLogEntry>>>(emptyMap())
     val logs: StateFlow<Map<String, List<ExtensionLogEntry>>> = _logs.asStateFlow()
 
+    private val _autoUpdateEnabled = MutableStateFlow(true)
+    val autoUpdateEnabled: StateFlow<Boolean> = _autoUpdateEnabled.asStateFlow()
+
+    private val _isCheckingUpdates = MutableStateFlow(false)
+    val isCheckingUpdates: StateFlow<Boolean> = _isCheckingUpdates.asStateFlow()
+
+    private val _pendingUpdates = MutableStateFlow<Map<String, PendingExtensionUpdate>>(emptyMap())
+    val pendingUpdates: StateFlow<Map<String, PendingExtensionUpdate>> = _pendingUpdates.asStateFlow()
+
+    private val _updateOutcomes = MutableStateFlow<Map<String, ExtensionUpdateCheckOutcome>>(emptyMap())
+    val updateOutcomes: StateFlow<Map<String, ExtensionUpdateCheckOutcome>> = _updateOutcomes.asStateFlow()
+
+    private val _lastBatchUpdateSummary = MutableStateFlow<ExtensionBatchUpdateSummary?>(null)
+    val lastBatchUpdateSummary: StateFlow<ExtensionBatchUpdateSummary?> = _lastBatchUpdateSummary.asStateFlow()
+
     @Volatile
     var onAvailabilityChanged: (() -> Unit)? = null
 
     init {
         providerRegistry.extensionStatusLookup = { providerId -> availabilityForProvider(providerId) }
         providerRegistry.extensionCookieLookup = { providerId -> cookieForProvider(providerId) }
+        loadUpdatePrefs()
         loadFromDisk()
         syncProviderRegistry()
+    }
+
+    private fun loadUpdatePrefs() {
+        val loaded = Persistence.load<ExtensionUpdatePrefs>(updatePrefsFile) ?: ExtensionUpdatePrefs()
+        updatePrefs = loaded
+        _autoUpdateEnabled.value = loaded.autoUpdateEnabled
+    }
+
+    private fun saveUpdatePrefsLocked() {
+        runCatching { Persistence.save(updatePrefs, updatePrefsFile) }
     }
 
     private fun loadFromDisk() {
@@ -416,12 +447,169 @@ class ExtensionStore(
             )
             _extensions.value = (_extensions.value.filterNot { it.id == manifest.id } + installed)
                 .sortedBy { it.manifest.name.lowercase() }
+            if (_pendingUpdates.value.containsKey(manifest.id)) {
+                _pendingUpdates.value = _pendingUpdates.value - manifest.id
+            }
             installed
         }
 
         syncProviderRegistry()
         onAvailabilityChanged?.invoke()
         return result
+    }
+
+    fun setAutoUpdateEnabled(enabled: Boolean) {
+        synchronized(storeLock) {
+            if (updatePrefs.autoUpdateEnabled == enabled) return
+            updatePrefs = updatePrefs.copy(autoUpdateEnabled = enabled)
+            _autoUpdateEnabled.value = enabled
+            saveUpdatePrefsLocked()
+        }
+    }
+
+    fun effectiveUpdateUrl(extension: InstalledExtension): String? {
+        val manifestUrl = extension.manifest.updateUrl
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && isValidHttpsUrl(it) }
+        if (manifestUrl != null) return manifestUrl
+        return extension.state.sourceUrl
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() && isValidHttpsUrl(it) }
+    }
+
+    suspend fun checkForUpdatesOnLaunch(): ExtensionBatchUpdateSummary? {
+        val (enabled, lastCheck) = synchronized(storeLock) {
+            updatePrefs.autoUpdateEnabled to updatePrefs.lastCheckEpochMs
+        }
+        if (!enabled) return null
+        val now = clockMs()
+        if (lastCheck > 0L && now - lastCheck < AUTO_UPDATE_INTERVAL_MS) {
+            return null
+        }
+        return checkAllForUpdates(manual = false)
+    }
+
+    suspend fun checkAllForUpdates(manual: Boolean = true): ExtensionBatchUpdateSummary = updateMutex.withLock {
+        _isCheckingUpdates.value = true
+        try {
+            synchronized(storeLock) {
+                updatePrefs = updatePrefs.copy(lastCheckEpochMs = clockMs())
+                saveUpdatePrefsLocked()
+            }
+            val targets = _extensions.value.filter { effectiveUpdateUrl(it) != null }
+            var appliedCount = 0
+            var reviewCount = 0
+            var failedCount = 0
+            for (ext in targets) {
+                when (checkSingleExtensionLocked(ext)) {
+                    is ExtensionUpdateCheckOutcome.Applied -> appliedCount += 1
+                    is ExtensionUpdateCheckOutcome.ReviewRequired -> reviewCount += 1
+                    is ExtensionUpdateCheckOutcome.Error -> failedCount += 1
+                    ExtensionUpdateCheckOutcome.UpToDate,
+                    ExtensionUpdateCheckOutcome.NoUpdateUrl,
+                    ExtensionUpdateCheckOutcome.Checking -> Unit
+                }
+            }
+            val summary = ExtensionBatchUpdateSummary(
+                checkedCount = targets.size,
+                appliedCount = appliedCount,
+                reviewRequiredCount = reviewCount,
+                failedCount = failedCount,
+            )
+            if (manual || appliedCount > 0 || reviewCount > 0) {
+                _lastBatchUpdateSummary.value = summary
+            }
+            summary
+        } finally {
+            _isCheckingUpdates.value = false
+        }
+    }
+
+    suspend fun checkForUpdate(extensionId: String): ExtensionUpdateCheckOutcome = updateMutex.withLock {
+        val ext = findById(extensionId) ?: return@withLock ExtensionUpdateCheckOutcome.NoUpdateUrl
+        checkSingleExtensionLocked(ext)
+    }
+
+    private suspend fun checkSingleExtensionLocked(ext: InstalledExtension): ExtensionUpdateCheckOutcome {
+        val updateUrl = effectiveUpdateUrl(ext)
+        if (updateUrl == null) {
+            _updateOutcomes.value = _updateOutcomes.value + (ext.id to ExtensionUpdateCheckOutcome.NoUpdateUrl)
+            return ExtensionUpdateCheckOutcome.NoUpdateUrl
+        }
+
+        _updateOutcomes.value = _updateOutcomes.value + (ext.id to ExtensionUpdateCheckOutcome.Checking)
+        val outcome = try {
+            requireHttpsUrl(updateUrl)
+            val staged = stageFromUrl(updateUrl).getOrElse { throw it }
+            if (staged.manifest.id != ext.id) {
+                throw IllegalArgumentException(
+                    "Extension ID mismatch: expected '${ext.id}', got '${staged.manifest.id}'."
+                )
+            }
+            if (!ExtensionSemVer.isStrictlyGreater(staged.manifest.version, ext.manifest.version)) {
+                _pendingUpdates.value = _pendingUpdates.value - ext.id
+                ExtensionUpdateCheckOutcome.UpToDate
+            } else {
+                val diff = ExtensionUpdateGuard.evaluatePermissionEscalation(ext.manifest, staged.manifest)
+                if (!diff.hasEscalation) {
+                    val preservedSource = ext.state.sourceUrl ?: staged.sourceUrl
+                    installStaged(
+                        staged = staged.copy(sourceUrl = preservedSource),
+                        enableImmediately = ext.enabled,
+                    )
+                    _pendingUpdates.value = _pendingUpdates.value - ext.id
+                    ExtensionUpdateCheckOutcome.Applied(
+                        fromVersion = ext.manifest.version,
+                        toVersion = staged.manifest.version,
+                    )
+                } else {
+                    val pending = PendingExtensionUpdate(
+                        installed = ext,
+                        staged = staged,
+                        diff = diff,
+                        updateUrl = updateUrl,
+                    )
+                    _pendingUpdates.value = _pendingUpdates.value + (ext.id to pending)
+                    ExtensionUpdateCheckOutcome.ReviewRequired(pending)
+                }
+            }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (err: Exception) {
+            ExtensionUpdateCheckOutcome.Error(err.message ?: "Update check failed.")
+        }
+
+        _updateOutcomes.value = _updateOutcomes.value + (ext.id to outcome)
+        return outcome
+    }
+
+    fun approvePendingUpdate(extensionId: String): InstalledExtension? {
+        val pending = _pendingUpdates.value[extensionId] ?: return null
+        val current = findById(extensionId) ?: pending.installed
+        val preservedSource = current.state.sourceUrl ?: pending.staged.sourceUrl
+        val installed = installStaged(
+            staged = pending.staged.copy(sourceUrl = preservedSource),
+            enableImmediately = current.enabled,
+        )
+        _pendingUpdates.value = _pendingUpdates.value - extensionId
+        _updateOutcomes.value = _updateOutcomes.value + (
+            extensionId to ExtensionUpdateCheckOutcome.Applied(
+                fromVersion = current.manifest.version,
+                toVersion = installed.manifest.version,
+            )
+        )
+        return installed
+    }
+
+    fun dismissPendingUpdate(extensionId: String) {
+        _pendingUpdates.value = _pendingUpdates.value - extensionId
+        if (_updateOutcomes.value[extensionId] is ExtensionUpdateCheckOutcome.ReviewRequired) {
+            _updateOutcomes.value = _updateOutcomes.value - extensionId
+        }
+    }
+
+    fun clearBatchUpdateSummary() {
+        _lastBatchUpdateSummary.value = null
     }
 
     fun setEnabled(extensionId: String, enabled: Boolean) {
@@ -510,6 +698,8 @@ class ExtensionStore(
             kvMap.remove(extensionId)
             logsMap.remove(extensionId)
             _logs.value = _logs.value - extensionId
+            _pendingUpdates.value = _pendingUpdates.value - extensionId
+            _updateOutcomes.value = _updateOutcomes.value - extensionId
             runCatching { File(extensionsDir, extensionId).deleteRecursively() }
         }
         if (removed) {
@@ -628,6 +818,11 @@ class ExtensionStore(
         }.getOrNull()
     }
 
+    private fun isValidHttpsUrl(urlString: String): Boolean {
+        val parsed = runCatching { URL(urlString) }.getOrNull() ?: return false
+        return parsed.protocol.equals("https", ignoreCase = true) && !parsed.host.isNullOrBlank()
+    }
+
     private fun requireHttpsUrl(urlString: String) {
         val parsed = runCatching { URL(urlString) }.getOrNull()
             ?: throw IllegalArgumentException("Invalid URL: $urlString")
@@ -660,6 +855,8 @@ class ExtensionStore(
         const val STATE_FILE = "state.json"
         const val KV_FILE = "kv.json"
         const val LOGS_FILE = "logs.json"
+        const val UPDATE_PREFS_FILE = "update-prefs.json"
         const val MAX_LOG_ENTRIES = 200
+        const val AUTO_UPDATE_INTERVAL_MS = 6L * 60L * 60L * 1000L
     }
 }

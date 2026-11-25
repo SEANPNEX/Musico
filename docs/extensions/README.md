@@ -391,6 +391,7 @@ Package the included starter directory into a `.musicoext` bundle:
 | `description` | `string` | No | Short description shown in Extension Manager. |
 | `badgeLabel` | `string` | No | Short pill badge in **Folders**, **Songs** search chips, and lyrics badges (defaults to `name`, max 16 chars). |
 | `entry` | `string` | No | Relative script path inside `.musicoext` (defaults to `"index.js"`). |
+| `updateUrl` | `string` | No | Optional HTTPS URL to a `.musicoext` package used for automatic and manual extension updates (falls back to the link import URL if omitted). |
 | `capabilities` | `string[]` | Yes | Non-empty subset of `"playlist"`, `"tree"`, `"stream"`, `"cookie"`, `"proxy"`, `"lyrics"`, `"search"`, `"qr_login"`. |
 | `urlPatterns` | `string[]` | Conditional | Native regex strings tested before starting a JS VM. **Required** when `"playlist"` or `"tree"` is declared; optional/empty allowed otherwise. |
 | `searchKinds` | `string[]` | No | Subset of `"track"`, `"playlist"`, `"album"`. Controls available filter pills when `"search"` is declared (defaults to all three when omitted/empty). |

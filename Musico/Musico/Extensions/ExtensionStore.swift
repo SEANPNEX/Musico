@@ -149,6 +149,9 @@ final class ExtensionHostStorage: ExtensionRuntimeHostDelegate, @unchecked Senda
 @MainActor @Observable
 final class ExtensionStore {
     nonisolated static let shared = ExtensionStore()
+    nonisolated static let autoUpdateInterval: TimeInterval = 6 * 60 * 60
+    nonisolated static let autoUpdateEnabledDefaultsKey = "extensions.autoUpdateEnabled"
+    nonisolated static let lastUpdateCheckDefaultsKey = "extensions.lastUpdateCheckAt"
 
     nonisolated static var defaultBaseDirectory: URL {
         Persistence.supportDirectory.appendingPathComponent("Extensions", isDirectory: true)
@@ -165,11 +168,41 @@ final class ExtensionStore {
             }
         }
     }
+    var autoUpdateEnabled: Bool {
+        get {
+            access(keyPath: \.autoUpdateEnabled)
+            return storedAutoUpdateEnabled
+        }
+        set {
+            withMutation(keyPath: \.autoUpdateEnabled) {
+                storedAutoUpdateEnabled = newValue
+            }
+            defaults.set(newValue, forKey: Self.autoUpdateEnabledDefaultsKey)
+        }
+    }
+    private(set) var lastUpdateCheckAt: Date? {
+        get {
+            access(keyPath: \.lastUpdateCheckAt)
+            return storedLastUpdateCheckAt
+        }
+        set {
+            withMutation(keyPath: \.lastUpdateCheckAt) {
+                storedLastUpdateCheckAt = newValue
+            }
+        }
+    }
+    private(set) var isCheckingForUpdates: Bool = false
+    private(set) var pendingUpdates: [String: PendingExtensionUpdate] = [:]
+    private(set) var updateStatusByID: [String: ExtensionUpdateStatus] = [:]
+
     @ObservationIgnored private nonisolated(unsafe) var storedExtensions: [InstalledExtension]
+    @ObservationIgnored private nonisolated(unsafe) var storedAutoUpdateEnabled: Bool
+    @ObservationIgnored private nonisolated(unsafe) var storedLastUpdateCheckAt: Date?
     @ObservationIgnored let baseDirectory: URL
     @ObservationIgnored let registry: CloudProviderRegistry
     @ObservationIgnored private let transport: any CloudHTTPTransport
     @ObservationIgnored private let hostStorage: ExtensionHostStorage
+    @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let shortTimeoutMs: Int
     @ObservationIgnored private let longTimeoutMs: Int
     @ObservationIgnored private let lookupLock = NSLock()
@@ -182,6 +215,7 @@ final class ExtensionStore {
         baseDirectory: URL = ExtensionStore.defaultBaseDirectory,
         registry: CloudProviderRegistry = .shared,
         transport: any CloudHTTPTransport = URLSessionCloudTransport(),
+        defaults: UserDefaults = .standard,
         shortTimeoutMs: Int = JSExtensionRuntime.defaultShortTimeoutMs,
         longTimeoutMs: Int = JSExtensionRuntime.defaultLongTimeoutMs
     ) {
@@ -189,8 +223,19 @@ final class ExtensionStore {
         self.registry = registry
         self.transport = transport
         self.hostStorage = ExtensionHostStorage(baseDirectory: baseDirectory)
+        self.defaults = defaults
         self.shortTimeoutMs = shortTimeoutMs
         self.longTimeoutMs = longTimeoutMs
+        if defaults.object(forKey: Self.autoUpdateEnabledDefaultsKey) != nil {
+            self.storedAutoUpdateEnabled = defaults.bool(forKey: Self.autoUpdateEnabledDefaultsKey)
+        } else {
+            self.storedAutoUpdateEnabled = true
+        }
+        if let ts = defaults.object(forKey: Self.lastUpdateCheckDefaultsKey) as? Double {
+            self.storedLastUpdateCheckAt = Date(timeIntervalSince1970: ts)
+        } else {
+            self.storedLastUpdateCheckAt = nil
+        }
 
         let loaded = Self.loadAllFromDisk(baseDirectory: baseDirectory, hostStorage: hostStorage)
         self.storedExtensions = loaded
@@ -274,6 +319,11 @@ final class ExtensionStore {
             throw ExtensionImportError.invalidURL
         }
 
+        let data = try await downloadPackageData(from: url)
+        return try await importPackageData(data, fileName: url.lastPathComponent, sourceURL: url.absoluteString)
+    }
+
+    private func downloadPackageData(from url: URL) async throws -> Data {
         var request = URLRequest(url: url)
         request.timeoutInterval = 30
         let response: HTTPResponseData
@@ -291,12 +341,13 @@ final class ExtensionStore {
         guard response.data.count <= ExtensionArchiveReader.maxArchiveBytes else {
             throw ExtensionArchiveError.archiveTooLarge(ExtensionArchiveReader.maxArchiveBytes / (1024 * 1024))
         }
-
-        return try await importPackageData(response.data, fileName: url.lastPathComponent, sourceURL: url.absoluteString)
+        return response.data
     }
 
-    @discardableResult
-    func importPackageData(_ data: Data, fileName: String, sourceURL: String?) async throws -> InstalledExtension {
+    private func parsePackageData(
+        _ data: Data,
+        fileName: String
+    ) async throws -> (manifest: ExtensionManifest, scriptSource: String, iconData: Data?) {
         let lowerName = fileName.lowercased()
         let hasZipMagic = data.count >= 4
             && data[data.startIndex] == 0x50
@@ -304,16 +355,12 @@ final class ExtensionStore {
             && data[data.startIndex + 2] == 0x03
             && data[data.startIndex + 3] == 0x04
 
-        let manifest: ExtensionManifest
-        let scriptSource: String
-        let iconData: Data?
-
         if hasZipMagic || lowerName.hasSuffix(".musicoext") || lowerName.hasSuffix(".zip") {
             let entries = try ExtensionArchiveReader.extractEntries(from: data)
             guard let manifestData = entries["manifest.json"] else {
                 throw ExtensionImportError.invalidPackage("Missing manifest.json in archive.")
             }
-            manifest = try JSONDecoder().decode(ExtensionManifest.self, from: manifestData)
+            let manifest = try JSONDecoder().decode(ExtensionManifest.self, from: manifestData)
             try manifest.validate()
 
             let entryPath = try ExtensionArchiveReader.validateAndNormalizeEntryPath(manifest.effectiveEntry, isDirectory: false)
@@ -322,8 +369,7 @@ final class ExtensionStore {
                   !decodedScript.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                 throw ExtensionImportError.missingEntryScript(manifest.effectiveEntry)
             }
-            scriptSource = decodedScript
-            iconData = entries["icon.png"]
+            return (manifest, decodedScript, entries["icon.png"])
         } else {
             guard data.count <= ExtensionArchiveReader.maxUncompressedBytes else {
                 throw ExtensionArchiveError.archiveTooLarge(ExtensionArchiveReader.maxUncompressedBytes / (1024 * 1024))
@@ -336,24 +382,49 @@ final class ExtensionStore {
             // Single-file scripts always execute from saved index.js.
             extractedManifest.entry = "index.js"
             try extractedManifest.validate()
-            manifest = extractedManifest
-            scriptSource = decodedScript
-            iconData = nil
+            return (extractedManifest, decodedScript, nil)
         }
+    }
 
+    @discardableResult
+    func importPackageData(_ data: Data, fileName: String, sourceURL: String?) async throws -> InstalledExtension {
+        let parsed = try await parsePackageData(data, fileName: fileName)
+        let installed = try writeExtensionPackage(
+            manifest: parsed.manifest,
+            scriptSource: parsed.scriptSource,
+            iconData: parsed.iconData,
+            sourceURL: sourceURL,
+            isEnabled: false,
+            permissionApproved: false,
+            now: Date()
+        )
+        pendingUpdates.removeValue(forKey: installed.id)
+        updateStatusByID.removeValue(forKey: installed.id)
+        return installed
+    }
+
+    @discardableResult
+    private func writeExtensionPackage(
+        manifest: ExtensionManifest,
+        scriptSource: String,
+        iconData: Data?,
+        sourceURL: String?,
+        isEnabled: Bool,
+        permissionApproved: Bool,
+        now: Date
+    ) throws -> InstalledExtension {
         let extDir = baseDirectory.appendingPathComponent(manifest.id, isDirectory: true)
         try FileManager.default.createDirectory(at: extDir, withIntermediateDirectories: true)
 
         let existingState = extensions.first { $0.id == manifest.id }?.state
         let mergedSettings = filterCompatibleSettings(existingState?.settings ?? [:], manifest: manifest)
         let preservedCookie = manifest.supportsCookieAuth ? existingState?.cookie : nil
-        // Newly imported or updated packages always require Permission Review before enabling.
         let newState = ExtensionState(
-            isEnabled: false,
-            permissionApproved: false,
+            isEnabled: isEnabled,
+            permissionApproved: permissionApproved,
             settings: mergedSettings,
-            installedAt: existingState?.installedAt ?? Date(),
-            updatedAt: Date(),
+            installedAt: existingState?.installedAt ?? now,
+            updatedAt: now,
             sourceURL: sourceURL ?? existingState?.sourceURL,
             cookie: preservedCookie
         )
@@ -386,6 +457,159 @@ final class ExtensionStore {
         }
         syncAll()
         return installed
+    }
+
+    // MARK: - Updates
+
+    /// Prefers valid HTTPS `manifest.updateUrl`, falling back to valid HTTPS `state.sourceURL`.
+    func updateSourceURL(for ext: InstalledExtension) -> URL? {
+        if let manifestURL = ext.manifest.validatedUpdateURL {
+            return manifestURL
+        }
+        return ExtensionManifest.validateHTTPSURL(ext.state.sourceURL)
+    }
+
+    static func permissionEscalation(
+        from current: ExtensionManifest,
+        to candidate: ExtensionManifest
+    ) -> (addedHosts: [String], addedCapabilities: [ExtensionCapability]) {
+        var addedHosts: [String] = []
+        var seenHosts = Set<String>()
+        for host in candidate.permissions.hosts {
+            let norm = HostAllowlistMatcher.normalizeHost(host)
+            if !HostAllowlistMatcher.isPatternCovered(host, by: current.permissions.hosts),
+               seenHosts.insert(norm).inserted {
+                addedHosts.append(host)
+            }
+        }
+        let currentCaps = Set(current.capabilities)
+        var addedCapabilities: [ExtensionCapability] = []
+        var seenCaps = Set<ExtensionCapability>()
+        for cap in candidate.capabilities where !currentCaps.contains(cap) {
+            if seenCaps.insert(cap).inserted {
+                addedCapabilities.append(cap)
+            }
+        }
+        return (addedHosts, addedCapabilities)
+    }
+
+    func checkForUpdatesIfNeeded(now: Date = Date()) async {
+        guard autoUpdateEnabled else { return }
+        if let lastUpdateCheckAt, now.timeIntervalSince(lastUpdateCheckAt) < Self.autoUpdateInterval {
+            return
+        }
+        await checkForUpdates(manual: false, now: now)
+    }
+
+    func checkForUpdates(manual: Bool = true, now: Date = Date()) async {
+        guard !isCheckingForUpdates else { return }
+        _ = manual
+        isCheckingForUpdates = true
+        defer { isCheckingForUpdates = false }
+
+        lastUpdateCheckAt = now
+        defaults.set(now.timeIntervalSince1970, forKey: Self.lastUpdateCheckDefaultsKey)
+
+        let snapshot = extensions
+        for ext in snapshot {
+            guard updateSourceURL(for: ext) != nil else { continue }
+            await checkSingleExtensionUpdate(ext, now: now)
+        }
+    }
+
+    func checkForUpdate(extensionID: String, now: Date = Date()) async {
+        guard let ext = self.extension(forID: extensionID) else { return }
+        await checkSingleExtensionUpdate(ext, now: now)
+    }
+
+    private func checkSingleExtensionUpdate(_ ext: InstalledExtension, now: Date) async {
+        guard let updateURL = updateSourceURL(for: ext) else {
+            let hasRawCandidate = !(ext.manifest.updateUrl?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+                || !(ext.state.sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ?? true)
+            let err: ExtensionUpdateError = hasRawCandidate ? .insecureUpdateURL : .noUpdateURL
+            updateStatusByID[ext.id] = .error(err.localizedDescription)
+            return
+        }
+
+        updateStatusByID[ext.id] = .checking
+        do {
+            let data = try await downloadPackageData(from: updateURL)
+            let parsed = try await parsePackageData(data, fileName: updateURL.lastPathComponent)
+
+            guard parsed.manifest.id == ext.id else {
+                throw ExtensionUpdateError.mismatchedID(expected: ext.id, actual: parsed.manifest.id)
+            }
+            guard let installedSemVer = ExtensionSemVer(ext.manifest.version) else {
+                throw ExtensionUpdateError.invalidVersion(ext.manifest.version)
+            }
+            guard let remoteSemVer = ExtensionSemVer(parsed.manifest.version) else {
+                throw ExtensionUpdateError.invalidVersion(parsed.manifest.version)
+            }
+
+            guard remoteSemVer > installedSemVer else {
+                pendingUpdates.removeValue(forKey: ext.id)
+                updateStatusByID[ext.id] = .upToDate
+                return
+            }
+
+            let escalation = Self.permissionEscalation(from: ext.manifest, to: parsed.manifest)
+            if escalation.addedHosts.isEmpty && escalation.addedCapabilities.isEmpty && ext.state.permissionApproved {
+                try writeExtensionPackage(
+                    manifest: parsed.manifest,
+                    scriptSource: parsed.scriptSource,
+                    iconData: parsed.iconData,
+                    sourceURL: ext.state.sourceURL,
+                    isEnabled: ext.state.isEnabled,
+                    permissionApproved: true,
+                    now: now
+                )
+                pendingUpdates.removeValue(forKey: ext.id)
+                updateStatusByID[ext.id] = .updated(toVersion: parsed.manifest.version)
+            } else {
+                pendingUpdates[ext.id] = PendingExtensionUpdate(
+                    installedVersion: ext.manifest.version,
+                    manifest: parsed.manifest,
+                    scriptSource: parsed.scriptSource,
+                    iconData: parsed.iconData,
+                    sourceURL: updateURL.absoluteString,
+                    addedHosts: escalation.addedHosts,
+                    addedCapabilities: escalation.addedCapabilities,
+                    checkedAt: now
+                )
+                updateStatusByID[ext.id] = .pendingReview(version: parsed.manifest.version)
+            }
+        } catch {
+            updateStatusByID[ext.id] = .error(error.localizedDescription)
+        }
+    }
+
+    @discardableResult
+    func approvePendingUpdate(id: String, now: Date = Date()) -> InstalledExtension? {
+        guard let pending = pendingUpdates[id],
+              let ext = self.extension(forID: id) else {
+            return nil
+        }
+        guard let updated = try? writeExtensionPackage(
+            manifest: pending.manifest,
+            scriptSource: pending.scriptSource,
+            iconData: pending.iconData,
+            sourceURL: ext.state.sourceURL,
+            isEnabled: true,
+            permissionApproved: true,
+            now: now
+        ) else {
+            return nil
+        }
+        pendingUpdates.removeValue(forKey: id)
+        updateStatusByID[id] = .updated(toVersion: pending.manifest.version)
+        return updated
+    }
+
+    func dismissPendingUpdate(id: String) {
+        pendingUpdates.removeValue(forKey: id)
+        if case .pendingReview = updateStatusByID[id] {
+            updateStatusByID.removeValue(forKey: id)
+        }
     }
 
     // MARK: - Lifecycle, Settings & Logs
@@ -450,6 +674,8 @@ final class ExtensionStore {
         guard let idx = extensions.firstIndex(where: { $0.id == id }) else { return }
         let extDir = extensions[idx].directoryURL
         extensions.remove(at: idx)
+        pendingUpdates.removeValue(forKey: id)
+        updateStatusByID.removeValue(forKey: id)
         hostStorage.removeExtension(id: id)
         try? FileManager.default.removeItem(at: extDir)
         syncAll()

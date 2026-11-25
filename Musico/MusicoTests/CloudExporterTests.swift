@@ -431,6 +431,150 @@ final class CloudExporterTests: XCTestCase {
         XCTAssertEqual(downloads.value, ["f2.mp3"])
         XCTAssertTrue(FileManager.default.fileExists(atPath: summary.destinationURL.appendingPathComponent("New Track.mp3").path))
     }
+
+    @MainActor
+    func testCoverArtResolutionEmbeddingAndWebMSidecarAcrossExportPaths() async throws {
+        // 1. Magic-byte MIME detection & Bilibili CDN Referer
+        let png = Self.makeImageData(color: .systemRed, png: true)
+        let jpg = Self.makeImageData(color: .systemBlue, png: false)
+        let webpHeader = Data([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50])
+        XCTAssertEqual(CloudThumbnailCache.detectedMIMEType(for: png), "image/png")
+        XCTAssertEqual(CloudThumbnailCache.detectedMIMEType(for: jpg), "image/jpeg")
+        XCTAssertEqual(CloudThumbnailCache.detectedMIMEType(for: webpHeader), "image/webp")
+        XCTAssertEqual(
+            CloudThumbnailCache.referer(for: URL(string: "https://i0.hdslb.com/bfs/archive/cover.jpg")!),
+            "https://www.bilibili.com/"
+        )
+        XCTAssertNil(CloudThumbnailCache.referer(for: URL(string: "https://i.ytimg.com/vi/abc/hqdefault.jpg")!))
+
+        // 2. Disk ArtworkCache fallback + remote fetch fallback
+        let artworkCache = ArtworkCache(directory: makeTempDir())
+        let diskArtKey = try XCTUnwrap(artworkCache.store(jpg))
+        let remoteURLString = "https://i0.hdslb.com/bfs/archive/remote-cover.png"
+        let thumbCache = CloudThumbnailCache(fetcher: { _ in png })
+
+        let root = makeCloudRoot()
+        let libraryTrackWithDiskArt = Track(
+            id: Track.makeID(rootID: root.id, relativePath: "disk1"),
+            rootID: root.id,
+            relativePath: "disk1",
+            title: "Disk Art MP3",
+            artist: "Art",
+            album: "Alb",
+            albumArtist: "Art",
+            trackNumber: nil,
+            discNumber: nil,
+            duration: 58,
+            fileSize: 0,
+            modified: Date(timeIntervalSince1970: 0),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(timeIntervalSince1970: 0),
+            artworkKey: diskArtKey,
+            cloudSource: "youtube",
+            remoteTrackID: "disk1",
+            remoteArtworkURL: nil
+        )
+        let libraryTrackWithRemoteArt = Track(
+            id: Track.makeID(rootID: root.id, relativePath: "remote1"),
+            rootID: root.id,
+            relativePath: "remote1",
+            title: "Remote WebM",
+            artist: "Bili",
+            album: "BiliAlb",
+            albumArtist: "Bili",
+            trackNumber: nil,
+            discNumber: nil,
+            duration: 58,
+            fileSize: 0,
+            modified: Date(timeIntervalSince1970: 0),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(timeIntervalSince1970: 0),
+            artworkKey: nil,
+            cloudSource: "bilibili",
+            remoteTrackID: "remote1",
+            remoteArtworkURL: remoteURLString
+        )
+
+        let mp3Fixture = try XCTUnwrap(Bundle(for: CloudExporterTests.self).url(forResource: "sample", withExtension: "mp3"))
+        let mp3Data = try Data(contentsOf: mp3Fixture)
+        let resolver = StubCloudStreamResolver { track, _, _ in
+            let isWebm = track.remoteTrackID == "remote1"
+            let ext = isWebm ? "webm" : "mp3"
+            return CloudStreamResult(
+                url: URL(string: "https://cdn.example/\(track.remoteTrackID ?? "x").\(ext)")!,
+                headers: [:],
+                fileExtension: ext,
+                expiresAt: Date().addingTimeInterval(600)
+            )
+        }
+        let cache = CloudAudioCache(
+            directory: makeTempDir(),
+            maxBytes: 50_000_000,
+            resolver: resolver,
+            downloader: { url, _ in
+                let tmp = makeTempDir().appendingPathComponent("dl.\(url.pathExtension)")
+                if url.pathExtension == "webm" {
+                    try Data("webm-bytes".utf8).write(to: tmp)
+                    return (tmp, 200, "audio/webm")
+                } else {
+                    try mp3Data.write(to: tmp)
+                    return (tmp, 200, "audio/mpeg")
+                }
+            }
+        )
+
+        // Single-track export for non-ephemeral library track embeds artwork into MP3 (even with artworkData: nil)
+        let singleDir = makeTempDir()
+        let savedMP3 = try await CloudExporter.exportTrack(
+            libraryTrackWithDiskArt,
+            root: root,
+            toFolder: singleDir,
+            cache: cache,
+            artworkData: nil,
+            artworkCache: artworkCache,
+            thumbnailCache: thumbCache
+        )
+        let mp3Meta = await MetadataReader().read(savedMP3)
+        XCTAssertNotNil(mp3Meta.artwork)
+        XCTAssertEqual(mp3Meta.title, "Disk Art MP3")
+
+        // Export playlist tags MP3 AND writes sibling .png sidecar for .webm
+        let playlistParent = makeTempDir()
+        let summary = try await CloudExporter.exportPlaylist(
+            root: root,
+            tracks: [libraryTrackWithDiskArt, libraryTrackWithRemoteArt],
+            toParentFolder: playlistParent,
+            folderName: "Cover Export",
+            cache: cache,
+            artworkCache: artworkCache,
+            thumbnailCache: thumbCache
+        )
+        XCTAssertEqual(summary.savedCount, 2)
+        let exportedMP3 = summary.destinationURL.appendingPathComponent("Disk Art MP3.mp3")
+        let exportedWebM = summary.destinationURL.appendingPathComponent("Remote WebM.webm")
+        let exportedWebMSidecar = summary.destinationURL.appendingPathComponent("Remote WebM.png")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exportedWebM.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exportedWebMSidecar.path))
+        XCTAssertEqual(try Data(contentsOf: exportedWebMSidecar), png)
+        let exportedMP3Meta = await MetadataReader().read(exportedMP3)
+        XCTAssertNotNil(exportedMP3Meta.artwork)
+        let exportedWebMMeta = await MetadataReader().read(exportedWebM)
+        XCTAssertEqual(exportedWebMMeta.artwork, png)
+    }
+
+    private static func makeImageData(color: UIColor, png: Bool) -> Data {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8))
+        if png {
+            return renderer.pngData { ctx in
+                color.setFill()
+                ctx.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+            }
+        }
+        return renderer.jpegData(withCompressionQuality: 0.9) { ctx in
+            color.setFill()
+            ctx.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+    }
 }
 
 private final class LockBox<Value>: @unchecked Sendable {

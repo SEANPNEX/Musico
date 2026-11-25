@@ -1,5 +1,46 @@
 import AVFoundation
 import Foundation
+import UIKit
+
+enum ArtworkImageFormat: String, Equatable, Sendable {
+    case jpeg
+    case png
+    case webp
+
+    var mimeType: String {
+        switch self {
+        case .jpeg: "image/jpeg"
+        case .png: "image/png"
+        case .webp: "image/webp"
+        }
+    }
+
+    var fileExtension: String {
+        switch self {
+        case .jpeg: "jpg"
+        case .png: "png"
+        case .webp: "webp"
+        }
+    }
+
+    static func detect(in data: Data) -> ArtworkImageFormat? {
+        guard data.count >= 4 else { return nil }
+        if data.starts(with: [0x89, 0x50, 0x4E, 0x47]) {
+            return .png
+        }
+        if data.starts(with: [0xFF, 0xD8, 0xFF]) {
+            return .jpeg
+        }
+        if data.count >= 12 {
+            let b = [UInt8](data.prefix(12))
+            if b[0] == 0x52, b[1] == 0x49, b[2] == 0x46, b[3] == 0x46,
+               b[8] == 0x57, b[9] == 0x45, b[10] == 0x42, b[11] == 0x50 {
+                return .webp
+            }
+        }
+        return nil
+    }
+}
 
 enum AudioTagWriter {
     struct Payload: Sendable {
@@ -8,6 +49,50 @@ enum AudioTagWriter {
         var album: String
         var genre: String
         var artworkData: Data?
+    }
+
+    static let embeddableExtensions: Set<String> = ["flac", "m4a", "mp4", "mp3"]
+
+    static func supportsEmbeddedArtwork(for url: URL) -> Bool {
+        embeddableExtensions.contains(url.pathExtension.lowercased())
+    }
+
+    /// Writes a sibling `<stem>.jpg` or `<stem>.png` alongside non-embeddable audio files (e.g. `.webm`).
+    @discardableResult
+    static func writeArtworkSidecar(_ imageData: Data, alongside audioURL: URL) -> URL? {
+        guard !imageData.isEmpty else { return nil }
+        let stem = audioURL.deletingPathExtension().lastPathComponent
+        guard !stem.isEmpty else { return nil }
+
+        let targetExt: String
+        let outputData: Data
+        switch ArtworkImageFormat.detect(in: imageData) {
+        case .png:
+            targetExt = "png"
+            outputData = imageData
+        case .jpeg:
+            targetExt = "jpg"
+            outputData = imageData
+        case .webp, .none:
+            if let image = UIImage(data: imageData),
+               let jpeg = image.jpegData(compressionQuality: 0.9) {
+                targetExt = "jpg"
+                outputData = jpeg
+            } else if ArtworkImageFormat.detect(in: imageData) == .webp {
+                targetExt = "webp"
+                outputData = imageData
+            } else {
+                return nil
+            }
+        }
+
+        let sidecarURL = audioURL.deletingLastPathComponent().appendingPathComponent("\(stem).\(targetExt)")
+        do {
+            try outputData.write(to: sidecarURL, options: .atomic)
+            return sidecarURL
+        } catch {
+            return nil
+        }
     }
 
     /// Best-effort tag writing to writable local audio files. Fails silently on read-only or unsupported formats.
@@ -164,7 +249,7 @@ enum AudioTagWriter {
             var be = UInt32(value).bigEndian
             withUnsafeBytes(of: &be) { data.append(contentsOf: $0) }
         }
-        let mime = imageData.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg"
+        let mime = (ArtworkImageFormat.detect(in: imageData) ?? .jpeg).mimeType
         let mimeData = Data(mime.utf8)
         var data = Data()
         appendBE32(3, to: &data) // Front cover
@@ -209,10 +294,18 @@ enum AudioTagWriter {
             items.append(genreItem)
         }
         if let artworkData = payload.artworkData, !artworkData.isEmpty {
+            let embeddableData: Data
+            if ArtworkImageFormat.detect(in: artworkData) == .webp,
+               let image = UIImage(data: artworkData),
+               let jpeg = image.jpegData(compressionQuality: 0.9) {
+                embeddableData = jpeg
+            } else {
+                embeddableData = artworkData
+            }
             let artItem = AVMutableMetadataItem()
             artItem.keySpace = .common
             artItem.key = AVMetadataKey.commonKeyArtwork as NSString
-            artItem.value = artworkData as NSData
+            artItem.value = embeddableData as NSData
             items.append(artItem)
         }
 
@@ -319,7 +412,7 @@ enum AudioTagWriter {
     }
 
     private static func makeID3PictureFrame(_ imageData: Data) -> Data {
-        let mime = imageData.starts(with: [0x89, 0x50, 0x4E, 0x47]) ? "image/png" : "image/jpeg"
+        let mime = (ArtworkImageFormat.detect(in: imageData) ?? .jpeg).mimeType
         var payload = Data([0x00]) // ISO-8859-1 description
         payload.append(Data(mime.utf8))
         payload.append(0x00)

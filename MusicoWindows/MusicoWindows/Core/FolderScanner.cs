@@ -9,7 +9,7 @@ public static class FolderScanner
 {
     public static readonly HashSet<string> AudioExtensions = new(StringComparer.OrdinalIgnoreCase)
     {
-        "mp3", "m4a", "aac", "flac", "wav", "aif", "aiff", "wma", "ogg", "opus"
+        "mp3", "m4a", "aac", "flac", "wav", "aif", "aiff", "wma", "ogg", "opus", "webm"
     };
 
     private static bool IsAudio(string fileName)

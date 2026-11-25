@@ -326,10 +326,11 @@ struct SongsView: View {
             ContentUnavailableView.search(text: trimmedQuery)
         } else {
             if !isSearchingLocal {
-                PlayShuffleButtons(ids: songs.map(\.id))
+                PlayShuffleButtons(ids: songs.map(\.id), queueName: "Songs")
             }
             TrackRows(
                 tracks: songs,
+                queueName: isSearchingLocal ? nil : "Songs",
                 subtitle: { sort == .album || isSearchingLocal ? "\(L10n.displayArtist($0.artist)) — \(L10n.displayAlbum($0.album))" : L10n.displayArtist($0.artist) },
                 onTap: isSearchingLocal ? { index, _ in
                     let queueName = SearchField.queueName(field: navigation.searchField, query: trimmedQuery)
@@ -520,7 +521,7 @@ struct SongsView: View {
                 }
                 if let queues, queues.queues.count > 1 {
                     Menu(L10n.tr("Add to Another Queue"), systemImage: "rectangle.stack.badge.plus") {
-                        ForEach(queues.queues.filter { $0.id != queues.activeID }) { queue in
+                        ForEach(queues.queues.filter { $0.id != queues.viewedQueueID }) { queue in
                             Button(L10n.displayQueueName(queue.name)) {
                                 library.registerEphemeralTracks([track])
                                 player.addToQueue([track.id], queue: queue.id)

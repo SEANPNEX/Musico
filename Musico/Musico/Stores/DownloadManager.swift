@@ -122,6 +122,7 @@ final class DownloadManager {
                     toParentFolder: parentURL,
                     folderName: folderName,
                     cache: cache,
+                    artworkCache: library?.artwork ?? .shared,
                     onDetailedProgress: { progress in
                         guard job.state == .running else { return }
                         job.completedTracks = progress.completedTracks

@@ -973,6 +973,169 @@ final class ExtensionRuntimeTests: XCTestCase {
         let logsText = (store.extension(forID: installed.id)?.logs ?? []).map(\.message).joined(separator: "\n")
         XCTAssertFalse(logsText.contains("qr_secret_token_99"))
     }
+
+    // MARK: - Extension Auto-Updates, SemVer, UpdateUrl & Permission Escalation Guard
+
+    func testExtensionManifestUpdateUrlAndSemVerValidation() throws {
+        // HTTPS updateUrl succeeds
+        let validJSON = """
+        {
+          "apiVersion": 1,
+          "id": "com.test.upd",
+          "name": "Updater",
+          "version": "1.2.3",
+          "updateUrl": "https://cdn.example.test/updater.musicoext",
+          "capabilities": ["search"],
+          "permissions": { "hosts": ["api.example.test"] }
+        }
+        """
+        let valid = try JSONDecoder().decode(ExtensionManifest.self, from: Data(validJSON.utf8))
+        try valid.validate()
+        XCTAssertEqual(valid.validatedUpdateURL?.absoluteString, "https://cdn.example.test/updater.musicoext")
+
+        // HTTP updateUrl rejected
+        let httpJSON = validJSON.replacingOccurrences(of: "https://", with: "http://")
+        let insecure = try JSONDecoder().decode(ExtensionManifest.self, from: Data(httpJSON.utf8))
+        XCTAssertThrowsError(try insecure.validate()) { error in
+            XCTAssertEqual(error as? ExtensionManifestError, .invalidUpdateURL("http://cdn.example.test/updater.musicoext"))
+        }
+
+        // SemVer ordering
+        XCTAssertLessThan(ExtensionSemVer("1.0.0-alpha")!, ExtensionSemVer("1.0.0-beta")!)
+        XCTAssertLessThan(ExtensionSemVer("1.0.0-beta")!, ExtensionSemVer("1.0.0")!)
+        XCTAssertLessThan(ExtensionSemVer("1.0.0")!, ExtensionSemVer("1.0.1")!)
+        XCTAssertLessThan(ExtensionSemVer("1.2.9")!, ExtensionSemVer("1.10.0")!)
+        XCTAssertEqual(ExtensionSemVer("1.2.0+build1"), ExtensionSemVer("1.2.0+build2"))
+    }
+
+    @MainActor
+    func testExtensionAutoUpdateThrottlePreferenceSilentApplyAndEscalationGuard() async throws {
+        func makeScript(id: String, version: String, updateUrl: String?, hosts: [String], caps: [String]) -> String {
+            let hostsJSON = hosts.map { "\"\($0)\"" }.joined(separator: ", ")
+            let capsJSON = caps.map { "\"\($0)\"" }.joined(separator: ", ")
+            let updateLine = updateUrl.map { "  updateUrl: \"\($0)\",\n" } ?? ""
+            return """
+            exports.manifest = {
+              apiVersion: 1,
+              id: "\(id)",
+              name: "AutoExt",
+              version: "\(version)",
+            \(updateLine)  capabilities: [\(capsJSON)],
+              permissions: { hosts: [\(hostsJSON)] }
+            };
+            exports.search = async function() { return { items: [] }; };
+            exports.resolveStream = async function() { return { url: "https://api.example.test/s.mp3", fileExtension: "mp3" }; };
+            """
+        }
+
+        let suiteName = "ExtensionAutoUpdateTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let remoteBody = NSLockBox<String>(makeScript(
+            id: "com.test.auto",
+            version: "1.0.0",
+            updateUrl: "https://upd.example.test/latest.musico.js",
+            hosts: ["api.example.test"],
+            caps: ["search"]
+        ))
+        let requestedURLs = NSLockBox<[String]>([])
+
+        let transport = FixtureTransport { req in
+            let url = req.url!
+            requestedURLs.withLock { $0.append(url.absoluteString) }
+            if url.host == "install.example.test" || url.host == "upd.example.test" {
+                return HTTPResponseData(
+                    statusCode: 200,
+                    headers: ["Content-Type": "application/javascript"],
+                    data: Data(remoteBody.value.utf8),
+                    finalURL: url
+                )
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: url)
+        }
+
+        let baseDir = makeTempDir()
+        let store = ExtensionStore(
+            baseDirectory: baseDir,
+            registry: CloudProviderRegistry(builtIns: []),
+            transport: transport,
+            defaults: defaults
+        )
+        XCTAssertTrue(store.autoUpdateEnabled)
+
+        let installed = try await store.importFromURL("https://install.example.test/v1.musico.js")
+        store.approvePermissionsAndEnable(id: installed.id)
+        XCTAssertEqual(store.updateSourceURL(for: installed)?.absoluteString, "https://upd.example.test/latest.musico.js")
+
+        // Mismatched ID is rejected cleanly
+        remoteBody.withLock {
+            $0 = makeScript(
+                id: "com.test.other",
+                version: "2.0.0",
+                updateUrl: "https://upd.example.test/latest.musico.js",
+                hosts: ["api.example.test"],
+                caps: ["search"]
+            )
+        }
+        await store.checkForUpdate(extensionID: installed.id)
+        XCTAssertEqual(store.extension(forID: installed.id)?.manifest.version, "1.0.0")
+        if case .error = store.updateStatusByID[installed.id] {} else {
+            XCTFail("Expected error status for mismatched ID")
+        }
+
+        // Unchanged/reduced permissions + newer SemVer -> silent in-place update preserving enabled state
+        remoteBody.withLock {
+            $0 = makeScript(
+                id: "com.test.auto",
+                version: "1.1.0",
+                updateUrl: "https://upd.example.test/latest.musico.js",
+                hosts: ["api.example.test"],
+                caps: ["search"]
+            )
+        }
+        let t0 = Date(timeIntervalSince1970: 1_700_000_000)
+        requestedURLs.withLock { $0.removeAll() }
+        await store.checkForUpdatesIfNeeded(now: t0)
+        XCTAssertEqual(requestedURLs.value, ["https://upd.example.test/latest.musico.js"])
+        XCTAssertEqual(store.extension(forID: installed.id)?.manifest.version, "1.1.0")
+        XCTAssertTrue(store.extension(forID: installed.id)?.isActive ?? false)
+        XCTAssertNil(store.pendingUpdates[installed.id])
+
+        // Throttled within 6 hours -> does not fetch again
+        requestedURLs.withLock { $0.removeAll() }
+        await store.checkForUpdatesIfNeeded(now: t0.addingTimeInterval(3 * 60 * 60))
+        XCTAssertTrue(requestedURLs.value.isEmpty)
+
+        // Expanded permissions after 6 hours -> staged for Review Update instead of auto-applying
+        remoteBody.withLock {
+            $0 = makeScript(
+                id: "com.test.auto",
+                version: "1.2.0",
+                updateUrl: "https://upd.example.test/latest.musico.js",
+                hosts: ["api.example.test", "new.example.test"],
+                caps: ["search", "stream"]
+            )
+        }
+        await store.checkForUpdatesIfNeeded(now: t0.addingTimeInterval(6 * 60 * 60 + 1))
+        XCTAssertEqual(store.extension(forID: installed.id)?.manifest.version, "1.1.0")
+        let pending = try XCTUnwrap(store.pendingUpdates[installed.id])
+        XCTAssertEqual(pending.manifest.version, "1.2.0")
+        XCTAssertEqual(pending.addedHosts, ["new.example.test"])
+        XCTAssertEqual(pending.addedCapabilities, [.stream])
+
+        // Approving staged update applies v1.2.0 and enables it
+        let approved = store.approvePendingUpdate(id: installed.id)
+        XCTAssertEqual(approved?.manifest.version, "1.2.0")
+        XCTAssertTrue(approved?.isActive ?? false)
+        XCTAssertNil(store.pendingUpdates[installed.id])
+
+        // Disabling autoUpdateEnabled skips background checks even past 6 hours
+        store.autoUpdateEnabled = false
+        requestedURLs.withLock { $0.removeAll() }
+        await store.checkForUpdatesIfNeeded(now: t0.addingTimeInterval(20 * 60 * 60))
+        XCTAssertTrue(requestedURLs.value.isEmpty)
+    }
 }
 
 private final class NSLockBox<Value>: @unchecked Sendable {

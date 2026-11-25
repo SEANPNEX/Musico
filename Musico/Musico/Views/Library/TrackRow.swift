@@ -92,6 +92,7 @@ struct TrackRows: View {
     let tracks: [Track]
     /// The list to play when `tracks` is only the start of a longer one.
     var queue: [Track]?
+    var queueName: String? = nil
     var subtitle: ((Track) -> String)?
     var onTap: ((Int, Track) -> Void)?
 
@@ -103,6 +104,8 @@ struct TrackRows: View {
             Button {
                 if let onTap {
                     onTap(index, track)
+                } else if let queueName {
+                    player.playInNamedQueue((queue ?? tracks).map(\.id), name: queueName, startAt: index)
                 } else {
                     player.play((queue ?? tracks).map(\.id), startAt: index)
                 }
@@ -478,7 +481,7 @@ struct TrackMenuItems: View {
         Button(L10n.tr("Add to Queue"), systemImage: "text.append") { player.addToQueue(ids, queue: nil) }
         if queues.queues.count > 1 {
             Menu(L10n.tr("Add to Another Queue"), systemImage: "rectangle.stack.badge.plus") {
-                ForEach(queues.queues.filter { $0.id != queues.activeID }) { queue in
+                ForEach(queues.queues.filter { $0.id != queues.viewedQueueID }) { queue in
                     Button(L10n.displayQueueName(queue.name)) { player.addToQueue(ids, queue: queue.id) }
                 }
             }

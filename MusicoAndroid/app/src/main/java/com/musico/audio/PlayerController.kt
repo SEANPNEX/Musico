@@ -725,6 +725,18 @@ class PlayerController(
         }
     }
 
+    fun playTrack(inQueue: String, index: Int) {
+        val targetQueue = queues.state.value.queues.firstOrNull { it.id == inQueue } ?: return
+        if (index !in targetQueue.trackIds.indices) return
+        if (queues.state.value.activeId != inQueue) {
+            persistPosition()
+            queues.setActive(inQueue)
+        }
+        _state.value = _state.value.copy(errorMessage = null, playbackError = null)
+        queues.update(inQueue) { it.jump(index) }
+        startCurrent(autoplay = true)
+    }
+
     fun switchQueue(id: String) {
         if (id == queues.state.value.activeId) return
         val wasPlaying = isActiveOrLoadingToPlay
@@ -736,28 +748,29 @@ class PlayerController(
 
     fun deleteQueue(id: String) {
         val wasActive = id == queues.state.value.activeId
-        val wasPlaying = isActiveOrLoadingToPlay
         queues.delete(id)
         if (wasActive && queues.state.value.activeId != id) {
-            startCurrent(autoplay = wasPlaying, positionSec = queues.active.positionSec)
+            clearPlayback()
         }
     }
 
-    fun removeFromQueue(index: Int) {
-        val removingCurrent = index == queues.active.currentIndex
+    fun removeFromQueue(index: Int, queueId: String = queues.state.value.activeId) {
+        val targetQueue = queues.state.value.queues.firstOrNull { it.id == queueId } ?: return
+        val isActiveQueue = queueId == queues.state.value.activeId
+        val removingCurrent = isActiveQueue && index == targetQueue.currentIndex
         val wasPlaying = isActiveOrLoadingToPlay
-        queues.updateActive { it.removeAt(index) }
+        queues.update(queueId) { it.removeAt(index) }
         if (removingCurrent) {
             startCurrent(autoplay = wasPlaying)
         }
     }
 
-    fun moveInQueue(fromIndex: Int, toIndex: Int) {
-        queues.updateActive { it.move(fromIndex, toIndex) }
+    fun moveInQueue(fromIndex: Int, toIndex: Int, queueId: String = queues.state.value.activeId) {
+        queues.update(queueId) { it.move(fromIndex, toIndex) }
     }
 
-    fun reorderQueue(newOrderIndices: List<Int>) {
-        queues.updateActive { it.reorder(newOrderIndices, TrackSortOrder.CUSTOM) }
+    fun reorderQueue(newOrderIndices: List<Int>, queueId: String = queues.state.value.activeId) {
+        queues.update(queueId) { it.reorder(newOrderIndices, TrackSortOrder.CUSTOM) }
     }
 
     fun sortQueue(sortOrder: TrackSortOrder, queueId: String? = null) {
@@ -782,9 +795,12 @@ class PlayerController(
         }
     }
 
-    fun clearQueue() {
-        queues.updateActive { it.replace(emptyList(), 0) }
-        clearPlayback()
+    fun clearQueue(queueId: String = queues.state.value.activeId) {
+        val isActiveQueue = queueId == queues.state.value.activeId
+        queues.update(queueId) { it.replace(emptyList(), 0) }
+        if (isActiveQueue) {
+            clearPlayback()
+        }
     }
 
     private fun tracksRemoved(ids: Set<String>) {

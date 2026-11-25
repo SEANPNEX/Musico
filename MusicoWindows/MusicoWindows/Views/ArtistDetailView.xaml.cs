@@ -83,6 +83,7 @@ public partial class ArtistDetailView : UserControl
 
         TracksStack.Children.Clear();
         var ids = _tracks.Select(t => t.Id).ToList();
+        string queueName = FormatArtistQueueName(_artist);
         for (int i = 0; i < _tracks.Count; i++)
         {
             int idx = i;
@@ -98,7 +99,7 @@ public partial class ArtistDetailView : UserControl
                 isCurrent,
                 isPlaying,
                 lib.IsAvailable(track),
-                () => _ctx.Services.Player.Play(ids, idx),
+                () => _ctx.Services.Player.PlayInNamedQueue(queueName, ids, startAt: idx),
                 _ctx.OpenTextPrompt,
                 null,
                 _ctx.OpenSaveCloudTrack,
@@ -107,22 +108,27 @@ public partial class ArtistDetailView : UserControl
         }
     }
 
+    private static string FormatArtistQueueName(string artist) =>
+        $"Artist: {L.DisplayArtist(artist)}";
+
     private void Back_Click(object sender, RoutedEventArgs e) => BackRequested?.Invoke();
 
     private void PlayAll_Click(object sender, RoutedEventArgs e)
     {
         if (_ctx is null || _tracks.Count == 0) return;
         var ids = _tracks.Select(t => t.Id).ToList();
-        if (_ctx.Services.Queues.Active.Shuffle) _ctx.Services.Player.ToggleShuffle();
-        _ctx.Services.Player.Play(ids, 0);
+        _ctx.Services.Player.PlayInNamedQueue(FormatArtistQueueName(_artist), ids, startAt: 0, shuffle: false);
     }
 
     private void ShuffleAll_Click(object sender, RoutedEventArgs e)
     {
         if (_ctx is null || _tracks.Count == 0) return;
         var ids = _tracks.Select(t => t.Id).ToList();
-        if (!_ctx.Services.Queues.Active.Shuffle) _ctx.Services.Player.ToggleShuffle();
-        _ctx.Services.Player.Play(ids, Random.Shared.Next(ids.Count));
+        _ctx.Services.Player.PlayInNamedQueue(
+            FormatArtistQueueName(_artist),
+            ids,
+            startAt: Random.Shared.Next(ids.Count),
+            shuffle: true);
     }
 
     private void More_Click(object sender, RoutedEventArgs e)

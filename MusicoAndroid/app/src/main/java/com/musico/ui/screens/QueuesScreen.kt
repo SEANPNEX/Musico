@@ -21,18 +21,21 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.automirrored.rounded.VolumeUp
 import androidx.compose.material.icons.rounded.Add
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.DeleteSweep
 import androidx.compose.material.icons.rounded.Edit
+import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.MoreVert
@@ -43,6 +46,8 @@ import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
+import androidx.compose.material3.FilterChip
+import androidx.compose.material3.FilterChipDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -105,6 +110,7 @@ fun QueuesScreen(
     modifier: Modifier = Modifier
 ) {
     val strings = LocalStrings.current
+    val viewed = queueState.viewed
     var editing by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
 
@@ -115,7 +121,7 @@ fun QueuesScreen(
             TopAppBar(
                 title = { Text(strings.queuesTitle) },
                 actions = {
-                    if (queueState.active.trackIds.isNotEmpty()) {
+                    if (viewed.trackIds.isNotEmpty()) {
                         TextButton(onClick = { editing = !editing }) {
                             Text(if (editing) strings.done else strings.edit)
                         }
@@ -145,11 +151,11 @@ fun QueuesScreen(
 
     if (confirmClear) {
         ConfirmDialog(
-            title = strings.clearQueueConfirmTitle(strings.displayQueueName(queueState.active.name)),
+            title = strings.clearQueueConfirmTitle(strings.displayQueueName(viewed.name)),
             message = strings.clearQueueConfirmMessage,
             confirmLabel = strings.clearQueue,
             onDismiss = { confirmClear = false },
-            onConfirm = { playerController.clearQueue() }
+            onConfirm = { playerController.clearQueue(queueId = viewed.id) }
         )
     }
 }
@@ -168,6 +174,7 @@ fun QueueSheet(
     onDismiss: () -> Unit
 ) {
     val strings = LocalStrings.current
+    val viewed = queueState.viewed
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var editing by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
@@ -193,7 +200,7 @@ fun QueueSheet(
                     style = MaterialTheme.typography.titleLarge
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (queueState.active.trackIds.isNotEmpty()) {
+                    if (viewed.trackIds.isNotEmpty()) {
                         TextButton(onClick = { editing = !editing }) {
                             Text(if (editing) strings.done else strings.edit)
                         }
@@ -226,11 +233,11 @@ fun QueueSheet(
 
     if (confirmClear) {
         ConfirmDialog(
-            title = strings.clearQueueConfirmTitle(strings.displayQueueName(queueState.active.name)),
+            title = strings.clearQueueConfirmTitle(strings.displayQueueName(viewed.name)),
             message = strings.clearQueueConfirmMessage,
             confirmLabel = strings.clearQueue,
             onDismiss = { confirmClear = false },
-            onConfirm = { playerController.clearQueue() }
+            onConfirm = { playerController.clearQueue(queueId = viewed.id) }
         )
     }
 }
@@ -254,16 +261,55 @@ fun QueuesContent(
     var queueActionsExpanded by remember { mutableStateOf(false) }
     var showQueueSwitcher by remember { mutableStateOf(false) }
 
-    val active = queueState.active
-    val activeSummary = queueSummaryText(
-        queue = active,
-        isActive = true,
+    val viewed = queueState.viewed
+    val isViewingPlayingQueue = viewed.id == queueState.activeId
+    val viewedSummary = queueSummaryText(
+        queue = viewed,
+        isActive = isViewingPlayingQueue,
         activePositionSec = playerState.currentTimeSec,
         libraryStore = libraryStore,
         strings = strings,
     )
 
     Column(modifier = modifier) {
+        LazyRow(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(top = 6.dp),
+            contentPadding = PaddingValues(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            items(queueState.queues, key = { it.id }) { queue ->
+                val isViewedChip = queue.id == viewed.id
+                val isPlayingChip = queue.id == queueState.activeId
+                FilterChip(
+                    selected = isViewedChip,
+                    onClick = { queueStore.selectViewedQueue(queue.id) },
+                    label = {
+                        Text(
+                            text = strings.displayQueueName(queue.name),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    },
+                    leadingIcon = if (isPlayingChip) {
+                        {
+                            Icon(
+                                imageVector = if (playerState.isPlaying) {
+                                    Icons.Rounded.GraphicEq
+                                } else {
+                                    Icons.AutoMirrored.Rounded.VolumeUp
+                                },
+                                contentDescription = strings.playing,
+                                tint = MaterialTheme.colorScheme.primary,
+                                modifier = Modifier.size(FilterChipDefaults.IconSize),
+                            )
+                        }
+                    } else null,
+                )
+            }
+        }
+
         ElevatedCard(
             modifier = Modifier
                 .fillMaxWidth()
@@ -286,18 +332,35 @@ fun QueuesContent(
                             .animateContentSize(),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            if (isViewingPlayingQueue) {
+                                Icon(
+                                    imageVector = if (playerState.isPlaying) {
+                                        Icons.Rounded.GraphicEq
+                                    } else {
+                                        Icons.AutoMirrored.Rounded.VolumeUp
+                                    },
+                                    contentDescription = strings.playing,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
+                            Text(
+                                text = strings.displayQueueName(viewed.name),
+                                style = MaterialTheme.typography.titleMedium,
+                                maxLines = 1,
+                                modifier = Modifier.basicMarquee(
+                                    iterations = Int.MAX_VALUE,
+                                    initialDelayMillis = 1500,
+                                    repeatDelayMillis = 1500,
+                                ),
+                            )
+                        }
                         Text(
-                            text = strings.displayQueueName(active.name),
-                            style = MaterialTheme.typography.titleMedium,
-                            maxLines = 1,
-                            modifier = Modifier.basicMarquee(
-                                iterations = Int.MAX_VALUE,
-                                initialDelayMillis = 1500,
-                                repeatDelayMillis = 1500,
-                            ),
-                        )
-                        Text(
-                            text = activeSummary,
+                            text = viewedSummary,
                             style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             maxLines = 1,
@@ -351,10 +414,10 @@ fun QueuesContent(
 
                     Spacer(Modifier.weight(1f))
 
-                    if (active.trackIds.isNotEmpty()) {
+                    if (viewed.trackIds.isNotEmpty()) {
                         SortOrderMenuButton(
-                            current = active.sortOrder,
-                            onSelect = { order -> playerController.sortQueue(order) },
+                            current = viewed.sortOrder,
+                            onSelect = { order -> playerController.sortQueue(order, queueId = viewed.id) },
                             contentDescription = strings.sortQueue,
                         )
                     }
@@ -372,7 +435,7 @@ fun QueuesContent(
                                 leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
                                 onClick = {
                                     queueActionsExpanded = false
-                                    renamingQueue = active
+                                    renamingQueue = viewed
                                 }
                             )
                             if (queueState.queues.size > 1) {
@@ -387,17 +450,17 @@ fun QueuesContent(
                                     },
                                     onClick = {
                                         queueActionsExpanded = false
-                                        deletingQueue = active
+                                        deletingQueue = viewed
                                     }
                                 )
                             }
-                            if (active.trackIds.isNotEmpty()) {
+                            if (viewed.trackIds.isNotEmpty()) {
                                 DropdownMenuItem(
                                     text = { Text(strings.clearQueue) },
                                     leadingIcon = { Icon(Icons.Rounded.DeleteSweep, contentDescription = null) },
                                     onClick = {
                                         queueActionsExpanded = false
-                                        playerController.clearQueue()
+                                        playerController.clearQueue(queueId = viewed.id)
                                     }
                                 )
                             }
@@ -411,13 +474,16 @@ fun QueuesContent(
 
         val listState = rememberLazyListState()
         val dragState = rememberDragReorderState(
-            items = active.trackIds,
+            items = viewed.trackIds,
             listState = listState,
             headerCount = 0,
-            scopeKey = active.id,
+            scopeKey = viewed.id,
             keyOf = { it },
             onCommit = { reordered ->
-                playerController.reorderQueue(reordered.map { it.originalIndex })
+                playerController.reorderQueue(
+                    newOrderIndices = reordered.map { it.originalIndex },
+                    queueId = viewed.id,
+                )
             },
         )
 
@@ -426,7 +492,7 @@ fun QueuesContent(
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 16.dp)
         ) {
-            if (active.trackIds.isEmpty()) {
+            if (viewed.trackIds.isEmpty()) {
                 item(key = "empty_queue") {
                     EmptyState(
                         icon = Icons.AutoMirrored.Rounded.QueueMusic,
@@ -442,7 +508,7 @@ fun QueuesContent(
                     val trackId = dragItem.value
                     val slotIndex = dragItem.originalIndex
                     val track = libraryStore.track(trackId)
-                    val isCurrentSlot = slotIndex == active.currentIndex
+                    val isCurrentSlot = isViewingPlayingQueue && slotIndex == viewed.currentIndex
                     val isDragged = dragState.activeUid == dragItem.uid
                     val rowBg = when {
                         isDragged -> MaterialTheme.colorScheme.surfaceContainerHighest
@@ -471,26 +537,43 @@ fun QueuesContent(
                             isPlaying = isCurrentSlot && playerState.isPlaying,
                             isAvailable = libraryStore.isAvailable(track),
                             backgroundColor = rowBg,
-                            onClick = { playerController.jump(index) },
+                            onClick = { playerController.playTrack(inQueue = viewed.id, index = index) },
                             modifier = rowModifier,
                             dragHandleModifier = Modifier.dragHandle(dragState, dragItem.uid),
                             trailingActions = if (editing) {
                                 {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
                                         IconButton(
-                                            onClick = { playerController.moveInQueue(index, index - 1) },
+                                            onClick = {
+                                                playerController.moveInQueue(
+                                                    fromIndex = index,
+                                                    toIndex = index - 1,
+                                                    queueId = viewed.id,
+                                                )
+                                            },
                                             enabled = index > 0
                                         ) {
                                             Icon(Icons.Rounded.KeyboardArrowUp, contentDescription = strings.moveUp)
                                         }
                                         IconButton(
-                                            onClick = { playerController.moveInQueue(index, index + 1) },
-                                            enabled = index < active.trackIds.lastIndex
+                                            onClick = {
+                                                playerController.moveInQueue(
+                                                    fromIndex = index,
+                                                    toIndex = index + 1,
+                                                    queueId = viewed.id,
+                                                )
+                                            },
+                                            enabled = index < viewed.trackIds.lastIndex
                                         ) {
                                             Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = strings.moveDown)
                                         }
                                         IconButton(
-                                            onClick = { playerController.removeFromQueue(index) }
+                                            onClick = {
+                                                playerController.removeFromQueue(
+                                                    index = index,
+                                                    queueId = viewed.id,
+                                                )
+                                            }
                                         ) {
                                             Icon(
                                                 Icons.Rounded.DeleteOutline,
@@ -506,11 +589,12 @@ fun QueuesContent(
                                     TrackMenuItems(
                                         ids = listOf(track.id),
                                         queues = queueState.queues,
-                                        activeQueueId = active.id,
+                                        activeQueueId = viewed.id,
                                         actionState = trackActions,
                                         onDismiss = onDismiss,
                                         favouriteId = track.id,
-                                        isFavourite = track.id in libraryState.favourites
+                                        isFavourite = track.id in libraryState.favourites,
+                                        addTargetQueueId = viewed.id,
                                     )
                                     HorizontalDivider()
                                     DropdownMenuItem(
@@ -524,7 +608,10 @@ fun QueuesContent(
                                         },
                                         onClick = {
                                             onDismiss()
-                                            playerController.removeFromQueue(index)
+                                            playerController.removeFromQueue(
+                                                index = index,
+                                                queueId = viewed.id,
+                                            )
                                         }
                                     )
                                 }
@@ -540,7 +627,14 @@ fun QueuesContent(
                                 )
                             },
                             trailingContent = {
-                                IconButton(onClick = { playerController.removeFromQueue(index) }) {
+                                IconButton(
+                                    onClick = {
+                                        playerController.removeFromQueue(
+                                            index = index,
+                                            queueId = viewed.id,
+                                        )
+                                    }
+                                ) {
                                     Icon(Icons.Rounded.DeleteOutline, contentDescription = strings.remove)
                                 }
                             }
@@ -557,7 +651,7 @@ fun QueuesContent(
             libraryStore = libraryStore,
             playerState = playerState,
             onSelectQueue = { queueId ->
-                playerController.switchQueue(queueId)
+                queueStore.selectViewedQueue(queueId)
                 showQueueSwitcher = false
             },
             onCreateQueue = { queueStore.addQueue(name = null) },
@@ -668,16 +762,17 @@ private fun QueueSwitcherSheet(
                 contentPadding = PaddingValues(vertical = 8.dp),
             ) {
                 items(queueState.queues, key = { it.id }) { queue ->
-                    val isSelected = queue.id == queueState.activeId
+                    val isViewed = queue.id == queueState.viewedId
+                    val isPlayingQueue = queue.id == queueState.activeId
                     var rowMenuExpanded by remember(queue.id) { mutableStateOf(false) }
                     val summary = queueSummaryText(
                         queue = queue,
-                        isActive = isSelected,
+                        isActive = isPlayingQueue,
                         activePositionSec = playerState.currentTimeSec,
                         libraryStore = libraryStore,
                         strings = strings,
                     )
-                    val containerColor = if (isSelected) {
+                    val containerColor = if (isViewed) {
                         MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.55f)
                     } else {
                         Color.Transparent
@@ -690,7 +785,17 @@ private fun QueueSwitcherSheet(
                             .background(containerColor)
                             .clickable { onSelectQueue(queue.id) },
                         leadingContent = {
-                            if (isSelected) {
+                            if (isPlayingQueue) {
+                                Icon(
+                                    imageVector = if (playerState.isPlaying) {
+                                        Icons.Rounded.GraphicEq
+                                    } else {
+                                        Icons.AutoMirrored.Rounded.VolumeUp
+                                    },
+                                    contentDescription = strings.playing,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            } else if (isViewed) {
                                 Icon(
                                     imageVector = Icons.Rounded.Check,
                                     contentDescription = null,
@@ -709,8 +814,8 @@ private fun QueueSwitcherSheet(
                                 text = strings.displayQueueName(queue.name),
                                 maxLines = 2,
                                 overflow = TextOverflow.Ellipsis,
-                                fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
-                                color = if (isSelected) {
+                                fontWeight = if (isViewed || isPlayingQueue) FontWeight.SemiBold else FontWeight.Normal,
+                                color = if (isViewed) {
                                     MaterialTheme.colorScheme.primary
                                 } else {
                                     MaterialTheme.colorScheme.onSurface

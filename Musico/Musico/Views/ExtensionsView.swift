@@ -13,6 +13,7 @@ struct ExtensionsView: View {
     @State private var showURLImporter = false
     @State private var importError: String?
     @State private var reviewTarget: InstalledExtension?
+    @State private var updateReviewTarget: PendingExtensionUpdate?
 
     init(extensionStore: ExtensionStore? = nil, showDoneButton: Bool = false) {
         self.explicitStore = extensionStore
@@ -73,6 +74,37 @@ struct ExtensionsView: View {
                 } footer: {
                     Text(L10n.tr("Extensions run natively in an isolated JavaScript sandbox with strict host allowlists."))
                 }
+
+                Section {
+                    Toggle(
+                        L10n.tr("Automatic Updates"),
+                        isOn: Binding(
+                            get: { extensionStore.autoUpdateEnabled },
+                            set: { extensionStore.autoUpdateEnabled = $0 }
+                        )
+                    )
+                    Button {
+                        Task { await extensionStore.checkForUpdates(manual: true) }
+                    } label: {
+                        HStack {
+                            Label(L10n.tr("Check for Updates"), systemImage: "arrow.clockwise")
+                            Spacer()
+                            if extensionStore.isCheckingForUpdates {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        }
+                    }
+                    .disabled(extensionStore.isCheckingForUpdates)
+                } header: {
+                    Text(L10n.tr("Updates"))
+                } footer: {
+                    if let lastCheck = extensionStore.lastUpdateCheckAt {
+                        Text(L10n.tr("Last checked %@", L10n.formatDateTime(lastCheck)))
+                    } else {
+                        Text(L10n.tr("Extensions installed from HTTPS links or declaring an update URL check automatically every 6 hours."))
+                    }
+                }
             }
         }
         .navigationTitle(L10n.tr("Extensions"))
@@ -132,6 +164,12 @@ struct ExtensionsView: View {
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
         }
+        .sheet(item: $updateReviewTarget) { pending in
+            ExtensionUpdateReviewSheet(pendingUpdate: pending, extensionStore: extensionStore)
+                .environment(\.extensionStore, extensionStore)
+                .environment(\.languageManager, languageManager)
+                .environment(\.locale, languageManager.effectiveLocale)
+        }
         .alert(
             L10n.tr("Couldn’t Import Extension"),
             isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })
@@ -162,8 +200,21 @@ struct ExtensionsView: View {
                     .font(.caption)
                     .foregroundStyle(ext.state.permissionApproved ? Color.secondary : Color.orange)
                     .lineLimit(1)
+                if let subtitle = updateStatusSubtitle(for: ext) {
+                    Text(subtitle.text)
+                        .font(.caption2)
+                        .foregroundStyle(subtitle.color)
+                        .lineLimit(1)
+                }
             }
             Spacer()
+            if let pending = extensionStore.pendingUpdates[ext.id] {
+                Button(L10n.tr("Review Update")) {
+                    updateReviewTarget = pending
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+            }
             Toggle(
                 "",
                 isOn: Binding(
@@ -186,6 +237,22 @@ struct ExtensionsView: View {
             return L10n.tr("Permission Review Required")
         }
         return ext.isActive ? L10n.tr("Enabled") : L10n.tr("Disabled")
+    }
+
+    private func updateStatusSubtitle(for ext: InstalledExtension) -> (text: String, color: Color)? {
+        if let pending = extensionStore.pendingUpdates[ext.id] {
+            return (L10n.tr("Update v%@ requires permission review", pending.manifest.version), .orange)
+        }
+        switch extensionStore.updateStatusByID[ext.id] {
+        case .checking:
+            return (L10n.tr("Checking for updates…"), .secondary)
+        case .updated(let version):
+            return (L10n.tr("Updated to v%@", version), .green)
+        case .error(let message):
+            return (message, .red)
+        case .upToDate, .pendingReview, .none:
+            return nil
+        }
     }
 }
 
@@ -314,6 +381,7 @@ struct ExtensionDetailView: View {
     @Environment(\.dismiss) private var dismiss
 
     @State private var showReviewSheet = false
+    @State private var showUpdateReviewSheet = false
     @State private var confirmUninstall = false
     @State private var showQRLoginSheet = false
 
@@ -466,6 +534,54 @@ struct ExtensionDetailView: View {
                 }
             }
 
+            if extensionStore.updateSourceURL(for: ext) != nil || extensionStore.pendingUpdates[ext.id] != nil {
+                Section(L10n.tr("Updates")) {
+                    if let updateURL = extensionStore.updateSourceURL(for: ext) {
+                        LabeledContent(L10n.tr("Update Source")) {
+                            Text(updateURL.absoluteString)
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+
+                    if extensionStore.pendingUpdates[ext.id] != nil {
+                        Button {
+                            showUpdateReviewSheet = true
+                        } label: {
+                            Label(L10n.tr("Review Update…"), systemImage: "exclamationmark.shield")
+                        }
+                        .tint(.orange)
+                    }
+
+                    Button {
+                        Task {
+                            await extensionStore.checkForUpdate(extensionID: ext.id)
+                            if extensionStore.pendingUpdates[ext.id] != nil {
+                                showUpdateReviewSheet = true
+                            }
+                        }
+                    } label: {
+                        HStack {
+                            Label(L10n.tr("Check for Update"), systemImage: "arrow.clockwise")
+                            Spacer()
+                            if case .checking = extensionStore.updateStatusByID[ext.id] {
+                                ProgressView()
+                                    .controlSize(.small)
+                            }
+                        }
+                    }
+                    .disabled(extensionStore.updateStatusByID[ext.id] == .checking)
+
+                    if let statusInfo = detailUpdateStatus(for: ext.id) {
+                        Text(statusInfo.text)
+                            .font(.caption)
+                            .foregroundStyle(statusInfo.color)
+                    }
+                }
+            }
+
             Section {
                 if ext.logs.isEmpty {
                     Text(L10n.tr("No diagnostic logs recorded yet."))
@@ -516,6 +632,14 @@ struct ExtensionDetailView: View {
                 .environment(\.extensionStore, extensionStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+        }
+        .sheet(isPresented: $showUpdateReviewSheet) {
+            if let pending = extensionStore.pendingUpdates[ext.id] {
+                ExtensionUpdateReviewSheet(pendingUpdate: pending, extensionStore: extensionStore)
+                    .environment(\.extensionStore, extensionStore)
+                    .environment(\.languageManager, languageManager)
+                    .environment(\.locale, languageManager.effectiveLocale)
+            }
         }
         .sheet(isPresented: $showQRLoginSheet) {
             ExtensionQRLoginSheet(extensionItem: ext, extensionStore: extensionStore)
@@ -584,6 +708,135 @@ struct ExtensionDetailView: View {
         case .info: .secondary
         case .warn: .orange
         case .error: .red
+        }
+    }
+
+    private func detailUpdateStatus(for id: String) -> (text: String, color: Color)? {
+        if let pending = extensionStore.pendingUpdates[id] {
+            return (L10n.tr("Version %@ is ready for permission review.", pending.manifest.version), .orange)
+        }
+        switch extensionStore.updateStatusByID[id] {
+        case .checking:
+            return (L10n.tr("Checking for updates…"), .secondary)
+        case .upToDate:
+            return (L10n.tr("Extension is up to date."), .secondary)
+        case .updated(let version):
+            return (L10n.tr("Updated to v%@", version), .green)
+        case .error(let message):
+            return (message, .red)
+        case .pendingReview, .none:
+            return nil
+        }
+    }
+}
+
+struct ExtensionUpdateReviewSheet: View {
+    let pendingUpdate: PendingExtensionUpdate
+    private let explicitStore: ExtensionStore?
+    @Environment(\.extensionStore) private var envExtensionStore
+    @Environment(\.dismiss) private var dismiss
+
+    init(pendingUpdate: PendingExtensionUpdate, extensionStore: ExtensionStore? = nil) {
+        self.pendingUpdate = pendingUpdate
+        self.explicitStore = extensionStore
+    }
+
+    private var extensionStore: ExtensionStore {
+        explicitStore ?? envExtensionStore
+    }
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    HStack(spacing: 12) {
+                        ExtensionIconView(iconData: pendingUpdate.iconData, size: 42)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(pendingUpdate.manifest.name)
+                                .font(.headline)
+                            Text("v\(pendingUpdate.installedVersion) \u{2192} v\(pendingUpdate.manifest.version)")
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(Color.accentColor)
+                            Text(pendingUpdate.manifest.id)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Text(L10n.tr("This update requests additional permissions. Review the new hosts or capabilities before applying it."))
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                if !pendingUpdate.addedHosts.isEmpty {
+                    Section(L10n.tr("New Network Hosts")) {
+                        ForEach(pendingUpdate.addedHosts, id: \.self) { host in
+                            Label {
+                                Text(host)
+                                    .font(.system(.subheadline, design: .monospaced))
+                            } icon: {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                            }
+                        }
+                    }
+                }
+
+                if !pendingUpdate.addedCapabilities.isEmpty {
+                    Section(L10n.tr("New Capabilities")) {
+                        ForEach(pendingUpdate.addedCapabilities, id: \.self) { cap in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Label(cap.localizedTitle, systemImage: "exclamationmark.triangle.fill")
+                                    .font(.subheadline.weight(.medium))
+                                    .foregroundStyle(.orange)
+                                Text(cap.localizedDescription)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                }
+
+                Section(L10n.tr("All Allowed Hosts")) {
+                    ForEach(pendingUpdate.manifest.permissions.hosts, id: \.self) { host in
+                        Label {
+                            Text(host)
+                                .font(.system(.subheadline, design: .monospaced))
+                        } icon: {
+                            Image(systemName: "network")
+                                .foregroundStyle(.blue)
+                        }
+                    }
+                }
+
+                Section(L10n.tr("All Capabilities")) {
+                    ForEach(pendingUpdate.manifest.capabilities, id: \.self) { cap in
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(cap.localizedTitle)
+                                .font(.subheadline.weight(.medium))
+                            Text(cap.localizedDescription)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+            .navigationTitle(L10n.tr("Review Update"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(L10n.tr("Cancel")) {
+                        dismiss()
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(L10n.tr("Allow & Update")) {
+                        extensionStore.approvePendingUpdate(id: pendingUpdate.id)
+                        dismiss()
+                    }
+                }
+            }
         }
     }
 }

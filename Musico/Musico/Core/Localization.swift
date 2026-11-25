@@ -283,6 +283,12 @@ enum L10n {
     @MainActor
     static func displayQueueName(_ name: String) -> String {
         guard resolved == .zhHans else { return name }
+        if name == "Songs" {
+            return tr("Songs")
+        }
+        if name == "Stats" {
+            return tr("Stats")
+        }
         if name.hasPrefix("Queue "), let number = Int(name.dropFirst(6)), number > 0 {
             return "队列 \(number)"
         }
@@ -881,5 +887,31 @@ enum L10n {
         "Waiting for QR code scan…": "等待扫描二维码…",
         "Refresh QR Code": "刷新二维码",
         "Couldn’t generate QR code.": "无法生成二维码。",
+
+        // Extension Auto-Updates & Queue Decoupling (v1.2.6)
+        "Automatic Updates": "自动更新",
+        "Updates": "更新",
+        "Last checked %@": "上次检查：%@",
+        "Extensions installed from HTTPS links or declaring an update URL check automatically every 6 hours.": "通过 HTTPS 链接安装或声明了更新地址的扩展每 6 小时自动检查一次更新。",
+        "Review Update": "审核更新",
+        "Review Update…": "审核更新…",
+        "Update Source": "更新源",
+        "Check for Update": "检查更新",
+        "Extension is up to date.": "扩展已是最新版本。",
+        "Updated to v%@": "已更新至 v%@",
+        "Update v%@ requires permission review": "更新 v%@ 需要确认权限",
+        "Version %@ is ready for permission review.": "版本 %@ 已就绪，等待确认权限。",
+        "This update requests additional permissions. Review the new hosts or capabilities before applying it.": "此更新请求了额外权限。应用前请先确认新增的主机或能力。",
+        "New Network Hosts": "新增网络主机",
+        "New Capabilities": "新增能力",
+        "All Allowed Hosts": "全部允许的网络主机",
+        "All Capabilities": "全部能力",
+        "Allow & Update": "允许并更新",
+        "Invalid extension update URL “%@”.": "无效的扩展更新链接“%@”。",
+        "This extension has no update URL configured.": "此扩展未配置更新地址。",
+        "Extension update URLs must use HTTPS.": "扩展更新链接必须使用 HTTPS。",
+        "Update rejected: expected extension ID “%@”, got “%@”.": "已拒绝更新：预期扩展 ID 为“%@”，实际为“%@”。",
+        "Playing": "正在播放",
+        "View Queue": "查看队列",
     ]
 }

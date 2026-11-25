@@ -18,10 +18,12 @@ public partial class ExtensionsView : UserControl
 {
     private ViewContext? _ctx;
     private string? _reviewExtensionId;
+    private bool _isUpdateReview;
     private string? _qrExtensionId;
     private CancellationTokenSource? _qrLoginCts;
     private string? _activeLogExtensionId;
     private bool _isBusy;
+    private bool _suppressAutoUpdateToggle;
 
     public ExtensionsView()
     {
@@ -38,6 +40,7 @@ public partial class ExtensionsView : UserControl
         Detach();
         _ctx = ctx;
         _ctx.Services.Extensions.Changed += OnExtensionsChanged;
+        _ctx.Services.Extensions.UpdatesChanged += OnUpdatesChanged;
         _ctx.Services.Extensions.LogsChanged += OnLogsChanged;
         LocalizationManager.LanguageChanged += OnLanguageChanged;
         Refresh();
@@ -66,12 +69,15 @@ public partial class ExtensionsView : UserControl
         LocalizationManager.LanguageChanged -= OnLanguageChanged;
         if (_ctx is null) return;
         _ctx.Services.Extensions.Changed -= OnExtensionsChanged;
+        _ctx.Services.Extensions.UpdatesChanged -= OnUpdatesChanged;
         _ctx.Services.Extensions.LogsChanged -= OnLogsChanged;
     }
 
     private void OnLanguageChanged(ResolvedLanguage _) => Refresh();
 
     private void OnExtensionsChanged() => Dispatcher.BeginInvoke(Refresh);
+
+    private void OnUpdatesChanged() => Dispatcher.BeginInvoke(Refresh);
 
     private void OnLogsChanged(string extensionId)
     {
@@ -111,6 +117,17 @@ public partial class ExtensionsView : UserControl
         if (_ctx is null) return;
         var store = _ctx.Services.Extensions;
         var extensions = store.Extensions;
+
+        _suppressAutoUpdateToggle = true;
+        try
+        {
+            AutoUpdateToggle.IsChecked = store.AutoUpdateEnabled;
+        }
+        finally
+        {
+            _suppressAutoUpdateToggle = false;
+        }
+        CheckUpdatesButton.IsEnabled = !_isBusy && extensions.Count > 0;
 
         ExtensionsStack.Children.Clear();
         EmptyState.Visibility = extensions.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
@@ -181,6 +198,14 @@ public partial class ExtensionsView : UserControl
                 : L.Get("Extensions_StatusDisabled");
         titleRow.Children.Add(CreatePill(statusLabel, isAccent: ext.IsEnabled, isWarning: ext.PendingPermissionReview));
 
+        var pendingUpdate = store.GetPendingUpdate(ext.Id);
+        if (pendingUpdate is not null)
+        {
+            titleRow.Children.Add(CreatePill(
+                L.Format("Extensions_UpdateAvailableBadge", pendingUpdate.NewVersion),
+                isWarning: true));
+        }
+
         string author = string.IsNullOrWhiteSpace(ext.Manifest.Author)
             ? L.Get("Extensions_UnknownAuthor")
             : ext.Manifest.Author!;
@@ -243,6 +268,30 @@ public partial class ExtensionsView : UserControl
             actions.Children.Add(toggle);
         }
 
+        if (pendingUpdate is not null)
+        {
+            var reviewUpdateBtn = new Button
+            {
+                Style = (Style)FindResource("Win10PrimaryButtonStyle"),
+                Content = L.Get("Extensions_ReviewUpdateButton"),
+                Margin = new Thickness(0, 0, 8, 0)
+            };
+            reviewUpdateBtn.Click += (_, _) => OpenUpdateReview(ext.Id);
+            actions.Children.Add(reviewUpdateBtn);
+        }
+        else if (ExtensionStore.ResolveUpdateUrl(ext) is not null)
+        {
+            var updateBtn = new Button
+            {
+                Style = (Style)FindResource("Win10ButtonStyle"),
+                Content = L.Get("Extensions_UpdateButton"),
+                Margin = new Thickness(0, 0, 8, 0),
+                IsEnabled = !_isBusy
+            };
+            updateBtn.Click += async (_, _) => await CheckSingleExtensionUpdateAsync(ext);
+            actions.Children.Add(updateBtn);
+        }
+
         int logCount = store.GetLogs(ext.Id).Count;
         bool isShowingLogs = string.Equals(_activeLogExtensionId, ext.Id, StringComparison.OrdinalIgnoreCase);
         var logsBtn = new Button
@@ -288,6 +337,21 @@ public partial class ExtensionsView : UserControl
         };
         permTb.SetResourceReference(TextBlock.ForegroundProperty, "TextTertiaryBrush");
         rootPanel.Children.Add(permTb);
+
+        if (ExtensionStore.ResolveUpdateUrl(ext) is string updateUrl)
+        {
+            var updateUrlTb = new TextBlock
+            {
+                Text = L.Format("Extensions_UpdateFromUrlLabel", updateUrl),
+                FontFamily = (FontFamily)FindResource("Win10Font"),
+                FontSize = 11,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                Margin = new Thickness(44, 3, 0, 0),
+                ToolTip = updateUrl
+            };
+            updateUrlTb.SetResourceReference(TextBlock.ForegroundProperty, "TextTertiaryBrush");
+            rootPanel.Children.Add(updateUrlTb);
+        }
 
         // Extension Auth Section (Cookie editor and/or QR code login)
         if (ext.Manifest.SupportsCookieAuth)
@@ -555,7 +619,15 @@ public partial class ExtensionsView : UserControl
         var ext = _ctx.Services.Extensions.GetById(extensionId);
         if (ext is null) return;
 
+        _isUpdateReview = false;
         _reviewExtensionId = ext.Id;
+        ReviewTitleText.Text = (string)FindResource("Str_Extensions_ReviewTitle");
+        ReviewSubtitleText.Text = (string)FindResource("Str_Extensions_ReviewSubtitle");
+        ReviewPrimaryButton.Content = (string)FindResource("Str_Extensions_ApproveEnable");
+        ReviewSecondaryButton.Content = (string)FindResource("Str_Extensions_KeepDisabled");
+        ReviewEscalationSection.Visibility = Visibility.Collapsed;
+        ReviewNewPermissionsPanel.Children.Clear();
+
         ReviewExtNameText.Text = ext.Manifest.Name;
         string author = string.IsNullOrWhiteSpace(ext.Manifest.Author)
             ? L.Get("Extensions_UnknownAuthor")
@@ -566,8 +638,85 @@ public partial class ExtensionsView : UserControl
             ? Visibility.Collapsed
             : Visibility.Visible;
 
+        PopulateReviewPermissions(ext.Manifest);
+
+        PermissionReviewOverlay.Visibility = Visibility.Visible;
+        Win10Animations.AnimateModalOpen(PermissionReviewOverlay, PermissionReviewCard);
+    }
+
+    private void OpenUpdateReview(string extensionId)
+    {
+        if (_ctx is null) return;
+        var store = _ctx.Services.Extensions;
+        var pending = store.GetPendingUpdate(extensionId);
+        if (pending is null) return;
+
+        _isUpdateReview = true;
+        _reviewExtensionId = pending.ExtensionId;
+        var nextManifest = pending.Package.Manifest;
+
+        ReviewTitleText.Text = L.Get("Extensions_ReviewUpdateTitle");
+        ReviewSubtitleText.Text = L.Format("Extensions_ReviewUpdateSubtitle", pending.InstalledVersion, pending.NewVersion);
+        ReviewPrimaryButton.Content = L.Get("Extensions_ApproveUpdate");
+        ReviewSecondaryButton.Content = (string)FindResource("Str_Common_Cancel");
+
+        ReviewExtNameText.Text = nextManifest.Name;
+        string author = string.IsNullOrWhiteSpace(nextManifest.Author)
+            ? L.Get("Extensions_UnknownAuthor")
+            : nextManifest.Author!;
+        ReviewExtMetaText.Text = $"{L.Format("Extensions_AuthorVersion", pending.NewVersion, author)} · {pending.ExtensionId}";
+        ReviewExtDescText.Text = nextManifest.Description ?? string.Empty;
+        ReviewExtDescText.Visibility = string.IsNullOrWhiteSpace(nextManifest.Description)
+            ? Visibility.Collapsed
+            : Visibility.Visible;
+
+        ReviewNewPermissionsPanel.Children.Clear();
+        if (pending.HasPermissionEscalation)
+        {
+            ReviewEscalationSection.Visibility = Visibility.Visible;
+            ReviewNewPermissionsHeader.Text = L.Get("Extensions_NewPermissionsLabel");
+            foreach (var cap in pending.AddedCapabilities)
+            {
+                var tb = new TextBlock
+                {
+                    Text = $"+ {FormatCapability(cap)}",
+                    FontFamily = (FontFamily)FindResource("Win10Font"),
+                    FontSize = 12,
+                    FontWeight = FontWeights.SemiBold,
+                    Margin = new Thickness(0, 1, 0, 1)
+                };
+                tb.SetResourceReference(TextBlock.ForegroundProperty, "WarningTextBrush");
+                ReviewNewPermissionsPanel.Children.Add(tb);
+            }
+            foreach (string host in pending.AddedHosts)
+            {
+                var tb = new TextBlock
+                {
+                    Text = $"+ {host}",
+                    FontFamily = (FontFamily)FindResource("Win10Font"),
+                    FontSize = 12,
+                    FontWeight = FontWeights.SemiBold,
+                    Margin = new Thickness(0, 1, 0, 1)
+                };
+                tb.SetResourceReference(TextBlock.ForegroundProperty, "WarningTextBrush");
+                ReviewNewPermissionsPanel.Children.Add(tb);
+            }
+        }
+        else
+        {
+            ReviewEscalationSection.Visibility = Visibility.Collapsed;
+        }
+
+        PopulateReviewPermissions(nextManifest);
+
+        PermissionReviewOverlay.Visibility = Visibility.Visible;
+        Win10Animations.AnimateModalOpen(PermissionReviewOverlay, PermissionReviewCard);
+    }
+
+    private void PopulateReviewPermissions(ExtensionManifest manifest)
+    {
         ReviewCapabilitiesPanel.Children.Clear();
-        foreach (var cap in ext.Manifest.Capabilities)
+        foreach (var cap in manifest.Capabilities)
         {
             var pill = CreatePill(FormatCapability(cap), isAccent: true);
             pill.Margin = new Thickness(0, 0, 6, 6);
@@ -575,7 +724,7 @@ public partial class ExtensionsView : UserControl
         }
 
         ReviewHostsPanel.Children.Clear();
-        if (ext.Manifest.Permissions.Hosts.Count == 0)
+        if (manifest.Permissions.Hosts.Count == 0)
         {
             var noneTb = new TextBlock
             {
@@ -588,7 +737,7 @@ public partial class ExtensionsView : UserControl
         }
         else
         {
-            foreach (string host in ext.Manifest.Permissions.Hosts)
+            foreach (string host in manifest.Permissions.Hosts)
             {
                 var hostTb = new TextBlock
                 {
@@ -601,14 +750,12 @@ public partial class ExtensionsView : UserControl
                 ReviewHostsPanel.Children.Add(hostTb);
             }
         }
-
-        PermissionReviewOverlay.Visibility = Visibility.Visible;
-        Win10Animations.AnimateModalOpen(PermissionReviewOverlay, PermissionReviewCard);
     }
 
     private void ClosePermissionReview()
     {
         _reviewExtensionId = null;
+        _isUpdateReview = false;
         PermissionReviewOverlay.Visibility = Visibility.Collapsed;
     }
 
@@ -759,7 +906,120 @@ public partial class ExtensionsView : UserControl
         ImportFileButton.IsEnabled = !busy;
         UrlImportBox.IsEnabled = !busy;
         ImportUrlButton.IsEnabled = !busy && !string.IsNullOrWhiteSpace(UrlImportBox.Text);
+        AutoUpdateToggle.IsEnabled = !busy;
+        CheckUpdatesButton.IsEnabled = !busy && (_ctx?.Services.Extensions.Extensions.Count ?? 0) > 0;
     }
+
+    private void AutoUpdateToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        if (_suppressAutoUpdateToggle || _ctx is null) return;
+        _ctx.Services.Extensions.AutoUpdateEnabled = AutoUpdateToggle.IsChecked == true;
+    }
+
+    private async void CheckUpdates_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ctx is null || _isBusy) return;
+        SetBusy(true);
+        ErrorBanner.Visibility = Visibility.Collapsed;
+        UpdateStatusBannerText.Text = L.Get("Extensions_CheckingUpdates");
+        UpdateStatusBanner.Visibility = Visibility.Visible;
+        try
+        {
+            var summary = await _ctx.Services.Extensions.CheckForUpdatesAsync();
+            Refresh();
+
+            int applied = summary.Results.Count(r => r.Outcome == ExtensionUpdateOutcome.AppliedSilently);
+            int staged = summary.Results.Count(r => r.Outcome == ExtensionUpdateOutcome.StagedForReview);
+            var failed = summary.Results.FirstOrDefault(r => r.Outcome == ExtensionUpdateOutcome.Failed);
+
+            if (staged > 0)
+            {
+                UpdateStatusBannerText.Text = L.Format("Extensions_UpdatesReviewNeededSummary", staged);
+                var firstStaged = summary.Results.First(r => r.Outcome == ExtensionUpdateOutcome.StagedForReview);
+                OpenUpdateReview(firstStaged.ExtensionId);
+            }
+            else if (applied > 0)
+            {
+                UpdateStatusBannerText.Text = L.Format("Extensions_UpdatesAppliedSummary", applied);
+            }
+            else if (failed is not null)
+            {
+                UpdateStatusBanner.Visibility = Visibility.Collapsed;
+                ErrorBannerText.Text = L.Format("Extensions_UpdateFailedBanner", failed.ErrorMessage ?? "Error");
+                ErrorBanner.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                UpdateStatusBannerText.Text = L.Get("Extensions_AllUpToDate");
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateStatusBanner.Visibility = Visibility.Collapsed;
+            ErrorBannerText.Text = L.Format("Extensions_UpdateFailedBanner", ex.Message);
+            ErrorBanner.Visibility = Visibility.Visible;
+        }
+        finally
+        {
+            SetBusy(false);
+            Refresh();
+        }
+    }
+
+    private async Task CheckSingleExtensionUpdateAsync(InstalledExtension ext)
+    {
+        if (_ctx is null || _isBusy) return;
+        SetBusy(true);
+        ErrorBanner.Visibility = Visibility.Collapsed;
+        UpdateStatusBannerText.Text = L.Get("Extensions_CheckingUpdates");
+        UpdateStatusBanner.Visibility = Visibility.Visible;
+        try
+        {
+            var summary = await _ctx.Services.Extensions.CheckForUpdatesAsync(extensionId: ext.Id);
+            Refresh();
+            var result = summary.Results.FirstOrDefault();
+            if (result is null)
+            {
+                UpdateStatusBanner.Visibility = Visibility.Collapsed;
+            }
+            else if (result.Outcome == ExtensionUpdateOutcome.StagedForReview)
+            {
+                UpdateStatusBannerText.Text = L.Format("Extensions_UpdatesReviewNeededSummary", 1);
+                OpenUpdateReview(ext.Id);
+            }
+            else if (result.Outcome == ExtensionUpdateOutcome.AppliedSilently)
+            {
+                UpdateStatusBannerText.Text = L.Format(
+                    "Extensions_UpdatedSingle",
+                    ext.Manifest.Name,
+                    result.RemoteVersion ?? string.Empty);
+            }
+            else if (result.Outcome == ExtensionUpdateOutcome.Failed)
+            {
+                UpdateStatusBanner.Visibility = Visibility.Collapsed;
+                ErrorBannerText.Text = L.Format("Extensions_UpdateFailedBanner", result.ErrorMessage ?? "Error");
+                ErrorBanner.Visibility = Visibility.Visible;
+            }
+            else
+            {
+                UpdateStatusBannerText.Text = L.Format("Extensions_UpToDateSingle", ext.Manifest.Name);
+            }
+        }
+        catch (Exception ex)
+        {
+            UpdateStatusBanner.Visibility = Visibility.Collapsed;
+            ErrorBannerText.Text = L.Format("Extensions_UpdateFailedBanner", ex.Message);
+            ErrorBanner.Visibility = Visibility.Visible;
+        }
+        finally
+        {
+            SetBusy(false);
+            Refresh();
+        }
+    }
+
+    private void DismissUpdateStatus_Click(object sender, RoutedEventArgs e) =>
+        UpdateStatusBanner.Visibility = Visibility.Collapsed;
 
     private void UrlImportBox_TextChanged(object sender, TextChangedEventArgs e)
     {
@@ -785,8 +1045,17 @@ public partial class ExtensionsView : UserControl
     {
         if (_ctx is null || string.IsNullOrWhiteSpace(_reviewExtensionId)) return;
         string id = _reviewExtensionId;
+        bool isUpdate = _isUpdateReview;
         ClosePermissionReview();
-        _ctx.Services.Extensions.ApproveAndEnable(id);
+        if (isUpdate)
+        {
+            _ctx.Services.Extensions.ApprovePendingUpdate(id);
+            UpdateStatusBanner.Visibility = Visibility.Collapsed;
+        }
+        else
+        {
+            _ctx.Services.Extensions.ApproveAndEnable(id);
+        }
     }
 
     private void KeepDisabledReview_Click(object sender, RoutedEventArgs e) => ClosePermissionReview();

@@ -598,14 +598,19 @@ fun SongsScreen(
                                     PlayShuffleButtons(
                                         enabled = songIds.isNotEmpty(),
                                         onPlay = {
-                                            if (activeQueue.shuffle) trackActions.playerController.toggleShuffle()
-                                            trackActions.playerController.play(songIds, startAt = 0)
+                                            trackActions.playerController.playInNamedQueue(
+                                                name = "Songs",
+                                                ids = songIds,
+                                                startAt = 0,
+                                                shuffle = false,
+                                            )
                                         },
                                         onShuffle = {
-                                            if (!activeQueue.shuffle) trackActions.playerController.toggleShuffle()
-                                            trackActions.playerController.play(
-                                                songIds,
-                                                startAt = Random.nextInt(songIds.size.coerceAtLeast(1))
+                                            trackActions.playerController.playInNamedQueue(
+                                                name = "Songs",
+                                                ids = songIds,
+                                                startAt = Random.nextInt(songIds.size.coerceAtLeast(1)),
+                                                shuffle = true,
                                             )
                                         }
                                     )
@@ -633,7 +638,12 @@ fun SongsScreen(
                                                 name = "${strings.searchFieldLabel(searchField)}: ${query.trim()}",
                                             )
                                         } else {
-                                            trackActions.playerController.play(songIds, startAt = index)
+                                            trackActions.playerController.playInNamedQueue(
+                                                name = "Songs",
+                                                ids = songIds,
+                                                startAt = index,
+                                                shuffle = false,
+                                            )
                                         }
                                     },
                                     modifier = Modifier.animateItem(),

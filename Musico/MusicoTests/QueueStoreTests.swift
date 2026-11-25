@@ -79,4 +79,27 @@ final class QueueStoreTests: XCTestCase {
         store.save()
         XCTAssertEqual(QueueStore(directory: dir).active.position, 42)
     }
+
+    func testViewedQueueInitializesToPlayingQueueAndSelectsIndependently() {
+        let store = QueueStore(directory: dir)
+        XCTAssertEqual(store.viewedQueueID, store.playingQueueID)
+        XCTAssertEqual(store.playingQueueID, store.activeID)
+
+        let second = store.addQueue(name: "Second")
+        XCTAssertEqual(store.viewedQueueID, store.playingQueueID)
+
+        store.selectViewedQueue(second)
+        XCTAssertEqual(store.viewedQueueID, second)
+        XCTAssertNotEqual(store.playingQueueID, second)
+
+        // Deleting viewed queue falls back cleanly without changing playingQueueID
+        store.delete(second)
+        XCTAssertEqual(store.viewedQueueID, store.playingQueueID)
+    }
+
+    func testAppNavigationDefaultsToQueues() {
+        let nav = AppNavigation()
+        XCTAssertEqual(nav.selectedTab, .queues)
+        XCTAssertEqual(nav.sidebarSelection, .queues)
+    }
 }

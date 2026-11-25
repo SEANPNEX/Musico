@@ -396,6 +396,76 @@ final class PlayerControllerTests: XCTestCase {
         XCTAssertEqual(queues.active.currentTrackID, bID)
         XCTAssertEqual(player.currentTrack?.id, bID)
     }
+
+    func testViewedQueueDecoupledFromPlayingQueueEditsAndPlayTrack() throws {
+        let aID = id("a.mp3")
+        let bID = id("b.mp3")
+        player.play([aID], startAt: 0)
+        let playingID = queues.playingQueueID
+        XCTAssertTrue(player.isPlaying)
+        XCTAssertEqual(queues.viewedQueueID, playingID)
+
+        // Add another queue and select it for viewing -> playback in playingID must not be interrupted.
+        let secondID = queues.addQueue(name: "Inspecting")
+        queues.selectViewedQueue(secondID)
+        XCTAssertEqual(queues.viewedQueueID, secondID)
+        XCTAssertEqual(queues.playingQueueID, playingID)
+        XCTAssertEqual(player.currentTrack?.id, aID)
+        XCTAssertTrue(player.isPlaying)
+
+        // Edits target viewedQueueID (addToQueue with nil, move, sort, remove, clear) without disturbing playingID.
+        player.addToQueue([bID, aID], queue: nil)
+        XCTAssertEqual(queues.viewed.trackIDs, [bID, aID])
+        XCTAssertEqual(queues.active.trackIDs, [aID])
+        XCTAssertEqual(player.currentTrack?.id, aID)
+        XCTAssertTrue(player.isPlaying)
+
+        player.moveInQueue(from: IndexSet(integer: 0), to: 2, inQueue: queues.viewedQueueID)
+        XCTAssertEqual(queues.viewed.trackIDs, [aID, bID])
+
+        player.sortQueue(queues.viewedQueueID, by: .nameDescending)
+        XCTAssertEqual(queues.viewed.trackIDs.count, 2)
+
+        player.removeFromQueue(at: 0, inQueue: queues.viewedQueueID)
+        XCTAssertEqual(queues.viewed.trackIDs.count, 1)
+        XCTAssertEqual(queues.playingQueueID, playingID)
+        XCTAssertTrue(player.isPlaying)
+
+        // Clicking a song row calls playTrack(inQueue:at:) which switches playingQueueID and starts playing.
+        let expectedTargetTrack = queues.viewed.trackIDs[0]
+        player.playTrack(inQueue: queues.viewedQueueID, at: 0)
+        XCTAssertEqual(queues.playingQueueID, secondID)
+        XCTAssertEqual(player.currentTrack?.id, expectedTargetTrack)
+        XCTAssertTrue(player.isPlaying)
+
+        // Deleting the playing queue pauses cleanly without auto-starting the fallback queue.
+        player.deleteQueue(secondID)
+        XCTAssertEqual(queues.playingQueueID, playingID)
+        XCTAssertFalse(player.isPlaying)
+    }
+
+    func testPlayInNamedQueuePreservesExistingQueuesForLibraryContexts() {
+        let aID = id("a.mp3")
+        let bID = id("b.mp3")
+        player.play([aID], startAt: 0)
+        let customID = queues.playingQueueID
+        queues.rename(customID, to: "My Custom Queue")
+
+        player.playInNamedQueue([aID, bID], name: "Songs", startAt: 1, shuffle: false)
+        XCTAssertEqual(queues.active.name, "Songs")
+        XCTAssertEqual(queues.active.currentTrackID, bID)
+        XCTAssertEqual(queues.queues.first { $0.id == customID }?.trackIDs, [aID])
+
+        player.playInNamedQueue([bID, aID], name: "Album: Greatest Hits", startAt: 0, shuffle: false)
+        XCTAssertEqual(queues.active.name, "Album: Greatest Hits")
+
+        player.playInNamedQueue([aID], name: "Artist: Kano", startAt: 0, shuffle: true)
+        XCTAssertEqual(queues.active.name, "Artist: Kano")
+
+        player.playInNamedQueue([bID], name: "Stats", startAt: 0, shuffle: false)
+        XCTAssertEqual(queues.active.name, "Stats")
+        XCTAssertEqual(queues.queues.first { $0.id == customID }?.trackIDs, [aID])
+    }
 }
 
 private struct TestCloudFetcher: CloudPlaylistFetching {

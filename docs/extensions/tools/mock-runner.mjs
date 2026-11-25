@@ -64,6 +64,15 @@ export function validateManifest(manifest) {
   assert.match(String(manifest.id || ''), /^[a-z0-9._-]{3,64}$/, 'manifest.id invalid');
   assert.ok(typeof manifest.name === 'string' && manifest.name.trim().length > 0, 'manifest.name required');
   assert.match(String(manifest.version || ''), /^\d+\.\d+\.\d+/, 'manifest.version must be SemVer');
+  if (manifest.updateUrl !== undefined && manifest.updateUrl !== null && String(manifest.updateUrl).trim() !== '') {
+    let parsedUpdate;
+    try {
+      parsedUpdate = new URL(String(manifest.updateUrl).trim());
+    } catch {
+      assert.fail(`Invalid manifest.updateUrl: ${manifest.updateUrl}`);
+    }
+    assert.equal(parsedUpdate.protocol, 'https:', 'manifest.updateUrl must use https://');
+  }
   assert.ok(Array.isArray(manifest.capabilities) && manifest.capabilities.length > 0, 'capabilities required');
   for (const cap of manifest.capabilities) {
     assert.ok(VALID_CAPABILITIES.has(String(cap)), `Unsupported capability: ${cap}`);
@@ -168,7 +177,7 @@ export function evaluateCommonJS(source, timeoutMs = 15000) {
   return mod.exports;
 }
 
-export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = new Map(), httpResponder = null, platform = 'macos', appVersion = '1.2.5-dev' } = {}) {
+export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = new Map(), httpResponder = null, platform = 'macos', appVersion = '1.2.6-dev' } = {}) {
   const logs = [];
   const allowedHosts = manifest.permissions?.hosts || [];
   const defaultSettings = {};

@@ -197,18 +197,24 @@ fun ArtistDetailScreen(
                 .padding(innerPadding),
             contentPadding = PaddingValues(bottom = 16.dp)
         ) {
+            val artistQueueName = "Artist: $artist"
             item(key = "play_shuffle") {
                 PlayShuffleButtons(
                     enabled = trackIds.isNotEmpty(),
                     onPlay = {
-                        if (activeQueue.shuffle) trackActions.playerController.toggleShuffle()
-                        trackActions.playerController.play(trackIds, startAt = 0)
+                        trackActions.playerController.playInNamedQueue(
+                            name = artistQueueName,
+                            ids = trackIds,
+                            startAt = 0,
+                            shuffle = false,
+                        )
                     },
                     onShuffle = {
-                        if (!activeQueue.shuffle) trackActions.playerController.toggleShuffle()
-                        trackActions.playerController.play(
-                            trackIds,
-                            startAt = Random.nextInt(trackIds.size.coerceAtLeast(1))
+                        trackActions.playerController.playInNamedQueue(
+                            name = artistQueueName,
+                            ids = trackIds,
+                            startAt = Random.nextInt(trackIds.size.coerceAtLeast(1)),
+                            shuffle = true,
                         )
                     }
                 )
@@ -258,7 +264,14 @@ fun ArtistDetailScreen(
                     isPlaying = playerState.isPlaying,
                     isAvailable = libraryStore.isAvailable(track),
                     subtitle = strings.displayAlbum(track.album),
-                    onClick = { trackActions.playerController.play(trackIds, startAt = index) },
+                    onClick = {
+                        trackActions.playerController.playInNamedQueue(
+                            name = artistQueueName,
+                            ids = trackIds,
+                            startAt = index,
+                            shuffle = false,
+                        )
+                    },
                     modifier = Modifier.animateItem(),
                     menuContent = { onDismiss ->
                         TrackMenuItems(

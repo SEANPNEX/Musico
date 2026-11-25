@@ -1486,7 +1486,9 @@ public sealed class LibraryStore : ObservableStore
                     && (Math.Abs((old.ModifiedUtc - file.ModifiedUtc).TotalSeconds) < 0.001 ||
                         (_metadataOverrides.TryGetValue(old.Id, out var ov) &&
                          ov.EditedUtc is DateTimeOffset edited &&
-                         file.ModifiedUtc <= edited)))
+                         file.ModifiedUtc <= edited))
+                    && !(old.ArtworkKey is null &&
+                         ImageFormatHelper.FindSiblingCoverPath(FolderScanner.CombinePath(rootPath, file.RelativePath)) is not null))
                 {
                     kept.Add(ApplyMetadataOverride(old));
                 }

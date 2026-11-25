@@ -274,14 +274,19 @@ fun StatsScreen(
                     PlayShuffleButtons(
                         enabled = trackIds.isNotEmpty(),
                         onPlay = {
-                            if (activeQueue.shuffle) trackActions.playerController.toggleShuffle()
-                            trackActions.playerController.play(trackIds, startAt = 0)
+                            trackActions.playerController.playInNamedQueue(
+                                name = "Stats",
+                                ids = trackIds,
+                                startAt = 0,
+                                shuffle = false,
+                            )
                         },
                         onShuffle = {
-                            if (!activeQueue.shuffle) trackActions.playerController.toggleShuffle()
-                            trackActions.playerController.play(
-                                trackIds,
-                                startAt = Random.nextInt(trackIds.size.coerceAtLeast(1))
+                            trackActions.playerController.playInNamedQueue(
+                                name = "Stats",
+                                ids = trackIds,
+                                startAt = Random.nextInt(trackIds.size.coerceAtLeast(1)),
+                                shuffle = true,
                             )
                         }
                     )
@@ -310,7 +315,14 @@ fun StatsScreen(
                         isPlaying = playerState.isPlaying,
                         isAvailable = libraryStore.isAvailable(track),
                         subtitle = caption,
-                        onClick = { trackActions.playerController.play(trackIds, startAt = index) },
+                        onClick = {
+                            trackActions.playerController.playInNamedQueue(
+                                name = "Stats",
+                                ids = trackIds,
+                                startAt = index,
+                                shuffle = false,
+                            )
+                        },
                         menuContent = { onDismiss ->
                             TrackMenuItems(
                                 ids = listOf(track.id),

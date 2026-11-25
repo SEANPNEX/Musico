@@ -4,6 +4,10 @@ import CryptoKit
 /// Cover art on disk, one downscaled JPEG per distinct image, with an in-memory cache in front.
 final class ArtworkCache: @unchecked Sendable {
     static let maxDimension: CGFloat = 600
+    static var defaultDirectory: URL {
+        Persistence.supportDirectory.appendingPathComponent("Artwork")
+    }
+    static let shared = ArtworkCache(directory: ArtworkCache.defaultDirectory)
 
     private let directory: URL
     private let memory = NSCache<NSString, UIImage>()
@@ -43,6 +47,16 @@ final class ArtworkCache: @unchecked Sendable {
         guard let image = UIImage(contentsOfFile: fileURL(key).path) else { return nil }
         memory.setObject(image, forKey: key as NSString)
         return image
+    }
+
+    func data(forKey key: String) -> Data? {
+        let url = fileURL(key)
+        guard FileManager.default.fileExists(atPath: url.path),
+              let data = try? Data(contentsOf: url),
+              !data.isEmpty else {
+            return nil
+        }
+        return data
     }
 
     /// Deletes stored images that no track refers to any more.

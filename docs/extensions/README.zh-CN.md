@@ -391,6 +391,7 @@ module.exports = {
 | `description` | `string` | 否 | 一句话简介。 |
 | `badgeLabel` | `string` | 否 | 在 **Folders**、搜索切换标签及歌词来源胶囊上展示的短标签（默认取 `name`，最多 16 个字符）。 |
 | `entry` | `string` | 否 | `.musicoext` 包内的入口 JS 路径（默认为 `"index.js"`）。 |
+| `updateUrl` | `string` | 否 | 可选的 HTTPS `.musicoext` 更新包地址，用于自动与手动检查更新（省略时回退至链接导入时记录的原 URL）。 |
 | `capabilities` | `string[]` | 是 | 非空数组，支持声明 `"playlist"`、`"tree"`、`"stream"`、`"cookie"`、`"proxy"`、`"lyrics"`、`"search"`、`"qr_login"`。 |
 | `urlPatterns` | `string[]` | 条件必填 | 原生端先做预筛选的正则表达式列表。声明 `"playlist"` 或 `"tree"` 时**必填**；其余扩展（如纯 `"lyrics"`、纯 `"search"` 或 `"search" + "stream"`）可省略或留空。 |
 | `searchKinds` | `string[]` | 否 | 支持 `"track"`、`"playlist"`、`"album"` 的子集，控制搜歌页面的分类筛选选项（省略或为空时默认开启全部三种）。 |

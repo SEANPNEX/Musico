@@ -72,8 +72,8 @@ struct StatsView: View {
                 ContentUnavailableView(section.emptyTitle, systemImage: "chart.bar", description: Text(section.emptyText))
                     .listRowSeparator(.hidden)
             } else {
-                PlayShuffleButtons(ids: tracks.map(\.id))
-                TrackRows(tracks: tracks, subtitle: caption)
+                PlayShuffleButtons(ids: tracks.map(\.id), queueName: "Stats")
+                TrackRows(tracks: tracks, queueName: "Stats", subtitle: caption)
             }
         }
         .listStyle(.plain)

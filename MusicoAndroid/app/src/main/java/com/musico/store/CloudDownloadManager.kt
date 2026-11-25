@@ -227,6 +227,7 @@ class CloudDownloadManager(
         track: Track,
         root: LibraryRoot?,
         targetUri: Uri,
+        artworkBytes: ByteArray? = null,
     ): String = launchTrackExportJob(
         track = track,
         targetDir = if (targetUri.scheme == "file" && targetUri.path != null) File(targetUri.path!!) else null,
@@ -237,6 +238,7 @@ class CloudDownloadManager(
                 root = root,
                 targetTreeUri = targetUri,
                 onDetailedProgress = onProgress,
+                artworkBytes = artworkBytes,
             )
         },
         isInsideIndexedRoot = { libraryStore.isUriInsideIndexedRoot(targetUri) },
@@ -246,6 +248,7 @@ class CloudDownloadManager(
         track: Track,
         root: LibraryRoot?,
         targetDir: File,
+        artworkBytes: ByteArray? = null,
     ): String = launchTrackExportJob(
         track = track,
         targetDir = targetDir,
@@ -256,6 +259,7 @@ class CloudDownloadManager(
                 root = root,
                 targetDir = targetDir,
                 onDetailedProgress = onProgress,
+                artworkBytes = artworkBytes,
             )
         },
         isInsideIndexedRoot = { libraryStore.isDirectoryInsideIndexedRoot(targetDir) },
@@ -264,10 +268,12 @@ class CloudDownloadManager(
     fun startTrackExportToAppFolder(
         track: Track,
         root: LibraryRoot? = null,
+        artworkBytes: ByteArray? = null,
     ): String = startTrackExport(
         track = track,
         root = root,
         targetDir = libraryStore.appFolderDirectory(),
+        artworkBytes = artworkBytes,
     )
 
     private fun launchTrackExportJob(

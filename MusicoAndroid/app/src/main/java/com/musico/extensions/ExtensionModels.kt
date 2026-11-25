@@ -187,6 +187,7 @@ data class ExtensionManifest(
     val searchKinds: List<ExtensionSearchKind> = emptyList(),
     val permissions: ExtensionPermissions = ExtensionPermissions(),
     val settings: List<ExtensionSettingSpec> = emptyList(),
+    val updateUrl: String? = null,
 ) {
     val providerId: String
         get() = "ext.$id"
@@ -324,6 +325,10 @@ object ExtensionManifestValidator {
         for (host in manifest.permissions.hosts) {
             HostAllowlistMatcher.validatePattern(host)
         }
+        val cleanUpdateUrl = manifest.updateUrl?.trim()?.takeIf { it.isNotEmpty() }
+        if (cleanUpdateUrl != null) {
+            validateHttpsUpdateUrl(cleanUpdateUrl)
+        }
         val cleanEntry = normalizeRelativeEntryPath(manifest.entry)
         val seenKeys = HashSet<String>()
         for (spec in manifest.settings) {
@@ -339,7 +344,22 @@ object ExtensionManifestValidator {
             version = manifest.version.trim(),
             entry = cleanEntry,
             searchKinds = manifest.searchKinds.distinct(),
+            updateUrl = cleanUpdateUrl,
         )
+    }
+
+    fun validateHttpsUpdateUrl(rawUrl: String): String {
+        val clean = rawUrl.trim()
+        require(clean.isNotEmpty()) { "Extension updateUrl must not be empty" }
+        val parsed = runCatching { URL(clean) }.getOrNull()
+            ?: throw IllegalArgumentException("Invalid extension updateUrl: $rawUrl")
+        require(parsed.protocol.equals("https", ignoreCase = true)) {
+            "Extension updateUrl must use https:// (got ${parsed.protocol})"
+        }
+        require(!parsed.host.isNullOrBlank()) {
+            "Invalid extension updateUrl host: $rawUrl"
+        }
+        return clean
     }
 
     fun normalizeRelativeEntryPath(raw: String): String {
@@ -544,4 +564,152 @@ data class ExtQrLoginPollResult(
     val cookie: String? = null,
     val accountName: String? = null,
     val message: String? = null,
+)
+
+/**
+ * SemVer 2.0 parser and comparator for extension versions (`MAJOR.MINOR.PATCH[-prerelease][+build]`).
+ */
+data class ExtensionSemVer(
+    val major: Int,
+    val minor: Int,
+    val patch: Int,
+    val preRelease: String? = null,
+) : Comparable<ExtensionSemVer> {
+
+    override fun compareTo(other: ExtensionSemVer): Int {
+        if (major != other.major) return major.compareTo(other.major)
+        if (minor != other.minor) return minor.compareTo(other.minor)
+        if (patch != other.patch) return patch.compareTo(other.patch)
+
+        val aPre = preRelease
+        val bPre = other.preRelease
+        if (aPre == bPre) return 0
+        if (aPre == null) return 1
+        if (bPre == null) return -1
+
+        val aParts = aPre.split('.')
+        val bParts = bPre.split('.')
+        val count = maxOf(aParts.size, bParts.size)
+        for (i in 0 until count) {
+            if (i >= aParts.size) return -1
+            if (i >= bParts.size) return 1
+            val partA = aParts[i]
+            val partB = bParts[i]
+            val numA = partA.toIntOrNull()
+            val numB = partB.toIntOrNull()
+            val cmp = when {
+                numA != null && numB != null -> numA.compareTo(numB)
+                numA != null -> -1
+                numB != null -> 1
+                else -> partA.compareTo(partB)
+            }
+            if (cmp != 0) return cmp
+        }
+        return 0
+    }
+
+    companion object {
+        private val CORE_REGEX = Regex("^(\\d+)\\.(\\d+)\\.(\\d+)$")
+
+        fun parse(raw: String): ExtensionSemVer? {
+            val trimmed = raw.trim().removePrefix("v").removePrefix("V")
+            if (trimmed.isEmpty()) return null
+            val withoutBuild = trimmed.substringBefore('+')
+            val dashIdx = withoutBuild.indexOf('-')
+            val core = if (dashIdx >= 0) withoutBuild.substring(0, dashIdx) else withoutBuild
+            val pre = if (dashIdx >= 0) {
+                withoutBuild.substring(dashIdx + 1).takeIf { it.isNotBlank() } ?: return null
+            } else {
+                null
+            }
+            val match = CORE_REGEX.matchEntire(core) ?: return null
+            val major = match.groupValues[1].toIntOrNull() ?: return null
+            val minor = match.groupValues[2].toIntOrNull() ?: return null
+            val patch = match.groupValues[3].toIntOrNull() ?: return null
+            return ExtensionSemVer(major, minor, patch, pre)
+        }
+
+        fun isStrictlyGreater(remote: String, installed: String): Boolean {
+            val remoteVer = parse(remote) ?: return false
+            val installedVer = parse(installed) ?: return false
+            return remoteVer > installedVer
+        }
+    }
+}
+
+data class ExtensionPermissionDiff(
+    val addedHosts: List<String> = emptyList(),
+    val addedCapabilities: List<ExtensionCapability> = emptyList(),
+) {
+    val hasEscalation: Boolean
+        get() = addedHosts.isNotEmpty() || addedCapabilities.isNotEmpty()
+}
+
+object ExtensionUpdateGuard {
+    fun evaluatePermissionEscalation(
+        installed: ExtensionManifest,
+        candidate: ExtensionManifest,
+    ): ExtensionPermissionDiff {
+        val installedCaps = installed.capabilities.toSet()
+        val addedCapabilities = candidate.capabilities.distinct().filter { it !in installedCaps }
+
+        val installedHosts = installed.permissions.hosts
+            .mapNotNull { runCatching { HostAllowlistMatcher.validatePattern(it) }.getOrNull() }
+        val addedHosts = candidate.permissions.hosts
+            .mapNotNull { runCatching { HostAllowlistMatcher.validatePattern(it) }.getOrNull() }
+            .distinct()
+            .filterNot { candidateHost -> isHostCovered(candidateHost, installedHosts) }
+
+        return ExtensionPermissionDiff(
+            addedHosts = addedHosts,
+            addedCapabilities = addedCapabilities,
+        )
+    }
+
+    private fun isHostCovered(candidatePattern: String, installedPatterns: List<String>): Boolean {
+        if (candidatePattern in installedPatterns) return true
+        val candidateDomain = if (candidatePattern.startsWith("*.")) {
+            candidatePattern.removePrefix("*.")
+        } else {
+            candidatePattern
+        }
+        return installedPatterns.any { existing ->
+            if (!existing.startsWith("*.")) return@any false
+            val allowedDomain = existing.removePrefix("*.")
+            if (candidatePattern.startsWith("*.")) {
+                candidateDomain == allowedDomain || candidateDomain.endsWith(".$allowedDomain")
+            } else {
+                candidateDomain.endsWith(".$allowedDomain") && candidateDomain.length > allowedDomain.length + 1
+            }
+        }
+    }
+}
+
+@Serializable
+data class ExtensionUpdatePrefs(
+    val autoUpdateEnabled: Boolean = true,
+    val lastCheckEpochMs: Long = 0L,
+)
+
+data class PendingExtensionUpdate(
+    val installed: InstalledExtension,
+    val staged: StagedExtensionPackage,
+    val diff: ExtensionPermissionDiff,
+    val updateUrl: String,
+)
+
+sealed interface ExtensionUpdateCheckOutcome {
+    data object Checking : ExtensionUpdateCheckOutcome
+    data object UpToDate : ExtensionUpdateCheckOutcome
+    data object NoUpdateUrl : ExtensionUpdateCheckOutcome
+    data class Applied(val fromVersion: String, val toVersion: String) : ExtensionUpdateCheckOutcome
+    data class ReviewRequired(val pending: PendingExtensionUpdate) : ExtensionUpdateCheckOutcome
+    data class Error(val message: String) : ExtensionUpdateCheckOutcome
+}
+
+data class ExtensionBatchUpdateSummary(
+    val checkedCount: Int,
+    val appliedCount: Int,
+    val reviewRequiredCount: Int,
+    val failedCount: Int,
 )

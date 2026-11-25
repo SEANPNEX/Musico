@@ -510,9 +510,9 @@ final class PlayerController {
         if wasEmpty { startCurrent(autoplay: true) }
     }
 
-    /// Appends to a queue (the active one when `queue` is nil).
+    /// Appends to a queue (the viewed queue when `queue` is nil).
     func addToQueue(_ ids: [String], queue: UUID?) {
-        let target = queue ?? queues.activeID
+        let target = queue ?? queues.viewedQueueID
         let startsPlayback = target == queues.activeID && queues.active.currentTrackID == nil
         queues.update(target) { $0.append(ids) }
         if startsPlayback { startCurrent(autoplay: true) }
@@ -654,6 +654,18 @@ final class PlayerController {
 
     // MARK: Queues
 
+    func playTrack(inQueue queueID: UUID, at index: Int) {
+        guard let queue = queues.queues.first(where: { $0.id == queueID }),
+              queue.trackIDs.indices.contains(index) else { return }
+        errorMessage = nil
+        if queueID != queues.activeID {
+            persistPosition()
+            queues.setActive(queueID)
+        }
+        queues.updateActive { $0.jump(to: index) }
+        startCurrent(autoplay: true)
+    }
+
     func switchQueue(to id: UUID) {
         guard id != queues.activeID else { return }
         let wasPlaying = isPlaying || isBuffering
@@ -665,31 +677,63 @@ final class PlayerController {
 
     func deleteQueue(_ id: UUID) {
         let wasActive = id == queues.activeID
-        let wasPlaying = isPlaying || isBuffering
         queues.delete(id)
-        if wasActive, queues.activeID != id { startCurrent(autoplay: wasPlaying, at: queues.active.position) }
+        if wasActive, queues.activeID != id {
+            pauseAndLoadFallbackAfterQueueRemoval()
+        }
     }
 
-    func removeFromQueue(at index: Int) {
-        let removingCurrent = index == queues.active.currentIndex
-        let wasPlaying = isPlaying || isBuffering
-        queues.updateActive { $0.remove(at: index) }
-        if removingCurrent { startCurrent(autoplay: wasPlaying) }
+    private func pauseAndLoadFallbackAfterQueueRemoval() {
+        cancelCloudLoad()
+        engine.unload()
+        isLoaded = false
+        isPlaying = false
+        errorMessage = nil
+        if let id = queues.active.currentTrackID, let track = library.track(id) {
+            if track.isCloud {
+                currentTrack = track
+                duration = track.duration
+                currentTime = min(max(queues.active.position, 0), track.duration)
+                updateNowPlaying()
+            } else if !loadCurrent(autoplay: false, at: queues.active.position) {
+                clearPlayback()
+            }
+        } else {
+            clearPlayback()
+        }
     }
 
-    func moveInQueue(from source: IndexSet, to destination: Int) {
-        queues.updateActive { $0.move(from: source, to: destination) }
+    func removeFromQueue(at index: Int, inQueue queueID: UUID? = nil) {
+        let target = queueID ?? queues.viewedQueueID
+        if target == queues.activeID {
+            let removingCurrent = index == queues.active.currentIndex
+            let wasPlaying = isPlaying || isBuffering
+            queues.updateActive { $0.remove(at: index) }
+            if removingCurrent { startCurrent(autoplay: wasPlaying) }
+        } else {
+            queues.update(target) { $0.remove(at: index) }
+        }
+    }
+
+    func moveInQueue(from source: IndexSet, to destination: Int, inQueue queueID: UUID? = nil) {
+        queues.update(queueID ?? queues.viewedQueueID) { $0.move(from: source, to: destination) }
     }
 
     func sortActiveQueue(by order: TrackSortOrder) {
+        sortQueue(queues.activeID, by: order)
+    }
+
+    func sortQueue(_ queueID: UUID? = nil, by order: TrackSortOrder) {
+        let target = queueID ?? queues.viewedQueueID
+        guard let queue = queues.queues.first(where: { $0.id == target }) else { return }
         var map = Dictionary(library.tracks.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        for id in queues.active.trackIDs where map[id] == nil {
+        for id in queue.trackIDs where map[id] == nil {
             if let track = library.track(id) {
                 map[id] = track
             }
         }
         let history = self.history
-        queues.updateActive {
+        queues.update(target) {
             $0.sort(
                 by: order,
                 tracksByID: map,

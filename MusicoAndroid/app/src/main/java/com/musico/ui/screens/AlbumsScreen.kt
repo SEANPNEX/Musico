@@ -256,18 +256,24 @@ fun AlbumDetailScreen(
                 }
             }
 
+            val albumQueueName = "Album: ${album.title}"
             item(key = "play_shuffle") {
                 PlayShuffleButtons(
                     enabled = album.trackIds.isNotEmpty(),
                     onPlay = {
-                        if (activeQueue.shuffle) trackActions.playerController.toggleShuffle()
-                        trackActions.playerController.play(album.trackIds, startAt = 0)
+                        trackActions.playerController.playInNamedQueue(
+                            name = albumQueueName,
+                            ids = album.trackIds,
+                            startAt = 0,
+                            shuffle = false,
+                        )
                     },
                     onShuffle = {
-                        if (!activeQueue.shuffle) trackActions.playerController.toggleShuffle()
-                        trackActions.playerController.play(
-                            album.trackIds,
-                            startAt = Random.nextInt(album.trackIds.size.coerceAtLeast(1))
+                        trackActions.playerController.playInNamedQueue(
+                            name = albumQueueName,
+                            ids = album.trackIds,
+                            startAt = Random.nextInt(album.trackIds.size.coerceAtLeast(1)),
+                            shuffle = true,
                         )
                     }
                 )
@@ -288,7 +294,14 @@ fun AlbumDetailScreen(
                     isPlaying = playerState.isPlaying,
                     isAvailable = libraryStore.isAvailable(track),
                     subtitle = subtitle,
-                    onClick = { trackActions.playerController.play(album.trackIds, startAt = index) },
+                    onClick = {
+                        trackActions.playerController.playInNamedQueue(
+                            name = albumQueueName,
+                            ids = album.trackIds,
+                            startAt = index,
+                            shuffle = false,
+                        )
+                    },
                     modifier = Modifier.animateItem(),
                     menuContent = { onDismiss ->
                         TrackMenuItems(

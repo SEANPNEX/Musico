@@ -8,10 +8,10 @@ enum AppTab: String, Hashable, CaseIterable {
 
 @MainActor @Observable
 final class AppNavigation {
-    var selectedTab: AppTab = .folders
+    var selectedTab: AppTab = .queues
     var librarySection: LibraryView.Section = .songs
     var libraryPath = NavigationPath()
-    var sidebarSelection: SidebarItem? = .songs
+    var sidebarSelection: SidebarItem? = .queues
     var sidebarDetailPath = NavigationPath()
     var showPlayer = false
     var searchQuery = ""

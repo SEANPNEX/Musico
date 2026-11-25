@@ -552,9 +552,12 @@ public sealed class PlayerController : ObservableStore, IDisposable
         CreateOrReplaceFolderQueue(queueName, ids, startPlayback: true, startAt: startAt, shuffle: shuffle);
     }
 
-    public void SortQueue(TrackSortMode mode)
+    public void SortQueue(TrackSortMode mode) =>
+        SortQueue(Queues.ActiveId, mode);
+
+    public void SortQueue(Guid queueId, TrackSortMode mode)
     {
-        Queues.SortActive(mode, Library, History);
+        Queues.SortQueue(queueId, mode, Library, History);
     }
 
     public void PlayNext(IReadOnlyList<string> ids)
@@ -646,9 +649,20 @@ public sealed class PlayerController : ObservableStore, IDisposable
         UpdateSmtc(trackChanged: false);
     }
 
-    public void Jump(int index)
+    public void Jump(int index) => PlayTrack(Queues.ActiveId, index);
+
+    public void PlayTrack(Guid queueId, int index)
     {
+        var target = Queues.GetById(queueId);
+        if (target is null || index < 0 || index >= target.TrackIds.Count) return;
+
         ErrorMessage = null;
+        if (queueId != Queues.ActiveId)
+        {
+            PersistPosition(flush: true);
+            Queues.SetActive(queueId);
+        }
+
         Queues.UpdateActive(q => q.Jump(index));
         StartCurrent(autoplay: true);
     }
@@ -740,31 +754,52 @@ public sealed class PlayerController : ObservableStore, IDisposable
     public void DeleteQueue(Guid id)
     {
         bool wasActive = id == Queues.ActiveId;
-        bool wasPlaying = IsPlaying || (IsLoadingCloud && _targetAutoplay);
         Queues.Delete(id);
         if (wasActive && Queues.ActiveId != id)
         {
-            StartCurrent(autoplay: wasPlaying, position: Queues.Active.PositionSeconds);
+            ClearPlayback();
+            ErrorMessage = null;
+            if (Queues.Active.CurrentTrackId is not null)
+            {
+                Restore();
+            }
         }
     }
 
-    public void RemoveFromQueue(int index)
+    public void RemoveFromQueue(int index) =>
+        RemoveFromQueue(Queues.ActiveId, index);
+
+    public void RemoveFromQueue(Guid queueId, int index)
     {
-        bool removingCurrent = index == Queues.Active.CurrentIndex;
+        var queue = Queues.GetById(queueId);
+        if (queue is null) return;
+
+        bool removingCurrent = queueId == Queues.ActiveId && index == queue.CurrentIndex;
         bool wasPlaying = IsPlaying || (IsLoadingCloud && _targetAutoplay);
-        Queues.UpdateActive(q => q.RemoveAt(index));
+        Queues.Update(queueId, q => q.RemoveAt(index));
         if (removingCurrent) StartCurrent(autoplay: wasPlaying);
     }
 
-    public void MoveInQueue(int fromIndex, int toIndex)
+    public void MoveInQueue(int fromIndex, int toIndex) =>
+        MoveInQueue(Queues.ActiveId, fromIndex, toIndex);
+
+    public void MoveInQueue(Guid queueId, int fromIndex, int toIndex)
     {
-        Queues.UpdateActive(q => q.Move(fromIndex, toIndex));
+        Queues.Update(queueId, q => q.Move(fromIndex, toIndex));
     }
 
-    public void ClearQueue()
+    public void ClearQueue() =>
+        ClearQueue(Queues.ActiveId);
+
+    public void ClearQueue(Guid queueId)
     {
-        Queues.UpdateActive(q => q.Replace(Array.Empty<string>(), 0));
-        ClearPlayback();
+        var queue = Queues.GetById(queueId);
+        if (queue is null) return;
+        Queues.Update(queueId, q => q.Replace(Array.Empty<string>(), 0));
+        if (queueId == Queues.ActiveId)
+        {
+            ClearPlayback();
+        }
     }
 
     private void OnLibraryTracksRemoved(ISet<string> ids)

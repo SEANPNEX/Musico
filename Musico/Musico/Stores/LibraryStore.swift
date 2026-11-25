@@ -698,6 +698,7 @@ final class LibraryStore {
                 folderURL: folderURL,
                 fetcher: cloudFetcher,
                 cache: cache,
+                artworkCache: artwork,
                 sourceURLOverride: tracking.sourceURL,
                 cookieOverride: tracking.cookie,
                 kindHintOverride: tracking.cloudKind,
@@ -710,6 +711,7 @@ final class LibraryStore {
                 folderURL: folderURL,
                 fetcher: cloudFetcher,
                 cache: cache,
+                artworkCache: artwork,
                 sourceURLOverride: tracking.sourceURL,
                 cookieOverride: tracking.cookie,
                 kindHintOverride: tracking.cloudKind,
@@ -1970,6 +1972,7 @@ final class LibraryStore {
             toFolder: targetFolder,
             cache: cache,
             artworkData: artworkData,
+            artworkCache: artwork,
             thumbnailCache: thumbnailCache
         )
         if containsLocalURL(savedURL) {

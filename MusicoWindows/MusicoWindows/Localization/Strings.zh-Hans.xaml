@@ -249,6 +249,8 @@
     <sys:String x:Key="Str_Extensions_QrLoginTitle">二维码登录</sys:String>
     <sys:String x:Key="Str_Extensions_QrLoginRefresh">刷新二维码</sys:String>
     <sys:String x:Key="Str_Extensions_QrLoginClose">关闭</sys:String>
+    <sys:String x:Key="Str_Extensions_AutoUpdate">自动更新扩展</sys:String>
+    <sys:String x:Key="Str_Extensions_CheckUpdates">检查更新</sys:String>
 
     <!-- Cloud Search & Preview -->
     <sys:String x:Key="Str_Songs_SearchButton">搜索</sys:String>

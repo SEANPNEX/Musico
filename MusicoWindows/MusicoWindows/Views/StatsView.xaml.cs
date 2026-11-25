@@ -150,7 +150,7 @@ public partial class StatsView : UserControl
                 isCurrent,
                 isPlaying,
                 lib.IsAvailable(track),
-                () => _ctx.Services.Player.Play(ids, idx),
+                () => _ctx.Services.Player.PlayInNamedQueue("Stats", ids, startAt: idx),
                 _ctx.OpenTextPrompt,
                 null,
                 _ctx.OpenSaveCloudTrack,
@@ -195,15 +195,13 @@ public partial class StatsView : UserControl
     {
         if (_ctx is null || _tracks.Count == 0) return;
         var ids = _tracks.Select(t => t.Id).ToList();
-        if (_ctx.Services.Queues.Active.Shuffle) _ctx.Services.Player.ToggleShuffle();
-        _ctx.Services.Player.Play(ids, 0);
+        _ctx.Services.Player.PlayInNamedQueue("Stats", ids, startAt: 0, shuffle: false);
     }
 
     private void ShuffleAll_Click(object sender, RoutedEventArgs e)
     {
         if (_ctx is null || _tracks.Count == 0) return;
         var ids = _tracks.Select(t => t.Id).ToList();
-        if (!_ctx.Services.Queues.Active.Shuffle) _ctx.Services.Player.ToggleShuffle();
-        _ctx.Services.Player.Play(ids, Random.Shared.Next(ids.Count));
+        _ctx.Services.Player.PlayInNamedQueue("Stats", ids, startAt: Random.Shared.Next(ids.Count), shuffle: true);
     }
 }

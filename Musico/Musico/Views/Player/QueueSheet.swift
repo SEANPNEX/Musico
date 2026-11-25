@@ -32,7 +32,8 @@ struct QueuesView: View {
 
     var body: some View {
         let canDeleteQueues = queues.queues.count > 1
-        queueContent(canDeleteQueues: canDeleteQueues)
+        let viewed = queues.viewed
+        queueContent(canDeleteQueues: canDeleteQueues, viewed: viewed)
             .navigationTitle(L10n.tr("Queues"))
             #if targetEnvironment(macCatalyst)
             .navigationBarTitleDisplayMode(.inline)
@@ -44,18 +45,18 @@ struct QueuesView: View {
                 ToolbarItem(placement: .topBarLeading) { EditButton() }
                 #endif
                 ToolbarItemGroup(placement: .topBarTrailing) {
-                    TrackSortMenu(selection: queues.active.sortOrder ?? .custom) { order in
-                        player.sortActiveQueue(by: order)
+                    TrackSortMenu(selection: viewed.sortOrder ?? .custom) { order in
+                        player.sortQueue(viewed.id, by: order)
                     }
-                    .disabled(queues.active.trackIDs.count < 2)
+                    .disabled(viewed.trackIDs.count < 2)
 
-                    Button(L10n.tr("Clear This Queue"), systemImage: "eraser") { clearingQueue = queues.active }
-                        .disabled(queues.active.trackIDs.isEmpty)
+                    Button(L10n.tr("Clear This Queue"), systemImage: "eraser") { clearingQueue = viewed }
+                        .disabled(viewed.trackIDs.isEmpty)
                         .help(L10n.tr("Clear This Queue"))
 
                     #if targetEnvironment(macCatalyst)
                     Button(L10n.tr("Delete Queue"), systemImage: "trash", role: .destructive) {
-                        player.deleteQueue(queues.activeID)
+                        player.deleteQueue(viewed.id)
                     }
                     .disabled(!canDeleteQueues)
                     .help(canDeleteQueues ? L10n.tr("Delete Queue") : L10n.tr("At least one queue is required"))
@@ -92,18 +93,18 @@ struct QueuesView: View {
     }
 
     @ViewBuilder
-    private func queueContent(canDeleteQueues: Bool) -> some View {
+    private func queueContent(canDeleteQueues: Bool, viewed: PlayQueue) -> some View {
         #if targetEnvironment(macCatalyst)
-        macQueuesBody(canDeleteQueues: canDeleteQueues)
+        macQueuesBody(canDeleteQueues: canDeleteQueues, viewed: viewed)
         #else
-        iosQueuesList(canDeleteQueues: canDeleteQueues)
+        iosQueuesList(canDeleteQueues: canDeleteQueues, viewed: viewed)
         #endif
     }
 
     #if targetEnvironment(macCatalyst)
-    private func macQueuesBody(canDeleteQueues: Bool) -> some View {
-        let active = queues.active
-        let scopeID = "queue-\(active.id.uuidString)"
+    private func macQueuesBody(canDeleteQueues: Bool, viewed: PlayQueue) -> some View {
+        let isViewingPlayingQueue = viewed.id == queues.playingQueueID
+        let scopeID = "queue-\(viewed.id.uuidString)"
         return ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 VStack(alignment: .leading, spacing: 8) {
@@ -114,7 +115,8 @@ struct QueuesView: View {
                             .textCase(.uppercase)
                         Spacer()
                         Button {
-                            queues.addQueue(name: nil)
+                            let newID = queues.addQueue(name: nil)
+                            queues.selectViewedQueue(newID)
                         } label: {
                             Label(L10n.tr("New Queue"), systemImage: "plus")
                                 .font(.caption.weight(.medium))
@@ -125,12 +127,15 @@ struct QueuesView: View {
 
                     VStack(spacing: 0) {
                         ForEach(Array(queues.queues.enumerated()), id: \.element.id) { idx, queue in
-                            let isActive = queue.id == queues.activeID
+                            let isPlayingQueue = queue.id == queues.playingQueueID
+                            let isViewed = queue.id == viewed.id
                             MacQueueRow(
                                 queue: queue,
-                                isActive: isActive,
+                                isPlayingQueue: isPlayingQueue,
+                                isViewed: isViewed,
+                                isAudioPlaying: player.isPlaying || player.isBuffering,
                                 canDelete: canDeleteQueues,
-                                onSelect: { player.switchQueue(to: queue.id) },
+                                onSelect: { queues.selectViewedQueue(queue.id) },
                                 onRename: { renaming = queue },
                                 onClear: { clearingQueue = queue },
                                 onDelete: { player.deleteQueue(queue.id) }
@@ -150,15 +155,23 @@ struct QueuesView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Text(L10n.displayQueueName(active.name))
+                    HStack(spacing: 6) {
+                        Text(L10n.displayQueueName(viewed.name))
                             .font(.caption.weight(.semibold))
                             .foregroundStyle(.secondary)
                             .textCase(.uppercase)
                             .lineLimit(1)
+                        if isViewingPlayingQueue {
+                            Label(L10n.tr("Playing"), systemImage: (player.isPlaying || player.isBuffering) ? "speaker.wave.2.fill" : "speaker.fill")
+                                .font(.caption2.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(Color.accentColor.opacity(0.14), in: Capsule())
+                        }
                         Spacer()
-                        if !active.trackIDs.isEmpty {
-                            Text(L10n.songCount(active.trackIDs.count))
+                        if !viewed.trackIDs.isEmpty {
+                            Text(L10n.songCount(viewed.trackIDs.count))
                                 .font(.caption.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
@@ -166,7 +179,7 @@ struct QueuesView: View {
                     .padding(.horizontal, 4)
 
                     Group {
-                        if active.trackIDs.isEmpty {
+                        if viewed.trackIDs.isEmpty {
                             Text(L10n.tr("This queue is empty. Tap a song in your library to fill it."))
                                 .font(.subheadline)
                                 .foregroundStyle(.secondary)
@@ -174,20 +187,20 @@ struct QueuesView: View {
                                 .padding(14)
                         } else {
                             LazyVStack(spacing: 0) {
-                                ForEach(Array(active.trackIDs.enumerated()), id: \.offset) { index, id in
+                                ForEach(Array(viewed.trackIDs.enumerated()), id: \.offset) { index, id in
                                     MacQueueTrackRow(
                                         track: library.track(id),
                                         trackID: id,
                                         index: index,
                                         scopeID: scopeID,
-                                        isActive: index == active.currentIndex,
-                                        onSelect: { player.jump(to: index) },
+                                        isActive: isViewingPlayingQueue && index == viewed.currentIndex,
+                                        onSelect: { player.playTrack(inQueue: viewed.id, at: index) },
                                         onMove: { from, to in
-                                            player.moveInQueue(from: IndexSet(integer: from), to: to)
+                                            player.moveInQueue(from: IndexSet(integer: from), to: to, inQueue: viewed.id)
                                         },
-                                        onRemove: { player.removeFromQueue(at: index) }
+                                        onRemove: { player.removeFromQueue(at: index, inQueue: viewed.id) }
                                     )
-                                    if index < active.trackIDs.count - 1 {
+                                    if index < viewed.trackIDs.count - 1 {
                                         Divider().padding(.leading, 68)
                                     }
                                 }
@@ -209,16 +222,20 @@ struct QueuesView: View {
     }
     #endif
 
-    private func iosQueuesList(canDeleteQueues: Bool) -> some View {
-        List {
+    private func iosQueuesList(canDeleteQueues: Bool, viewed: PlayQueue) -> some View {
+        let isViewingPlayingQueue = viewed.id == queues.playingQueueID
+        return List {
             Section(L10n.tr("Queues")) {
                 ForEach(queues.queues) { queue in
-                    let isActive = queue.id == queues.activeID
+                    let isPlayingQueue = queue.id == queues.playingQueueID
+                    let isViewed = queue.id == viewed.id
                     QueueRowView(
                         queue: queue,
-                        isActive: isActive,
+                        isPlayingQueue: isPlayingQueue,
+                        isViewed: isViewed,
+                        isAudioPlaying: player.isPlaying || player.isBuffering,
                         canDelete: canDeleteQueues,
-                        onSelect: { player.switchQueue(to: queue.id) },
+                        onSelect: { queues.selectViewedQueue(queue.id) },
                         onRename: { renaming = queue },
                         onClear: { clearingQueue = queue },
                         onDelete: { player.deleteQueue(queue.id) }
@@ -232,7 +249,8 @@ struct QueuesView: View {
                     }
                 }
                 Button {
-                    queues.addQueue(name: nil)
+                    let newID = queues.addQueue(name: nil)
+                    queues.selectViewedQueue(newID)
                 } label: {
                     Label(L10n.tr("New Queue"), systemImage: "plus")
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -241,30 +259,30 @@ struct QueuesView: View {
                 .buttonStyle(.borderless)
             }
             Section {
-                let active = queues.active
-                if active.trackIDs.isEmpty {
+                if viewed.trackIDs.isEmpty {
                     Text(L10n.tr("This queue is empty. Tap a song in your library to fill it."))
                         .foregroundStyle(.secondary)
                 }
                 // A song can be queued more than once, so rows are identified by position.
-                ForEach(Array(active.trackIDs.enumerated()), id: \.offset) { index, id in
+                ForEach(Array(viewed.trackIDs.enumerated()), id: \.offset) { index, id in
+                    let isRowActive = isViewingPlayingQueue && index == viewed.currentIndex
                     Group {
                         if let track = library.track(id) {
                             ReorderableTrackRow(
                                 track: track,
                                 index: index,
-                                scopeID: "queue-\(active.id.uuidString)",
-                                isActive: index == active.currentIndex,
-                                onTap: { player.jump(to: index) },
+                                scopeID: "queue-\(viewed.id.uuidString)",
+                                isActive: isRowActive,
+                                onTap: { player.playTrack(inQueue: viewed.id, at: index) },
                                 onMove: { from, to in
-                                    player.moveInQueue(from: IndexSet(integer: from), to: to)
+                                    player.moveInQueue(from: IndexSet(integer: from), to: to, inQueue: viewed.id)
                                 },
-                                onRemove: { player.removeFromQueue(at: index) },
+                                onRemove: { player.removeFromQueue(at: index, inQueue: viewed.id) },
                                 removeHelp: L10n.tr("Remove from Queue")
                             )
                         } else {
                             Button {
-                                player.jump(to: index)
+                                player.playTrack(inQueue: viewed.id, at: index)
                             } label: {
                                 Text(L10n.tr("Missing song"))
                                     .foregroundStyle(.secondary)
@@ -272,7 +290,7 @@ struct QueuesView: View {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.borderless)
-                            .listRowBackground(index == active.currentIndex ? Color.accentColor.opacity(0.12) : nil)
+                            .listRowBackground(isRowActive ? Color.accentColor.opacity(0.12) : nil)
                         }
                     }
                     .contextMenu {
@@ -280,20 +298,30 @@ struct QueuesView: View {
                         TrackMenuItems(ids: [id], favouriteID: isEphemeral ? nil : id)
                         Divider()
                         Button(L10n.tr("Remove from Queue"), systemImage: "minus.circle", role: .destructive) {
-                            player.removeFromQueue(at: index)
+                            player.removeFromQueue(at: index, inQueue: viewed.id)
                         }
                     }
                 }
                 .onDelete { offsets in
-                    for index in offsets.sorted(by: >) { player.removeFromQueue(at: index) }
+                    for index in offsets.sorted(by: >) { player.removeFromQueue(at: index, inQueue: viewed.id) }
                 }
-                .onMove { player.moveInQueue(from: $0, to: $1) }
+                .onMove { player.moveInQueue(from: $0, to: $1, inQueue: viewed.id) }
             } header: {
-                MarqueeText(
-                    text: L10n.displayQueueName(queues.active.name),
-                    font: .footnote.weight(.semibold),
-                    alignment: .leading
-                )
+                HStack(spacing: 6) {
+                    MarqueeText(
+                        text: L10n.displayQueueName(viewed.name),
+                        font: .footnote.weight(.semibold),
+                        alignment: .leading
+                    )
+                    if isViewingPlayingQueue {
+                        Label(L10n.tr("Playing"), systemImage: (player.isPlaying || player.isBuffering) ? "speaker.wave.2.fill" : "speaker.fill")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.14), in: Capsule())
+                    }
+                }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .textCase(nil)
@@ -304,7 +332,9 @@ struct QueuesView: View {
 #if targetEnvironment(macCatalyst)
 private struct MacQueueRow: View {
     let queue: PlayQueue
-    let isActive: Bool
+    let isPlayingQueue: Bool
+    let isViewed: Bool
+    let isAudioPlaying: Bool
     let canDelete: Bool
     let onSelect: () -> Void
     let onRename: () -> Void
@@ -320,18 +350,36 @@ private struct MacQueueRow: View {
         HStack(spacing: 8) {
             Button(action: onSelect) {
                 HStack(spacing: 8) {
-                    Image(systemName: "checkmark")
-                        .font(.caption.weight(.bold))
-                        .foregroundStyle(Color.accentColor)
-                        .opacity(isActive ? 1 : 0)
-                        .frame(width: 14)
+                    Group {
+                        if isPlayingQueue {
+                            Image(systemName: isAudioPlaying ? "speaker.wave.2.fill" : "speaker.fill")
+                                .font(.caption.weight(.bold))
+                                .foregroundStyle(Color.accentColor)
+                        } else {
+                            Image(systemName: "eye")
+                                .font(.caption.weight(.semibold))
+                                .foregroundStyle(Color.accentColor)
+                                .opacity(isViewed ? 1 : 0)
+                        }
+                    }
+                    .frame(width: 14)
 
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(L10n.displayQueueName(queue.name))
-                            .font(.subheadline.weight(isActive ? .semibold : .medium))
-                            .foregroundStyle(isActive ? Color.accentColor : .primary)
-                            .lineLimit(1)
-                        QueueSummary(queue: queue, isActive: isActive)
+                        HStack(spacing: 6) {
+                            Text(L10n.displayQueueName(queue.name))
+                                .font(.subheadline.weight(isViewed || isPlayingQueue ? .semibold : .medium))
+                                .foregroundStyle(isViewed ? Color.accentColor : .primary)
+                                .lineLimit(1)
+                            if isPlayingQueue {
+                                Text(L10n.tr("Playing"))
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(Color.accentColor)
+                                    .padding(.horizontal, 5)
+                                    .padding(.vertical, 1)
+                                    .background(Color.accentColor.opacity(0.14), in: Capsule())
+                            }
+                        }
+                        QueueSummary(queue: queue, isPlayingQueue: isPlayingQueue)
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .contentShape(Rectangle())
@@ -395,14 +443,14 @@ private struct MacQueueRow: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
         .background(
-            isActive
+            isViewed
                 ? Color.accentColor.opacity(0.10)
                 : (isHovered ? Color.primary.opacity(0.04) : .clear)
         )
         .onHover { isHovered = $0 }
         .contextMenu {
-            if !isActive {
-                Button(L10n.tr("Switch to Queue"), systemImage: "play.circle", action: onSelect)
+            if !isViewed {
+                Button(L10n.tr("View Queue"), systemImage: "eye", action: onSelect)
             }
             Button(L10n.tr("Rename…"), systemImage: "pencil", action: onRename)
             if !queue.trackIDs.isEmpty {
@@ -512,7 +560,9 @@ private struct MacQueueTrackRow: View {
 
 private struct QueueRowView: View {
     let queue: PlayQueue
-    let isActive: Bool
+    let isPlayingQueue: Bool
+    let isViewed: Bool
+    let isAudioPlaying: Bool
     let canDelete: Bool
     let onSelect: () -> Void
     let onRename: () -> Void
@@ -526,10 +576,24 @@ private struct QueueRowView: View {
         HStack(spacing: 8) {
             Button(action: onSelect) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(L10n.displayQueueName(queue.name))
-                        .foregroundStyle(isActive ? Color.accentColor : .primary)
-                        .lineLimit(2)
-                    QueueSummary(queue: queue, isActive: isActive)
+                    HStack(spacing: 6) {
+                        Text(L10n.displayQueueName(queue.name))
+                            .fontWeight(isViewed || isPlayingQueue ? .semibold : .regular)
+                            .foregroundStyle(isViewed ? Color.accentColor : .primary)
+                            .lineLimit(2)
+                        if isPlayingQueue {
+                            Label(
+                                L10n.tr("Playing"),
+                                systemImage: isAudioPlaying ? "speaker.wave.2.fill" : "speaker.fill"
+                            )
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(Color.accentColor)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.accentColor.opacity(0.14), in: Capsule())
+                        }
+                    }
+                    QueueSummary(queue: queue, isPlayingQueue: isPlayingQueue)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .contentShape(Rectangle())
@@ -537,7 +601,7 @@ private struct QueueRowView: View {
             .buttonStyle(.borderless)
 
             HStack(spacing: 4) {
-                if isActive {
+                if isViewed {
                     Image(systemName: "checkmark")
                         .font(.footnote.weight(.semibold))
                         .foregroundStyle(Color.accentColor)
@@ -576,7 +640,7 @@ private struct QueueRowView: View {
         }
         .onHover { isHovered = $0 }
         .listRowBackground(
-            isActive
+            isViewed
                 ? Color.accentColor.opacity(0.10)
                 : (isHovered ? Color.primary.opacity(0.04) : nil)
         )
@@ -591,8 +655,8 @@ private struct QueueRowView: View {
 
     @ViewBuilder
     private var queueMenuItems: some View {
-        if !isActive {
-            Button(L10n.tr("Switch to Queue"), systemImage: "play.circle", action: onSelect)
+        if !isViewed {
+            Button(L10n.tr("View Queue"), systemImage: "eye", action: onSelect)
         }
         Button(L10n.tr("Rename…"), systemImage: "pencil", action: onRename)
         if !queue.trackIDs.isEmpty {
@@ -608,7 +672,7 @@ private struct QueueRowView: View {
 /// Its own view so the playback clock only redraws this line, not the whole queue list.
 private struct QueueSummary: View {
     let queue: PlayQueue
-    let isActive: Bool
+    let isPlayingQueue: Bool
     @Environment(PlayerController.self) private var player
     @Environment(LibraryStore.self) private var library
 
@@ -618,6 +682,6 @@ private struct QueueSummary: View {
 
     private var text: String {
         guard let id = queue.currentTrackID, let track = library.track(id) else { return L10n.tr("Empty") }
-        return L10n.tr("%@ · %@ at %@", L10n.songCount(queue.trackIDs.count), track.title, formatTime(isActive ? player.currentTime : queue.position))
+        return L10n.tr("%@ · %@ at %@", L10n.songCount(queue.trackIDs.count), track.title, formatTime(isPlayingQueue ? player.currentTime : queue.position))
     }
 }

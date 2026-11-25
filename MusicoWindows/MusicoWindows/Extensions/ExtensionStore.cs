@@ -12,24 +12,44 @@ using MusicoWindows.Core;
 
 namespace MusicoWindows.Extensions;
 
+public sealed record PendingExtensionUpdate(
+    string ExtensionId,
+    string UpdateUrl,
+    string InstalledVersion,
+    string NewVersion,
+    LoadedExtensionPackage Package,
+    IReadOnlyList<ExtensionCapability> AddedCapabilities,
+    IReadOnlyList<string> AddedHosts,
+    ExtensionManifest PreviousManifest)
+{
+    public bool HasPermissionEscalation => AddedCapabilities.Count > 0 || AddedHosts.Count > 0;
+}
+
 public sealed class ExtensionStore : IExtensionHostServices
 {
     public const int MaxLogEntriesPerExtension = 200;
+    public static readonly TimeSpan AutoUpdateInterval = TimeSpan.FromHours(6);
 
     private sealed class ExtensionStateFile
     {
         public List<ExtensionStateRecord> Extensions { get; set; } = new();
+        public bool? AutoUpdateEnabled { get; set; }
+        public DateTimeOffset? LastUpdateCheckUtc { get; set; }
     }
 
     private readonly object _stateLock = new();
     private readonly object _logsLock = new();
     private readonly object _kvLock = new();
+    private readonly SemaphoreSlim _updateLock = new(1, 1);
 
     private readonly HttpMessageHandler? _httpHandler;
     private readonly JintExtensionRuntime _runtime;
     private readonly List<InstalledExtension> _extensions = new();
+    private readonly Dictionary<string, PendingExtensionUpdate> _pendingUpdates = new(StringComparer.OrdinalIgnoreCase);
     private readonly Dictionary<string, List<ExtensionLogEntry>> _logs = new(StringComparer.Ordinal);
     private readonly Dictionary<string, Dictionary<string, ExtensionKvEntry>> _kvCache = new(StringComparer.Ordinal);
+    private bool _autoUpdateEnabled = true;
+    private DateTimeOffset? _lastUpdateCheckUtc;
     private CloudProviderRegistry? _registry;
 
     public ExtensionStore(
@@ -55,7 +75,100 @@ public sealed class ExtensionStore : IExtensionHostServices
     private string StateFilePath => Path.Combine(ExtensionsDirectory, "state.json");
 
     public event Action? Changed;
+    public event Action? UpdatesChanged;
     public event Action<string>? LogsChanged;
+
+    public bool AutoUpdateEnabled
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _autoUpdateEnabled;
+            }
+        }
+        set
+        {
+            bool changed;
+            lock (_stateLock)
+            {
+                changed = _autoUpdateEnabled != value;
+                if (changed)
+                {
+                    _autoUpdateEnabled = value;
+                    SaveStateLocked();
+                }
+            }
+            if (changed)
+            {
+                UpdatesChanged?.Invoke();
+                Changed?.Invoke();
+            }
+        }
+    }
+
+    public DateTimeOffset? LastUpdateCheckUtc
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _lastUpdateCheckUtc;
+            }
+        }
+    }
+
+    public IReadOnlyList<PendingExtensionUpdate> PendingUpdates
+    {
+        get
+        {
+            lock (_stateLock)
+            {
+                return _pendingUpdates.Values.ToList();
+            }
+        }
+    }
+
+    public PendingExtensionUpdate? GetPendingUpdate(string? extensionId)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId)) return null;
+        string target = extensionId.Trim();
+        lock (_stateLock)
+        {
+            return _pendingUpdates.TryGetValue(target, out var pending) ? pending : null;
+        }
+    }
+
+    public static bool TryNormalizeHttpsUrl(string? rawUrl, out string? normalized)
+    {
+        normalized = null;
+        if (string.IsNullOrWhiteSpace(rawUrl)) return false;
+        if (!Uri.TryCreate(rawUrl.Trim(), UriKind.Absolute, out var uri) ||
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+        normalized = uri.AbsoluteUri;
+        return true;
+    }
+
+    public static string? ResolveUpdateUrl(InstalledExtension ext)
+    {
+        ArgumentNullException.ThrowIfNull(ext);
+        if (TryNormalizeHttpsUrl(ext.Manifest.UpdateUrl, out string? manifestUrl))
+        {
+            return manifestUrl;
+        }
+        if (TryNormalizeHttpsUrl(ext.State.SourceUrl, out string? sourceUrl))
+        {
+            return sourceUrl;
+        }
+        if (TryNormalizeHttpsUrl(ext.State.SourceLocation, out string? sourceLoc))
+        {
+            return sourceLoc;
+        }
+        return null;
+    }
 
     public IReadOnlyList<InstalledExtension> Extensions
     {
@@ -395,7 +508,7 @@ public sealed class ExtensionStore : IExtensionHostServices
     {
         LoadedExtensionPackage pkg = await Task.Run(() => ExtensionPackageLoader.LoadFromFile(filePath), ct)
             .ConfigureAwait(false);
-        return StageImportedPackage(pkg, filePath);
+        return StageImportedPackage(pkg, sourceLocation: filePath, sourceUrl: null);
     }
 
     public async Task<InstalledExtension> ImportFromUrlAsync(
@@ -403,16 +516,268 @@ public sealed class ExtensionStore : IExtensionHostServices
         string? proxyUrl = null,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(url) ||
-            !Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri) ||
-            !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        if (!TryNormalizeHttpsUrl(url, out string? normalizedUrl) || normalizedUrl is null)
         {
             throw new ArgumentException("Extension URL must be a valid https:// URL.", nameof(url));
+        }
+
+        LoadedExtensionPackage pkg = await DownloadPackageAsync(normalizedUrl, proxyUrl, ct).ConfigureAwait(false);
+        return StageImportedPackage(pkg, sourceLocation: normalizedUrl, sourceUrl: normalizedUrl);
+    }
+
+    public async Task<ExtensionUpdateCheckSummary> CheckForUpdatesIfDueAsync(
+        DateTimeOffset? nowUtc = null,
+        string? proxyUrl = null,
+        CancellationToken ct = default)
+    {
+        DateTimeOffset now = nowUtc ?? DateTimeOffset.UtcNow;
+        lock (_stateLock)
+        {
+            if (!_autoUpdateEnabled)
+            {
+                return new ExtensionUpdateCheckSummary(WasSkippedByThrottleOrSetting: true, Array.Empty<ExtensionUpdateItemResult>());
+            }
+
+            if (_lastUpdateCheckUtc is DateTimeOffset last && (now - last) < AutoUpdateInterval)
+            {
+                return new ExtensionUpdateCheckSummary(WasSkippedByThrottleOrSetting: true, Array.Empty<ExtensionUpdateItemResult>());
+            }
+        }
+
+        return await CheckForUpdatesAsync(extensionId: null, proxyUrl: proxyUrl, nowUtc: now, ct: ct)
+            .ConfigureAwait(false);
+    }
+
+    public async Task<ExtensionUpdateCheckSummary> CheckForUpdatesAsync(
+        string? extensionId = null,
+        string? proxyUrl = null,
+        DateTimeOffset? nowUtc = null,
+        CancellationToken ct = default)
+    {
+        await _updateLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            DateTimeOffset now = nowUtc ?? DateTimeOffset.UtcNow;
+            List<InstalledExtension> targets;
+            lock (_stateLock)
+            {
+                if (string.IsNullOrWhiteSpace(extensionId))
+                {
+                    _lastUpdateCheckUtc = now;
+                    SaveStateLocked();
+                    targets = _extensions.ToList();
+                }
+                else
+                {
+                    string targetId = extensionId.Trim();
+                    targets = _extensions
+                        .Where(e => string.Equals(e.Id, targetId, StringComparison.OrdinalIgnoreCase))
+                        .ToList();
+                }
+            }
+
+            var results = new List<ExtensionUpdateItemResult>(targets.Count);
+            bool anyChange = false;
+            bool anyUpdateStateChange = false;
+
+            foreach (var installed in targets)
+            {
+                ct.ThrowIfCancellationRequested();
+                var itemResult = await CheckSingleExtensionUpdateAsync(installed, proxyUrl, ct).ConfigureAwait(false);
+                results.Add(itemResult);
+                if (itemResult.Outcome == ExtensionUpdateOutcome.AppliedSilently)
+                {
+                    anyChange = true;
+                    anyUpdateStateChange = true;
+                }
+                else if (itemResult.Outcome == ExtensionUpdateOutcome.StagedForReview)
+                {
+                    anyUpdateStateChange = true;
+                }
+            }
+
+            if (anyChange)
+            {
+                SyncToRegistry();
+                Changed?.Invoke();
+            }
+            if (anyUpdateStateChange)
+            {
+                UpdatesChanged?.Invoke();
+            }
+
+            return new ExtensionUpdateCheckSummary(WasSkippedByThrottleOrSetting: false, results);
+        }
+        finally
+        {
+            _updateLock.Release();
+        }
+    }
+
+    public InstalledExtension ApprovePendingUpdate(string extensionId)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId))
+        {
+            throw new ArgumentException("Extension id is required.", nameof(extensionId));
+        }
+
+        InstalledExtension applied;
+        lock (_stateLock)
+        {
+            if (!_pendingUpdates.TryGetValue(extensionId.Trim(), out var pending))
+            {
+                throw new KeyNotFoundException($"No pending update for extension '{extensionId}'.");
+            }
+
+            applied = ApplyPackageUpdateLocked(pending.ExtensionId, pending.Package, clearPendingReview: true);
+            _pendingUpdates.Remove(pending.ExtensionId);
+            SaveStateLocked();
+        }
+
+        SyncToRegistry();
+        UpdatesChanged?.Invoke();
+        Changed?.Invoke();
+        return applied;
+    }
+
+    public bool DismissPendingUpdate(string extensionId)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId)) return false;
+        bool removed;
+        lock (_stateLock)
+        {
+            removed = _pendingUpdates.Remove(extensionId.Trim());
+        }
+        if (removed)
+        {
+            UpdatesChanged?.Invoke();
+            Changed?.Invoke();
+        }
+        return removed;
+    }
+
+    private async Task<ExtensionUpdateItemResult> CheckSingleExtensionUpdateAsync(
+        InstalledExtension installed,
+        string? proxyUrl,
+        CancellationToken ct)
+    {
+        string? updateUrl = ResolveUpdateUrl(installed);
+        if (updateUrl is null)
+        {
+            return new ExtensionUpdateItemResult(
+                installed.Id,
+                null,
+                ExtensionUpdateOutcome.SkippedNoUrl,
+                InstalledVersion: installed.Manifest.Version);
+        }
+
+        try
+        {
+            LoadedExtensionPackage remotePkg = await DownloadPackageAsync(updateUrl, proxyUrl, ct).ConfigureAwait(false);
+
+            if (!string.Equals(remotePkg.Manifest.Id, installed.Manifest.Id, StringComparison.Ordinal))
+            {
+                return new ExtensionUpdateItemResult(
+                    installed.Id,
+                    updateUrl,
+                    ExtensionUpdateOutcome.Failed,
+                    InstalledVersion: installed.Manifest.Version,
+                    RemoteVersion: remotePkg.Manifest.Version,
+                    ErrorMessage: $"Extension update id '{remotePkg.Manifest.Id}' does not match '{installed.Manifest.Id}'.");
+            }
+
+            if (!ExtensionVersionComparer.IsStrictlyNewer(remotePkg.Manifest.Version, installed.Manifest.Version))
+            {
+                lock (_stateLock)
+                {
+                    _pendingUpdates.Remove(installed.Id);
+                }
+                return new ExtensionUpdateItemResult(
+                    installed.Id,
+                    updateUrl,
+                    ExtensionUpdateOutcome.UpToDate,
+                    InstalledVersion: installed.Manifest.Version,
+                    RemoteVersion: remotePkg.Manifest.Version);
+            }
+
+            ExtensionPermissionEscalation escalation = ExtensionPermissionAnalyzer.AnalyzeEscalation(
+                installed.Manifest,
+                remotePkg.Manifest);
+
+            if (escalation.HasEscalation || installed.PendingPermissionReview)
+            {
+                var pending = new PendingExtensionUpdate(
+                    ExtensionId: installed.Id,
+                    UpdateUrl: updateUrl,
+                    InstalledVersion: installed.Manifest.Version,
+                    NewVersion: remotePkg.Manifest.Version,
+                    Package: remotePkg,
+                    AddedCapabilities: escalation.AddedCapabilities,
+                    AddedHosts: escalation.AddedHosts,
+                    PreviousManifest: installed.Manifest);
+
+                lock (_stateLock)
+                {
+                    _pendingUpdates[installed.Id] = pending;
+                }
+
+                return new ExtensionUpdateItemResult(
+                    installed.Id,
+                    updateUrl,
+                    ExtensionUpdateOutcome.StagedForReview,
+                    InstalledVersion: installed.Manifest.Version,
+                    RemoteVersion: remotePkg.Manifest.Version);
+            }
+
+            lock (_stateLock)
+            {
+                ApplyPackageUpdateLocked(installed.Id, remotePkg, clearPendingReview: false);
+                _pendingUpdates.Remove(installed.Id);
+                SaveStateLocked();
+            }
+
+            return new ExtensionUpdateItemResult(
+                installed.Id,
+                updateUrl,
+                ExtensionUpdateOutcome.AppliedSilently,
+                InstalledVersion: installed.Manifest.Version,
+                RemoteVersion: remotePkg.Manifest.Version);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            return new ExtensionUpdateItemResult(
+                installed.Id,
+                updateUrl,
+                ExtensionUpdateOutcome.Failed,
+                InstalledVersion: installed.Manifest.Version,
+                ErrorMessage: ex.Message);
+        }
+    }
+
+    private async Task<LoadedExtensionPackage> DownloadPackageAsync(
+        string httpsUrl,
+        string? proxyUrl,
+        CancellationToken ct)
+    {
+        if (!TryNormalizeHttpsUrl(httpsUrl, out string? normalized) || normalized is null ||
+            !Uri.TryCreate(normalized, UriKind.Absolute, out var uri))
+        {
+            throw new ArgumentException("Extension URL must be a valid https:// URL.", nameof(httpsUrl));
         }
 
         using var http = CloudHttpHelper.CreateClient(proxyUrl, _httpHandler, TimeSpan.FromSeconds(30));
         using var resp = await http.GetAsync(uri, HttpCompletionOption.ResponseHeadersRead, ct).ConfigureAwait(false);
         resp.EnsureSuccessStatusCode();
+
+        if (resp.RequestMessage?.RequestUri is Uri finalUri &&
+            !string.Equals(finalUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidDataException("Extension download redirected to a non-HTTPS URL.");
+        }
 
         await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
         using var ms = new MemoryStream();
@@ -432,18 +797,62 @@ public sealed class ExtensionStore : IExtensionHostServices
         }
 
         byte[] bytes = ms.ToArray();
-        string? hint = Path.GetFileName(uri.AbsolutePath);
-        LoadedExtensionPackage pkg = await Task.Run(() => ExtensionPackageLoader.LoadFromBytes(bytes, hint), ct)
+        string? hint = Path.GetFileName((resp.RequestMessage?.RequestUri ?? uri).AbsolutePath);
+        return await Task.Run(() => ExtensionPackageLoader.LoadFromBytes(bytes, hint), ct)
             .ConfigureAwait(false);
-
-        return StageImportedPackage(pkg, uri.AbsoluteUri);
     }
 
-    public InstalledExtension StageImportedPackage(LoadedExtensionPackage pkg, string? sourceLocation = null)
+    private InstalledExtension ApplyPackageUpdateLocked(
+        string extensionId,
+        LoadedExtensionPackage pkg,
+        bool clearPendingReview)
+    {
+        int idx = FindIndexLocked(extensionId);
+        if (idx < 0)
+        {
+            throw new KeyNotFoundException($"Extension '{extensionId}' is not installed.");
+        }
+
+        var existing = _extensions[idx];
+        string extDir = GetExtensionDirectory(pkg.Manifest.Id);
+        ExtensionPackageLoader.InstallToDirectory(pkg, extDir);
+
+        var settings = new Dictionary<string, JsonElement>(existing.State.Settings, StringComparer.Ordinal);
+        bool nextPendingReview = clearPendingReview ? false : existing.State.PendingPermissionReview;
+        bool nextEnabled = clearPendingReview && existing.State.PendingPermissionReview
+            ? true
+            : existing.State.Enabled;
+
+        var state = new ExtensionStateRecord
+        {
+            Id = pkg.Manifest.Id,
+            Enabled = nextEnabled,
+            PendingPermissionReview = nextPendingReview,
+            Format = pkg.Format,
+            SourceLocation = existing.State.SourceLocation,
+            SourceUrl = existing.State.SourceUrl,
+            InstalledUtc = DateTimeOffset.UtcNow,
+            Cookie = pkg.Manifest.SupportsCookieAuth ? existing.State.Cookie : null,
+            Settings = settings
+        };
+
+        var updated = BuildInstalledExtension(pkg.Manifest, state, extDir);
+        _extensions[idx] = updated;
+        return updated;
+    }
+
+    public InstalledExtension StageImportedPackage(
+        LoadedExtensionPackage pkg,
+        string? sourceLocation = null,
+        string? sourceUrl = null)
     {
         ArgumentNullException.ThrowIfNull(pkg);
         string extDir = GetExtensionDirectory(pkg.Manifest.Id);
         ExtensionPackageLoader.InstallToDirectory(pkg, extDir);
+
+        string? normalizedSourceUrl = TryNormalizeHttpsUrl(sourceUrl, out string? su)
+            ? su
+            : null;
 
         InstalledExtension installed;
         lock (_stateLock)
@@ -462,6 +871,7 @@ public sealed class ExtensionStore : IExtensionHostServices
                 PendingPermissionReview = true,
                 Format = pkg.Format,
                 SourceLocation = sourceLocation,
+                SourceUrl = normalizedSourceUrl,
                 InstalledUtc = DateTimeOffset.UtcNow,
                 Cookie = pkg.Manifest.SupportsCookieAuth ? existing?.State.Cookie : null,
                 Settings = settings
@@ -471,10 +881,12 @@ public sealed class ExtensionStore : IExtensionHostServices
 
             _extensions.RemoveAll(e => string.Equals(e.Id, pkg.Manifest.Id, StringComparison.OrdinalIgnoreCase));
             _extensions.Add(installed);
+            _pendingUpdates.Remove(pkg.Manifest.Id);
             SaveStateLocked();
         }
 
         SyncToRegistry();
+        UpdatesChanged?.Invoke();
         Changed?.Invoke();
         return installed;
     }
@@ -531,6 +943,7 @@ public sealed class ExtensionStore : IExtensionHostServices
             if (idx < 0) return false;
             dirToDelete = _extensions[idx].DirectoryPath;
             _extensions.RemoveAt(idx);
+            _pendingUpdates.Remove(extensionId.Trim());
             SaveStateLocked();
         }
 
@@ -767,14 +1180,27 @@ public sealed class ExtensionStore : IExtensionHostServices
     private void LoadFromDisk()
     {
         var stateFile = Persistence.Load<ExtensionStateFile>(StateFilePath);
-        if (stateFile?.Extensions is null || stateFile.Extensions.Count == 0) return;
+        if (stateFile is null) return;
 
         bool prunedMissing = false;
         lock (_stateLock)
         {
+            _autoUpdateEnabled = stateFile.AutoUpdateEnabled ?? true;
+            _lastUpdateCheckUtc = stateFile.LastUpdateCheckUtc;
+
+            if (stateFile.Extensions is null || stateFile.Extensions.Count == 0)
+            {
+                return;
+            }
+
             foreach (var state in stateFile.Extensions)
             {
                 if (string.IsNullOrWhiteSpace(state.Id)) continue;
+                if (string.IsNullOrWhiteSpace(state.SourceUrl) &&
+                    TryNormalizeHttpsUrl(state.SourceLocation, out string? migratedSourceUrl))
+                {
+                    state.SourceUrl = migratedSourceUrl;
+                }
                 string extDir = GetExtensionDirectory(state.Id);
                 string manifestPath = Path.Combine(extDir, "manifest.json");
                 if (!File.Exists(manifestPath))
@@ -843,7 +1269,9 @@ public sealed class ExtensionStore : IExtensionHostServices
     {
         var stateFile = new ExtensionStateFile
         {
-            Extensions = _extensions.Select(e => e.State).ToList()
+            Extensions = _extensions.Select(e => e.State).ToList(),
+            AutoUpdateEnabled = _autoUpdateEnabled,
+            LastUpdateCheckUtc = _lastUpdateCheckUtc
         };
         Persistence.Save(stateFile, StateFilePath);
     }

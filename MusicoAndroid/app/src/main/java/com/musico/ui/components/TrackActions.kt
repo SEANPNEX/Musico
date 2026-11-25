@@ -102,6 +102,7 @@ fun TrackMenuItems(
     favouriteId: String? = null,
     isFavourite: Boolean = false,
     namedQueueTitle: String? = null,
+    addTargetQueueId: String? = null,
 ) {
     val strings = LocalStrings.current
     val singleResolved = if (ids.size == 1) actionState.libraryStore.track(ids[0]) else null
@@ -133,7 +134,7 @@ fun TrackMenuItems(
         leadingIcon = { Icon(Icons.AutoMirrored.Rounded.QueueMusic, contentDescription = null) },
         enabled = ids.isNotEmpty(),
         onClick = {
-            actionState.playerController.addToQueue(ids, queueId = null)
+            actionState.playerController.addToQueue(ids, queueId = addTargetQueueId)
             onDismiss()
         }
     )

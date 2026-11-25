@@ -144,7 +144,6 @@
                                                  Style="{StaticResource Win10NavItemStyle}"
                                                  GroupName="MainNav"
                                                  Tag="songs"
-                                                 IsChecked="True"
                                                  Checked="NavItem_Checked">
                                         <StackPanel Orientation="Horizontal" Margin="14,0">
                                             <TextBlock Text="&#xE8D6;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="15" Width="22" VerticalAlignment="Center" />
@@ -234,6 +233,7 @@
                                                  Style="{StaticResource Win10NavItemStyle}"
                                                  GroupName="MainNav"
                                                  Tag="queues"
+                                                 IsChecked="True"
                                                  Checked="NavItem_Checked">
                                         <StackPanel Orientation="Horizontal" Margin="14,0">
                                             <TextBlock Text="&#xE90B;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="15" Width="22" VerticalAlignment="Center" />

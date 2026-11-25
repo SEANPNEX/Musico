@@ -3,6 +3,11 @@ package com.musico.cloud
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import com.musico.core.ArtworkCache
+import com.musico.core.AudioTagPayload
+import com.musico.core.AudioTagWriter
+import com.musico.core.CloudThumbnailCache
+import com.musico.core.DetectedImageInfo
 import com.musico.extensions.CloudProviderIds
 import com.musico.extensions.CloudProviderRegistry
 import com.musico.model.LibraryRoot
@@ -399,6 +404,9 @@ class CloudExporter(
     private val cloudResolver: CloudStreamResolver,
     private val downloader: CloudStreamDownloader = UrlConnectionCloudStreamDownloader(),
     private val providerRegistry: CloudProviderRegistry = CloudProviderRegistry(),
+    private val artworkCache: ArtworkCache? = null,
+    private val thumbnailCache: CloudThumbnailCache? = null,
+    private val httpClient: CloudHttpClient = UrlConnectionCloudHttpClient(),
 ) {
     private interface ExportSink {
         val existingNames: MutableSet<String>
@@ -408,6 +416,8 @@ class CloudExporter(
         suspend fun downloadTrack(
             track: Track,
             root: LibraryRoot?,
+            suppliedArtworkBytes: ByteArray? = null,
+            coverCacheByUrl: MutableMap<String, DetectedImageInfo?>? = null,
             onBytesProgress: ((ByteTransferProgress) -> Unit)?,
         ): String
     }
@@ -422,8 +432,18 @@ class CloudExporter(
         override suspend fun downloadTrack(
             track: Track,
             root: LibraryRoot?,
+            suppliedArtworkBytes: ByteArray?,
+            coverCacheByUrl: MutableMap<String, DetectedImageInfo?>?,
             onBytesProgress: ((ByteTransferProgress) -> Unit)?,
-        ): String = downloadToFileDir(track, root, dir, existingNames, onBytesProgress)
+        ): String = downloadToFileDir(
+            track = track,
+            root = root,
+            targetDir = dir,
+            existingNames = existingNames,
+            suppliedArtworkBytes = suppliedArtworkBytes,
+            coverCacheByUrl = coverCacheByUrl,
+            onBytesProgress = onBytesProgress,
+        )
     }
 
     private inner class DocumentExportSink(
@@ -439,8 +459,19 @@ class CloudExporter(
         override suspend fun downloadTrack(
             track: Track,
             root: LibraryRoot?,
+            suppliedArtworkBytes: ByteArray?,
+            coverCacheByUrl: MutableMap<String, DetectedImageInfo?>?,
             onBytesProgress: ((ByteTransferProgress) -> Unit)?,
-        ): String = downloadToDocumentDir(ctx, track, root, dirDoc, existingNames, onBytesProgress)
+        ): String = downloadToDocumentDir(
+            ctx = ctx,
+            track = track,
+            root = root,
+            dirDoc = dirDoc,
+            existingNames = existingNames,
+            suppliedArtworkBytes = suppliedArtworkBytes,
+            coverCacheByUrl = coverCacheByUrl,
+            onBytesProgress = onBytesProgress,
+        )
     }
 
     suspend fun exportPlaylist(
@@ -541,6 +572,7 @@ class CloudExporter(
         onDetailedProgress: ((CloudExportProgress) -> Unit)?,
     ): CloudExportSummary {
         val trackedMap = (sink.loadManifest()?.tracks ?: emptyMap()).toMutableMap()
+        val coverCacheByUrl = HashMap<String, DetectedImageInfo?>()
         val errors = mutableListOf<String>()
         var savedCount = 0
         var failedCount = 0
@@ -557,7 +589,11 @@ class CloudExporter(
                 )
             )
             try {
-                val savedName = sink.downloadTrack(track, root) { bp ->
+                val savedName = sink.downloadTrack(
+                    track = track,
+                    root = root,
+                    coverCacheByUrl = coverCacheByUrl,
+                ) { bp ->
                     onDetailedProgress?.invoke(
                         CloudExportProgress(
                             completedTracks = index,
@@ -777,6 +813,7 @@ class CloudExporter(
             providerId = resolvedProviderId,
         )
         val trackedMap = (existingManifest?.tracks ?: emptyMap()).toMutableMap()
+        val coverCacheByUrl = HashMap<String, DetectedImageInfo?>()
         val sourceSlug = if (playlist.source.startsWith("ext.")) {
             playlist.source
         } else {
@@ -835,7 +872,11 @@ class CloudExporter(
             )
 
             try {
-                val savedName = sink.downloadTrack(tempTrack, lookupRoot) { bp ->
+                val savedName = sink.downloadTrack(
+                    track = tempTrack,
+                    root = lookupRoot,
+                    coverCacheByUrl = coverCacheByUrl,
+                ) { bp ->
                     onDetailedProgress?.invoke(
                         CloudExportProgress(
                             completedTracks = index,
@@ -894,6 +935,7 @@ class CloudExporter(
         root: LibraryRoot?,
         targetDir: File,
         onDetailedProgress: ((CloudExportProgress) -> Unit)? = null,
+        artworkBytes: ByteArray? = null,
     ): String = withContext(Dispatchers.IO) {
         if (!targetDir.exists() && !targetDir.mkdirs()) {
             throw IOException("Could not create destination folder: ${targetDir.absolutePath}")
@@ -909,7 +951,13 @@ class CloudExporter(
                 currentTrackTitle = track.title,
             )
         )
-        val savedName = downloadToFileDir(track, root, targetDir, existingNames) { bp ->
+        val savedName = downloadToFileDir(
+            track = track,
+            root = root,
+            targetDir = targetDir,
+            existingNames = existingNames,
+            suppliedArtworkBytes = artworkBytes,
+        ) { bp ->
             onDetailedProgress?.invoke(
                 CloudExportProgress(
                     completedTracks = 0,
@@ -936,10 +984,11 @@ class CloudExporter(
         root: LibraryRoot?,
         targetTreeUri: Uri,
         onDetailedProgress: ((CloudExportProgress) -> Unit)? = null,
+        artworkBytes: ByteArray? = null,
     ): String {
         if (targetTreeUri.scheme == "file") {
             val path = targetTreeUri.path ?: throw IOException("Invalid file URI: $targetTreeUri")
-            return exportTrack(track, root, File(path), onDetailedProgress)
+            return exportTrack(track, root, File(path), onDetailedProgress, artworkBytes)
         }
         return withContext(Dispatchers.IO) {
             val ctx = context ?: throw IOException("Android context unavailable for SAF export.")
@@ -956,7 +1005,14 @@ class CloudExporter(
                     currentTrackTitle = track.title,
                 )
             )
-            val savedName = downloadToDocumentDir(ctx, track, root, dirDoc, existingNames) { bp ->
+            val savedName = downloadToDocumentDir(
+                ctx = ctx,
+                track = track,
+                root = root,
+                dirDoc = dirDoc,
+                existingNames = existingNames,
+                suppliedArtworkBytes = artworkBytes,
+            ) { bp ->
                 onDetailedProgress?.invoke(
                     CloudExportProgress(
                         completedTracks = 0,
@@ -984,6 +1040,8 @@ class CloudExporter(
         root: LibraryRoot?,
         targetDir: File,
         existingNames: Set<String>,
+        suppliedArtworkBytes: ByteArray? = null,
+        coverCacheByUrl: MutableMap<String, DetectedImageInfo?>? = null,
         onBytesProgress: ((ByteTransferProgress) -> Unit)? = null,
     ): String {
         return withStreamRetry(track, root, onBytesProgress) { stream ->
@@ -996,9 +1054,30 @@ class CloudExporter(
                 FileOutputStream(partFile).use { rawOut ->
                     downloadWithMeteredProgress(track, stream, rawOut, onBytesProgress)
                 }
+                val cover = resolveCoverImage(track, root, suppliedArtworkBytes, coverCacheByUrl)
+                if (AudioTagWriter.isEmbeddableExtension(ext)) {
+                    runCatching {
+                        AudioTagWriter.write(
+                            file = partFile,
+                            payload = AudioTagPayload(
+                                title = track.title,
+                                artist = track.artist,
+                                album = track.album,
+                                genre = track.genre,
+                                trackNumber = track.trackNumber,
+                                artworkBytes = cover?.bytes,
+                                artworkMimeType = cover?.mimeType,
+                            ),
+                            formatExtension = ext,
+                        )
+                    }
+                }
                 if (!partFile.renameTo(targetFile)) {
                     partFile.copyTo(targetFile, overwrite = true)
                     partFile.delete()
+                }
+                if (!AudioTagWriter.isEmbeddableExtension(ext) && cover != null) {
+                    writeFileSidecarCover(targetDir, fileName, cover)
                 }
                 fileName
             } catch (t: Throwable) {
@@ -1015,24 +1094,133 @@ class CloudExporter(
         root: LibraryRoot?,
         dirDoc: DocumentFile,
         existingNames: Set<String>,
+        suppliedArtworkBytes: ByteArray? = null,
+        coverCacheByUrl: MutableMap<String, DetectedImageInfo?>? = null,
         onBytesProgress: ((ByteTransferProgress) -> Unit)? = null,
     ): String {
         return withStreamRetry(track, root, onBytesProgress) { stream ->
             val (ext, mimeType) = extensionAndMimeFor(stream)
             val baseName = sanitizeFileName(track.title, track.remoteTrackId ?: "track")
             val fileName = uniqueFileName(existingNames, baseName, ext)
-            val doc = dirDoc.createFile(mimeType, fileName)
-                ?: throw IOException("Could not create file $fileName in destination folder.")
+            val cacheParent = (ctx.cacheDir ?: ctx.filesDir).apply { mkdirs() }
+            val tempFile = File.createTempFile("musico_export_", if (ext.isNotEmpty()) ".$ext" else ".tmp", cacheParent)
             try {
-                val out = ctx.contentResolver.openOutputStream(doc.uri)
-                    ?: throw IOException("Could not open output stream for $fileName.")
-                out.use { rawOut ->
+                FileOutputStream(tempFile).use { rawOut ->
                     downloadWithMeteredProgress(track, stream, rawOut, onBytesProgress)
                 }
-                doc.name ?: fileName
-            } catch (t: Throwable) {
-                runCatching { doc.delete() }
-                throw t
+                val cover = resolveCoverImage(track, root, suppliedArtworkBytes, coverCacheByUrl)
+                if (AudioTagWriter.isEmbeddableExtension(ext)) {
+                    runCatching {
+                        AudioTagWriter.write(
+                            tempFile,
+                            AudioTagPayload(
+                                title = track.title,
+                                artist = track.artist,
+                                album = track.album,
+                                genre = track.genre,
+                                trackNumber = track.trackNumber,
+                                artworkBytes = cover?.bytes,
+                                artworkMimeType = cover?.mimeType,
+                            ),
+                        )
+                    }
+                }
+                val doc = dirDoc.createFile(mimeType, fileName)
+                    ?: throw IOException("Could not create file $fileName in destination folder.")
+                try {
+                    val out = ctx.contentResolver.openOutputStream(doc.uri)
+                        ?: throw IOException("Could not open output stream for $fileName.")
+                    out.use { targetOut ->
+                        tempFile.inputStream().use { input ->
+                            input.copyTo(targetOut)
+                        }
+                        targetOut.flush()
+                    }
+                    val actualName = doc.name ?: fileName
+                    if (!AudioTagWriter.isEmbeddableExtension(ext) && cover != null) {
+                        writeSafSidecarCover(ctx, dirDoc, actualName, cover)
+                    }
+                    actualName
+                } catch (t: Throwable) {
+                    runCatching { doc.delete() }
+                    throw t
+                }
+            } finally {
+                runCatching { tempFile.delete() }
+            }
+        }
+    }
+
+    internal suspend fun resolveCoverImage(
+        track: Track,
+        root: LibraryRoot?,
+        suppliedArtworkBytes: ByteArray? = null,
+        coverCacheByUrl: MutableMap<String, DetectedImageInfo?>? = null,
+    ): DetectedImageInfo? {
+        AudioTagWriter.detectImage(suppliedArtworkBytes)?.let { return it }
+
+        val cachedFile = track.artworkKey?.let { key -> artworkCache?.file(key) }
+        if (cachedFile != null && cachedFile.isFile && cachedFile.canRead()) {
+            val cachedBytes = runCatching { cachedFile.readBytes() }.getOrNull()
+            AudioTagWriter.detectImage(cachedBytes)?.let { return it }
+        }
+
+        val remoteUrl = CloudThumbnailCache.normalizeHttpsUrlOrNull(track.remoteArtworkUrl)
+            ?: return null
+        if (coverCacheByUrl != null && coverCacheByUrl.containsKey(remoteUrl)) {
+            return coverCacheByUrl[remoteUrl]
+        }
+
+        val providerHeaders = providerRegistry.providerForTrack(track, root)?.artworkHeaders().orEmpty()
+        val fetched = runCatching {
+            val resolved = if (thumbnailCache != null) {
+                thumbnailCache.fetchImageBytes(remoteUrl, providerHeaders)
+            } else {
+                CloudThumbnailCache.fetchImageBytesWithClient(httpClient, remoteUrl, providerHeaders)
+            }
+            resolved?.let { AudioTagWriter.detectImage(it.bytes) }
+        }.getOrNull()
+
+        coverCacheByUrl?.put(remoteUrl, fetched)
+        return fetched
+    }
+
+    private fun writeFileSidecarCover(
+        targetDir: File,
+        savedFileName: String,
+        cover: DetectedImageInfo,
+    ) {
+        val stem = savedFileName.substringBeforeLast('.', savedFileName)
+        if (stem.isEmpty()) return
+        val sidecarName = "$stem.${cover.extension}"
+        val sidecarFile = File(targetDir, sidecarName)
+        val partSidecar = File(targetDir, ".$sidecarName.part")
+        runCatching {
+            partSidecar.writeBytes(cover.bytes)
+            if (!partSidecar.renameTo(sidecarFile)) {
+                partSidecar.copyTo(sidecarFile, overwrite = true)
+                partSidecar.delete()
+            }
+        }.onFailure {
+            runCatching { partSidecar.delete() }
+        }
+    }
+
+    private fun writeSafSidecarCover(
+        ctx: Context,
+        dirDoc: DocumentFile,
+        savedFileName: String,
+        cover: DetectedImageInfo,
+    ) {
+        val stem = savedFileName.substringBeforeLast('.', savedFileName)
+        if (stem.isEmpty()) return
+        val sidecarName = "$stem.${cover.extension}"
+        runCatching {
+            dirDoc.findFile(sidecarName)?.let { existing -> runCatching { existing.delete() } }
+            val sidecarDoc = dirDoc.createFile(cover.mimeType, sidecarName) ?: return
+            ctx.contentResolver.openOutputStream(sidecarDoc.uri)?.use { out ->
+                out.write(cover.bytes)
+                out.flush()
             }
         }
     }

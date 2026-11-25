@@ -12,9 +12,13 @@ import kotlin.math.min
 data class QueueUiState(
     val queues: List<PlayQueue>,
     val activeId: String,
+    val viewedId: String = activeId,
 ) {
     val active: PlayQueue
         get() = queues.firstOrNull { it.id == activeId } ?: queues.first()
+
+    val viewed: PlayQueue
+        get() = queues.firstOrNull { it.id == viewedId } ?: active
 }
 
 class QueueStore(
@@ -41,10 +45,10 @@ class QueueStore(
             } else {
                 loaded.queues[0].id
             }
-            QueueUiState(queues = loaded.queues, activeId = activeId)
+            QueueUiState(queues = loaded.queues, activeId = activeId, viewedId = activeId)
         } else {
             val first = PlayQueue(name = "Queue 1")
-            QueueUiState(queues = listOf(first), activeId = first.id)
+            QueueUiState(queues = listOf(first), activeId = first.id, viewedId = first.id)
         }
         _state = MutableStateFlow(initialState)
         state = _state.asStateFlow()
@@ -90,11 +94,14 @@ class QueueStore(
         _state.value = current.copy(queues = updatedList)
     }
 
-    fun addQueue(name: String? = null): String {
+    fun addQueue(name: String? = null, selectAsViewed: Boolean = true): String {
         val current = _state.value
         val title = resolveQueueTitle(name, current.queues)
         val queue = PlayQueue(name = title)
-        _state.value = current.copy(queues = current.queues + queue)
+        _state.value = current.copy(
+            queues = current.queues + queue,
+            viewedId = if (selectAsViewed) queue.id else current.viewedId,
+        )
         save()
         return queue.id
     }
@@ -117,11 +124,13 @@ class QueueStore(
         return if (existingIndex >= 0) {
             val existing = current.queues[existingIndex]
             val wasActive = existing.id == current.activeId
+            val wasViewed = existing.id == current.viewedId
             val nextQueues = current.queues.toMutableList().apply {
                 this[existingIndex] = created
             }
             val nextActiveId = if (wasActive) created.id else current.activeId
-            _state.value = QueueUiState(queues = nextQueues, activeId = nextActiveId)
+            val nextViewedId = if (wasViewed) created.id else current.viewedId
+            _state.value = QueueUiState(queues = nextQueues, activeId = nextActiveId, viewedId = nextViewedId)
             save()
             created.id to wasActive
         } else {
@@ -153,19 +162,27 @@ class QueueStore(
         val index = current.queues.indexOfFirst { it.id == id }
         if (index < 0) return
         val nextQueues = current.queues.toMutableList().apply { removeAt(index) }
-        val nextActiveId = if (current.activeId == id) {
-            nextQueues[min(index, nextQueues.lastIndex)].id
-        } else {
-            current.activeId
-        }
-        _state.value = QueueUiState(queues = nextQueues, activeId = nextActiveId)
+        val fallbackId = nextQueues[min(index, nextQueues.lastIndex)].id
+        val nextActiveId = if (current.activeId == id) fallbackId else current.activeId
+        val nextViewedId = if (current.viewedId == id) fallbackId else current.viewedId
+        _state.value = QueueUiState(queues = nextQueues, activeId = nextActiveId, viewedId = nextViewedId)
         save()
     }
 
-    fun setActive(id: String) {
+    fun selectViewedQueue(id: String) {
+        val current = _state.value
+        if (current.viewedId == id) return
+        if (current.queues.none { it.id == id }) return
+        _state.value = current.copy(viewedId = id)
+    }
+
+    fun setActive(id: String, syncViewed: Boolean = true) {
         val current = _state.value
         if (current.queues.none { it.id == id }) return
-        _state.value = current.copy(activeId = id)
+        _state.value = current.copy(
+            activeId = id,
+            viewedId = if (syncViewed) id else current.viewedId,
+        )
         save()
     }
 
