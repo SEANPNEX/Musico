@@ -541,11 +541,18 @@ public sealed class V126FeaturesTests : IDisposable
     {
         string stateDir = NewTempDir();
         string musicDir = NewTempDir();
+        string readerOnlyDir = NewTempDir();
 
-        // .webm + .webp sidecar
+        // Separate reader-only check for .webp sidecar discovery (MinimalWebpBytes is a header-only stub
+        // rather than a WIC-decodable image for ArtworkCache on Windows).
+        string webpSidecarAudio = Path.Combine(readerOnlyDir, "webp_sidecar.webm");
+        File.WriteAllBytes(webpSidecarAudio, [0x1A, 0x45, 0xDF, 0xA3]);
+        File.WriteAllBytes(Path.Combine(readerOnlyDir, "webp_sidecar.webp"), MinimalWebpBytes);
+
+        // .webm + valid .png sidecar for end-to-end FolderScanner + LibraryStore + ArtworkCache scan
         string webmPath = Path.Combine(musicDir, "video_audio.webm");
         File.WriteAllBytes(webmPath, [0x1A, 0x45, 0xDF, 0xA3]);
-        File.WriteAllBytes(Path.Combine(musicDir, "video_audio.webp"), MinimalWebpBytes);
+        File.WriteAllBytes(Path.Combine(musicDir, "video_audio.png"), ValidPngBytes);
 
         // .mp3 without embedded art + .png sidecar
         string mp3Path = Path.Combine(musicDir, "plain_song.mp3");
@@ -553,8 +560,11 @@ public sealed class V126FeaturesTests : IDisposable
         File.WriteAllBytes(Path.Combine(musicDir, "plain_song.png"), ValidPngBytes);
 
         var reader = new TagLibMetadataReader();
+        var webpSidecarMeta = await reader.ReadAsync(webpSidecarAudio);
+        Assert.Equal(MinimalWebpBytes, webpSidecarMeta.ArtworkBytes);
+
         var webmMeta = await reader.ReadAsync(webmPath);
-        Assert.Equal(MinimalWebpBytes, webmMeta.ArtworkBytes);
+        Assert.Equal(ValidPngBytes, webmMeta.ArtworkBytes);
 
         var mp3Meta = await reader.ReadAsync(mp3Path);
         Assert.Equal(ValidPngBytes, mp3Meta.ArtworkBytes);
