@@ -27,3 +27,6 @@ MusicoWindows/**/obj/
 MusicoWindows/dist/
 .vs/
 *.user
+
+# Local CI/Release Staging
+/dist/
