@@ -36,7 +36,7 @@ public abstract class ObservableStore : INotifyPropertyChanged
     {
 #if WINDOWS
         var dispatcher = Application.Current?.Dispatcher;
-        if (dispatcher is not null)
+        if (dispatcher is not null && !dispatcher.HasShutdownStarted && !dispatcher.HasShutdownFinished)
         {
             if (dispatcher.CheckAccess())
             {

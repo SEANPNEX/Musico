@@ -7,8 +7,8 @@ namespace MusicoWindows.Localization;
 
 public static partial class LocalizationManager
 {
-    private static readonly Uri EnUri = new("Localization/Strings.en.xaml", UriKind.Relative);
-    private static readonly Uri ZhHansUri = new("Localization/Strings.zh-Hans.xaml", UriKind.Relative);
+    private static readonly Uri EnUri = new("pack://application:,,,/MusicoWindows;component/Localization/Strings.en.xaml", UriKind.Absolute);
+    private static readonly Uri ZhHansUri = new("pack://application:,,,/MusicoWindows;component/Localization/Strings.zh-Hans.xaml", UriKind.Absolute);
 
     private static ResourceDictionary? _currentStringsDict;
 

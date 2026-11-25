@@ -57,6 +57,48 @@ jobs:
       - name: Build WPF app
         run: dotnet build MusicoWindows/MusicoWindows.csproj -c Release --no-restore
 
+      - name: Smoke-test single-file portable build
+        shell: pwsh
+        run: |
+          $portableDir = "dist\ci-portable"
+          $smokeState = "dist\ci-smoke-state"
+          $smokeMusic = "dist\ci-smoke-music"
+          $smokeErr = "$smokeState\smoke-error.log"
+
+          New-Item -ItemType Directory -Force -Path $smokeState, $smokeMusic | Out-Null
+
+          dotnet publish MusicoWindows\MusicoWindows.csproj `
+            -c Release -r win-x64 --self-contained true `
+            -p:PublishSingleFile=true `
+            -p:IncludeNativeLibrariesForSelfExtract=true `
+            -p:EnableCompressionInSingleFile=true `
+            -p:DebugType=none `
+            -o $portableDir
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          Set-Content -Path "$portableDir\portable.txt" -Value "portable" -Encoding UTF8
+
+          $exePath = Join-Path (Resolve-Path $portableDir) "MusicoWindows.exe"
+          $statePath = (Resolve-Path $smokeState).Path
+          $musicPath = (Resolve-Path $smokeMusic).Path
+          $errPath = Join-Path $statePath "smoke-error.log"
+
+          $proc = Start-Process -FilePath $exePath `
+            -ArgumentList "--startup-smoke-test", "--state-dir=`"$statePath`"", "--music-dir=`"$musicPath`"", "--smoke-error-file=`"$errPath`"" `
+            -WorkingDirectory (Resolve-Path $portableDir).Path `
+            -NoNewWindow -PassThru
+          if (-not $proc.WaitForExit(60000)) {
+            $proc.Kill($true)
+            if (Test-Path $errPath) { Get-Content $errPath }
+            throw "Single-file portable MusicoWindows.exe --startup-smoke-test timed out after 60s."
+          }
+          if ($proc.ExitCode -ne 0) {
+            if (Test-Path $errPath) { Get-Content $errPath }
+            if (Test-Path "$statePath\crash.log") { Get-Content "$statePath\crash.log" }
+            throw "Single-file portable MusicoWindows.exe --startup-smoke-test failed with exit code $($proc.ExitCode)."
+          }
+          Write-Host "Single-file portable startup smoke test passed."
+
   apple-ios-tests:
     name: Apple (iOS Simulator Tests)
     runs-on: macos-26

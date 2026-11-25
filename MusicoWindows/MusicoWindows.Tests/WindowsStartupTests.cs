@@ -1,13 +1,7 @@
+using System.Diagnostics;
+using System.Text;
 using MusicoWindows.Core;
 using Xunit;
-#if WINDOWS
-using System.Windows;
-using System.Windows.Threading;
-using MusicoWindows.Localization;
-using MusicoWindows.Models;
-using MusicoWindows.Stores;
-using MusicoWindows.Theme;
-#endif
 
 namespace MusicoWindows.Tests;
 
@@ -93,12 +87,11 @@ public sealed class WindowsStartupTests : IDisposable
 
 #if WINDOWS
     [Fact]
-    public void WpfApp_Startup_LoadsResourcesThemesLocalesAndMainWindow()
+    public async Task WpfApp_Startup_LoadsResourcesThemesLocalesAndMainWindow()
     {
         string stateDir = NewTempDir();
         string musicDir = NewTempDir();
-        string themePrefPath = Path.Combine(stateDir, "theme.txt");
-        string langPrefPath = Path.Combine(stateDir, "language.txt");
+        string errFile = Path.Combine(stateDir, "smoke-error.log");
 
         // Seed a minimal valid MP3 so LibraryStore + QueuesView + TrackRowControl exercise track rendering.
         byte[] frame = new byte[417];
@@ -110,98 +103,65 @@ public sealed class WindowsStartupTests : IDisposable
         for (int i = 0; i < 4; i++) Array.Copy(frame, 0, mp3, i * frame.Length, frame.Length);
         File.WriteAllBytes(Path.Combine(musicDir, "startup-smoke.mp3"), mp3);
 
-        Exception? staException = null;
-        using var done = new ManualResetEventSlim(false);
+        string exePath = Path.Combine(AppContext.BaseDirectory, "MusicoWindows.exe");
+        string dllPath = Path.Combine(AppContext.BaseDirectory, "MusicoWindows.dll");
 
-        var thread = new Thread(() =>
+        string args =
+            $"--startup-smoke-test --state-dir=\"{stateDir}\" --music-dir=\"{musicDir}\" --smoke-error-file=\"{errFile}\"";
+
+        var psi = new ProcessStartInfo
         {
-            Dispatcher? dispatcher = null;
-            AppServices? services = null;
-            MainWindow? window = null;
-            try
-            {
-                dispatcher = Dispatcher.CurrentDispatcher;
-                if (Application.ResourceAssembly is null)
-                {
-                    Application.ResourceAssembly = typeof(App).Assembly;
-                }
+            WorkingDirectory = AppContext.BaseDirectory,
+            UseShellExecute = false,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            CreateNoWindow = true
+        };
 
-                App app;
-                if (Application.Current is App existing)
-                {
-                    app = existing;
-                }
-                else
-                {
-                    app = new App
-                    {
-                        ShutdownMode = ShutdownMode.OnExplicitShutdown
-                    };
-                    app.InitializeComponent();
-                }
-
-                ThemeManager.Initialize(app, themePrefPath);
-                LocalizationManager.Initialize(app, langPrefPath);
-
-                services = new AppServices(stateDirectory: stateDir, musicDirectory: musicDir);
-                services.InitializeAsync().GetAwaiter().GetResult();
-
-                if (services.Library.Tracks.Count > 0)
-                {
-                    var trackIds = services.Library.Tracks.Select(t => t.Id).ToList();
-                    services.Queues.UpdateActive(q => q.Replace(trackIds, 0));
-                }
-
-                window = new MainWindow(services);
-                app.MainWindow = window;
-                window.Show();
-
-                // Pump WPF layout, bindings, styles, and dialogs across theme/locale switches.
-                dispatcher.Invoke(() => { }, DispatcherPriority.ApplicationIdle);
-
-                window.FullPlayer.Show();
-                dispatcher.Invoke(() => { }, DispatcherPriority.Background);
-                window.FullPlayer.Close();
-
-                window.CloudDialog.Show(services);
-                dispatcher.Invoke(() => { }, DispatcherPriority.Background);
-                window.CloudDialog.Close();
-
-                if (services.Library.Roots.FirstOrDefault() is { } firstRoot)
-                {
-                    window.EditCloudDialog.Show(services, firstRoot);
-                    dispatcher.Invoke(() => { }, DispatcherPriority.Background);
-                    window.EditCloudDialog.Close();
-                }
-
-                ThemeManager.ToggleTheme(app);
-                ThemeManager.ToggleTheme(app);
-                LocalizationManager.SetMode(app, AppLanguage.SimplifiedChinese, langPrefPath);
-                LocalizationManager.SetMode(app, AppLanguage.English, langPrefPath);
-                dispatcher.Invoke(() => { }, DispatcherPriority.Background);
-            }
-            catch (Exception ex)
-            {
-                staException = ex;
-            }
-            finally
-            {
-                try { window?.Close(); } catch { }
-                try { services?.Dispose(); } catch { }
-                try { dispatcher?.InvokeShutdown(); } catch { }
-                done.Set();
-            }
-        });
-
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.IsBackground = true;
-        thread.Start();
-
-        Assert.True(done.Wait(TimeSpan.FromSeconds(60)), "WPF startup smoke test timed out.");
-        if (staException is not null)
+        if (File.Exists(exePath))
         {
-            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(staException).Throw();
+            psi.FileName = exePath;
+            psi.Arguments = args;
         }
+        else if (File.Exists(dllPath))
+        {
+            psi.FileName = "dotnet";
+            psi.Arguments = $"\"{dllPath}\" {args}";
+        }
+        else
+        {
+            throw new FileNotFoundException($"Could not locate MusicoWindows.exe or MusicoWindows.dll in '{AppContext.BaseDirectory}'.");
+        }
+
+        using var proc = Process.Start(psi)
+            ?? throw new InvalidOperationException($"Failed to start '{psi.FileName}'.");
+
+        Task<string> stdoutTask = proc.StandardOutput.ReadToEndAsync();
+        Task<string> stderrTask = proc.StandardError.ReadToEndAsync();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+        bool timedOut = false;
+        try
+        {
+            await proc.WaitForExitAsync(cts.Token);
+        }
+        catch (OperationCanceledException)
+        {
+            timedOut = true;
+            try { proc.Kill(entireProcessTree: true); } catch { }
+        }
+
+        string stdout = await stdoutTask;
+        string stderr = await stderrTask;
+        string errDetails = File.Exists(errFile) ? File.ReadAllText(errFile, Encoding.UTF8) : string.Empty;
+        string crashDetails = File.Exists(Path.Combine(stateDir, "crash.log"))
+            ? File.ReadAllText(Path.Combine(stateDir, "crash.log"), Encoding.UTF8)
+            : string.Empty;
+
+        Assert.False(timedOut, $"MusicoWindows --startup-smoke-test timed out after 60s.\nERRFILE:\n{errDetails}\nCRASH:\n{crashDetails}\nSTDERR:\n{stderr}\nSTDOUT:\n{stdout}");
+        Assert.True(
+            proc.ExitCode == 0,
+            $"MusicoWindows --startup-smoke-test exited with code {proc.ExitCode}.\nERRFILE:\n{errDetails}\nCRASH:\n{crashDetails}\nSTDERR:\n{stderr}\nSTDOUT:\n{stdout}");
     }
 #endif
 }

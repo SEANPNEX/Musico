@@ -21,11 +21,12 @@ public static class ThemeManager
 {
     private const string PersonalizeKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
     private const string AppsUseLightThemeValue = "AppsUseLightTheme";
-    private static readonly Uri LightUri = new("Theme/Win10Light.xaml", UriKind.Relative);
-    private static readonly Uri DarkUri = new("Theme/Win10Dark.xaml", UriKind.Relative);
+    private static readonly Uri LightUri = new("pack://application:,,,/MusicoWindows;component/Theme/Win10Light.xaml", UriKind.Absolute);
+    private static readonly Uri DarkUri = new("pack://application:,,,/MusicoWindows;component/Theme/Win10Dark.xaml", UriKind.Absolute);
 
     private static ResourceDictionary? _currentThemeDict;
     private static bool _listeningToSystem;
+    private static string? _preferenceFilePathOverride;
 
     public static AppThemeMode CurrentMode { get; private set; } = AppThemeMode.System;
     public static bool IsDark { get; private set; } = true;
@@ -37,6 +38,7 @@ public static class ThemeManager
 
     public static void Initialize(Application app, string? preferenceFilePath = null)
     {
+        _preferenceFilePathOverride = string.IsNullOrWhiteSpace(preferenceFilePath) ? null : preferenceFilePath;
         CurrentMode = LoadSavedPreference(preferenceFilePath);
         ApplyTheme(app, ResolveIsDark(CurrentMode));
 
@@ -140,7 +142,9 @@ public static class ThemeManager
 
     private static AppThemeMode LoadSavedPreference(string? preferenceFilePath = null)
     {
-        string path = string.IsNullOrWhiteSpace(preferenceFilePath) ? PreferenceFilePath : preferenceFilePath;
+        string path = string.IsNullOrWhiteSpace(preferenceFilePath)
+            ? (_preferenceFilePathOverride ?? PreferenceFilePath)
+            : preferenceFilePath;
         try
         {
             if (File.Exists(path))
@@ -159,12 +163,13 @@ public static class ThemeManager
 
     private static void SavePreference(AppThemeMode mode)
     {
+        string path = _preferenceFilePathOverride ?? PreferenceFilePath;
         try
         {
-            var dir = Path.GetDirectoryName(PreferenceFilePath);
+            var dir = Path.GetDirectoryName(path);
             if (!string.IsNullOrEmpty(dir))
                 Directory.CreateDirectory(dir);
-            File.WriteAllText(PreferenceFilePath, mode.ToString());
+            File.WriteAllText(path, mode.ToString());
         }
         catch
         {
