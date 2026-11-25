@@ -49,7 +49,7 @@ Section "${APP_NAME} (Required)" SecCore
     Delete "$INSTDIR\*.json"
     Delete "$INSTDIR\*.pdb"
     Delete "$INSTDIR\${APP_EXE}"
-    File /r "../dist/installer-payload/*.*"
+    File /r "../dist/installer-payload\*.*"
 
     WriteUninstaller "$INSTDIR\Uninstall.exe"
 
