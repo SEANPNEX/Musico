@@ -53,6 +53,7 @@
     <SolidColorBrush x:Key="WarningBannerBrush" Color="#33FFB900" />
     <SolidColorBrush x:Key="WarningTextBrush" Color="#FFFFB900" />
     <SolidColorBrush x:Key="DangerBrush" Color="#FFFF6B6B" />
+    <SolidColorBrush x:Key="DangerSubtleBrush" Color="#29FF6B6B" />
 
     <!-- Sliders -->
     <SolidColorBrush x:Key="SliderTrackBrush" Color="#FF4A4A4A" />

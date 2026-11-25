@@ -35,24 +35,31 @@ public static class ThemeManager
     private static string PreferenceFilePath =>
         Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Musico", "theme.txt");
 
-    public static void Initialize(Application app)
+    public static void Initialize(Application app, string? preferenceFilePath = null)
     {
-        CurrentMode = LoadSavedPreference();
+        CurrentMode = LoadSavedPreference(preferenceFilePath);
         ApplyTheme(app, ResolveIsDark(CurrentMode));
 
         if (!_listeningToSystem && OperatingSystem.IsWindows())
         {
-            _listeningToSystem = true;
-            SystemEvents.UserPreferenceChanged += (_, e) =>
+            try
             {
-                if (e.Category == UserPreferenceCategory.General && CurrentMode == AppThemeMode.System)
+                SystemEvents.UserPreferenceChanged += (_, e) =>
                 {
-                    app.Dispatcher.BeginInvoke(() =>
+                    if (e.Category == UserPreferenceCategory.General && CurrentMode == AppThemeMode.System)
                     {
-                        ApplyTheme(app, ResolveIsDark(AppThemeMode.System));
-                    });
-                }
-            };
+                        app.Dispatcher.BeginInvoke(() =>
+                        {
+                            ApplyTheme(app, ResolveIsDark(AppThemeMode.System));
+                        });
+                    }
+                };
+                _listeningToSystem = true;
+            }
+            catch
+            {
+                // Ignore if system preference notifications are unavailable in this Windows session.
+            }
         }
     }
 
@@ -131,13 +138,14 @@ public static class ThemeManager
         ThemeChanged?.Invoke(isDark);
     }
 
-    private static AppThemeMode LoadSavedPreference()
+    private static AppThemeMode LoadSavedPreference(string? preferenceFilePath = null)
     {
+        string path = string.IsNullOrWhiteSpace(preferenceFilePath) ? PreferenceFilePath : preferenceFilePath;
         try
         {
-            if (File.Exists(PreferenceFilePath))
+            if (File.Exists(path))
             {
-                var text = File.ReadAllText(PreferenceFilePath).Trim();
+                var text = File.ReadAllText(path).Trim();
                 if (Enum.TryParse<AppThemeMode>(text, ignoreCase: true, out var mode))
                     return mode;
             }

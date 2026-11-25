@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using MusicoWindows.Audio;
 using MusicoWindows.Cloud;
 using MusicoWindows.Core;
@@ -55,7 +56,7 @@ public sealed class AppServices : IDisposable
             appVersion: UpdateService.GetCurrentAppVersion().ToString(),
             extensionSearch: (extId, query, ct) => Extensions.SearchLyricsAsync(extId, query, proxyUrl: null, ct: ct));
         AudioEngine = new AudioEngine();
-        Smtc = new SmtcBridge();
+        Smtc = TryCreateSmtcBridge();
         Update = new UpdateService(stateDirectory: StateDirectory);
         Player = new PlayerController(
             library: Library,
@@ -89,9 +90,25 @@ public sealed class AppServices : IDisposable
     public LyricsStore Lyrics { get; }
     public CloudLyricsService CloudLyrics { get; }
     public AudioEngine AudioEngine { get; }
-    public SmtcBridge Smtc { get; }
+    public ISmtcBridge? Smtc { get; }
     public UpdateService Update { get; }
     public PlayerController Player { get; }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ISmtcBridge? TryCreateSmtcBridge()
+    {
+        try
+        {
+            return CreateSmtcBridgeCore();
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ISmtcBridge CreateSmtcBridgeCore() => new SmtcBridge();
 
     public async Task InitializeAsync()
     {
@@ -112,7 +129,7 @@ public sealed class AppServices : IDisposable
         Downloads.CancelAll();
         Player.PersistPosition(flush: true);
         Player.Shutdown();
-        Smtc.Dispose();
+        Smtc?.Dispose();
         AudioEngine.Dispose();
         Update.Dispose();
     }

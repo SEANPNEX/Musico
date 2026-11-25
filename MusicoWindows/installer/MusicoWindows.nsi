@@ -37,7 +37,18 @@ SetCompressor /SOLID lzma
 
 Section "${APP_NAME} (Required)" SecCore
     SectionIn RO
+    ; Stop any lingering instance (e.g. older versions minimized to tray) before replacing files.
+    nsExec::ExecToStack 'taskkill /IM "${APP_EXE}" /F'
+    Pop $0
+    Pop $1
+    Sleep 500
+
     SetOutPath "$INSTDIR"
+    ; Remove stale assemblies/config from previous versions while preserving any Data directory.
+    Delete "$INSTDIR\*.dll"
+    Delete "$INSTDIR\*.json"
+    Delete "$INSTDIR\*.pdb"
+    Delete "$INSTDIR\${APP_EXE}"
     File /r "../dist/installer-payload\*.*"
 
     WriteUninstaller "$INSTDIR\Uninstall.exe"
