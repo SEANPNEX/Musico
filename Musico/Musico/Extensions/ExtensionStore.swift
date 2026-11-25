@@ -254,7 +254,7 @@ final class ExtensionStore {
     @ObservationIgnored private let longTimeoutMs: Int
     @ObservationIgnored private let lookupLock = NSLock()
     @ObservationIgnored private nonisolated(unsafe) var installedNamesByProviderID: [String: String] = [:]
-    @ObservationIgnored private nonisolated(unsafe) var lyricsRuntimesByID: [String: (badgeLabel: String, runtime: JSExtensionRuntime)] = [:]
+    @ObservationIgnored private nonisolated(unsafe) var lyricsRuntimesByID: [String: (badgeLabel: String, supportsCookieAuth: Bool, runtime: JSExtensionRuntime)] = [:]
     @ObservationIgnored private nonisolated(unsafe) var searchRuntimesByID: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)] = [:]
     @ObservationIgnored private nonisolated(unsafe) var qrLoginRuntimesByID: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)] = [:]
 
@@ -1062,17 +1062,19 @@ final class ExtensionStore {
     }
 
     nonisolated func searchLyrics(extensionID: String, query: CloudLyricsQuery) async throws -> [CloudLyricsCandidate] {
-        let entry: (badgeLabel: String, runtime: JSExtensionRuntime)? = lookupLock.withLock {
+        let entry: (badgeLabel: String, supportsCookieAuth: Bool, runtime: JSExtensionRuntime)? = lookupLock.withLock {
             lyricsRuntimesByID[extensionID]
         }
         guard let entry else {
             throw CloudLyricsError.providerUnavailable(extensionID)
         }
+        let cookie = entry.supportsCookieAuth ? hostStorage.cookie(for: extensionID) : nil
         let specs = try await entry.runtime.searchLyrics(
             title: query.trimmedTitle,
             artist: query.trimmedArtist,
             album: query.trimmedAlbum,
-            durationSec: query.durationSec
+            durationSec: query.durationSec,
+            cookie: cookie
         )
         return specs.enumerated().compactMap { index, spec -> CloudLyricsCandidate? in
             let title = (spec.title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1135,12 +1137,12 @@ final class ExtensionStore {
         shortTimeoutMs: Int,
         longTimeoutMs: Int
     ) -> (
-        lyrics: [String: (badgeLabel: String, runtime: JSExtensionRuntime)],
+        lyrics: [String: (badgeLabel: String, supportsCookieAuth: Bool, runtime: JSExtensionRuntime)],
         search: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)],
         qrLogin: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)]
     ) {
         var providers: [any CloudSourceProvider] = []
-        var lyricsRuntimes: [String: (badgeLabel: String, runtime: JSExtensionRuntime)] = [:]
+        var lyricsRuntimes: [String: (badgeLabel: String, supportsCookieAuth: Bool, runtime: JSExtensionRuntime)] = [:]
         var searchRuntimes: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)] = [:]
         var qrLoginRuntimes: [String: (manifest: ExtensionManifest, runtime: JSExtensionRuntime)] = [:]
         for ext in extensions where ext.isActive {
@@ -1172,7 +1174,11 @@ final class ExtensionStore {
                 ))
             }
             if ext.manifest.capabilities.contains(.lyrics) {
-                lyricsRuntimes[ext.manifest.id] = (badgeLabel: ext.manifest.effectiveBadgeLabel, runtime: runtime)
+                lyricsRuntimes[ext.manifest.id] = (
+                    badgeLabel: ext.manifest.effectiveBadgeLabel,
+                    supportsCookieAuth: ext.manifest.supportsCookieAuth,
+                    runtime: runtime
+                )
             }
             if ext.manifest.capabilities.contains(.search) {
                 searchRuntimes[ext.manifest.id] = (manifest: ext.manifest, runtime: runtime)

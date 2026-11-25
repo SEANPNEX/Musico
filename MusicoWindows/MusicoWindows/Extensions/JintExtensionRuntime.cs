@@ -349,6 +349,7 @@ public sealed class JintExtensionRuntime
         CloudLyricsQuery query,
         string? proxyUrl = null,
         IExtensionHostServices? host = null,
+        string? cookie = null,
         CancellationToken ct = default)
     {
         var reqObj = new Dictionary<string, object?>
@@ -363,6 +364,10 @@ public sealed class JintExtensionRuntime
         if (query.DurationSec is double dur && !double.IsNaN(dur) && !double.IsInfinity(dur) && dur > 0)
         {
             reqObj["durationSec"] = dur;
+        }
+        if (!string.IsNullOrWhiteSpace(cookie))
+        {
+            reqObj["cookie"] = cookie;
         }
 
         JsonElement payload = await InvokeHookAsync<JsonElement>(

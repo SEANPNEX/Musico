@@ -594,7 +594,8 @@ final class JSExtensionRuntime: @unchecked Sendable {
         title: String,
         artist: String,
         album: String?,
-        durationSec: Double?
+        durationSec: Double?,
+        cookie: String? = nil
     ) async throws -> [JSLyricsCandidateSpec] {
         var req: [String: Any] = [
             "title": title,
@@ -605,6 +606,9 @@ final class JSExtensionRuntime: @unchecked Sendable {
         }
         if let durationSec, durationSec.isFinite, durationSec > 0 {
             req["durationSec"] = durationSec
+        }
+        if let cookie, !cookie.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            req["cookie"] = cookie
         }
         let json = try await invokeAsyncHook(name: "searchLyrics", requestObject: req, timeoutMs: shortTimeoutMs)
         let trimmed = json.trimmingCharacters(in: .whitespacesAndNewlines)

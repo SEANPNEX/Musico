@@ -291,6 +291,7 @@ class ExtensionStore(
             artist = query.trimmedArtist,
             album = query.trimmedAlbum,
             durationSec = query.durationSec,
+            cookie = cookieForExtension(extensionId),
         )
         return specs.mapIndexedNotNull { index, spec ->
             val itemTitle = spec.title?.trim().orEmpty()

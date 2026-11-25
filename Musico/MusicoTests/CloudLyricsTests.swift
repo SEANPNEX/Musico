@@ -237,4 +237,66 @@ final class CloudLyricsTests: XCTestCase {
         let extOnly = try await service.search(query: query, source: .ext(id: "sample.lyrics"), activeExtensions: store.activeLyricsExtensions)
         XCTAssertEqual(extOnly.candidates.map(\.sourceName), ["SampleLrc"])
     }
+
+    @MainActor
+    func testLyricsExtensionReceivesSavedCookieInSearchLyrics() async throws {
+        let extScript = """
+        exports.manifest = {
+          apiVersion: 1,
+          id: "sample.lyrics.auth",
+          name: "Sample Auth Lyrics",
+          version: "1.0.0",
+          badgeLabel: "AuthLrc",
+          capabilities: ["lyrics", "cookie"],
+          permissions: { hosts: ["lyrics.example.com"] }
+        };
+
+        exports.searchLyrics = async function(ctx, req) {
+          var headers = {};
+          if (req.cookie) {
+            headers.Authorization = "Bearer " + req.cookie;
+          }
+          var res = await ctx.http.request({
+            url: "https://lyrics.example.com/search?title=" + encodeURIComponent(req.title),
+            headers: headers
+          });
+          return JSON.parse(res.text).items;
+        };
+        """
+
+        let transport = MockCloudLyricsTransport { req in
+            let auth = req.value(forHTTPHeaderField: "Authorization")
+            if auth == "Bearer secret-lyrics-token" {
+                let payload = """
+                {
+                  "items": [
+                    {
+                      "externalId": "auth-1",
+                      "title": "21→22",
+                      "artist": "あよ",
+                      "syncedLyrics": "[00:01.00]Line"
+                    }
+                  ]
+                }
+                """
+                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(payload.utf8), finalURL: req.url)
+            }
+            return HTTPResponseData(statusCode: 401, headers: [:], data: Data(), finalURL: req.url)
+        }
+
+        let dir = makeTempDir()
+        let store = ExtensionStore(baseDirectory: dir, registry: CloudProviderRegistry(), transport: transport)
+        let installed = try await store.importPackageData(Data(extScript.utf8), fileName: "auth.musico.js", sourceURL: nil)
+        store.approvePermissionsAndEnable(id: installed.id)
+        store.updateCookie(extensionID: installed.id, cookie: "secret-lyrics-token")
+
+        let service = store.makeCloudLyricsService()
+        let resp = try await service.search(
+            query: CloudLyricsQuery(title: "21→22", artist: "あよ", album: nil, durationSec: nil),
+            source: .ext(id: "sample.lyrics.auth"),
+            activeExtensions: store.activeLyricsExtensions
+        )
+        XCTAssertEqual(resp.candidates.count, 1)
+        XCTAssertEqual(transport.requests.first?.value(forHTTPHeaderField: "Authorization"), "Bearer secret-lyrics-token")
+    }
 }

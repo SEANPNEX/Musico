@@ -431,6 +431,7 @@ class QuickJsExtensionRuntime(
         artist: String,
         album: String? = null,
         durationSec: Double? = null,
+        cookie: String? = null,
     ): List<ExtLyricsCandidateSpec> {
         val reqJson = json.encodeToString(
             buildJsonObject {
@@ -440,6 +441,7 @@ class QuickJsExtensionRuntime(
                 if (durationSec != null && durationSec.isFinite() && durationSec > 0.0) {
                     put("durationSec", durationSec)
                 }
+                if (!cookie.isNullOrBlank()) put("cookie", cookie)
             }
         )
         val raw = invokeHook(

@@ -511,12 +511,16 @@ public sealed class ExtensionStore : IExtensionHostServices
         CancellationToken ct = default)
     {
         InstalledExtension? ext;
+        string? cookie;
         lock (_stateLock)
         {
             ext = _extensions.FirstOrDefault(e =>
                 string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase) &&
                 e.IsEnabled &&
                 e.Manifest.HasCapability(ExtensionCapability.Lyrics));
+            cookie = ext is not null && ext.Manifest.SupportsCookieAuth && !string.IsNullOrWhiteSpace(ext.State.Cookie)
+                ? ext.State.Cookie.Trim()
+                : null;
         }
         if (ext is null)
         {
@@ -530,6 +534,7 @@ public sealed class ExtensionStore : IExtensionHostServices
             query,
             proxyUrl: proxyUrl,
             host: this,
+            cookie: cookie,
             ct: ct).ConfigureAwait(false);
 
         var candidates = new List<CloudLyricsCandidate>(specs.Count);

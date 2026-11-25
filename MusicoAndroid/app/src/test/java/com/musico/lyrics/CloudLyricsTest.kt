@@ -239,4 +239,71 @@ class CloudLyricsTest {
         val extOnly = service.search(query, CloudLyricsSourceSelection.Extension("sample.lyrics"), extStore.activeLyricsExtensions())
         assertEquals(listOf("SampleLrc"), extOnly.candidates.map { it.sourceName })
     }
+
+    @Test
+    fun lyricsExtensionReceivesSavedCookieInSearchLyrics() = runBlocking {
+        val script = """
+            exports.manifest = {
+              apiVersion: 1,
+              id: "sample.lyrics.auth",
+              name: "Sample Auth Lyrics",
+              version: "1.0.0",
+              badgeLabel: "AuthLrc",
+              capabilities: ["lyrics", "cookie"],
+              permissions: { hosts: ["lyrics.example.com"] }
+            };
+
+            exports.searchLyrics = async function(ctx, req) {
+              var headers = {};
+              if (req.cookie) {
+                headers.Authorization = "Bearer " + req.cookie;
+              }
+              var res = await ctx.http.request({
+                url: "https://lyrics.example.com/search?title=" + encodeURIComponent(req.title),
+                headers: headers
+              });
+              return JSON.parse(res.text).items;
+            };
+        """.trimIndent()
+
+        val mockHttp = MockCloudLyricsHttpClient { _, url, headers, _ ->
+            if (headers["Authorization"] == "Bearer secret-lyrics-token") {
+                val json = """
+                    {
+                      "items": [
+                        {
+                          "externalId": "auth-1",
+                          "title": "21→22",
+                          "artist": "あよ",
+                          "syncedLyrics": "[00:01.00]Line"
+                        }
+                      ]
+                    }
+                """.trimIndent()
+                CloudHttpResponse(200, url, emptyMap(), json.toByteArray())
+            } else {
+                CloudHttpResponse(401, url, emptyMap(), ByteArray(0))
+            }
+        }
+
+        val stateDir = tempFolder.newFolder("state-auth")
+        val extStore = ExtensionStore(stateDir, mockHttp, CloudProviderRegistry(), appVersion = "1.2.3")
+        val staged = extStore.stageFromBytes(script.toByteArray(), fileNameHint = "auth.musico.js").getOrThrow()
+        val installed = extStore.installStaged(staged, enableImmediately = true)
+        extStore.setEnabled(installed.id, enabled = true)
+        extStore.updateCookie(installed.id, "secret-lyrics-token")
+
+        val service = CloudLyricsService(
+            httpClient = mockHttp,
+            appVersion = "1.2.3",
+            extensionSearch = { id, q -> extStore.searchLyrics(id, q) },
+        )
+        val resp = service.search(
+            CloudLyricsQuery("21→22", "あよ", null, null),
+            CloudLyricsSourceSelection.Extension("sample.lyrics.auth"),
+            extStore.activeLyricsExtensions(),
+        )
+        assertEquals(1, resp.candidates.size)
+        assertEquals("Bearer secret-lyrics-token", mockHttp.requests.single().second["Authorization"])
+    }
 }
