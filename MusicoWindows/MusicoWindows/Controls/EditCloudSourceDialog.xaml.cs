@@ -70,7 +70,7 @@ public partial class EditCloudSourceDialog : UserControl
         _missingProviderId = null;
         _missingProviderLabel = null;
         if (!string.IsNullOrWhiteSpace(boundProviderId) &&
-            services.CloudProviders.FindProvider(boundProviderId) is null)
+            services.CloudProviders.GetById(boundProviderId) is null)
         {
             _missingProviderId = boundProviderId;
             _missingProviderLabel = root.IsCloud

@@ -202,7 +202,7 @@ public partial class FullPlayerView : UserControl
         try
         {
             bool switched = await _ctx.Services.Player.SwitchCurrentTrackQualityAsync(qualityId);
-            if (!switched && _ctx.Services.Player.LastError is { Length: > 0 } err)
+            if (!switched && _ctx.Services.Player.ErrorMessage is { Length: > 0 } err)
             {
                 ErrorOccurred?.Invoke(L.Get("Quality_SwitchFailedTitle"), err);
             }
