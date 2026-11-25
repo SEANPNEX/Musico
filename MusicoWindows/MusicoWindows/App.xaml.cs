@@ -181,6 +181,22 @@ public partial class App : Application
             LocalizationManager.SetMode(this, AppLanguage.English, langPrefPath);
             await Dispatcher.Yield(DispatcherPriority.Background);
 
+            foreach (var navButton in new[]
+                     {
+                         window.NavFolders,
+                         window.NavSongs,
+                         window.NavAlbums,
+                         window.NavArtists,
+                         window.NavPlaylists,
+                         window.NavStats,
+                         window.NavExtensions,
+                         window.NavQueues
+                     })
+            {
+                navButton.IsChecked = true;
+                await Dispatcher.Yield(DispatcherPriority.Background);
+            }
+
             window.Close();
             Shutdown(0);
         }

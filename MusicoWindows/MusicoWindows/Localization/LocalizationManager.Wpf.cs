@@ -7,8 +7,8 @@ namespace MusicoWindows.Localization;
 
 public static partial class LocalizationManager
 {
-    private static readonly Uri EnUri = new("pack://application:,,,/MusicoWindows;component/Localization/Strings.en.xaml", UriKind.Absolute);
-    private static readonly Uri ZhHansUri = new("pack://application:,,,/MusicoWindows;component/Localization/Strings.zh-Hans.xaml", UriKind.Absolute);
+    private const string EnResourceUri = "pack://application:,,,/MusicoWindows;component/Localization/Strings.en.xaml";
+    private const string ZhHansResourceUri = "pack://application:,,,/MusicoWindows;component/Localization/Strings.zh-Hans.xaml";
 
     private static ResourceDictionary? _currentStringsDict;
 
@@ -43,7 +43,7 @@ public static partial class LocalizationManager
 
     private static void SwapStringDictionary(Application app, ResolvedLanguage language)
     {
-        var uri = language == ResolvedLanguage.SimplifiedChinese ? ZhHansUri : EnUri;
+        var uri = new Uri(language == ResolvedLanguage.SimplifiedChinese ? ZhHansResourceUri : EnResourceUri, UriKind.Absolute);
         var newDict = new ResourceDictionary { Source = uri };
 
         var merged = app.Resources.MergedDictionaries;

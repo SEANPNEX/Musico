@@ -339,6 +339,8 @@ public partial class CloudLyricsDialog : UserControl
 
     private void RenderPreview()
     {
+        if (PreviewHeaderText is null || IncludeTranslationCheck is null || PreviewBodyText is null) return;
+
         if (_selectedCandidate is null)
         {
             PreviewHeaderText.Text = string.Empty;
@@ -367,7 +369,11 @@ public partial class CloudLyricsDialog : UserControl
         }
     }
 
-    private void IncludeTranslation_Changed(object sender, RoutedEventArgs e) => RenderPreview();
+    private void IncludeTranslation_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        RenderPreview();
+    }
 
     private void Search_Click(object sender, RoutedEventArgs e) => _ = ExecuteSearchAsync();
 

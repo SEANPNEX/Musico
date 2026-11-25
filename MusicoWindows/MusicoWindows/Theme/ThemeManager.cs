@@ -21,8 +21,8 @@ public static class ThemeManager
 {
     private const string PersonalizeKeyPath = @"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize";
     private const string AppsUseLightThemeValue = "AppsUseLightTheme";
-    private static readonly Uri LightUri = new("pack://application:,,,/MusicoWindows;component/Theme/Win10Light.xaml", UriKind.Absolute);
-    private static readonly Uri DarkUri = new("pack://application:,,,/MusicoWindows;component/Theme/Win10Dark.xaml", UriKind.Absolute);
+    private const string LightResourceUri = "pack://application:,,,/MusicoWindows;component/Theme/Win10Light.xaml";
+    private const string DarkResourceUri = "pack://application:,,,/MusicoWindows;component/Theme/Win10Dark.xaml";
 
     private static ResourceDictionary? _currentThemeDict;
     private static bool _listeningToSystem;
@@ -110,7 +110,7 @@ public static class ThemeManager
     private static void ApplyTheme(Application app, bool isDark)
     {
         IsDark = isDark;
-        var uri = isDark ? DarkUri : LightUri;
+        var uri = new Uri(isDark ? DarkResourceUri : LightResourceUri, UriKind.Absolute);
         var newDict = new ResourceDictionary { Source = uri };
 
         var merged = app.Resources.MergedDictionaries;
