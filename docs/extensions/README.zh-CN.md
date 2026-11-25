@@ -395,8 +395,8 @@ module.exports = {
 | `capabilities` | `string[]` | 是 | 非空数组，支持声明 `"playlist"`、`"tree"`、`"stream"`、`"cookie"`、`"proxy"`、`"lyrics"`、`"search"`、`"qr_login"`。 |
 | `urlPatterns` | `string[]` | 条件必填 | 原生端先做预筛选的正则表达式列表。声明 `"playlist"` 或 `"tree"` 时**必填**；其余扩展（如纯 `"lyrics"`、纯 `"search"` 或 `"search" + "stream"`）可省略或留空。 |
 | `searchKinds` | `string[]` | 否 | 支持 `"track"`、`"playlist"`、`"album"` 的子集，控制搜歌页面的分类筛选选项（省略或为空时默认开启全部三种）。 |
-| `permissions.hosts` | `string[]` | 是 | 严格的 HTTP/HTTPS 域名白名单：支持精确域名（`example.com`）或二级以上通配子域（`*.sub.domain`，禁止裸 `*` 或 `*.com`）。 |
-| `settings` | `array` | 否 | 配置项列表 `{ key, label, type, default, options? }`，`type` 支持 `"boolean"`、`"string"`、`"select"`；`select` 的 `options` 支持纯字符串或 `{ value, label }` 对象。 |
+| `permissions.hosts` | `string[]` | 条件必填 | 严格的 HTTP/HTTPS 域名白名单：支持精确域名（`example.com`）或二级以上通配子域（`*.sub.domain`，禁止裸 `*` 或 `*.com`）。当 `settings` 包含 `"server_url"` 配置项时可留空。 |
+| `settings` | `array` | 否 | 配置项列表 `{ key, label, type, default, options? }`，`type` 支持 `"boolean"`、`"string"`、`"select"`、`"server_url"`；`select` 的 `options` 支持纯字符串或 `{ value, label }` 对象；`"server_url"` 会将用户填写的 `http://` 或 `https://` 服务器精确主机名动态加入扩展的网络白名单。 |
 
 ---
 

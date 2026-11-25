@@ -1136,6 +1136,93 @@ final class ExtensionRuntimeTests: XCTestCase {
         await store.checkForUpdatesIfNeeded(now: t0.addingTimeInterval(20 * 60 * 60))
         XCTAssertTrue(requestedURLs.value.isEmpty)
     }
+
+    func testServerURLSettingDynamicallyAllowsConfiguredHostWhileBlockingOthers() async throws {
+        let script = """
+        'use strict';
+        var manifest = {
+          apiVersion: 1,
+          id: 'com.test.serverurl',
+          name: 'Server URL Ext',
+          version: '1.0.0',
+          capabilities: ['search', 'stream'],
+          permissions: { hosts: [] },
+          settings: [
+            { key: 'serverUrl', label: 'Server URL', type: 'server_url', default: '' }
+          ]
+        };
+        async function search(ctx, req) {
+          var base = String(ctx.settings.get('serverUrl') || '').replace(/\\/+$/, '');
+          var res = await ctx.http.request({ method: 'GET', url: base + '/v1/search?q=' + encodeURIComponent(req.query) });
+          var data = JSON.parse(res.text);
+          return {
+            items: [{ kind: 'track', remoteTrackId: data.id, title: data.title }],
+            nextCursor: null
+          };
+        }
+        async function resolveStream(ctx, req) {
+          var base = String(ctx.settings.get('serverUrl') || '').replace(/\\/+$/, '');
+          if (req.remoteTrackId === 'evil') {
+            return { url: 'https://evil.example.test/stream.m4a', fileExtension: 'm4a' };
+          }
+          return { url: base + '/v1/tracks/' + req.remoteTrackId + '/stream', fileExtension: 'm4a' };
+        }
+        module.exports = { manifest: manifest, search: search, resolveStream: resolveStream };
+        """
+
+        let manifest = try await JSExtensionRuntime.extractManifest(from: script)
+        XCTAssertTrue(manifest.hasServerURLSetting)
+        XCTAssertEqual(manifest.settings?.first?.type, .serverURL)
+        XCTAssertNil(HostAllowlistMatcher.extractApprovedHost(fromServerURL: "file:///etc/passwd"))
+        XCTAssertNil(HostAllowlistMatcher.extractApprovedHost(fromServerURL: "https://*.example.com"))
+        XCTAssertNil(HostAllowlistMatcher.extractApprovedHost(fromServerURL: "not a url"))
+        XCTAssertEqual(HostAllowlistMatcher.extractApprovedHost(fromServerURL: "https://am.local.test:8787/api"), "am.local.test")
+        XCTAssertEqual(HostAllowlistMatcher.extractApprovedHost(fromServerURL: "http://127.0.0.1:8787"), "127.0.0.1")
+
+        let transport = FixtureTransport { req in
+            let payload = #"{"id":"tr-9","title":"Server OK"}"#
+            return HTTPResponseData(
+                statusCode: 200,
+                headers: ["Content-Type": "application/json"],
+                data: Data(payload.utf8),
+                finalURL: req.url
+            )
+        }
+
+        // Valid HTTPS server URL with port
+        let delegate = InMemoryExtensionHostDelegate(settings: [
+            manifest.id: ["serverUrl": .string("https://am.local.test:8787/")]
+        ])
+        let runtime = JSExtensionRuntime(manifest: manifest, scriptSource: script, transport: transport, hostDelegate: delegate)
+        let page = try await runtime.search(query: "test")
+        XCTAssertEqual(page.items.first?.title, "Server OK")
+
+        let stream = try await runtime.resolveStream(remoteTrackID: "tr-9", relativePath: nil, cookie: nil, forceRefresh: false)
+        XCTAssertEqual(stream.url, "https://am.local.test:8787/v1/tracks/tr-9/stream")
+
+        do {
+            _ = try await runtime.resolveStream(remoteTrackID: "evil", relativePath: nil, cookie: nil, forceRefresh: false)
+            XCTFail("Expected unrelated stream host to be rejected")
+        } catch let err as CloudSourceError {
+            guard case .permissionDenied = err else {
+                return XCTFail("Expected permissionDenied, got \(err)")
+            }
+        }
+
+        // Invalid serverUrl grants no host permission
+        let badDelegate = InMemoryExtensionHostDelegate(settings: [
+            manifest.id: ["serverUrl": .string("https://*.wildcard.test")]
+        ])
+        let badRuntime = JSExtensionRuntime(manifest: manifest, scriptSource: script, transport: transport, hostDelegate: badDelegate)
+        do {
+            _ = try await badRuntime.resolveStream(remoteTrackID: "tr-9", relativePath: nil, cookie: nil, forceRefresh: false)
+            XCTFail("Expected invalid wildcard serverUrl to grant no host permission")
+        } catch let err as CloudSourceError {
+            guard case .permissionDenied = err else {
+                return XCTFail("Expected permissionDenied, got \(err)")
+            }
+        }
+    }
 }
 
 private final class NSLockBox<Value>: @unchecked Sendable {

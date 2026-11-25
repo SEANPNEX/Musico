@@ -31,6 +31,7 @@ const STARTER_SINGLE = path.resolve(__dirname, '../starter-single-file.musico.js
 
 export const VALID_CAPABILITIES = new Set(['playlist', 'tree', 'stream', 'cookie', 'proxy', 'lyrics', 'search', 'qr_login']);
 export const VALID_SEARCH_KINDS = new Set(['track', 'playlist', 'album']);
+export const VALID_SETTING_TYPES = new Set(['boolean', 'string', 'select', 'server_url']);
 export const VALID_QR_LOGIN_STATUSES = new Set(['pending', 'scanned', 'confirmed', 'expired', 'error']);
 
 export function validateRequiredHooks(manifest, exportsObj) {
@@ -93,11 +94,49 @@ export function validateManifest(manifest) {
       assert.ok(VALID_SEARCH_KINDS.has(String(kind)), `Unsupported searchKind: ${kind}`);
     }
   }
-  assert.ok(manifest.permissions && Array.isArray(manifest.permissions.hosts) && manifest.permissions.hosts.length > 0, 'permissions.hosts required');
+  const hasServerUrlSetting = Array.isArray(manifest.settings) &&
+    manifest.settings.some((s) => s && s.type === 'server_url');
+  assert.ok(
+    manifest.permissions &&
+      Array.isArray(manifest.permissions.hosts) &&
+      (manifest.permissions.hosts.length > 0 || hasServerUrlSetting),
+    'permissions.hosts required'
+  );
   for (const hostPat of manifest.permissions.hosts) {
     validateHostPattern(hostPat);
   }
+  if (manifest.settings !== undefined) {
+    assert.ok(Array.isArray(manifest.settings), 'settings must be an array');
+    for (const spec of manifest.settings) {
+      assert.ok(spec && typeof spec === 'object', 'setting spec must be an object');
+      assert.ok(typeof spec.key === 'string' && spec.key.trim().length > 0, 'setting key required');
+      assert.ok(VALID_SETTING_TYPES.has(String(spec.type)), `Unsupported setting type: ${spec.type}`);
+    }
+  }
   return manifest;
+}
+
+export function extractApprovedHost(rawServerUrl) {
+  const trimmed = String(rawServerUrl || '').trim();
+  if (!trimmed) return null;
+  let parsed;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return null;
+  }
+  const host = parsed.hostname.toLowerCase().replace(/\.$/, '');
+  if (!host || host.startsWith('*.') || host.includes('*')) {
+    return null;
+  }
+  try {
+    return validateHostPattern(host);
+  } catch {
+    return null;
+  }
 }
 
 export function validateHostPattern(pattern) {
@@ -179,10 +218,22 @@ export function evaluateCommonJS(source, timeoutMs = 15000) {
 
 export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = new Map(), httpResponder = null, platform = 'macos', appVersion = '1.2.6-dev' } = {}) {
   const logs = [];
-  const allowedHosts = manifest.permissions?.hosts || [];
   const defaultSettings = {};
   for (const s of manifest.settings || []) {
     defaultSettings[s.key] = s.default;
+  }
+  const allowedHosts = [...(manifest.permissions?.hosts || [])];
+  const seenHosts = new Set(allowedHosts.map((h) => String(h).trim().toLowerCase().replace(/\.+$/, '')));
+  for (const s of manifest.settings || []) {
+    if (s.type !== 'server_url') continue;
+    const rawVal = Object.prototype.hasOwnProperty.call(settingsOverrides, s.key)
+      ? settingsOverrides[s.key]
+      : s.default;
+    const approved = extractApprovedHost(rawVal);
+    if (approved && !seenHosts.has(approved)) {
+      seenHosts.add(approved);
+      allowedHosts.push(approved);
+    }
   }
 
   function assertAllowedUrl(urlString) {
@@ -854,8 +905,53 @@ async function runSelfTest() {
     permissions: { hosts: ['auth.fixture.test'] }
   }, { manifest: {} }), /startQrLogin/);
 
+  // 7. Test server_url setting dynamic host allowlist
+  const serverUrlSource = `
+    var manifest = {
+      apiVersion: 1,
+      id: 'com.example.test.serverurl',
+      name: 'Test Server URL',
+      version: '1.0.0',
+      capabilities: ['search', 'stream'],
+      permissions: { hosts: [] },
+      settings: [
+        { key: 'serverUrl', label: 'Server URL', type: 'server_url', default: '' }
+      ]
+    };
+    async function search(ctx, req) {
+      var base = String(ctx.settings.get('serverUrl') || '').replace(/\\/+$/, '');
+      var res = await ctx.http.request({ method: 'GET', url: base + '/ok' });
+      return { items: [{ kind: 'track', remoteTrackId: 's1', title: res.text }], nextCursor: null };
+    }
+    async function resolveStream(ctx, req) {
+      var base = String(ctx.settings.get('serverUrl') || '').replace(/\\/+$/, '');
+      if (req.remoteTrackId === 'evil') {
+        return { url: 'https://evil.example.com/a.m4a', fileExtension: 'm4a' };
+      }
+      return { url: base + '/stream.m4a', fileExtension: 'm4a' };
+    }
+    module.exports = { manifest: manifest, search: search, resolveStream: resolveStream };
+  `;
+  const serverExports = evaluateCommonJS(serverUrlSource);
+  validateManifest(serverExports.manifest);
+  const serverExt = { manifest: serverExports.manifest, source: serverUrlSource, exportsObj: serverExports };
+  const serverBridge = createHostBridge(serverExports.manifest, {
+    settingsOverrides: { serverUrl: 'https://edge1.cdn.fixture.test:8787/' },
+    httpResponder: responder
+  });
+  const serverSearch = await runSearch(serverExt, serverBridge, { query: 'test' });
+  assert.equal(serverSearch.items[0].title, 'edge-ok');
+  const serverStream = await runResolveStream(serverExt, serverBridge, { remoteTrackId: 's1', forceRefresh: false });
+  assert.equal(serverStream.url, 'https://edge1.cdn.fixture.test:8787/stream.m4a');
+  await assert.rejects(
+    () => runResolveStream(serverExt, serverBridge, { remoteTrackId: 'evil', forceRefresh: false }),
+    (err) => err.code === 'PERMISSION_DENIED'
+  );
+  assert.equal(extractApprovedHost('file:///etc/passwd'), null);
+  assert.equal(extractApprovedHost('https://*.example.com'), null);
+
   console.log('ALL_SELF_TESTS_PASSED', {
-    testedFixtures: ['basic-playlist.musico.js', 'tree-source', 'security-and-errors.musico.js', 'starter', 'starter-single-file.musico.js', 'in-memory-lyrics', 'in-memory-search', 'in-memory-qr-login'],
+    testedFixtures: ['basic-playlist.musico.js', 'tree-source', 'security-and-errors.musico.js', 'starter', 'starter-single-file.musico.js', 'in-memory-lyrics', 'in-memory-search', 'in-memory-qr-login', 'in-memory-server-url'],
     httpRequestsExecuted: capturedRequests.length
   });
 }

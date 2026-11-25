@@ -201,6 +201,8 @@ interface AppStrings {
     val extensionCookieLabel: String
     val extensionCookiePlaceholder: String
     val extensionCookieSupportingText: String
+    val extensionServerUrlHint: String
+    fun extensionServerUrlAllowedHost(host: String): String
     val showCookie: String
     val hideCookie: String
     val clearCookie: String
@@ -767,6 +769,8 @@ object EnStrings : AppStrings {
     override val extensionCookieLabel = "Extension Cookie"
     override val extensionCookiePlaceholder = "Paste cookie header (optional)"
     override val extensionCookieSupportingText = "Stored locally and sent only to this extension for search, preview, and streaming."
+    override val extensionServerUrlHint = "Enter an http:// or https:// server URL. Its host will be allowed for this extension."
+    override fun extensionServerUrlAllowedHost(host: String) = "Allows network access to: $host"
     override val showCookie = "Show cookie"
     override val hideCookie = "Hide cookie"
     override val clearCookie = "Clear cookie"
@@ -1329,6 +1333,8 @@ object ZhHansStrings : AppStrings {
     override val extensionCookieLabel = "扩展 Cookie"
     override val extensionCookiePlaceholder = "粘贴 Cookie 请求头（可选）"
     override val extensionCookieSupportingText = "仅保存在本地，并仅发送给此扩展用于搜索、预览和播放。"
+    override val extensionServerUrlHint = "请输入 http:// 或 https:// 服务器地址，其主机将被允许供此扩展访问。"
+    override fun extensionServerUrlAllowedHost(host: String) = "允许网络访问：$host"
     override val showCookie = "显示 Cookie"
     override val hideCookie = "隐藏 Cookie"
     override val clearCookie = "清除 Cookie"

@@ -1108,6 +1108,7 @@ private fun ExtensionSettingsDialog(
                     SettingFieldRow(
                         spec = spec,
                         overrides = overrides,
+                        strings = strings,
                         onUpdate = { value -> onUpdateSetting(spec.key, value) },
                     )
                 }
@@ -1179,6 +1180,7 @@ private fun ExtensionSettingsDialog(
 private fun SettingFieldRow(
     spec: ExtensionSettingSpec,
     overrides: Map<String, JsonPrimitive>,
+    strings: AppStrings,
     onUpdate: (JsonPrimitive) -> Unit,
 ) {
     when (spec.type) {
@@ -1210,6 +1212,28 @@ private fun SettingFieldRow(
                 value = current,
                 onValueChange = { onUpdate(JsonPrimitive(it)) },
                 label = { Text(spec.label) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
+        ExtensionSettingType.SERVER_URL -> {
+            val current = spec.resolveString(overrides)
+            val approvedHost = com.musico.extensions.HostAllowlistMatcher.extractApprovedHost(current)
+            OutlinedTextField(
+                value = current,
+                onValueChange = { onUpdate(JsonPrimitive(it)) },
+                label = { Text(spec.label) },
+                placeholder = { Text("https://server.example.com") },
+                supportingText = {
+                    Text(
+                        if (approvedHost != null) {
+                            strings.extensionServerUrlAllowedHost(approvedHost)
+                        } else {
+                            strings.extensionServerUrlHint
+                        }
+                    )
+                },
+                keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
             )

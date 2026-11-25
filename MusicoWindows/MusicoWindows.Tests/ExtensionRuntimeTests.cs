@@ -1130,4 +1130,76 @@ public sealed class ExtensionRuntimeTests
         int sepCol = left == 0 ? 7 : left - 1;
         Assert.False(matrix.Get(sepRow, sepCol));
     }
+
+    [Fact]
+    public async Task ServerUrlSetting_DynamicallyAllowsConfiguredHostAndBlocksOthers()
+    {
+        var handler = new AsyncStubHttpHandler((req, _) =>
+        {
+            string json = """{"id":"tr-win-1","title":"Windows Server OK"}""";
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, Encoding.UTF8, "application/json")
+            });
+        });
+
+        var store = new ExtensionStore(TestHelpers.MakeTempDir(), handler);
+        const string script = """
+            'use strict';
+            var manifest = {
+              apiVersion: 1,
+              id: 'com.musico.test.win.serverurl',
+              name: 'Windows Server URL',
+              version: '1.0.0',
+              capabilities: ['search', 'stream'],
+              permissions: { hosts: [] },
+              settings: [
+                { key: 'serverUrl', label: 'Server URL', type: 'server_url', default: '' }
+              ]
+            };
+            async function search(ctx, req) {
+              var base = String(ctx.settings.get('serverUrl') || '').replace(/\/+$/, '');
+              var res = await ctx.http.request({ method: 'GET', url: base + '/v1/search?q=' + encodeURIComponent(req.query) });
+              var data = JSON.parse(res.text);
+              return { items: [{ kind: 'track', remoteTrackId: data.id, title: data.title }], nextCursor: null };
+            }
+            async function resolveStream(ctx, req) {
+              var base = String(ctx.settings.get('serverUrl') || '').replace(/\/+$/, '');
+              if (req.remoteTrackId === 'evil') {
+                return { url: 'https://evil.example.test/stream.m4a', fileExtension: 'm4a' };
+              }
+              return { url: base + '/v1/tracks/' + req.remoteTrackId + '/stream', fileExtension: 'm4a' };
+            }
+            module.exports = { manifest: manifest, search: search, resolveStream: resolveStream };
+            """;
+
+        Assert.Null(HostAllowlistMatcher.ExtractApprovedHost("file:///etc/passwd"));
+        Assert.Null(HostAllowlistMatcher.ExtractApprovedHost("https://*.wildcard.test"));
+        Assert.Equal("am.local.test", HostAllowlistMatcher.ExtractApprovedHost("https://am.local.test:8787/api"));
+
+        var staged = store.StageImportedPackage(ExtensionPackageLoader.LoadSingleFileScript(script));
+        Assert.True(staged.Manifest.HasServerUrlSetting);
+        store.ApproveAndEnable(staged.Id);
+        store.SetSettingValue(staged.Id, "serverUrl", "https://am.local.test:8787/");
+
+        var page = await store.SearchAsync(staged.Id, "hello");
+        var item = Assert.Single(page.Items);
+        Assert.Equal("Windows Server OK", item.Title);
+
+        var runtime = new JintExtensionRuntime(handler);
+        var stream = await runtime.ResolveStreamAsync(
+            staged.Manifest,
+            script,
+            new ExtResolveStreamRequest { RemoteTrackId = "tr-win-1" },
+            host: store);
+        Assert.Equal("https://am.local.test:8787/v1/tracks/tr-win-1/stream", stream.Url);
+
+        var ex = await Assert.ThrowsAsync<CloudServiceException>(() =>
+            runtime.ResolveStreamAsync(
+                staged.Manifest,
+                script,
+                new ExtResolveStreamRequest { RemoteTrackId = "evil" },
+                host: store));
+        Assert.Equal(CloudErrorCode.PermissionDenied, ex.Code);
+    }
 }

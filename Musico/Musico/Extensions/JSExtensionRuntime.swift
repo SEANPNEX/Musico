@@ -792,8 +792,15 @@ final class JSExtensionRuntime: @unchecked Sendable {
         }
     }
 
+    private func effectiveAllowedHosts() -> [String] {
+        manifest.effectiveAllowedHosts { key in
+            self.hostDelegate?.settingValue(extensionID: self.manifest.id, key: key)
+        }
+    }
+
     private func assertAllowedURL(_ urlString: String) throws {
-        guard HostAllowlistMatcher.isAllowed(urlString: urlString, patterns: manifest.permissions.hosts) else {
+        let allowedHosts = effectiveAllowedHosts()
+        guard HostAllowlistMatcher.isAllowed(urlString: urlString, patterns: allowedHosts) else {
             let host = HostAllowlistMatcher.extractedHost(from: urlString)
             throw CloudSourceError.permissionDenied(host: host)
         }
@@ -1322,6 +1329,12 @@ private final class AsyncInvocationSession: @unchecked Sendable {
         }
     }
 
+    private func effectiveAllowedHosts() -> [String] {
+        manifest.effectiveAllowedHosts { key in
+            self.hostDelegate?.settingValue(extensionID: self.manifest.id, key: key)
+        }
+    }
+
     private func executeHTTPRequest(requestJSON: String) async throws -> String {
         guard let reqData = requestJSON.data(using: .utf8),
               let reqObj = try JSONSerialization.jsonObject(with: reqData) as? [String: Any] else {
@@ -1353,9 +1366,10 @@ private final class AsyncInvocationSession: @unchecked Sendable {
         var currentMethod = method
         var currentBody: Data? = bodyString.map { Data($0.utf8) }
 
+        let allowedHosts = effectiveAllowedHosts()
         for hop in 0...JSExtensionRuntime.maxHTTPRedirectHops {
             try Task.checkCancellation()
-            guard HostAllowlistMatcher.isAllowed(url: currentURL, patterns: manifest.permissions.hosts) else {
+            guard HostAllowlistMatcher.isAllowed(url: currentURL, patterns: allowedHosts) else {
                 throw CloudSourceError.permissionDenied(host: HostAllowlistMatcher.extractedHost(from: currentURL.absoluteString))
             }
 
@@ -1386,7 +1400,7 @@ private final class AsyncInvocationSession: @unchecked Sendable {
                 guard let nextURL = URL(string: location, relativeTo: currentURL)?.absoluteURL else {
                     throw CloudSourceError.networkError("Invalid redirect Location URL")
                 }
-                guard HostAllowlistMatcher.isAllowed(url: nextURL, patterns: manifest.permissions.hosts) else {
+                guard HostAllowlistMatcher.isAllowed(url: nextURL, patterns: allowedHosts) else {
                     throw CloudSourceError.permissionDenied(host: HostAllowlistMatcher.extractedHost(from: nextURL.absoluteString))
                 }
 

@@ -318,7 +318,8 @@ public sealed class JintExtensionRuntime
                 "Extension resolveStream did not return a playable stream URL.");
         }
 
-        if (!HostAllowlistMatcher.IsAllowed(result.Url, manifest.Permissions.Hosts))
+        IReadOnlyList<string> allowedHosts = ResolveEffectiveAllowedHosts(manifest, host);
+        if (!HostAllowlistMatcher.IsAllowed(result.Url, allowedHosts))
         {
             throw new CloudServiceException(
                 CloudErrorCode.PermissionDenied,
@@ -330,7 +331,7 @@ public sealed class JintExtensionRuntime
             foreach (string fallbackUrl in result.FallbackUrls)
             {
                 if (string.IsNullOrWhiteSpace(fallbackUrl)) continue;
-                if (!HostAllowlistMatcher.IsAllowed(fallbackUrl, manifest.Permissions.Hosts))
+                if (!HostAllowlistMatcher.IsAllowed(fallbackUrl, allowedHosts))
                 {
                     throw new CloudServiceException(
                         CloudErrorCode.PermissionDenied,
@@ -793,8 +794,9 @@ public sealed class JintExtensionRuntime
                 opts.CatchClrExceptions();
             });
 
+            IReadOnlyList<string> effectiveHosts = ResolveEffectiveAllowedHosts(manifest, effectiveHost);
             Func<string, Task<string>> httpBridge = reqJson =>
-                ExecuteHttpRequestEnvelopeAsync(reqJson, manifest.Permissions.Hosts, proxyUrl, linkedCts.Token);
+                ExecuteHttpRequestEnvelopeAsync(reqJson, effectiveHosts, proxyUrl, linkedCts.Token);
 
             var cryptoBridge = new CryptoBridge();
             var kvBridge = new KvBridge(effectiveHost, manifest.Id);
@@ -865,6 +867,14 @@ public sealed class JintExtensionRuntime
                 throw TranslateJsException(ex, hookName, timeout, ct);
             }
         }, ct);
+    }
+
+    private static IReadOnlyList<string> ResolveEffectiveAllowedHosts(
+        ExtensionManifest manifest,
+        IExtensionHostServices? host)
+    {
+        var effectiveHost = host ?? new InMemoryExtensionHostServices(manifest);
+        return manifest.GetEffectiveAllowedHosts(key => effectiveHost.GetSettingJson(manifest.Id, key));
     }
 
     private async Task<string> ExecuteHttpRequestEnvelopeAsync(

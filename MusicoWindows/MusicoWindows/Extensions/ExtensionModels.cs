@@ -33,7 +33,8 @@ public enum ExtensionSettingType
 {
     Boolean,
     String,
-    Select
+    Select,
+    ServerUrl
 }
 
 public sealed class ExtensionCapabilityJsonConverter : JsonConverter<ExtensionCapability>
@@ -113,6 +114,7 @@ public sealed class ExtensionSettingTypeJsonConverter : JsonConverter<ExtensionS
             "boolean" => ExtensionSettingType.Boolean,
             "string" => ExtensionSettingType.String,
             "select" => ExtensionSettingType.Select,
+            "server_url" => ExtensionSettingType.ServerUrl,
             _ => throw new JsonException($"Unsupported extension setting type: '{raw}'.")
         };
     }
@@ -124,6 +126,7 @@ public sealed class ExtensionSettingTypeJsonConverter : JsonConverter<ExtensionS
             ExtensionSettingType.Boolean => "boolean",
             ExtensionSettingType.String => "string",
             ExtensionSettingType.Select => "select",
+            ExtensionSettingType.ServerUrl => "server_url",
             _ => value.ToString().ToLowerInvariant()
         });
     }
@@ -296,6 +299,51 @@ public sealed class ExtensionManifest
     [JsonIgnore]
     public bool SupportsQrLogin =>
         HasCapability(ExtensionCapability.QrLogin);
+
+    [JsonIgnore]
+    public bool HasServerUrlSetting =>
+        Settings?.Any(s => s.Type == ExtensionSettingType.ServerUrl) ?? false;
+
+    public IReadOnlyList<string> GetEffectiveAllowedHosts(Func<string, string?> settingJsonLookup)
+    {
+        var combined = new List<string>(Permissions?.Hosts ?? []);
+        var seen = new HashSet<string>(
+            combined.Select(h => (h ?? string.Empty).Trim().ToLowerInvariant().TrimEnd('.')),
+            StringComparer.Ordinal);
+
+        if (Settings is not null)
+        {
+            foreach (var spec in Settings)
+            {
+                if (spec.Type != ExtensionSettingType.ServerUrl) continue;
+                string? rawUrl = null;
+                string? rawJson = settingJsonLookup(spec.Key);
+                if (!string.IsNullOrWhiteSpace(rawJson))
+                {
+                    try
+                    {
+                        using var doc = JsonDocument.Parse(rawJson);
+                        if (doc.RootElement.ValueKind == JsonValueKind.String)
+                        {
+                            rawUrl = doc.RootElement.GetString();
+                        }
+                    }
+                    catch
+                    {
+                        rawUrl = null;
+                    }
+                }
+                rawUrl ??= spec.GetDefaultString();
+                string? approved = HostAllowlistMatcher.ExtractApprovedHost(rawUrl);
+                if (approved is not null && seen.Add(approved))
+                {
+                    combined.Add(approved);
+                }
+            }
+        }
+
+        return combined;
+    }
 }
 
 public static class HostAllowlistMatcher
@@ -414,6 +462,30 @@ public static class HostAllowlistMatcher
 
     public static bool IsAllowed(string? urlString, IEnumerable<string>? allowedPatterns) =>
         IsAllowed(urlString, allowedPatterns, out _);
+
+    public static string? ExtractApprovedHost(string? rawServerUrl)
+    {
+        if (string.IsNullOrWhiteSpace(rawServerUrl)) return null;
+        if (!Uri.TryCreate(rawServerUrl.Trim(), UriKind.Absolute, out var uri)) return null;
+        if (!string.Equals(uri.Scheme, Uri.UriSchemeHttp, StringComparison.OrdinalIgnoreCase) &&
+            !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+        string host = (uri.IdnHost ?? uri.Host).Trim().ToLowerInvariant().TrimEnd('.');
+        if (string.IsNullOrEmpty(host) || host.StartsWith("*.", StringComparison.Ordinal) || host.Contains('*', StringComparison.Ordinal))
+        {
+            return null;
+        }
+        try
+        {
+            return ValidatePattern(host);
+        }
+        catch
+        {
+            return null;
+        }
+    }
 }
 
 public static class ExtensionManifestValidator
@@ -501,12 +573,13 @@ public static class ExtensionManifestValidator
             }
         }
 
-        if (manifest.Permissions?.Hosts is null || manifest.Permissions.Hosts.Count == 0)
+        if ((manifest.Permissions?.Hosts is null || manifest.Permissions.Hosts.Count == 0) &&
+            !manifest.HasServerUrlSetting)
         {
             throw new InvalidDataException("Extension manifest.permissions.hosts must declare at least one allowed host.");
         }
 
-        foreach (string hostPattern in manifest.Permissions.Hosts)
+        foreach (string hostPattern in manifest.Permissions?.Hosts ?? [])
         {
             HostAllowlistMatcher.ValidatePattern(hostPattern);
         }

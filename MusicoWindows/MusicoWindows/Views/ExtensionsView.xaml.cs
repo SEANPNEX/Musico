@@ -324,8 +324,9 @@ public partial class ExtensionsView : UserControl
 
         // Permissions summary row
         string capsText = string.Join(", ", ext.Manifest.Capabilities.Select(FormatCapability));
-        string hostsText = ext.Manifest.Permissions.Hosts.Count > 0
-            ? string.Join(", ", ext.Manifest.Permissions.Hosts)
+        var effectiveHosts = ext.Manifest.GetEffectiveAllowedHosts(key => store.GetSettingJson(ext.Id, key));
+        string hostsText = effectiveHosts.Count > 0
+            ? string.Join(", ", effectiveHosts)
             : L.Get("Extensions_NoHosts");
         var permTb = new TextBlock
         {
@@ -561,6 +562,40 @@ public partial class ExtensionsView : UserControl
                 editor = combo;
                 break;
 
+            case ExtensionSettingType.ServerUrl:
+                var serverStack = new StackPanel { MaxWidth = 300, HorizontalAlignment = HorizontalAlignment.Stretch };
+                string initialServerUrl = store.GetSettingString(extensionId, spec.Key);
+                var serverTb = new TextBox
+                {
+                    Style = (Style)FindResource("Win10TextBoxStyle"),
+                    Height = 32,
+                    HorizontalAlignment = HorizontalAlignment.Stretch,
+                    Text = initialServerUrl
+                };
+                var hintTb = new TextBlock
+                {
+                    FontFamily = (FontFamily)FindResource("Win10Font"),
+                    FontSize = 11,
+                    TextWrapping = TextWrapping.Wrap,
+                    Margin = new Thickness(0, 4, 0, 0),
+                    Text = FormatServerUrlHint(initialServerUrl)
+                };
+                hintTb.SetResourceReference(TextBlock.ForegroundProperty, "TextTertiaryBrush");
+                serverTb.TextChanged += (_, _) => hintTb.Text = FormatServerUrlHint(serverTb.Text);
+                serverTb.LostFocus += (_, _) => store.SetSettingValue(extensionId, spec.Key, serverTb.Text);
+                serverTb.KeyDown += (_, e) =>
+                {
+                    if (e.Key == Key.Enter)
+                    {
+                        store.SetSettingValue(extensionId, spec.Key, serverTb.Text);
+                        Keyboard.ClearFocus();
+                    }
+                };
+                serverStack.Children.Add(serverTb);
+                serverStack.Children.Add(hintTb);
+                editor = serverStack;
+                break;
+
             default:
                 var tb = new TextBox
                 {
@@ -586,6 +621,14 @@ public partial class ExtensionsView : UserControl
         Grid.SetColumn(editor, 1);
         row.Children.Add(editor);
         return row;
+    }
+
+    private static string FormatServerUrlHint(string? rawServerUrl)
+    {
+        string? host = HostAllowlistMatcher.ExtractApprovedHost(rawServerUrl);
+        return host is not null
+            ? L.Format("Extensions_ServerUrlAllowedHost", host)
+            : L.Get("Extensions_ServerUrlHint");
     }
 
     private Border CreatePill(string text, bool isAccent = false, bool isWarning = false)

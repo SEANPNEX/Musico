@@ -504,6 +504,10 @@ struct ExtensionDetailView: View {
             }
 
             Section(L10n.tr("Permissions")) {
+                let staticNormalized = Set(ext.manifest.permissions.hosts.map { HostAllowlistMatcher.normalizeHost($0) })
+                let dynamicHosts = ext.manifest.effectiveAllowedHosts { key in
+                    ext.state.settings[key]
+                }.filter { !staticNormalized.contains(HostAllowlistMatcher.normalizeHost($0)) }
                 ForEach(ext.manifest.permissions.hosts, id: \.self) { host in
                     Label {
                         Text(host)
@@ -511,6 +515,20 @@ struct ExtensionDetailView: View {
                     } icon: {
                         Image(systemName: "network")
                             .foregroundStyle(.blue)
+                    }
+                }
+                ForEach(dynamicHosts, id: \.self) { host in
+                    Label {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(host)
+                                .font(.system(.caption, design: .monospaced))
+                            Text(L10n.tr("From server setting"))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    } icon: {
+                        Image(systemName: "network")
+                            .foregroundStyle(.green)
                     }
                 }
                 HStack {
@@ -698,6 +716,34 @@ struct ExtensionDetailView: View {
             ) {
                 ForEach(options) { opt in
                     Text(opt.label).tag(opt.value)
+                }
+            }
+        case .serverURL:
+            let currentText = currentValue?.stringValue ?? ""
+            VStack(alignment: .leading, spacing: 4) {
+                LabeledContent(spec.label) {
+                    TextField(
+                        "https://server.example.com",
+                        text: Binding(
+                            get: { currentText },
+                            set: { extensionStore.updateSetting(extensionID: ext.id, key: spec.key, value: .string($0)) }
+                        )
+                    )
+                    .multilineTextAlignment(.trailing)
+                    .textInputAutocapitalization(.never)
+                    .autocorrectionDisabled()
+                    #if os(iOS)
+                    .keyboardType(.URL)
+                    #endif
+                }
+                if let approvedHost = HostAllowlistMatcher.extractApprovedHost(fromServerURL: currentText) {
+                    Text(L10n.tr("Allows network access to: %@", approvedHost))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(L10n.tr("Enter an http:// or https:// server URL. Its host will be allowed for this extension."))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
             }
         }

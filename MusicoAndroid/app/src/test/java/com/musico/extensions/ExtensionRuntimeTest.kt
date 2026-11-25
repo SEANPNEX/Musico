@@ -983,4 +983,71 @@ class ExtensionRuntimeTest {
             // expected
         }
     }
+
+    @Test
+    fun serverUrlSetting_dynamicallyAllowsConfiguredHost_andBlocksOthers() = runBlocking {
+        val extId = "com.test.android.serverurl"
+        val mockHttp = MockHttpTransport { call ->
+            jsonReply("""{"id":"tr-10","title":"Android Server OK"}""")
+        }
+        val (extStore, _, _) = createHarness(httpClient = mockHttp)
+        val runtime = QuickJsExtensionRuntime(httpClient = mockHttp, host = extStore)
+        val script = """
+            'use strict';
+            var manifest = {
+              apiVersion: 1,
+              id: '$extId',
+              name: 'Server URL Ext',
+              version: '1.0.0',
+              capabilities: ['search', 'stream'],
+              permissions: { hosts: [] },
+              settings: [
+                { key: 'serverUrl', label: 'Server URL', type: 'server_url', default: '' }
+              ]
+            };
+            async function search(ctx, req) {
+              var base = String(ctx.settings.get('serverUrl') || '').replace(/\/+$/, '');
+              var res = await ctx.http.request({ method: 'GET', url: base + '/v1/search?q=' + encodeURIComponent(req.query) });
+              var data = JSON.parse(res.text);
+              return { items: [{ kind: 'track', remoteTrackId: data.id, title: data.title }], nextCursor: null };
+            }
+            async function resolveStream(ctx, req) {
+              var base = String(ctx.settings.get('serverUrl') || '').replace(/\/+$/, '');
+              if (req.remoteTrackId === 'evil') {
+                return { url: 'https://evil.example.test/stream.m4a', fileExtension: 'm4a' };
+              }
+              return { url: base + '/v1/tracks/' + req.remoteTrackId + '/stream', fileExtension: 'm4a' };
+            }
+            module.exports = { manifest: manifest, search: search, resolveStream: resolveStream };
+        """.trimIndent()
+
+        val staged = extStore.stageFromBytes(script.toByteArray(Charsets.UTF_8), "serverurl.musico.js").getOrThrow()
+        assertTrue(staged.manifest.hasServerUrlSetting)
+        assertNull(HostAllowlistMatcher.extractApprovedHost("file:///etc/passwd"))
+        assertNull(HostAllowlistMatcher.extractApprovedHost("https://*.wildcard.test"))
+        assertEquals("am.local.test", HostAllowlistMatcher.extractApprovedHost("https://am.local.test:8787/api"))
+
+        val installed = extStore.installStaged(staged, enableImmediately = true)
+        extStore.updateSetting(installed.id, "serverUrl", JsonPrimitive("https://am.local.test:8787/"))
+
+        val page = extStore.search(extensionId = extId, query = "hello")
+        assertEquals(1, page.items.size)
+        assertEquals("Android Server OK", page.items[0].title)
+
+        val stream = runtime.resolveStream(
+            extension = extStore.findById(installed.id)!!,
+            remoteTrackId = "tr-10",
+        )
+        assertEquals("https://am.local.test:8787/v1/tracks/tr-10/stream", stream.url)
+
+        try {
+            runtime.resolveStream(
+                extension = extStore.findById(installed.id)!!,
+                remoteTrackId = "evil",
+            )
+            fail("Expected unrelated stream host to be rejected")
+        } catch (err: CloudSourceException) {
+            assertEquals(CloudErrorCode.PERMISSION_DENIED, err.code)
+        }
+    }
 }

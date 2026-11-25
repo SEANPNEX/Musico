@@ -292,6 +292,7 @@ struct ExtensionSettingSpec: Codable, Hashable, Identifiable, Sendable {
         case boolean
         case string
         case select
+        case serverURL = "server_url"
     }
 
     enum CodingKeys: String, CodingKey {
@@ -406,6 +407,25 @@ enum HostAllowlistMatcher {
             return normalizeHost(host)
         }
         return urlString
+    }
+
+    static func extractApprovedHost(fromServerURL raw: String) -> String? {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let url = URL(string: trimmed),
+              let scheme = url.scheme?.lowercased(),
+              scheme == "http" || scheme == "https",
+              let rawHost = URLComponents(url: url, resolvingAgainstBaseURL: true)?.host ?? url.host else {
+            return nil
+        }
+        let normalized = normalizeHost(rawHost)
+        guard !normalized.isEmpty,
+              !normalized.hasPrefix("*."),
+              !normalized.contains("*"),
+              let validated = try? validatePattern(normalized) else {
+            return nil
+        }
+        return validated
     }
 }
 
@@ -576,6 +596,25 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
         return String(fallback.prefix(16))
     }
 
+    var hasServerURLSetting: Bool {
+        (settings ?? []).contains { $0.type == .serverURL }
+    }
+
+    func effectiveAllowedHosts(settingLookup: (String) -> ExtensionSettingValue?) -> [String] {
+        var combined = permissions.hosts
+        var seen = Set(combined.map { HostAllowlistMatcher.normalizeHost($0) })
+        for spec in settings ?? [] where spec.type == .serverURL {
+            guard let raw = (settingLookup(spec.key) ?? spec.defaultValue)?.stringValue,
+                  let approvedHost = HostAllowlistMatcher.extractApprovedHost(fromServerURL: raw) else {
+                continue
+            }
+            if seen.insert(approvedHost).inserted {
+                combined.append(approvedHost)
+            }
+        }
+        return combined
+    }
+
     func defaultSettingValue(for key: String) -> ExtensionSettingValue? {
         settings?.first { $0.key == key }?.defaultValue
     }
@@ -605,7 +644,7 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
                 throw ExtensionManifestError.invalidURLPattern(pattern)
             }
         }
-        guard !permissions.hosts.isEmpty else {
+        guard !permissions.hosts.isEmpty || hasServerURLSetting else {
             throw ExtensionManifestError.missingRequiredField("permissions.hosts")
         }
         for host in permissions.hosts {

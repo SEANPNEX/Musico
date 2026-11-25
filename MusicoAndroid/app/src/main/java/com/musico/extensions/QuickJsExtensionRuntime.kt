@@ -411,7 +411,7 @@ class QuickJsExtensionRuntime(
             timeoutMs = shortTimeoutMs,
         )
         val resolved = decodeEnvelope<ExtResolveStreamResult>(raw)
-        val allowedHosts = extension.manifest.permissions.hosts
+        val allowedHosts = effectiveAllowedHosts(extension.manifest)
         HostAllowlistMatcher.assertAllowed(resolved.url, allowedHosts)
         resolved.fallbackUrls?.forEach { fb ->
             HostAllowlistMatcher.assertAllowed(fb, allowedHosts)
@@ -853,9 +853,12 @@ class QuickJsExtensionRuntime(
         )
     }
 
+    private fun effectiveAllowedHosts(manifest: ExtensionManifest): List<String> =
+        manifest.effectiveAllowedHosts { key -> host.getSetting(manifest.id, key) }
+
     private fun bindHostBridge(qjs: QuickJs, manifest: ExtensionManifest) {
         val extId = manifest.id
-        val allowedHosts = manifest.permissions.hosts
+        val allowedHosts = effectiveAllowedHosts(manifest)
 
         qjs.define("__musicoBridge") {
             asyncFunction(

@@ -12,6 +12,7 @@ import kotlinx.serialization.descriptors.element
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonEncoder
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
@@ -98,6 +99,9 @@ enum class ExtensionSettingType(val wireName: String) {
 
     @SerialName("select")
     SELECT("select"),
+
+    @SerialName("server_url")
+    SERVER_URL("server_url"),
 }
 
 @Serializable(with = ExtensionSelectOptionSerializer::class)
@@ -204,6 +208,24 @@ data class ExtensionManifest(
     val supportsQrLogin: Boolean
         get() = ExtensionCapability.QR_LOGIN in capabilities
 
+    val hasServerUrlSetting: Boolean
+        get() = settings.any { it.type == ExtensionSettingType.SERVER_URL }
+
+    fun effectiveAllowedHosts(settingLookup: (String) -> JsonElement?): List<String> {
+        val combined = permissions.hosts.toMutableList()
+        val seen = combined.mapTo(HashSet()) { it.trim().lowercase().trimEnd('.') }
+        for (spec in settings) {
+            if (spec.type != ExtensionSettingType.SERVER_URL) continue
+            val rawElem = settingLookup(spec.key) ?: spec.default
+            val rawUrl = (rawElem as? JsonPrimitive)?.contentOrNull ?: continue
+            val approved = HostAllowlistMatcher.extractApprovedHost(rawUrl) ?: continue
+            if (seen.add(approved)) {
+                combined.add(approved)
+            }
+        }
+        return combined
+    }
+
     companion object {
         const val CURRENT_API_VERSION = 1
         const val MAX_BADGE_LENGTH = 16
@@ -284,6 +306,17 @@ object HostAllowlistMatcher {
             )
         }
     }
+
+    fun extractApprovedHost(rawServerUrl: String?): String? {
+        val trimmed = rawServerUrl?.trim().orEmpty()
+        if (trimmed.isEmpty()) return null
+        val parsed = runCatching { URL(trimmed) }.getOrNull() ?: return null
+        val scheme = parsed.protocol?.lowercase() ?: return null
+        if (scheme != "http" && scheme != "https") return null
+        val rawHost = parsed.host?.lowercase()?.trimEnd('.')?.takeIf { it.isNotEmpty() } ?: return null
+        if (rawHost.startsWith("*.") || rawHost.contains('*')) return null
+        return runCatching { validatePattern(rawHost) }.getOrNull()
+    }
 }
 
 object ExtensionManifestValidator {
@@ -319,7 +352,7 @@ object ExtensionManifestValidator {
                 throw IllegalArgumentException("Invalid urlPattern regex '$pattern': ${err.message}", err)
             }
         }
-        require(manifest.permissions.hosts.isNotEmpty()) {
+        require(manifest.permissions.hosts.isNotEmpty() || manifest.hasServerUrlSetting) {
             "Extension manifest.permissions.hosts must not be empty"
         }
         for (host in manifest.permissions.hosts) {

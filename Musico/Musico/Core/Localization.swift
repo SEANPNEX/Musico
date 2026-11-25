@@ -913,5 +913,8 @@ enum L10n {
         "Update rejected: expected extension ID “%@”, got “%@”.": "已拒绝更新：预期扩展 ID 为“%@”，实际为“%@”。",
         "Playing": "正在播放",
         "View Queue": "查看队列",
+        "Allows network access to: %@": "允许网络访问：%@",
+        "Enter an http:// or https:// server URL. Its host will be allowed for this extension.": "请输入 http:// 或 https:// 服务器地址，其主机将被允许供此扩展访问。",
+        "From server setting": "来自服务器设置",
     ]
 }
