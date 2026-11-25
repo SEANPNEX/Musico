@@ -6,6 +6,19 @@ import SwiftUI
 /// These show each sheet the way the app does, with the stores set on the presenting view.
 @MainActor
 final class SheetEnvironmentTests: XCTestCase {
+    private var savedAnimationsEnabled = true
+
+    override func setUp() async throws {
+        try await super.setUp()
+        savedAnimationsEnabled = UIView.areAnimationsEnabled
+        UIView.setAnimationsEnabled(false)
+    }
+
+    override func tearDown() async throws {
+        UIView.setAnimationsEnabled(savedAnimationsEnabled)
+        try await super.tearDown()
+    }
+
     private func tearDownWindow(_ window: UIWindow) {
         if window.rootViewController?.presentedViewController != nil {
             window.rootViewController?.dismiss(animated: false)
@@ -39,9 +52,9 @@ final class SheetEnvironmentTests: XCTestCase {
         if let sheet {
             let content = AnyView(sheet.onAppear(perform: markShown))
             if attachEmptyHostEnvironment {
-                root = AnyView(SheetHost(content: content, delay: 100))
+                root = AnyView(SheetHost(content: content, delay: 20))
             } else {
-                root = AnyView(SheetHost(content: outer ? AnyView(SheetHost(content: content, delay: 600)) : content, delay: 100))
+                root = AnyView(SheetHost(content: outer ? AnyView(SheetHost(content: content, delay: 100)) : content, delay: 20))
             }
         } else {
             root = AnyView(RootView(showPlayer: showPlayer, layout: layout).onAppear(perform: markShown))
@@ -80,9 +93,9 @@ final class SheetEnvironmentTests: XCTestCase {
         window.makeKeyAndVisible()
         defer { tearDownWindow(window) }
         await fulfillment(of: [shown], timeout: 15)
-        try await Task.sleep(for: .milliseconds(attachEmptyHostEnvironment ? 300 : 1000))
+        try await Task.sleep(for: .milliseconds(attachEmptyHostEnvironment ? 80 : 200))
         tearDownWindow(window)
-        try await Task.sleep(for: .milliseconds(50))
+        try await Task.sleep(for: .milliseconds(20))
     }
 
     private func presentSongInfoViaHost(layout: AppLayout, showPlayer: Bool) async throws {
@@ -128,7 +141,7 @@ final class SheetEnvironmentTests: XCTestCase {
         window.makeKeyAndVisible()
         defer { tearDownWindow(window) }
         await fulfillment(of: [shown], timeout: 15)
-        try await Task.sleep(for: .milliseconds(800))
+        try await Task.sleep(for: .milliseconds(150))
     }
 
     func testPlayerSheetOpensFromTheRootView() async throws { try await present(nil as EmptyView?, over: false) }
@@ -269,35 +282,41 @@ final class SheetEnvironmentTests: XCTestCase {
         defer { player.shutdown() }
         player.addToQueue(ids, queue: extraQueue)
 
-        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
-        let window = UIWindow(windowScene: scene)
-        let rendered = expectation(description: "playlist and queue views rendered")
-        var didFulfill = false
-        let harness = VStack(spacing: 12) {
-            NavigationStack { PlaylistsView() }
-            NavigationStack { PlaylistDetailView(ref: .favourites) }
-            NavigationStack { PlaylistDetailView(ref: .user(playlistID)) }
-            NavigationStack { QueuesView() }
-            SidebarRootView(openPlayer: {})
-        }
-        .onAppear {
-            guard !didFulfill else { return }
-            didFulfill = true
-            rendered.fulfill()
-        }
-        .modifier(NewPlaylistAlert())
-        .modifier(CloudExportHostModifier())
-        .modifier(SongInfoHostModifier())
-        .environment(library)
-        .environment(queues)
-        .environment(player)
-        .environment(history)
+        let viewsToMount: [(String, AnyView)] = [
+            ("PlaylistsView", AnyView(NavigationStack { PlaylistsView() })),
+            ("PlaylistDetailView.favourites", AnyView(NavigationStack { PlaylistDetailView(ref: .favourites) })),
+            ("PlaylistDetailView.user", AnyView(NavigationStack { PlaylistDetailView(ref: .user(playlistID)) })),
+            ("QueuesView", AnyView(NavigationStack { QueuesView() })),
+            ("SidebarRootView", AnyView(SidebarRootView(openPlayer: {})))
+        ]
 
-        window.rootViewController = UIHostingController(rootView: harness)
-        window.makeKeyAndVisible()
-        defer { tearDownWindow(window) }
-        await fulfillment(of: [rendered], timeout: 15)
-        try await Task.sleep(for: .milliseconds(400))
+        let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)
+        for (name, view) in viewsToMount {
+            let window = UIWindow(windowScene: scene)
+            let rendered = expectation(description: "rendered \(name)")
+            var didFulfill = false
+            let harness = view
+                .onAppear {
+                    guard !didFulfill else { return }
+                    didFulfill = true
+                    rendered.fulfill()
+                }
+                .modifier(NewPlaylistAlert())
+                .modifier(CloudExportHostModifier())
+                .modifier(SongInfoHostModifier())
+                .environment(library)
+                .environment(queues)
+                .environment(player)
+                .environment(history)
+
+            window.rootViewController = UIHostingController(rootView: harness)
+            window.makeKeyAndVisible()
+            defer { tearDownWindow(window) }
+            await fulfillment(of: [rendered], timeout: 15)
+            try await Task.sleep(for: .milliseconds(80))
+            tearDownWindow(window)
+            try await Task.sleep(for: .milliseconds(20))
+        }
     }
 
     func testPlayerBarAndMiniPlayerRenderAndControlPlayback() async throws {
@@ -361,7 +380,7 @@ final class SheetEnvironmentTests: XCTestCase {
         window.makeKeyAndVisible()
         defer { tearDownWindow(window) }
         await fulfillment(of: [rendered], timeout: 15)
-        try await Task.sleep(for: .milliseconds(300))
+        try await Task.sleep(for: .milliseconds(100))
     }
 }
 
@@ -393,7 +412,7 @@ private struct SongInfoProbe: View {
             .task {
                 guard !triggered else { return }
                 triggered = true
-                try? await Task.sleep(for: .milliseconds(250))
+                try? await Task.sleep(for: .milliseconds(60))
                 onReady(prompt)
             }
     }
