@@ -9,6 +9,8 @@ IPA_STAGE="$DIST_DIR/ipa-stage"
 DMG_OUT="$DIST_DIR/Musico-${VERSION}-macOS.dmg"
 IPA_OUT="$DIST_DIR/Musico-${VERSION}-iOS-unsigned.ipa"
 VERIFY_TMP="$DIST_DIR/verify-tmp.dmg"
+CATALYST_LOG="$DIST_DIR/build-catalyst.log"
+IOS_LOG="$DIST_DIR/build-ios.log"
 
 cleanup() {
   rm -rf "$DMG_STAGE" "$IPA_STAGE" "$VERIFY_TMP"
@@ -17,20 +19,58 @@ trap cleanup EXIT
 
 cd "$ROOT_DIR"
 mkdir -p "$DIST_DIR"
-rm -rf "$DMG_STAGE" "$IPA_STAGE" "$DMG_OUT" "$IPA_OUT" "$VERIFY_TMP"
+rm -rf "$DMG_STAGE" "$IPA_STAGE" "$DMG_OUT" "$IPA_OUT" "$VERIFY_TMP" "$CATALYST_LOG" "$IOS_LOG"
 
 echo "==> Xcode & SDK versions:"
 xcodebuild -version
 echo "macOS SDK: $(xcrun --sdk macosx --show-sdk-version)"
 echo "iOS SDK: $(xcrun --sdk iphoneos --show-sdk-version)"
 
-echo "==> Building macOS (Mac Catalyst, Release)..."
-xcodebuild -project Musico.xcodeproj -scheme Musico \
-  -configuration Release \
-  -destination 'generic/platform=macOS,variant=Mac Catalyst' \
-  -derivedDataPath "$ROOT_DIR/build/ReleaseCatalyst" \
-  CODE_SIGNING_ALLOWED=NO \
-  build
+CATALYST_ARGS=()
+if [[ -n "${CATALYST_ARCHS:-}" ]]; then
+  echo "==> Building Mac Catalyst (${CATALYST_ARCHS}) & iOS (arm64) in parallel..."
+  CATALYST_ARGS+=(ARCHS="$CATALYST_ARCHS" ONLY_ACTIVE_ARCH=NO)
+else
+  echo "==> Building Mac Catalyst (Universal) & iOS (arm64) in parallel..."
+fi
+
+(
+  xcodebuild -project Musico.xcodeproj -scheme Musico \
+    -configuration Release \
+    -destination 'generic/platform=macOS,variant=Mac Catalyst' \
+    -derivedDataPath "$ROOT_DIR/build/ReleaseCatalyst" \
+    ${CATALYST_ARGS[@]+"${CATALYST_ARGS[@]}"} \
+    CODE_SIGNING_ALLOWED=NO \
+    build
+) >"$CATALYST_LOG" 2>&1 &
+CATALYST_PID=$!
+
+(
+  xcodebuild -project Musico.xcodeproj -scheme Musico \
+    -configuration Release \
+    -destination 'generic/platform=iOS' \
+    -derivedDataPath "$ROOT_DIR/build/ReleaseIOS" \
+    CODE_SIGNING_ALLOWED=NO \
+    build
+) >"$IOS_LOG" 2>&1 &
+IOS_PID=$!
+
+CATALYST_RC=0
+IOS_RC=0
+wait "$CATALYST_PID" || CATALYST_RC=$?
+wait "$IOS_PID" || IOS_RC=$?
+
+if [[ "$CATALYST_RC" -ne 0 ]]; then
+  echo "Mac Catalyst Release build failed (exit $CATALYST_RC). Last 80 log lines:" >&2
+  tail -n 80 "$CATALYST_LOG" >&2 || true
+  exit "$CATALYST_RC"
+fi
+if [[ "$IOS_RC" -ne 0 ]]; then
+  echo "iOS Release build failed (exit $IOS_RC). Last 80 log lines:" >&2
+  tail -n 80 "$IOS_LOG" >&2 || true
+  exit "$IOS_RC"
+fi
+rm -f "$CATALYST_LOG" "$IOS_LOG"
 
 CATALYST_APP="$ROOT_DIR/build/ReleaseCatalyst/Build/Products/Release-maccatalyst/Musico.app"
 if [[ ! -d "$CATALYST_APP" ]]; then
@@ -134,14 +174,6 @@ if [[ "$DMG_VERIFIED" -ne 1 ]]; then
   echo "hdiutil verify failed" >&2
   exit 1
 fi
-
-echo "==> Building iOS (Release, unsigned)..."
-xcodebuild -project Musico.xcodeproj -scheme Musico \
-  -configuration Release \
-  -destination 'generic/platform=iOS' \
-  -derivedDataPath "$ROOT_DIR/build/ReleaseIOS" \
-  CODE_SIGNING_ALLOWED=NO \
-  build
 
 IOS_APP="$ROOT_DIR/build/ReleaseIOS/Build/Products/Release-iphoneos/Musico.app"
 if [[ ! -d "$IOS_APP" ]]; then

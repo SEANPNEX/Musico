@@ -13,6 +13,11 @@ on:
         required: false
         default: true
         type: boolean
+      build_debug_apk:
+        description: 'Also build & attach debug APK (set false for faster release-only builds)'
+        required: false
+        default: true
+        type: boolean
       include_apple:
         description: 'Build macOS DMG & iOS IPA on hosted macos-26 runner (slow; off by default when built locally)'
         required: false
@@ -35,7 +40,7 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: '17'
@@ -64,9 +69,15 @@ jobs:
             printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE_TMP"
             export ANDROID_KEYSTORE_PATH="$KEYSTORE_TMP"
           fi
-          ./gradlew assembleDebug assembleRelease --stacktrace
+          GRADLE_TASKS="assembleRelease"
+          if [ "${{ inputs.build_debug_apk }}" = "true" ]; then
+            GRADLE_TASKS="assembleDebug assembleRelease"
+          fi
+          ./gradlew $GRADLE_TASKS --parallel --build-cache --stacktrace
           mkdir -p dist
-          cp app/build/outputs/apk/debug/app-debug.apk "dist/MusicoAndroid-${VERSION}-debug.apk"
+          if [ "${{ inputs.build_debug_apk }}" = "true" ] && [ -f app/build/outputs/apk/debug/app-debug.apk ]; then
+            cp app/build/outputs/apk/debug/app-debug.apk "dist/MusicoAndroid-${VERSION}-debug.apk"
+          fi
           if [ -f app/build/outputs/apk/release/app-release.apk ]; then
             cp app/build/outputs/apk/release/app-release.apk "dist/MusicoAndroid-${VERSION}-release.apk"
           elif [ -f app/build/outputs/apk/release/app-release-unsigned.apk ]; then
@@ -93,6 +104,16 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('MusicoWindows/**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Restore Windows app dependencies
+        run: dotnet restore MusicoWindows/MusicoWindows.csproj -r win-x64
+
       - name: Publish Portable & Installer Payloads
         shell: pwsh
         run: |
@@ -105,7 +126,7 @@ jobs:
           New-Item -ItemType Directory -Force -Path dist | Out-Null
 
           dotnet publish MusicoWindows\MusicoWindows.csproj `
-            -c Release -r win-x64 --self-contained true `
+            --no-restore -c Release -r win-x64 --self-contained true `
             -p:Version=$version `
             -p:PublishSingleFile=true `
             -p:IncludeNativeLibrariesForSelfExtract=true `
@@ -122,7 +143,7 @@ jobs:
           Compress-Archive -Path $portableDir -DestinationPath $portableZip -CompressionLevel Optimal -Force
 
           dotnet publish MusicoWindows\MusicoWindows.csproj `
-            -c Release -r win-x64 --self-contained true `
+            --no-restore -c Release -r win-x64 --self-contained true `
             -p:Version=$version `
             -p:PublishSingleFile=false `
             -p:DebugType=none `
@@ -196,8 +217,6 @@ jobs:
       - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          BUILD_ANDROID: ${{ inputs.build_android }}
-          INCLUDE_APPLE: ${{ inputs.include_apple }}
         run: |
           set -euo pipefail
           shopt -s nullglob
@@ -206,23 +225,13 @@ jobs:
           cd release-assets
           UPLOAD_FILES=(*)
 
-          RELEASE_EXISTS=0
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            RELEASE_EXISTS=1
-            if [ "$INCLUDE_APPLE" != "true" ]; then
-              gh release download "$TAG" -p '*.dmg' -p '*.ipa' --skip-existing || true
-            fi
-            if [ "$BUILD_ANDROID" != "true" ]; then
-              gh release download "$TAG" -p '*.apk' --skip-existing || true
-            fi
+          if [ "${#UPLOAD_FILES[@]}" -eq 0 ]; then
+            echo "No release assets built by workflow." >&2
+            exit 1
           fi
 
-          rm -f SHA256SUMS.txt
-          sha256sum * > SHA256SUMS.txt
-          ls -lh
-
-          if [ "$RELEASE_EXISTS" -eq 1 ]; then
-            gh release upload "$TAG" "${UPLOAD_FILES[@]}" SHA256SUMS.txt --clobber
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${UPLOAD_FILES[@]}" --clobber
           else
             cat > ../release-notes.md <<EOF
           ## Musico ${TAG}
@@ -239,8 +248,37 @@ jobs:
           Checksums are included in \`SHA256SUMS.txt\`.
           EOF
 
-            gh release create "$TAG" * \
+            gh release create "$TAG" "${UPLOAD_FILES[@]}" \
               --title "Musico ${TAG}" \
               --notes-file ../release-notes.md \
               --latest
           fi
+
+          # Build SHA256SUMS.txt directly from release asset digests + local fallback (no slow .dmg/.ipa download).
+          gh release view "$TAG" --json assets > ../assets.json
+          python3 - <<'PY'
+          import hashlib, json, os
+          with open("../assets.json", "r", encoding="utf-8") as f:
+              assets = json.load(f).get("assets", [])
+          lines = []
+          for asset in sorted(assets, key=lambda a: a.get("name", "")):
+              name = asset.get("name", "")
+              if not name or name == "SHA256SUMS.txt":
+                  continue
+              digest = (asset.get("digest") or "").strip()
+              if digest.startswith("sha256:"):
+                  hex_digest = digest.split(":", 1)[1]
+              elif os.path.isfile(name):
+                  h = hashlib.sha256()
+                  with open(name, "rb") as af:
+                      for chunk in iter(lambda: af.read(1024 * 1024), b""):
+                          h.update(chunk)
+                  hex_digest = h.hexdigest()
+              else:
+                  continue
+              lines.append(f"{hex_digest}  {name}\n")
+          with open("SHA256SUMS.txt", "w", encoding="utf-8") as out:
+              out.writelines(lines)
+          PY
+          cat SHA256SUMS.txt
+          gh release upload "$TAG" SHA256SUMS.txt --clobber
