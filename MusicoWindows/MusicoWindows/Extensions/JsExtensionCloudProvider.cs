@@ -67,6 +67,9 @@ public sealed class JsExtensionCloudProvider : ICloudSourceProvider
     public bool UsesFlatCloudListing => !_extension.Manifest.HasCapability(ExtensionCapability.Tree);
     public bool SupportsProgressiveTree => _extension.Manifest.HasCapability(ExtensionCapability.Tree);
     public bool IsAvailable => _store.GetById(_extension.Id)?.IsEnabled == true;
+    public IReadOnlyList<ExtensionQualityOption> AvailableQualities => _extension.Manifest.EffectiveQualities;
+    public string? DefaultStreamQualityId => _extension.Manifest.EffectiveDefaultStreamQualityId;
+    public string? DefaultDownloadQualityId => _extension.Manifest.EffectiveDefaultDownloadQualityId;
 
     public bool MatchesUrlPattern(string? candidate)
     {
@@ -432,7 +435,9 @@ public sealed class JsExtensionCloudProvider : ICloudSourceProvider
         string? cookie,
         string? proxyUrl,
         bool forceRefresh = false,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? quality = null,
+        CloudStreamPurpose purpose = CloudStreamPurpose.Stream)
     {
         EnsureAvailable();
         if (!Manifest.HasCapability(ExtensionCapability.Stream))
@@ -441,6 +446,10 @@ public sealed class JsExtensionCloudProvider : ICloudSourceProvider
                 CloudErrorCode.NoPlayableStream,
                 $"Extension '{Manifest.Name}' does not declare the 'stream' capability.");
         }
+
+        string? requestedQuality = string.IsNullOrWhiteSpace(quality)
+            ? (purpose == CloudStreamPurpose.Download ? DefaultDownloadQualityId : DefaultStreamQualityId)
+            : quality.Trim();
 
         string? effectiveCookie = ResolveEffectiveCookie(cookie);
         string scriptSource = _store.ReadScriptSource(_extension);
@@ -452,7 +461,9 @@ public sealed class JsExtensionCloudProvider : ICloudSourceProvider
                 RemoteTrackId = remoteTrackId,
                 RelativePath = relativePath,
                 Cookie = effectiveCookie,
-                ForceRefresh = forceRefresh
+                ForceRefresh = forceRefresh,
+                Quality = requestedQuality,
+                Purpose = purpose.ToWireString()
             },
             SupportsProxy ? proxyUrl : null,
             _store,
@@ -462,12 +473,25 @@ public sealed class JsExtensionCloudProvider : ICloudSourceProvider
             ? InferExtensionFromUrl(res.Url) ?? "mp3"
             : res.FileExtension.Trim().TrimStart('.');
 
+        string? actualQuality = string.IsNullOrWhiteSpace(res.ActualQuality)
+            ? requestedQuality
+            : res.ActualQuality.Trim();
+        string? qualityLabel = string.IsNullOrWhiteSpace(res.QualityLabel)
+            ? Manifest.FindQuality(actualQuality)?.EffectiveBadge
+            : res.QualityLabel.Trim();
+        int? bitrateKbps = res.BitrateKbps is double kbps && double.IsFinite(kbps) && kbps > 0
+            ? (int)Math.Max(1, Math.Round(kbps))
+            : null;
+
         return new CloudAudioStream(
             Url: res.Url!,
             Extension: ext,
             Headers: res.Headers is { Count: > 0 } ? res.Headers : null,
             ContentLength: res.ContentLength is > 0 ? res.ContentLength : null,
-            FallbackUrls: res.FallbackUrls is { Count: > 0 } ? res.FallbackUrls : null);
+            FallbackUrls: res.FallbackUrls is { Count: > 0 } ? res.FallbackUrls : null,
+            ActualQuality: actualQuality,
+            QualityLabel: qualityLabel,
+            BitrateKbps: bitrateKbps);
     }
 
     public void ConfigureArtworkRequest(HttpRequestMessage request) { }

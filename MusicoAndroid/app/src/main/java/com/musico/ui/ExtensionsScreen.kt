@@ -86,6 +86,7 @@ import com.musico.extensions.ExtQrLoginStatus
 import com.musico.extensions.ExtensionCapability
 import com.musico.extensions.ExtensionLogEntry
 import com.musico.extensions.ExtensionManifest
+import com.musico.extensions.ExtensionQualityOption
 import com.musico.extensions.ExtensionSettingSpec
 import com.musico.extensions.ExtensionSettingType
 import com.musico.extensions.ExtensionStore
@@ -402,6 +403,13 @@ fun ExtensionsScreen(
             onUpdateCookie = { cookie ->
                 extensionStore.updateCookie(activeSettingsExt.id, cookie)
             },
+            onUpdateQualities = { streamQualityId, downloadQualityId ->
+                extensionStore.updateQualityPreferences(
+                    extensionId = activeSettingsExt.id,
+                    streamQualityId = streamQualityId,
+                    downloadQualityId = downloadQualityId,
+                )
+            },
             onOpenQrLogin = {
                 settingsTargetId = null
                 qrLoginTargetId = activeSettingsExt.id
@@ -667,7 +675,7 @@ private fun ExtensionItemCard(
                             Text(strings.updateAction)
                         }
                     }
-                    if (manifest.settings.isNotEmpty() || manifest.supportsCookieAuth) {
+                    if (manifest.settings.isNotEmpty() || manifest.supportsCookieAuth || manifest.qualities.isNotEmpty()) {
                         TextButton(onClick = onOpenSettings) {
                             Icon(Icons.Rounded.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
@@ -1082,15 +1090,25 @@ private fun ExtensionSettingsDialog(
     strings: AppStrings,
     onUpdateSetting: (key: String, value: JsonPrimitive) -> Unit,
     onUpdateCookie: (String?) -> Unit,
+    onUpdateQualities: (streamQualityId: String?, downloadQualityId: String?) -> Unit,
     onOpenQrLogin: () -> Unit,
     onResetDefaults: () -> Unit,
     onDismiss: () -> Unit,
 ) {
     val overrides = extension.state.settings
+    val qualities = extension.manifest.qualities
+    val hasQualities = qualities.isNotEmpty()
     val hasCookie = extension.manifest.supportsCookieAuth
     val hasQrLogin = extension.manifest.supportsQrLogin
     val cookieValue = extension.state.cookie.orEmpty()
     var showCookie by remember(extension.id) { mutableStateOf(false) }
+
+    val selectedStreamQualityId = extension.state.streamQualityId
+        ?.takeIf { id -> qualities.any { it.id == id } }
+        ?: extension.manifest.effectiveDefaultStreamQuality
+    val selectedDownloadQualityId = extension.state.downloadQualityId
+        ?.takeIf { id -> qualities.any { it.id == id } }
+        ?: extension.manifest.effectiveDefaultDownloadQuality
 
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -1104,6 +1122,27 @@ private fun ExtensionSettingsDialog(
                     .verticalScroll(rememberScrollState()),
                 verticalArrangement = Arrangement.spacedBy(14.dp),
             ) {
+                if (hasQualities) {
+                    ExtensionQualitySelectorRow(
+                        label = strings.streamingQualityLabel,
+                        qualities = qualities,
+                        selectedId = selectedStreamQualityId,
+                        onSelect = { nextId ->
+                            onUpdateQualities(nextId, selectedDownloadQualityId)
+                        },
+                    )
+                    ExtensionQualitySelectorRow(
+                        label = strings.downloadQualityLabel,
+                        qualities = qualities,
+                        selectedId = selectedDownloadQualityId,
+                        onSelect = { nextId ->
+                            onUpdateQualities(selectedStreamQualityId, nextId)
+                        },
+                    )
+                    if (extension.manifest.settings.isNotEmpty()) {
+                        HorizontalDivider()
+                    }
+                }
                 extension.manifest.settings.forEach { spec ->
                     SettingFieldRow(
                         spec = spec,
@@ -1113,7 +1152,7 @@ private fun ExtensionSettingsDialog(
                     )
                 }
                 if (hasCookie) {
-                    if (extension.manifest.settings.isNotEmpty()) {
+                    if (extension.manifest.settings.isNotEmpty() || hasQualities) {
                         HorizontalDivider()
                     }
                     if (hasQrLogin) {
@@ -1164,7 +1203,7 @@ private fun ExtensionSettingsDialog(
                 Text(strings.done)
             }
         },
-        dismissButton = if (extension.manifest.settings.isNotEmpty()) {
+        dismissButton = if (extension.manifest.settings.isNotEmpty() || hasQualities) {
             {
                 TextButton(onClick = onResetDefaults) {
                     Text(strings.resetDefaults)
@@ -1174,6 +1213,54 @@ private fun ExtensionSettingsDialog(
             null
         },
     )
+}
+
+@Composable
+private fun ExtensionQualitySelectorRow(
+    label: String,
+    qualities: List<ExtensionQualityOption>,
+    selectedId: String?,
+    onSelect: (String) -> Unit,
+) {
+    val selected = qualities.firstOrNull { it.id == selectedId } ?: qualities.firstOrNull()
+    var expanded by remember { mutableStateOf(false) }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Box {
+            FilledTonalButton(
+                onClick = { expanded = true },
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = selected?.label ?: selectedId.orEmpty(),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
+                qualities.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option.label) },
+                        leadingIcon = if (option.id == selected?.id) {
+                            { Icon(Icons.Rounded.Check, contentDescription = null) }
+                        } else null,
+                        onClick = {
+                            onSelect(option.id)
+                            expanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable

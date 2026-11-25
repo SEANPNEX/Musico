@@ -105,12 +105,30 @@ public sealed record CloudPlaylistResult(
             : Kind.BuiltinProviderId();
 }
 
+public enum CloudStreamPurpose
+{
+    Stream,
+    Download
+}
+
+public static class CloudStreamPurposeExtensions
+{
+    public static string ToWireString(this CloudStreamPurpose purpose) => purpose switch
+    {
+        CloudStreamPurpose.Download => "download",
+        _ => "stream"
+    };
+}
+
 public sealed record CloudAudioStream(
     string Url,
     string Extension,
     IReadOnlyDictionary<string, string>? Headers = null,
     long? ContentLength = null,
-    IReadOnlyList<string>? FallbackUrls = null);
+    IReadOnlyList<string>? FallbackUrls = null,
+    string? ActualQuality = null,
+    string? QualityLabel = null,
+    int? BitrateKbps = null);
 
 public sealed class ExtensionHttpRequest
 {

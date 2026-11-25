@@ -108,6 +108,9 @@ struct JSStreamResolution: Codable, Equatable, Sendable {
     var expiresAtMs: Double?
     var fallbackUrls: [String]?
     var contentLength: Int64?
+    var actualQuality: String?
+    var qualityLabel: String?
+    var bitrateKbps: Double?
 }
 
 struct JSLyricsCandidateSpec: Codable, Equatable, Sendable {
@@ -564,6 +567,8 @@ final class JSExtensionRuntime: @unchecked Sendable {
         remoteTrackID: String,
         relativePath: String?,
         cookie: String?,
+        quality: String? = nil,
+        purpose: CloudStreamPurpose? = nil,
         forceRefresh: Bool
     ) async throws -> JSStreamResolution {
         var req: [String: Any] = [
@@ -572,6 +577,8 @@ final class JSExtensionRuntime: @unchecked Sendable {
         ]
         if let relativePath { req["relativePath"] = relativePath }
         if let cookie { req["cookie"] = cookie }
+        if let quality = Self.trimmedNonEmpty(quality) { req["quality"] = quality }
+        if let purpose { req["purpose"] = purpose.rawValue }
         let json = try await invokeAsyncHook(name: "resolveStream", requestObject: req, timeoutMs: shortTimeoutMs)
         let resolution = try JSONDecoder().decode(JSStreamResolution.self, from: Data(json.utf8))
 

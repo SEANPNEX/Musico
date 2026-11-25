@@ -490,6 +490,59 @@ struct ExtensionDetailView: View {
                 }
             }
 
+            let qualities = ext.manifest.effectiveQualities
+            if !qualities.isEmpty {
+                Section {
+                    Picker(
+                        L10n.tr("Streaming Quality"),
+                        selection: Binding(
+                            get: {
+                                let stored = ext.state.streamQualityID
+                                if let stored, qualities.contains(where: { $0.id == stored }) { return stored }
+                                return ext.manifest.effectiveDefaultStreamQualityID ?? qualities[0].id
+                            },
+                            set: { newValue in
+                                extensionStore.updateQualityPreferences(
+                                    extensionID: ext.id,
+                                    streamQualityID: newValue,
+                                    downloadQualityID: ext.state.downloadQualityID
+                                )
+                            }
+                        )
+                    ) {
+                        ForEach(qualities) { quality in
+                            Text(quality.label).tag(quality.id)
+                        }
+                    }
+
+                    Picker(
+                        L10n.tr("Download Quality"),
+                        selection: Binding(
+                            get: {
+                                let stored = ext.state.downloadQualityID
+                                if let stored, qualities.contains(where: { $0.id == stored }) { return stored }
+                                return ext.manifest.effectiveDefaultDownloadQualityID ?? qualities[0].id
+                            },
+                            set: { newValue in
+                                extensionStore.updateQualityPreferences(
+                                    extensionID: ext.id,
+                                    streamQualityID: ext.state.streamQualityID,
+                                    downloadQualityID: newValue
+                                )
+                            }
+                        )
+                    ) {
+                        ForEach(qualities) { quality in
+                            Text(quality.label).tag(quality.id)
+                        }
+                    }
+                } header: {
+                    Text(L10n.tr("Audio Quality"))
+                } footer: {
+                    Text(L10n.tr("Default quality used for playback and saving songs when a folder does not specify its own."))
+                }
+            }
+
             if let settings = ext.manifest.settings, !settings.isEmpty {
                 Section(L10n.tr("Settings")) {
                     ForEach(settings) { spec in

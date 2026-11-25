@@ -7,6 +7,7 @@ import com.musico.cloud.CloudHttpResponse
 import com.musico.cloud.CloudPlaylistResult
 import com.musico.cloud.CloudSource
 import com.musico.cloud.CloudStreamDownloader
+import com.musico.cloud.CloudStreamPurpose
 import com.musico.cloud.CloudStreamResolver
 import com.musico.cloud.CloudTrackMetadata
 import com.musico.cloud.ResolvedStream
@@ -228,6 +229,14 @@ class AudioTagWriterAndSidecarTest {
 
         val thumbnailCache = CloudThumbnailCache(httpClient = httpClient)
         val resolver = object : CloudStreamResolver() {
+            override suspend fun resolve(
+                track: Track,
+                root: LibraryRoot?,
+                forceRefresh: Boolean,
+                purpose: CloudStreamPurpose,
+                requestedQualityId: String?,
+            ): ResolvedStream = resolve(track, root, forceRefresh)
+
             override suspend fun resolve(
                 track: Track,
                 root: LibraryRoot?,

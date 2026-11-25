@@ -3,8 +3,10 @@ package com.musico.extensions
 import com.musico.cloud.BilibiliClient
 import com.musico.cloud.CloudErrorCode
 import com.musico.cloud.CloudPlaylistResult
+import com.musico.cloud.CloudQualityOption
 import com.musico.cloud.CloudSource
 import com.musico.cloud.CloudSourceException
+import com.musico.cloud.CloudStreamPurpose
 import com.musico.cloud.CloudTrackMetadata
 import com.musico.cloud.DriveCrawlBatch
 import com.musico.cloud.GoogleDriveClient
@@ -86,6 +88,12 @@ interface CloudSourceProvider {
         get() = true
     val supportsStream: Boolean
         get() = true
+    val availableQualities: List<CloudQualityOption>
+        get() = emptyList()
+    val defaultStreamQualityId: String?
+        get() = availableQualities.firstOrNull()?.id
+    val defaultDownloadQualityId: String?
+        get() = availableQualities.firstOrNull()?.id
 
     fun canHandle(rawInput: String): CloudUrlMatch?
 
@@ -98,6 +106,8 @@ interface CloudSourceProvider {
         relativePath: String? = null,
         cookie: String? = null,
         forceRefresh: Boolean = false,
+        quality: String? = null,
+        purpose: CloudStreamPurpose = CloudStreamPurpose.STREAM,
     ): ResolvedStream
 
     suspend fun crawlProgressive(
@@ -139,6 +149,9 @@ class YouTubeSourceProvider(
     override val supportsTree: Boolean = false
     override val supportsCookie: Boolean = true
     override val usesFlatCloudListing: Boolean = true
+    override val availableQualities: List<CloudQualityOption> = YouTubeClient.AVAILABLE_QUALITIES
+    override val defaultStreamQualityId: String = YouTubeClient.DEFAULT_STREAM_QUALITY_ID
+    override val defaultDownloadQualityId: String = YouTubeClient.DEFAULT_DOWNLOAD_QUALITY_ID
 
     override fun canHandle(rawInput: String): CloudUrlMatch? {
         val clean = extractCloudSourceInput(rawInput)
@@ -154,7 +167,9 @@ class YouTubeSourceProvider(
         relativePath: String?,
         cookie: String?,
         forceRefresh: Boolean,
-    ): ResolvedStream = client.resolveStream(remoteTrackId, cookie)
+        quality: String?,
+        purpose: CloudStreamPurpose,
+    ): ResolvedStream = client.resolveStream(remoteTrackId, cookie, quality = quality)
 
     override fun downloadHeaders(stream: ResolvedStream): Map<String, String> {
         val hasRange = stream.headers.keys.any { it.equals("Range", ignoreCase = true) }
@@ -174,6 +189,9 @@ class BilibiliSourceProvider(
     override val supportsTree: Boolean = false
     override val supportsCookie: Boolean = true
     override val usesFlatCloudListing: Boolean = true
+    override val availableQualities: List<CloudQualityOption> = BilibiliClient.AVAILABLE_QUALITIES
+    override val defaultStreamQualityId: String = BilibiliClient.DEFAULT_STREAM_QUALITY_ID
+    override val defaultDownloadQualityId: String = BilibiliClient.DEFAULT_DOWNLOAD_QUALITY_ID
 
     override fun canHandle(rawInput: String): CloudUrlMatch? {
         val clean = extractCloudSourceInput(rawInput)
@@ -189,7 +207,9 @@ class BilibiliSourceProvider(
         relativePath: String?,
         cookie: String?,
         forceRefresh: Boolean,
-    ): ResolvedStream = client.resolveStream(remoteTrackId, cookie)
+        quality: String?,
+        purpose: CloudStreamPurpose,
+    ): ResolvedStream = client.resolveStream(remoteTrackId, cookie, quality = quality)
 
     override fun artworkHeaders(): Map<String, String> = mapOf(
         "Referer" to "https://www.bilibili.com/",
@@ -224,6 +244,8 @@ class GoogleDriveSourceProvider(
         relativePath: String?,
         cookie: String?,
         forceRefresh: Boolean,
+        quality: String?,
+        purpose: CloudStreamPurpose,
     ): ResolvedStream = client.resolveStream(remoteTrackId, cookie)
 
     override suspend fun crawlProgressive(
@@ -276,6 +298,9 @@ class CloudProviderRegistry(
     @Volatile
     var extensionCookieLookup: ((String) -> String?)? = null
 
+    @Volatile
+    var extensionQualityLookup: ((String) -> Pair<String?, String?>?)? = null
+
     private val _providers = MutableStateFlow<List<CloudSourceProvider>>(builtinsById.values.toList())
     val providers: StateFlow<List<CloudSourceProvider>> = _providers.asStateFlow()
 
@@ -318,6 +343,29 @@ class CloudProviderRegistry(
         if (CloudProviderIds.isBuiltin(pid)) return null
         return extensionCookieLookup?.invoke(pid)?.trim()?.takeIf { it.isNotEmpty() }
     }
+
+    fun extensionQualityFor(providerId: String?): Pair<String?, String?>? {
+        val pid = providerId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
+        if (CloudProviderIds.isBuiltin(pid)) return null
+        return extensionQualityLookup?.invoke(pid)
+    }
+
+    fun compatibleProvidersForUrl(
+        rawInput: String?,
+        excludingProviderId: String? = null,
+    ): List<CloudSourceProvider> {
+        val clean = rawInput?.let { extractCloudSourceInput(it) }?.takeIf { it.isNotEmpty() } ?: return emptyList()
+        return _providers.value.filter { provider ->
+            provider.supportsCollections &&
+                provider.providerId != excludingProviderId &&
+                provider.matchesUrlPatternFast(clean)
+        }
+    }
+
+    fun bestCompatibleProviderForUrl(
+        rawInput: String?,
+        excludingProviderId: String? = null,
+    ): CloudSourceProvider? = compatibleProvidersForUrl(rawInput, excludingProviderId).firstOrNull()
 
     fun providerForId(providerId: String?): CloudSourceProvider? {
         val resolved = CloudProviderIds.fromLegacySlug(providerId) ?: providerId?.trim()?.takeIf { it.isNotEmpty() } ?: return null

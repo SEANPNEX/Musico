@@ -1,0 +1,216 @@
+<UserControl x:Class="MusicoWindows.Controls.EditCloudSourceDialog"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Visibility="Collapsed">
+    <Grid x:Name="BackdropGrid"
+          Background="{DynamicResource DialogOverlayBrush}"
+          MouseDown="Overlay_MouseDown">
+        <Border x:Name="DialogCard"
+                Width="480"
+                MaxHeight="700"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Background="{DynamicResource DialogSurfaceBrush}"
+                BorderBrush="{DynamicResource ControlBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="0"
+                Padding="24"
+                MouseDown="Card_MouseDown">
+            <ScrollViewer VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Disabled">
+                <StackPanel>
+                    <!-- Header -->
+                    <Grid Margin="0,0,0,12">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <TextBlock Text="&#xE70F;"
+                                       FontFamily="{StaticResource Win10GlyphFont}"
+                                       FontSize="18"
+                                       Foreground="{DynamicResource AccentBrush}"
+                                       VerticalAlignment="Center"
+                                       Margin="0,0,10,0" />
+                            <TextBlock Text="{DynamicResource Str_EditCloud_Title}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="20"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       VerticalAlignment="Center" />
+                        </StackPanel>
+                        <Button x:Name="CloseIconButton"
+                                Style="{StaticResource Win10IconButtonStyle}"
+                                Content="&#xE711;"
+                                HorizontalAlignment="Right"
+                                ToolTip="{DynamicResource Str_Common_Close}"
+                                Click="Cancel_Click" />
+                    </Grid>
+
+                    <TextBlock x:Name="TargetLabelText"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextTrimming="CharacterEllipsis"
+                               Margin="0,0,0,14" />
+
+                    <!-- Source URL -->
+                    <TextBlock Text="{DynamicResource Str_EditCloud_UrlLabel}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               Margin="0,0,0,6" />
+                    <TextBox x:Name="UrlBox"
+                             Style="{StaticResource Win10TextBoxStyle}"
+                             Height="34"
+                             KeyDown="InputBox_KeyDown"
+                             TextChanged="UrlBox_TextChanged" />
+                    <TextBlock Text="{DynamicResource Str_EditCloud_UrlHint}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="11"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap"
+                               Margin="0,4,0,14" />
+
+                    <!-- Provider / Source Tag -->
+                    <TextBlock Text="{DynamicResource Str_EditCloud_ProviderLabel}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="13"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               Margin="0,0,0,6" />
+                    <ComboBox x:Name="ProviderCombo"
+                              Style="{StaticResource Win10ComboBoxStyle}"
+                              DisplayMemberPath="Label"
+                              SelectedValuePath="ProviderId"
+                              SelectionChanged="ProviderCombo_SelectionChanged" />
+                    <TextBlock Text="{DynamicResource Str_EditCloud_ProviderHint}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="11"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap"
+                               Margin="0,4,0,14" />
+
+                    <!-- Optional Cookie -->
+                    <StackPanel x:Name="CookieSection">
+                        <TextBlock Text="{DynamicResource Str_AddCloud_CookieLabel}"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   Margin="0,0,0,6" />
+                        <TextBox x:Name="CookieBox"
+                                 Style="{StaticResource Win10TextBoxStyle}"
+                                 Height="34"
+                                 KeyDown="InputBox_KeyDown" />
+                        <TextBlock Text="{DynamicResource Str_AddCloud_CookieHint}"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,4,0,14" />
+                    </StackPanel>
+
+                    <!-- Optional HTTP Proxy -->
+                    <StackPanel x:Name="ProxySection">
+                        <TextBlock Text="{DynamicResource Str_AddCloud_ProxyLabel}"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   Margin="0,0,0,6" />
+                        <TextBox x:Name="ProxyBox"
+                                 Style="{StaticResource Win10TextBoxStyle}"
+                                 Height="34"
+                                 KeyDown="InputBox_KeyDown" />
+                        <TextBlock Text="{DynamicResource Str_AddCloud_ProxyHint}"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   Margin="0,4,0,14" />
+                    </StackPanel>
+
+                    <!-- Audio Quality Selectors -->
+                    <StackPanel x:Name="QualitySection" Visibility="Collapsed">
+                        <Grid Margin="0,0,0,14">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="10" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0">
+                                <TextBlock Text="{DynamicResource Str_Quality_StreamLabel}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="13"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           Margin="0,0,0,6" />
+                                <ComboBox x:Name="StreamQualityCombo"
+                                          Style="{StaticResource Win10ComboBoxStyle}"
+                                          DisplayMemberPath="Label"
+                                          SelectedValuePath="QualityId" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="2">
+                                <TextBlock Text="{DynamicResource Str_Quality_DownloadLabel}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="13"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           Margin="0,0,0,6" />
+                                <ComboBox x:Name="DownloadQualityCombo"
+                                          Style="{StaticResource Win10ComboBoxStyle}"
+                                          DisplayMemberPath="Label"
+                                          SelectedValuePath="QualityId" />
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- Validation / Network Error Banner -->
+                    <Border x:Name="ErrorBanner"
+                            Background="{DynamicResource WarningBannerBrush}"
+                            BorderBrush="{DynamicResource DangerBrush}"
+                            BorderThickness="1"
+                            Padding="10,8"
+                            Margin="0,0,0,14"
+                            Visibility="Collapsed">
+                        <TextBlock x:Name="ErrorText"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource DangerBrush}"
+                                   TextWrapping="Wrap" />
+                    </Border>
+
+                    <!-- Busy Indicator -->
+                    <StackPanel x:Name="BusyPanel"
+                                Margin="0,0,0,14"
+                                Visibility="Collapsed">
+                        <TextBlock Text="{DynamicResource Str_EditCloud_Saving}"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   Margin="0,0,0,6" />
+                        <ProgressBar Style="{StaticResource Win10ProgressBarStyle}"
+                                     IsIndeterminate="True" />
+                    </StackPanel>
+
+                    <!-- Footer -->
+                    <Grid Margin="0,4,0,0">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="8" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <Button x:Name="SaveButton"
+                                Grid.Column="0"
+                                Style="{StaticResource Win10PrimaryButtonStyle}"
+                                Content="{DynamicResource Str_Common_Save}"
+                                IsEnabled="False"
+                                Click="Save_Click" />
+                        <Button x:Name="CancelButton"
+                                Grid.Column="2"
+                                Style="{StaticResource Win10ButtonStyle}"
+                                Content="{DynamicResource Str_Common_Cancel}"
+                                Click="Cancel_Click" />
+                    </Grid>
+                </StackPanel>
+            </ScrollViewer>
+        </Border>
+    </Grid>
+</UserControl>

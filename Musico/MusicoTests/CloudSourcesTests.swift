@@ -1896,6 +1896,195 @@ final class CloudSourcesTests: XCTestCase {
         XCTAssertEqual(fbRes.tracks.count, 51)
         XCTAssertTrue(fbRes.tracks.contains { $0.remoteTrackID == "f_r_53" })
     }
+
+    func testBilibili30251FLACPriorityAndQualityResolution() async throws {
+        let playPayload: [String: Any] = [
+            "code": 0,
+            "data": [
+                "dash": [
+                    "audio": [
+                        ["id": 30216, "baseUrl": "https://upos.bilivideo.com/low64.m4s", "bandwidth": 64000, "mimeType": "audio/mp4"],
+                        ["id": 30232, "baseUrl": "https://upos.bilivideo.com/std132.m4s", "bandwidth": 132000, "mimeType": "audio/mp4"],
+                        ["id": 30280, "baseUrl": "https://upos.bilivideo.com/high192.m4s", "bandwidth": 192000, "mimeType": "audio/mp4"]
+                    ],
+                    "flac": [
+                        "audio": ["id": 30251, "baseUrl": "https://upos.bilivideo.com/hires.flac", "bandwidth": 1_100_000, "mimeType": "audio/flac"]
+                    ]
+                ]
+            ]
+        ]
+
+        let highest = try XCTUnwrap(BilibiliClient.extractPlayURLCandidate(from: playPayload, qualityID: "highest"))
+        XCTAssertEqual(highest.url.absoluteString, "https://upos.bilivideo.com/hires.flac")
+        XCTAssertEqual(highest.fileExtension, "flac")
+        XCTAssertEqual(highest.actualQuality, "highest")
+        XCTAssertEqual(highest.qualityLabel, "FLAC")
+
+        let defaultHighest = try XCTUnwrap(BilibiliClient.extractPlayURLCandidate(from: playPayload))
+        XCTAssertEqual(defaultHighest.url.absoluteString, "https://upos.bilivideo.com/hires.flac")
+
+        let high = try XCTUnwrap(BilibiliClient.extractPlayURLCandidate(from: playPayload, qualityID: "high"))
+        XCTAssertEqual(high.url.absoluteString, "https://upos.bilivideo.com/high192.m4s")
+        XCTAssertEqual(high.actualQuality, "high")
+        XCTAssertEqual(high.qualityLabel, "192k")
+
+        let standard = try XCTUnwrap(BilibiliClient.extractPlayURLCandidate(from: playPayload, qualityID: "standard"))
+        XCTAssertEqual(standard.url.absoluteString, "https://upos.bilivideo.com/std132.m4s")
+        XCTAssertEqual(standard.actualQuality, "standard")
+        XCTAssertEqual(standard.qualityLabel, "132k")
+
+        let low = try XCTUnwrap(BilibiliClient.extractPlayURLCandidate(from: playPayload, qualityID: "low"))
+        XCTAssertEqual(low.url.absoluteString, "https://upos.bilivideo.com/low64.m4s")
+        XCTAssertEqual(low.actualQuality, "low")
+        XCTAssertEqual(low.qualityLabel, "64k")
+
+        // Built-in provider metadata checks
+        let registry = CloudProviderRegistry()
+        let biliProvider = try XCTUnwrap(registry.provider(forID: BuiltInProviderID.bilibili))
+        XCTAssertEqual(biliProvider.availableQualities.map(\.id), ["highest", "high", "standard", "low"])
+        XCTAssertEqual(biliProvider.defaultStreamQualityID, "standard")
+        XCTAssertEqual(biliProvider.defaultDownloadQualityID, "highest")
+
+        let ytProvider = try XCTUnwrap(registry.provider(forID: BuiltInProviderID.youtube))
+        XCTAssertEqual(ytProvider.availableQualities.map(\.id), ["highest", "high", "standard", "low"])
+        XCTAssertEqual(ytProvider.defaultStreamQualityID, "standard")
+        XCTAssertEqual(ytProvider.defaultDownloadQualityID, "highest")
+
+        let driveProvider = try XCTUnwrap(registry.provider(forID: BuiltInProviderID.googleDrive))
+        XCTAssertTrue(driveProvider.availableQualities.isEmpty)
+        XCTAssertNil(driveProvider.defaultStreamQualityID)
+        XCTAssertNil(driveProvider.defaultDownloadQualityID)
+    }
+
+    func testYouTubeQualityCandidateSelection() throws {
+        let playerJSON: [String: Any] = [
+            "streamingData": [
+                "adaptiveFormats": [
+                    ["itag": 139, "mimeType": "audio/mp4", "bitrate": 48000, "url": "https://cdn.example/139.m4a"],
+                    ["itag": 140, "mimeType": "audio/mp4", "bitrate": 128000, "url": "https://cdn.example/140.m4a"],
+                    ["itag": 141, "mimeType": "audio/mp4", "bitrate": 256000, "url": "https://cdn.example/141.m4a"]
+                ]
+            ]
+        ]
+        let highest = YouTubeClient.extractStreamCandidates(from: playerJSON, qualityID: "highest").first
+        XCTAssertEqual(highest?.itag, 141)
+        XCTAssertEqual(highest?.qualityLabel, "256k")
+        XCTAssertEqual(highest?.actualQuality, "highest")
+
+        let standard = YouTubeClient.extractStreamCandidates(from: playerJSON, qualityID: "standard").first
+        XCTAssertEqual(standard?.itag, 140)
+        XCTAssertEqual(standard?.qualityLabel, "128k")
+        XCTAssertEqual(standard?.actualQuality, "standard")
+
+        let low = YouTubeClient.extractStreamCandidates(from: playerJSON, qualityID: "low").first
+        XCTAssertEqual(low?.itag, 139)
+        XCTAssertEqual(low?.qualityLabel, "48k")
+        XCTAssertEqual(low?.actualQuality, "low")
+    }
+
+    func testCloudAudioCacheQualityPartitioningEvictionAndDownloadPurpose() async throws {
+        let dir = makeTempDir()
+        let recordedCalls = SendableValueBox<[(purpose: CloudStreamPurpose, quality: String?)]>([])
+
+        let resolver = QualityAwareMockResolver { _, _, purpose, quality, _ in
+            recordedCalls.withLock { $0.append((purpose, quality)) }
+            let ext = (quality == "highest") ? "flac" : "m4a"
+            return CloudStreamResult(
+                url: URL(string: "https://cdn.example/\(quality ?? "default").\(ext)")!,
+                headers: [:],
+                fileExtension: ext,
+                expiresAt: Date().addingTimeInterval(600),
+                actualQuality: quality,
+                qualityLabel: (quality == "highest") ? "FLAC" : "132k"
+            )
+        }
+
+        let cache = CloudAudioCache(
+            directory: dir,
+            maxBytes: 100_000,
+            resolver: resolver,
+            downloader: { url, _ in
+                let tmp = makeTempDir().appendingPathComponent("dl.bin")
+                try Data(url.absoluteString.utf8).write(to: tmp)
+                return (tmp, 200, "audio/mp4")
+            }
+        )
+
+        let rootID = UUID()
+        let root = LibraryRoot(
+            id: rootID,
+            name: "Bili Mix",
+            kind: .cloudBilibili,
+            bookmark: nil,
+            sourceURL: "https://www.bilibili.com/video/BV1xx411c7mD",
+            remoteID: "BV1xx411c7mD",
+            streamQualityID: "standard",
+            downloadQualityID: "highest"
+        )
+        let track = Track(
+            id: "track-partition-1",
+            rootID: rootID,
+            relativePath: "BV1",
+            title: "Partition Song",
+            artist: "Art",
+            album: "Alb",
+            albumArtist: "Art",
+            duration: 120,
+            fileSize: 0,
+            modified: Date(),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(),
+            cloudSource: "bilibili",
+            remoteTrackID: "BV1#1"
+        )
+
+        // Stream uses standard -> <trackID>__standard.m4a
+        let stdURL = try await cache.resolveAndCache(track: track, root: root, purpose: .stream)
+        XCTAssertEqual(stdURL.lastPathComponent, "track-partition-1__standard.m4a")
+        XCTAssertTrue(cache.hasCachedFileSync(for: track.id))
+        let stdHit = await cache.cachedURLIfPresent(for: track.id, qualityID: "standard")
+        XCTAssertEqual(stdHit, stdURL)
+        let highMiss = await cache.cachedURLIfPresent(for: track.id, qualityID: "highest")
+        XCTAssertNil(highMiss)
+
+        // Switching to highest downloads <trackID>__highest.flac and evicts <trackID>__standard.m4a
+        let exportFolder = makeTempDir()
+        let exportedURL = try await CloudExporter.exportTrack(
+            track,
+            root: root,
+            toFolder: exportFolder,
+            cache: cache
+        )
+        XCTAssertEqual(exportedURL.pathExtension, "flac")
+        let stdAfterSwitch = await cache.cachedURLIfPresent(for: track.id, qualityID: "standard")
+        let highAfterSwitch = await cache.cachedURLIfPresent(for: track.id, qualityID: "highest")
+        XCTAssertNil(stdAfterSwitch)
+        XCTAssertEqual(highAfterSwitch?.lastPathComponent, "track-partition-1__highest.flac")
+
+        XCTAssertEqual(recordedCalls.value.count, 2)
+        XCTAssertEqual(recordedCalls.value[0].purpose, .stream)
+        XCTAssertEqual(recordedCalls.value[0].quality, "standard")
+        XCTAssertEqual(recordedCalls.value[1].purpose, .download)
+        XCTAssertEqual(recordedCalls.value[1].quality, "highest")
+    }
+}
+
+private struct QualityAwareMockResolver: CloudStreamResolving {
+    let handler: @Sendable (Track, LibraryRoot?, CloudStreamPurpose, String?, Bool) async throws -> CloudStreamResult
+
+    func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult {
+        try await handler(track, root, .stream, nil, forceRefresh)
+    }
+
+    func resolveStream(
+        track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        qualityID: String?,
+        forceRefresh: Bool
+    ) async throws -> CloudStreamResult {
+        try await handler(track, root, purpose, qualityID, forceRefresh)
+    }
 }
 
 private final class SendableValueBox<Value>: @unchecked Sendable {

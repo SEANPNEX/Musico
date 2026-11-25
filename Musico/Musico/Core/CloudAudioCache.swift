@@ -164,9 +164,32 @@ actor CloudAudioCache {
 
     // MARK: Public API
 
-    func cachedURLIfPresent(for trackID: String) -> URL? {
+    nonisolated static func sanitizeQuality(_ qualityID: String?) -> String? {
+        guard let raw = qualityID?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty else {
+            return nil
+        }
+        let cleaned = raw
+            .replacingOccurrences(of: #"[^A-Za-z0-9_-]+"#, with: "_", options: .regularExpression)
+            .trimmingCharacters(in: CharacterSet(charactersIn: "_"))
+        return cleaned.isEmpty ? nil : cleaned
+    }
+
+    private nonisolated static func inFlightKey(trackID: String, qualityID: String?) -> String {
+        "\(trackID)|\(sanitizeQuality(qualityID) ?? "")"
+    }
+
+    func effectiveQualityID(
+        for track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose = .stream,
+        overrideQualityID: String? = nil
+    ) -> String? {
+        resolver.effectiveQualityID(for: track, root: root, purpose: purpose, overrideQualityID: overrideQualityID)
+    }
+
+    func cachedURLIfPresent(for trackID: String, qualityID: String? = nil) -> URL? {
         for ext in Self.supportedExtensions {
-            let candidate = fileURL(trackID: trackID, ext: ext)
+            let candidate = fileURL(trackID: trackID, qualityID: qualityID, ext: ext)
             if FileManager.default.fileExists(atPath: candidate.path) {
                 touch(candidate)
                 return candidate
@@ -176,35 +199,67 @@ actor CloudAudioCache {
     }
 
     nonisolated func hasCachedFileSync(for trackID: String) -> Bool {
-        Self.supportedExtensions.contains { ext in
-            FileManager.default.fileExists(atPath: fileURL(trackID: trackID, ext: ext).path)
+        if Self.supportedExtensions.contains(where: { ext in
+            FileManager.default.fileExists(atPath: fileURL(trackID: trackID, qualityID: nil, ext: ext).path)
+        }) {
+            return true
+        }
+        let prefix = Track.safeCacheStem(for: trackID) + "__"
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return false
+        }
+        return urls.contains { url in
+            let name = url.lastPathComponent
+            let ext = url.pathExtension.lowercased()
+            return name.hasPrefix(prefix) && Self.supportedExtensions.contains(ext)
         }
     }
 
-    func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool = false) async throws -> CloudStreamResult {
+    func resolveStream(
+        track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose = .stream,
+        qualityID: String? = nil,
+        forceRefresh: Bool = false
+    ) async throws -> CloudStreamResult {
         try Task.checkCancellation()
-        return try await resolver.resolveStream(track: track, root: root, forceRefresh: forceRefresh)
+        let effectiveQuality = effectiveQualityID(for: track, root: root, purpose: purpose, overrideQualityID: qualityID)
+        return try await resolver.resolveStream(
+            track: track,
+            root: root,
+            purpose: purpose,
+            qualityID: effectiveQuality,
+            forceRefresh: forceRefresh
+        )
     }
 
     func resolveAndCache(
         track: Track,
         root: LibraryRoot?,
+        purpose: CloudStreamPurpose = .stream,
+        qualityID: String? = nil,
         forceRefresh: Bool = false,
         onProgress: (@Sendable (CloudDownloadProgress) -> Void)? = nil
     ) async throws -> URL {
         try Task.checkCancellation()
+        let effectiveQuality = effectiveQualityID(for: track, root: root, purpose: purpose, overrideQualityID: qualityID)
         if forceRefresh {
             remove(trackID: track.id)
-        } else if let cached = cachedURLIfPresent(for: track.id) {
+        } else if let cached = cachedURLIfPresent(for: track.id, qualityID: effectiveQuality) {
             return cached
         }
 
+        let cacheKey = Self.inFlightKey(trackID: track.id, qualityID: effectiveQuality)
         let entry: InFlightEntry
-        if let existing = inFlight[track.id] {
+        if let existing = inFlight[cacheKey] {
             entry = existing
         } else {
             let created = InFlightEntry()
-            inFlight[track.id] = created
+            inFlight[cacheKey] = created
             let entryID = created.id
             let broadcaster = created.broadcaster
             created.task = Task<URL, Error> { [self] in
@@ -212,15 +267,17 @@ actor CloudAudioCache {
                     let url = try await self.performFetchAndStore(
                         track: track,
                         root: root,
+                        purpose: purpose,
+                        qualityID: effectiveQuality,
                         forceRefresh: forceRefresh,
                         onProgress: { progress in
                             broadcaster.broadcast(progress)
                         }
                     )
-                    await self.finishInFlight(trackID: track.id, entryID: entryID, result: .success(url))
+                    await self.finishInFlight(cacheKey: cacheKey, entryID: entryID, result: .success(url))
                     return url
                 } catch {
-                    await self.finishInFlight(trackID: track.id, entryID: entryID, result: .failure(error))
+                    await self.finishInFlight(cacheKey: cacheKey, entryID: entryID, result: .failure(error))
                     throw error
                 }
             }
@@ -237,8 +294,8 @@ actor CloudAudioCache {
                     if entry.waiters.isEmpty {
                         entry.task?.cancel()
                         entryBroadcaster.removeAll()
-                        if inFlight[track.id]?.id == entryID {
-                            inFlight[track.id] = nil
+                        if inFlight[cacheKey]?.id == entryID {
+                            inFlight[cacheKey] = nil
                         }
                     }
                     continuation.resume(throwing: CancellationError())
@@ -250,30 +307,42 @@ actor CloudAudioCache {
         } onCancel: {
             entryBroadcaster.remove(id: waiterID)
             Task {
-                await self.cancelWaiter(trackID: track.id, entryID: entryID, waiterID: waiterID)
+                await self.cancelWaiter(cacheKey: cacheKey, entryID: entryID, waiterID: waiterID)
             }
         }
     }
 
-    func prefetch(track: Track, root: LibraryRoot?) async {
-        guard track.isCloud, cachedURLIfPresent(for: track.id) == nil, inFlight[track.id] == nil else { return }
-        _ = try? await resolveAndCache(track: track, root: root, forceRefresh: false)
+    func prefetch(track: Track, root: LibraryRoot?, purpose: CloudStreamPurpose = .stream) async {
+        let effectiveQuality = effectiveQualityID(for: track, root: root, purpose: purpose, overrideQualityID: nil)
+        let cacheKey = Self.inFlightKey(trackID: track.id, qualityID: effectiveQuality)
+        guard track.isCloud, cachedURLIfPresent(for: track.id, qualityID: effectiveQuality) == nil, inFlight[cacheKey] == nil else { return }
+        _ = try? await resolveAndCache(track: track, root: root, purpose: purpose, qualityID: effectiveQuality, forceRefresh: false)
     }
 
     func remove(trackID: String) {
         for ext in Self.supportedExtensions {
-            let candidate = fileURL(trackID: trackID, ext: ext)
+            let candidate = fileURL(trackID: trackID, qualityID: nil, ext: ext)
             try? FileManager.default.removeItem(at: candidate)
+        }
+        let prefix = Track.safeCacheStem(for: trackID) + "__"
+        if let urls = try? FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            for url in urls where url.lastPathComponent.hasPrefix(prefix) {
+                try? FileManager.default.removeItem(at: url)
+            }
         }
     }
 
     /// Writes `data` atomically into the cache and enforces the LRU size limit. Useful for tests too.
     @discardableResult
-    func storeData(_ data: Data, for trackID: String, fileExtension: String) throws -> URL {
+    func storeData(_ data: Data, for trackID: String, qualityID: String? = nil, fileExtension: String) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         remove(trackID: trackID)
         let ext = sanitizeExtension(fileExtension)
-        let destination = fileURL(trackID: trackID, ext: ext)
+        let destination = fileURL(trackID: trackID, qualityID: qualityID, ext: ext)
         let temp = directory.appendingPathComponent(".tmp-\(UUID().uuidString).\(ext)")
         try data.write(to: temp, options: .atomic)
         try FileManager.default.moveItem(at: temp, to: destination)
@@ -288,14 +357,14 @@ actor CloudAudioCache {
 
     // MARK: Waiter Management
 
-    private func cancelWaiter(trackID: String, entryID: UUID, waiterID: UUID) {
-        guard let entry = inFlight[trackID], entry.id == entryID else { return }
+    private func cancelWaiter(cacheKey: String, entryID: UUID, waiterID: UUID) {
+        guard let entry = inFlight[cacheKey], entry.id == entryID else { return }
         entry.broadcaster.remove(id: waiterID)
         guard let continuation = entry.waiters.removeValue(forKey: waiterID) else {
             if entry.waiters.isEmpty {
                 entry.task?.cancel()
                 entry.broadcaster.removeAll()
-                inFlight[trackID] = nil
+                inFlight[cacheKey] = nil
             }
             return
         }
@@ -303,13 +372,13 @@ actor CloudAudioCache {
         if entry.waiters.isEmpty {
             entry.task?.cancel()
             entry.broadcaster.removeAll()
-            inFlight[trackID] = nil
+            inFlight[cacheKey] = nil
         }
     }
 
-    private func finishInFlight(trackID: String, entryID: UUID, result: Result<URL, Error>) {
-        guard let entry = inFlight[trackID], entry.id == entryID else { return }
-        inFlight[trackID] = nil
+    private func finishInFlight(cacheKey: String, entryID: UUID, result: Result<URL, Error>) {
+        guard let entry = inFlight[cacheKey], entry.id == entryID else { return }
+        inFlight[cacheKey] = nil
         entry.broadcaster.removeAll()
         let continuations = Array(entry.waiters.values)
         entry.waiters.removeAll()
@@ -323,11 +392,19 @@ actor CloudAudioCache {
     private func performFetchAndStore(
         track: Track,
         root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        qualityID: String?,
         forceRefresh: Bool,
         onProgress: (@Sendable (CloudDownloadProgress) -> Void)?
     ) async throws -> URL {
         try Task.checkCancellation()
-        var stream = try await resolver.resolveStream(track: track, root: root, forceRefresh: forceRefresh)
+        var stream = try await resolver.resolveStream(
+            track: track,
+            root: root,
+            purpose: purpose,
+            qualityID: qualityID,
+            forceRefresh: forceRefresh
+        )
         var attempts = [stream.url] + stream.fallbackURLs
         var lastError: Error = CloudSourceError.noPlayableStream
 
@@ -365,6 +442,7 @@ actor CloudAudioCache {
                     return try moveTempFileIntoCache(
                         tempFile: result.tempFile,
                         trackID: track.id,
+                        qualityID: qualityID,
                         fileExtension: stream.fileExtension
                     )
                 } catch is CancellationError {
@@ -376,7 +454,13 @@ actor CloudAudioCache {
             }
             // If first pass failed (e.g. expired cached stream URL returning 403), force-refresh stream once.
             if attemptIndex == 0 && !forceRefresh && !Task.isCancelled {
-                if let refreshed = try? await resolver.resolveStream(track: track, root: root, forceRefresh: true) {
+                if let refreshed = try? await resolver.resolveStream(
+                    track: track,
+                    root: root,
+                    purpose: purpose,
+                    qualityID: qualityID,
+                    forceRefresh: true
+                ) {
                     stream = refreshed
                     attempts = [stream.url] + stream.fallbackURLs
                     continue
@@ -387,11 +471,11 @@ actor CloudAudioCache {
         throw lastError
     }
 
-    private func moveTempFileIntoCache(tempFile: URL, trackID: String, fileExtension: String) throws -> URL {
+    private func moveTempFileIntoCache(tempFile: URL, trackID: String, qualityID: String?, fileExtension: String) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         remove(trackID: trackID)
         let ext = sanitizeExtension(fileExtension)
-        let destination = fileURL(trackID: trackID, ext: ext)
+        let destination = fileURL(trackID: trackID, qualityID: qualityID, ext: ext)
         let staged = directory.appendingPathComponent(".tmp-\(UUID().uuidString).\(ext)")
         if (try? FileManager.default.moveItem(at: tempFile, to: staged)) == nil {
             try FileManager.default.copyItem(at: tempFile, to: staged)
@@ -407,8 +491,11 @@ actor CloudAudioCache {
         return destination
     }
 
-    private nonisolated func fileURL(trackID: String, ext: String) -> URL {
+    private nonisolated func fileURL(trackID: String, qualityID: String? = nil, ext: String) -> URL {
         let stem = Track.safeCacheStem(for: trackID)
+        if let cleanQ = Self.sanitizeQuality(qualityID) {
+            return directory.appendingPathComponent("\(stem)__\(cleanQ).\(ext)")
+        }
         return directory.appendingPathComponent("\(stem).\(ext)")
     }
 

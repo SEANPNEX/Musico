@@ -14,6 +14,8 @@ struct CloudFolderManifest: Codable, Equatable, Sendable {
     var lastSyncedEpochMs: Int64
     var tracks: [String: String]
     var providerID: String? = nil
+    var streamQualityID: String? = nil
+    var downloadQualityID: String? = nil
 
     var resolvedProviderID: String? {
         if let providerID, !providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -196,6 +198,8 @@ enum CloudExporter {
                 let cachedURL = try await cache.resolveAndCache(
                     track: track,
                     root: root,
+                    purpose: .download,
+                    qualityID: root.downloadQualityID,
                     onProgress: onDetailedProgress.map { callback in
                         { dlProgress in
                             Task { @MainActor in
@@ -252,7 +256,9 @@ enum CloudExporter {
                 cloudKind: cloudKind,
                 lastSyncedEpochMs: Int64(Date().timeIntervalSince1970 * 1000),
                 tracks: trackedMap,
-                providerID: root.effectiveProviderID
+                providerID: root.effectiveProviderID,
+                streamQualityID: root.streamQualityID,
+                downloadQualityID: root.downloadQualityID
             )
             try? saveManifest(manifest, in: destinationURL)
         }
@@ -400,6 +406,8 @@ enum CloudExporter {
         cloudLookupRoot.sourceURL = rawSource
         cloudLookupRoot.remoteID = fetched.remoteID
         cloudLookupRoot.cookie = effectiveCookie
+        cloudLookupRoot.streamQualityID = root.streamQualityID ?? existingManifest?.streamQualityID
+        cloudLookupRoot.downloadQualityID = root.downloadQualityID ?? existingManifest?.downloadQualityID
 
         let now = Date()
         let sourceSlug = resolvedProvider?.trackCloudSource
@@ -495,7 +503,9 @@ enum CloudExporter {
             cloudKind: fetched.kind,
             lastSyncedEpochMs: Int64(Date().timeIntervalSince1970 * 1000),
             tracks: trackedMap,
-            providerID: resolvedProviderID
+            providerID: resolvedProviderID,
+            streamQualityID: cloudLookupRoot.streamQualityID,
+            downloadQualityID: cloudLookupRoot.downloadQualityID
         )
         try saveManifest(updatedManifest, in: folderURL)
 
@@ -578,6 +588,8 @@ enum CloudExporter {
         let cachedURL = try await cache.resolveAndCache(
             track: track,
             root: root,
+            purpose: .download,
+            qualityID: root?.downloadQualityID,
             onProgress: onProgress.map { callback in
                 { progress in
                     Task { @MainActor in

@@ -45,6 +45,11 @@ public sealed class PlayerController : ObservableStore, IDisposable
     private string? _errorMessage;
     private SleepState _sleepState = SleepState.Off;
     private EqSettings _eq;
+    private string? _currentQualityId;
+    private string? _currentQualityLabel;
+    private IReadOnlyList<ExtensionQualityOption> _currentTrackAvailableQualities = Array.Empty<ExtensionQualityOption>();
+    private string? _qualityOverrideTrackId;
+    private string? _qualityOverrideId;
 
     private bool _isLoaded;
     private bool _targetAutoplay;
@@ -129,6 +134,13 @@ public sealed class PlayerController : ObservableStore, IDisposable
     public double CurrentTimeSeconds { get => _currentTimeSeconds; private set => SetProperty(ref _currentTimeSeconds, value); }
     public string? ErrorMessage { get => _errorMessage; private set => SetProperty(ref _errorMessage, value); }
     public SleepState SleepState { get => _sleepState; private set => SetProperty(ref _sleepState, value); }
+    public string? CurrentQualityId { get => _currentQualityId; private set => SetProperty(ref _currentQualityId, value); }
+    public string? CurrentQualityLabel { get => _currentQualityLabel; private set => SetProperty(ref _currentQualityLabel, value); }
+    public IReadOnlyList<ExtensionQualityOption> CurrentTrackAvailableQualities
+    {
+        get => _currentTrackAvailableQualities;
+        private set => SetProperty(ref _currentTrackAvailableQualities, value);
+    }
 
     public float Volume
     {
@@ -201,6 +213,11 @@ public sealed class PlayerController : ObservableStore, IDisposable
         var track = trackId is not null ? Library.GetTrack(trackId) : null;
         if (track is null || track.IsCloud) return false;
 
+        _qualityOverrideTrackId = null;
+        _qualityOverrideId = null;
+        CurrentQualityId = null;
+        CurrentQualityLabel = null;
+        CurrentTrackAvailableQualities = Array.Empty<ExtensionQualityOption>();
         CurrentTrack = track;
         DurationSeconds = track.DurationSeconds;
         CurrentTimeSeconds = 0;
@@ -289,11 +306,29 @@ public sealed class PlayerController : ObservableStore, IDisposable
         }
     }
 
+    private string? GetTrackQualityOverride(string trackId) =>
+        string.Equals(_qualityOverrideTrackId, trackId, StringComparison.Ordinal)
+            ? _qualityOverrideId
+            : null;
+
     private void BeginCloudLoad(Track track, bool autoplay, double position)
     {
         _engine.Unload();
         _isLoaded = false;
         IsPlaying = false;
+        if (!string.Equals(_qualityOverrideTrackId, track.Id, StringComparison.Ordinal))
+        {
+            _qualityOverrideTrackId = null;
+            _qualityOverrideId = null;
+        }
+        var root = Library.GetRoot(track.RootId);
+        var provider = CloudStreamResolver.GetProvider(_providerRegistry, track, root);
+        string? initialQuality = CloudStreamResolver.ResolveRequestedQuality(
+            provider, track, root, _extensions, CloudStreamPurpose.Stream, GetTrackQualityOverride(track.Id));
+        CurrentTrackAvailableQualities = provider?.AvailableQualities ?? Array.Empty<ExtensionQualityOption>();
+        CurrentQualityId = initialQuality;
+        CurrentQualityLabel = CloudStreamResolver.ResolveQualityLabel(provider, initialQuality);
+
         CurrentTrack = track;
         DurationSeconds = track.DurationSeconds;
         CurrentTimeSeconds = 0;
@@ -329,20 +364,45 @@ public sealed class PlayerController : ObservableStore, IDisposable
             }
 
             string? filePath = null;
+            CloudAudioStream? resolvedStream = null;
+            ICloudSourceProvider? cloudProvider = null;
+            string? requestedQuality = null;
             try
             {
                 if (!track.IsCloud)
                 {
+                    _qualityOverrideTrackId = null;
+                    _qualityOverrideId = null;
                     filePath = Library.GetFilePath(track);
                 }
                 else
                 {
+                    if (!string.Equals(_qualityOverrideTrackId, track.Id, StringComparison.Ordinal))
+                    {
+                        _qualityOverrideTrackId = null;
+                        _qualityOverrideId = null;
+                    }
                     var root = Library.GetRoot(track.RootId);
+                    cloudProvider = CloudStreamResolver.GetProvider(_providerRegistry, track, root);
+                    string? qualityOverride = GetTrackQualityOverride(track.Id);
+                    requestedQuality = CloudStreamResolver.ResolveRequestedQuality(
+                        cloudProvider, track, root, _extensions, CloudStreamPurpose.Stream, qualityOverride);
+
                     filePath = await _cloudCache.GetOrDownloadAsync(
                         track.Id,
-                        token => ResolveCloudStreamAsync(track, root, token),
+                        async token =>
+                        {
+                            resolvedStream = await ResolveCloudStreamAsync(
+                                track,
+                                root,
+                                token,
+                                forceRefresh: false,
+                                qualityOverride: qualityOverride).ConfigureAwait(false);
+                            return resolvedStream;
+                        },
                         root?.ProxyUrl,
-                        ct).ConfigureAwait(false);
+                        ct,
+                        quality: requestedQuality).ConfigureAwait(false);
                 }
             }
             catch (OperationCanceledException)
@@ -370,8 +430,27 @@ public sealed class PlayerController : ObservableStore, IDisposable
                     CurrentTrack = track;
                     DurationSeconds = track.DurationSeconds;
                     CurrentTimeSeconds = 0;
+                    if (track.IsCloud)
+                    {
+                        CurrentTrackAvailableQualities = cloudProvider?.AvailableQualities ?? Array.Empty<ExtensionQualityOption>();
+                        string? actualQuality = resolvedStream?.ActualQuality ?? requestedQuality;
+                        CurrentQualityId = actualQuality;
+                        CurrentQualityLabel = resolvedStream?.QualityLabel
+                                              ?? CloudStreamResolver.ResolveQualityLabel(cloudProvider, actualQuality);
+                    }
+                    else
+                    {
+                        CurrentTrackAvailableQualities = Array.Empty<ExtensionQualityOption>();
+                        CurrentQualityId = null;
+                        CurrentQualityLabel = null;
+                    }
+
                     bool shouldPlay = _targetAutoplay;
                     if (!FinishTrackLoad(track, filePath, shouldPlay, pos)) return false;
+                    if (track.IsCloud)
+                    {
+                        _cloudCache.EvictStaleQualityVariants(track.Id, filePath);
+                    }
                     IsLoadingCloud = false;
                     _targetAutoplay = false;
                     return true;
@@ -411,8 +490,130 @@ public sealed class PlayerController : ObservableStore, IDisposable
         }
     }
 
-    private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct) =>
-        CloudStreamResolver.ResolveAsync(_providerRegistry, track, root, _extensions, forceRefresh: false, ct: ct);
+    public async Task<bool> SwitchCurrentTrackQualityAsync(string qualityId, CancellationToken ct = default)
+    {
+        if (_disposed || string.IsNullOrWhiteSpace(qualityId)) return false;
+        if (CurrentTrack is not { IsCloud: true } track) return false;
+
+        var root = Library.GetRoot(track.RootId);
+        var provider = CloudStreamResolver.GetProvider(_providerRegistry, track, root);
+        if (provider is null || !provider.IsAvailable || provider.AvailableQualities.Count == 0)
+        {
+            return false;
+        }
+
+        string trimmed = qualityId.Trim();
+        var option = provider.AvailableQualities.FirstOrDefault(q =>
+            string.Equals(q.Id.Trim(), trimmed, StringComparison.OrdinalIgnoreCase));
+        if (option is null) return false;
+
+        string? prevOverrideTrackId = _qualityOverrideTrackId;
+        string? prevOverrideQualityId = _qualityOverrideId;
+        string targetQualityId = option.Id.Trim();
+
+        double initialPos = _isLoaded ? _engine.CurrentTimeSeconds : CurrentTimeSeconds;
+        bool wasPlaying = IsPlaying || (IsLoadingCloud && _targetAutoplay);
+
+        CancelPendingCloudLoad();
+        _qualityOverrideTrackId = track.Id;
+        _qualityOverrideId = targetQualityId;
+        CurrentTrackAvailableQualities = provider.AvailableQualities;
+        CurrentQualityId = targetQualityId;
+        CurrentQualityLabel = option.EffectiveBadge;
+        IsLoadingCloud = true;
+        _targetAutoplay = wasPlaying;
+
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _loadCts = cts;
+        int gen = _loadGeneration;
+
+        try
+        {
+            CloudAudioStream? resolvedStream = null;
+            string filePath = await _cloudCache.GetOrDownloadAsync(
+                track.Id,
+                async token =>
+                {
+                    resolvedStream = await ResolveCloudStreamAsync(
+                        track,
+                        root,
+                        token,
+                        forceRefresh: true,
+                        qualityOverride: targetQualityId).ConfigureAwait(false);
+                    return resolvedStream;
+                },
+                root?.ProxyUrl,
+                cts.Token,
+                quality: targetQualityId,
+                forceRefresh: true).ConfigureAwait(false);
+
+            if (cts.IsCancellationRequested || gen != _loadGeneration || _disposed) return false;
+
+            return await RunOnUiAsync(() =>
+            {
+                if (cts.IsCancellationRequested || gen != _loadGeneration || _disposed || CurrentTrack?.Id != track.Id)
+                {
+                    return false;
+                }
+
+                double resumePos = _isLoaded ? _engine.CurrentTimeSeconds : initialPos;
+                bool shouldPlay = _isLoaded ? _engine.IsPlaying : _targetAutoplay;
+                if (!FinishTrackLoad(track, filePath, shouldPlay, resumePos))
+                {
+                    return false;
+                }
+
+                _cloudCache.EvictStaleQualityVariants(track.Id, filePath);
+                string actualQuality = resolvedStream?.ActualQuality ?? targetQualityId;
+                CurrentQualityId = actualQuality;
+                CurrentQualityLabel = resolvedStream?.QualityLabel
+                                      ?? CloudStreamResolver.ResolveQualityLabel(provider, actualQuality)
+                                      ?? option.EffectiveBadge;
+                IsLoadingCloud = false;
+                _targetAutoplay = false;
+                return true;
+            }).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            await RunOnUiAsync(() =>
+            {
+                if (gen != _loadGeneration || _disposed) return;
+                _qualityOverrideTrackId = prevOverrideTrackId;
+                _qualityOverrideId = prevOverrideQualityId;
+                string? fallbackQuality = CloudStreamResolver.ResolveRequestedQuality(
+                    provider, track, root, _extensions, CloudStreamPurpose.Stream, GetTrackQualityOverride(track.Id));
+                CurrentQualityId = fallbackQuality;
+                CurrentQualityLabel = CloudStreamResolver.ResolveQualityLabel(provider, fallbackQuality);
+                IsLoadingCloud = false;
+                _targetAutoplay = false;
+                ErrorMessage = string.IsNullOrWhiteSpace(ex.Message)
+                    ? L.Format("Player_CouldNotPlaySong", track.Title)
+                    : ex.Message;
+            }).ConfigureAwait(false);
+            return false;
+        }
+    }
+
+    private Task<CloudAudioStream> ResolveCloudStreamAsync(
+        Track track,
+        LibraryRoot? root,
+        CancellationToken ct,
+        bool forceRefresh = false,
+        string? qualityOverride = null) =>
+        CloudStreamResolver.ResolveAsync(
+            _providerRegistry,
+            track,
+            root,
+            _extensions,
+            forceRefresh: forceRefresh,
+            ct: ct,
+            purpose: CloudStreamPurpose.Stream,
+            qualityOverride: qualityOverride);
 
     private void PrefetchNextCloudTrack()
     {
@@ -430,6 +631,9 @@ public sealed class PlayerController : ObservableStore, IDisposable
         var cts = new CancellationTokenSource();
         _prefetchCts = cts;
         var root = Library.GetRoot(nextTrack.RootId);
+        var nextProvider = CloudStreamResolver.GetProvider(_providerRegistry, nextTrack, root);
+        string? nextQuality = CloudStreamResolver.ResolveRequestedQuality(
+            nextProvider, nextTrack, root, _extensions, CloudStreamPurpose.Stream, qualityOverride: null);
 
         _ = Task.Run(async () =>
         {
@@ -439,7 +643,8 @@ public sealed class PlayerController : ObservableStore, IDisposable
                     nextTrack.Id,
                     token => ResolveCloudStreamAsync(nextTrack, root, token),
                     root?.ProxyUrl,
-                    cts.Token).ConfigureAwait(false);
+                    cts.Token,
+                    quality: nextQuality).ConfigureAwait(false);
             }
             catch
             {
@@ -472,6 +677,11 @@ public sealed class PlayerController : ObservableStore, IDisposable
         CancelPendingCloudLoad();
         _engine.Unload();
         _isLoaded = false;
+        _qualityOverrideTrackId = null;
+        _qualityOverrideId = null;
+        CurrentQualityId = null;
+        CurrentQualityLabel = null;
+        CurrentTrackAvailableQualities = Array.Empty<ExtensionQualityOption>();
         CurrentTrack = null;
         IsPlaying = false;
         DurationSeconds = 0;
@@ -906,12 +1116,21 @@ public sealed class PlayerController : ObservableStore, IDisposable
         var track = trackId is not null ? Library.GetTrack(trackId) : null;
         if (track is not null && track.IsCloud)
         {
-            if (_cloudCache.TryGetCachedPath(track.Id) is not null)
+            var root = Library.GetRoot(track.RootId);
+            var provider = CloudStreamResolver.GetProvider(_providerRegistry, track, root);
+            string? defaultQuality = CloudStreamResolver.ResolveRequestedQuality(
+                provider, track, root, _extensions, CloudStreamPurpose.Stream);
+
+            if ((defaultQuality is not null && _cloudCache.TryGetCachedPath(track.Id, defaultQuality) is not null) ||
+                _cloudCache.TryGetCachedPath(track.Id) is not null)
             {
                 StartCurrent(autoplay: false, position: Queues.Active.PositionSeconds);
             }
             else
             {
+                CurrentTrackAvailableQualities = provider?.AvailableQualities ?? Array.Empty<ExtensionQualityOption>();
+                CurrentQualityId = defaultQuality;
+                CurrentQualityLabel = CloudStreamResolver.ResolveQualityLabel(provider, defaultQuality);
                 CurrentTrack = track;
                 DurationSeconds = track.DurationSeconds;
                 CurrentTimeSeconds = Math.Clamp(Queues.Active.PositionSeconds, 0, Math.Max(track.DurationSeconds, 0));

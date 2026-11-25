@@ -9,6 +9,8 @@ final class ExtensionHostStorage: ExtensionRuntimeHostDelegate, @unchecked Senda
     private var kvByExt: [String: [String: ExtensionKVEntry]] = [:]
     private var settingsByExt: [String: [String: ExtensionSettingValue]] = [:]
     private var cookiesByExt: [String: String] = [:]
+    private var streamQualityByExt: [String: String] = [:]
+    private var downloadQualityByExt: [String: String] = [:]
     private var logsByExt: [String: [ExtensionLogEntry]] = [:]
     var onLogsChanged: (@Sendable (String) -> Void)?
 
@@ -16,11 +18,19 @@ final class ExtensionHostStorage: ExtensionRuntimeHostDelegate, @unchecked Senda
         self.baseDirectory = baseDirectory
     }
 
-    func loadExtension(id: String, settings: [String: ExtensionSettingValue], cookie: String? = nil) {
+    func loadExtension(
+        id: String,
+        settings: [String: ExtensionSettingValue],
+        cookie: String? = nil,
+        streamQualityID: String? = nil,
+        downloadQualityID: String? = nil
+    ) {
         let extDir = baseDirectory.appendingPathComponent(id, isDirectory: true)
         let kv = Persistence.load([String: ExtensionKVEntry].self, from: extDir.appendingPathComponent("kv.json")) ?? [:]
         let logs = Persistence.load([ExtensionLogEntry].self, from: extDir.appendingPathComponent("logs.json")) ?? []
         let cleanCookie = cookie?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanStreamQ = streamQualityID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanDownloadQ = downloadQualityID?.trimmingCharacters(in: .whitespacesAndNewlines)
         lock.withLock {
             kvByExt[id] = kv
             settingsByExt[id] = settings
@@ -28,6 +38,16 @@ final class ExtensionHostStorage: ExtensionRuntimeHostDelegate, @unchecked Senda
                 cookiesByExt[id] = cleanCookie
             } else {
                 cookiesByExt.removeValue(forKey: id)
+            }
+            if let cleanStreamQ, !cleanStreamQ.isEmpty {
+                streamQualityByExt[id] = cleanStreamQ
+            } else {
+                streamQualityByExt.removeValue(forKey: id)
+            }
+            if let cleanDownloadQ, !cleanDownloadQ.isEmpty {
+                downloadQualityByExt[id] = cleanDownloadQ
+            } else {
+                downloadQualityByExt.removeValue(forKey: id)
             }
             logsByExt[id] = Array(logs.suffix(200))
         }
@@ -37,6 +57,31 @@ final class ExtensionHostStorage: ExtensionRuntimeHostDelegate, @unchecked Senda
         lock.withLock {
             settingsByExt[extensionID] = settings
         }
+    }
+
+    func setQualityPreferences(streamQualityID: String?, downloadQualityID: String?, for extensionID: String) {
+        let cleanStreamQ = streamQualityID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanDownloadQ = downloadQualityID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        lock.withLock {
+            if let cleanStreamQ, !cleanStreamQ.isEmpty {
+                streamQualityByExt[extensionID] = cleanStreamQ
+            } else {
+                streamQualityByExt.removeValue(forKey: extensionID)
+            }
+            if let cleanDownloadQ, !cleanDownloadQ.isEmpty {
+                downloadQualityByExt[extensionID] = cleanDownloadQ
+            } else {
+                downloadQualityByExt.removeValue(forKey: extensionID)
+            }
+        }
+    }
+
+    func streamQualityID(for extensionID: String) -> String? {
+        lock.withLock { streamQualityByExt[extensionID] }
+    }
+
+    func downloadQualityID(for extensionID: String) -> String? {
+        lock.withLock { downloadQualityByExt[extensionID] }
     }
 
     func setCookie(_ cookie: String?, for extensionID: String) {
@@ -59,6 +104,8 @@ final class ExtensionHostStorage: ExtensionRuntimeHostDelegate, @unchecked Senda
             kvByExt.removeValue(forKey: id)
             settingsByExt.removeValue(forKey: id)
             cookiesByExt.removeValue(forKey: id)
+            streamQualityByExt.removeValue(forKey: id)
+            downloadQualityByExt.removeValue(forKey: id)
             logsByExt.removeValue(forKey: id)
         }
     }
@@ -419,6 +466,9 @@ final class ExtensionStore {
         let existingState = extensions.first { $0.id == manifest.id }?.state
         let mergedSettings = filterCompatibleSettings(existingState?.settings ?? [:], manifest: manifest)
         let preservedCookie = manifest.supportsCookieAuth ? existingState?.cookie : nil
+        let validQualityIDs = Set(manifest.effectiveQualities.map(\.id))
+        let preservedStreamQuality = existingState?.streamQualityID.flatMap { validQualityIDs.contains($0) ? $0 : nil }
+        let preservedDownloadQuality = existingState?.downloadQualityID.flatMap { validQualityIDs.contains($0) ? $0 : nil }
         let newState = ExtensionState(
             isEnabled: isEnabled,
             permissionApproved: permissionApproved,
@@ -426,7 +476,9 @@ final class ExtensionStore {
             installedAt: existingState?.installedAt ?? now,
             updatedAt: now,
             sourceURL: sourceURL ?? existingState?.sourceURL,
-            cookie: preservedCookie
+            cookie: preservedCookie,
+            streamQualityID: preservedStreamQuality,
+            downloadQualityID: preservedDownloadQuality
         )
 
         var storedManifest = manifest
@@ -440,7 +492,13 @@ final class ExtensionStore {
         }
         try Persistence.save(newState, to: extDir.appendingPathComponent("state.json"))
 
-        hostStorage.loadExtension(id: storedManifest.id, settings: mergedSettings, cookie: preservedCookie)
+        hostStorage.loadExtension(
+            id: storedManifest.id,
+            settings: mergedSettings,
+            cookie: preservedCookie,
+            streamQualityID: preservedStreamQuality,
+            downloadQualityID: preservedDownloadQuality
+        )
         let installed = InstalledExtension(
             manifest: storedManifest,
             state: newState,
@@ -650,6 +708,24 @@ final class ExtensionStore {
         extensions[idx].state.settings = [:]
         extensions[idx].state.updatedAt = Date()
         hostStorage.setSettings([:], for: extensionID)
+        saveState(for: extensions[idx])
+    }
+
+    func updateQualityPreferences(extensionID: String, streamQualityID: String?, downloadQualityID: String?) {
+        guard let idx = extensions.firstIndex(where: { $0.id == extensionID }) else { return }
+        let validIDs = Set(extensions[idx].manifest.effectiveQualities.map(\.id))
+        let cleanStream = streamQualityID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanDownload = downloadQualityID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let normalizedStream = cleanStream.flatMap { (!$0.isEmpty && validIDs.contains($0)) ? $0 : nil }
+        let normalizedDownload = cleanDownload.flatMap { (!$0.isEmpty && validIDs.contains($0)) ? $0 : nil }
+        extensions[idx].state.streamQualityID = normalizedStream
+        extensions[idx].state.downloadQualityID = normalizedDownload
+        extensions[idx].state.updatedAt = Date()
+        hostStorage.setQualityPreferences(
+            streamQualityID: normalizedStream,
+            downloadQualityID: normalizedDownload,
+            for: extensionID
+        )
         saveState(for: extensions[idx])
     }
 
@@ -904,7 +980,9 @@ final class ExtensionStore {
                 providers.append(JSExtensionCloudProvider(
                     manifest: ext.manifest,
                     runtime: runtime,
-                    extensionCookieProvider: { [weak hostStorage] in hostStorage?.cookie(for: extID) }
+                    extensionCookieProvider: { [weak hostStorage] in hostStorage?.cookie(for: extID) },
+                    extensionStreamQualityProvider: { [weak hostStorage] in hostStorage?.streamQualityID(for: extID) },
+                    extensionDownloadQualityProvider: { [weak hostStorage] in hostStorage?.downloadQualityID(for: extID) }
                 ))
             }
             if ext.manifest.capabilities.contains(.lyrics) {
@@ -952,7 +1030,9 @@ final class ExtensionStore {
             hostStorage.loadExtension(
                 id: manifest.id,
                 settings: state.settings,
-                cookie: manifest.supportsCookieAuth ? state.cookie : nil
+                cookie: manifest.supportsCookieAuth ? state.cookie : nil,
+                streamQualityID: state.streamQualityID,
+                downloadQualityID: state.downloadQualityID
             )
             loaded.append(InstalledExtension(
                 manifest: manifest,

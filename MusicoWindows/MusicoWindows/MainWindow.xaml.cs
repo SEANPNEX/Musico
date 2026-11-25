@@ -42,6 +42,7 @@ public partial class MainWindow : Window
             OpenArtist = ShowArtistDetail,
             OpenPlaylist = ShowPlaylistDetail,
             OpenAddCloudFolder = () => CloudDialog.Show(_services),
+            OpenEditCloudSource = (root, relPath, preselect) => EditCloudDialog.Show(_services, root, relPath, preselect),
             OpenSaveCloudPlaylist = (root, tracks) => SaveCloudDialog.Show(_services, root, tracks),
             OpenSaveCloudTrack = StartSingleTrackExport,
             OpenUpdateTrackedFolder = root => SaveCloudDialog.ShowTrackedFolderUpdate(_services, root),
@@ -706,6 +707,7 @@ public partial class MainWindow : Window
             if (UpdateDialog.IsOpen) { UpdateDialog.Close(); e.Handled = true; return; }
             if (DownloadsOverlay.IsOpen) { DownloadsOverlay.Close(); e.Handled = true; return; }
             if (SaveCloudDialog.IsOpen) { SaveCloudDialog.Close(); e.Handled = true; return; }
+            if (EditCloudDialog.IsOpen) { EditCloudDialog.Close(); e.Handled = true; return; }
             if (CloudDialog.IsOpen) { CloudDialog.Close(); e.Handled = true; return; }
             if (CollectionPreviewOverlay.IsOpen) { CollectionPreviewOverlay.Close(); e.Handled = true; return; }
             if (CloudLyricsOverlay.IsOpen) { CloudLyricsOverlay.Close(); e.Handled = true; return; }
@@ -749,7 +751,7 @@ public partial class MainWindow : Window
         if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
         {
             if (Keyboard.FocusedElement is TextBoxBase or PasswordBox) return;
-            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || SaveCloudDialog.IsOpen || CollectionPreviewOverlay.IsOpen || CloudLyricsOverlay.IsOpen || DownloadsOverlay.IsOpen || UpdateDialog.IsOpen || SongInfoDialog.IsOpen) return;
+            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || EditCloudDialog.IsOpen || SaveCloudDialog.IsOpen || CollectionPreviewOverlay.IsOpen || CloudLyricsOverlay.IsOpen || DownloadsOverlay.IsOpen || UpdateDialog.IsOpen || SongInfoDialog.IsOpen) return;
             _services.Player.TogglePlayPause();
             e.Handled = true;
         }

@@ -10,6 +10,7 @@ import com.musico.cloud.CloudErrorCode
 import com.musico.cloud.CloudHttpClient
 import com.musico.cloud.CloudHttpRequest
 import com.musico.cloud.CloudSourceException
+import com.musico.cloud.CloudStreamPurpose
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -394,13 +395,18 @@ class QuickJsExtensionRuntime(
         relativePath: String? = null,
         cookie: String? = null,
         forceRefresh: Boolean = false,
+        quality: String? = null,
+        purpose: CloudStreamPurpose? = null,
     ): ExtResolveStreamResult {
+        val cleanQuality = quality?.trim()?.takeIf { it.isNotEmpty() }
         val reqJson = json.encodeToString(
             buildJsonObject {
                 put("remoteTrackId", remoteTrackId)
                 if (relativePath != null) put("relativePath", relativePath) else put("relativePath", JsonNull)
                 if (cookie != null) put("cookie", cookie) else put("cookie", JsonNull)
                 put("forceRefresh", forceRefresh)
+                if (cleanQuality != null) put("quality", cleanQuality)
+                if (purpose != null) put("purpose", purpose.wireName)
             }
         )
         val raw = invokeHook(

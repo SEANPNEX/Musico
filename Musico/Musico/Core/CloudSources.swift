@@ -89,6 +89,9 @@ struct CloudStreamResult: Sendable, Equatable {
     var expiresAt: Date
     var fallbackURLs: [URL] = []
     var contentLength: Int64? = nil
+    var actualQuality: String? = nil
+    var qualityLabel: String? = nil
+    var bitrateKbps: Int? = nil
 }
 
 struct HTTPResponseData: Sendable {
@@ -254,6 +257,51 @@ protocol GoogleDriveProgressiveFetching: CloudPlaylistFetching {
 
 protocol CloudStreamResolving: Sendable {
     func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult
+    func resolveStream(
+        track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        qualityID: String?,
+        forceRefresh: Bool
+    ) async throws -> CloudStreamResult
+    func effectiveQualityID(
+        for track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        overrideQualityID: String?
+    ) -> String?
+}
+
+extension CloudStreamResolving {
+    func resolveStream(
+        track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        qualityID: String?,
+        forceRefresh: Bool
+    ) async throws -> CloudStreamResult {
+        try await resolveStream(track: track, root: root, forceRefresh: forceRefresh)
+    }
+
+    func effectiveQualityID(
+        for track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        overrideQualityID: String?
+    ) -> String? {
+        let trimmed = overrideQualityID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let trimmed, !trimmed.isEmpty {
+            return trimmed
+        }
+        switch purpose {
+        case .stream:
+            let rootQ = root?.streamQualityID?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (rootQ?.isEmpty == false) ? rootQ : nil
+        case .download:
+            let rootQ = root?.downloadQualityID?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return (rootQ?.isEmpty == false) ? rootQ : nil
+        }
+    }
 }
 
 // MARK: - Share-Link URL Extraction & Classification
@@ -539,7 +587,30 @@ final class LiveCloudService: CloudPlaylistFetching, CloudProviderPlaylistFetchi
         )
     }
 
+    func effectiveQualityID(
+        for track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        overrideQualityID: String?
+    ) -> String? {
+        guard let providerID = CloudProviderRegistry.providerID(for: track, root: root),
+              let provider = registry.provider(forID: providerID) else {
+            return nil
+        }
+        return provider.effectiveQualityID(root: root, purpose: purpose, overrideQualityID: overrideQualityID)
+    }
+
     func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool = false) async throws -> CloudStreamResult {
+        try await resolveStream(track: track, root: root, purpose: .stream, qualityID: nil, forceRefresh: forceRefresh)
+    }
+
+    func resolveStream(
+        track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        qualityID: String?,
+        forceRefresh: Bool = false
+    ) async throws -> CloudStreamResult {
         guard let providerID = CloudProviderRegistry.providerID(for: track, root: root) else {
             throw CloudSourceError.unsupportedSource
         }
@@ -550,7 +621,13 @@ final class LiveCloudService: CloudPlaylistFetching, CloudProviderPlaylistFetchi
             }
             throw CloudSourceError.unsupportedSource
         }
-        return try await provider.resolveStream(track: track, root: root, forceRefresh: forceRefresh)
+        return try await provider.resolveStream(
+            track: track,
+            root: root,
+            purpose: purpose,
+            qualityID: qualityID,
+            forceRefresh: forceRefresh
+        )
     }
 }
 
@@ -1194,8 +1271,15 @@ actor YouTubeClient {
 
     // MARK: Stream Resolution
 
-    func resolveStream(videoID: String, cookie: String?, forceRefresh: Bool = false) async throws -> CloudStreamResult {
-        if !forceRefresh, let cached = streamCache[videoID], cached.result.expiresAt > Date().addingTimeInterval(30) {
+    func resolveStream(
+        videoID: String,
+        cookie: String?,
+        qualityID: String? = nil,
+        forceRefresh: Bool = false
+    ) async throws -> CloudStreamResult {
+        let normalizedQuality = qualityID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let cacheKey = "\(videoID)|\(normalizedQuality?.isEmpty == false ? normalizedQuality! : "highest")"
+        if !forceRefresh, let cached = streamCache[cacheKey], cached.result.expiresAt > Date().addingTimeInterval(30) {
             return cached.result
         }
 
@@ -1255,7 +1339,7 @@ actor YouTubeClient {
                         }
                     }
 
-                    let candidates = Self.extractStreamCandidates(from: json)
+                    let candidates = Self.extractStreamCandidates(from: json, qualityID: normalizedQuality)
                     for candidate in candidates.prefix(3) {
                         let probeHeaders = [
                             "User-Agent": client.userAgent,
@@ -1273,9 +1357,12 @@ actor YouTubeClient {
                                 headers: headers,
                                 fileExtension: candidate.fileExtension,
                                 expiresAt: expiresAt,
-                                contentLength: candidate.contentLength
+                                contentLength: candidate.contentLength,
+                                actualQuality: candidate.actualQuality,
+                                qualityLabel: candidate.qualityLabel,
+                                bitrateKbps: candidate.bitrateKbps
                             )
-                            streamCache[videoID] = CachedStream(result: result)
+                            streamCache[cacheKey] = CachedStream(result: result)
                             return result
                         }
                     }
@@ -1369,6 +1456,9 @@ actor YouTubeClient {
         var priority: Int
         var bitrate: Int
         var contentLength: Int64? = nil
+        var actualQuality: String? = nil
+        var qualityLabel: String? = nil
+        var bitrateKbps: Int? = nil
     }
 
     nonisolated static func parseBrowsePage(_ json: [String: Any], seenVideoIDs: inout Set<String>) -> BrowseParseResult {
@@ -1666,10 +1756,11 @@ actor YouTubeClient {
         )
     }
 
-    nonisolated static func extractStreamCandidates(from playerJSON: [String: Any]) -> [StreamCandidate] {
+    nonisolated static func extractStreamCandidates(from playerJSON: [String: Any], qualityID: String? = nil) -> [StreamCandidate] {
         guard let streamingData = playerJSON["streamingData"] as? [String: Any] else { return [] }
         let adaptive = (streamingData["adaptiveFormats"] as? [[String: Any]]) ?? []
         let progressive = (streamingData["formats"] as? [[String: Any]]) ?? []
+        let requested = qualityID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
 
         var candidates: [StreamCandidate] = []
         for format in adaptive + progressive {
@@ -1690,23 +1781,79 @@ actor YouTubeClient {
 
             let priority: Int
             let ext: String
-            if itag == 141 {
-                priority = 0; ext = "m4a"
-            } else if itag == 140 {
-                priority = 1; ext = "m4a"
-            } else if itag == 139 {
-                priority = 2; ext = "m4a"
-            } else if mime.hasPrefix("audio/mp4") || mime.contains("mp4a") {
-                priority = 3; ext = "m4a"
+            let isAudioMP4 = mime.hasPrefix("audio/mp4") || mime.contains("mp4a")
+            let isVideoMP4 = mime.hasPrefix("video/mp4")
+
+            if itag == 141 || itag == 140 || itag == 139 || isAudioMP4 {
+                ext = "m4a"
+                switch requested {
+                case "low":
+                    if itag == 139 { priority = 0 }
+                    else if itag == 140 { priority = 1 }
+                    else if itag == 141 { priority = 3 }
+                    else { priority = 2 }
+                case "standard", "high":
+                    if itag == 140 { priority = 0 }
+                    else if itag == 141 { priority = 1 }
+                    else if isAudioMP4 && itag != 139 { priority = 2 }
+                    else { priority = 3 }
+                default: // "highest" or nil
+                    if itag == 141 { priority = 0 }
+                    else if itag == 140 { priority = 1 }
+                    else if itag == 139 { priority = 3 }
+                    else { priority = 2 }
+                }
             } else if itag == 18 {
                 priority = 4; ext = "mp4"
-            } else if mime.hasPrefix("video/mp4") {
+            } else if isVideoMP4 {
                 priority = 5; ext = "mp4"
             } else {
                 continue
             }
 
-            candidates.append(StreamCandidate(itag: itag, url: url, fileExtension: ext, priority: priority, bitrate: bitrate, contentLength: contentLength))
+            let derivedKbps = bitrate > 0 ? max(1, Int((Double(bitrate) / 1000.0).rounded())) : nil
+            let actualQuality: String
+            let qualityLabel: String
+            let bitrateKbps: Int?
+            switch itag {
+            case 141:
+                actualQuality = "highest"
+                bitrateKbps = derivedKbps ?? 256
+                qualityLabel = "\(bitrateKbps!)k"
+            case 140:
+                actualQuality = (requested == "high") ? "high" : "standard"
+                bitrateKbps = derivedKbps ?? 128
+                qualityLabel = "\(bitrateKbps!)k"
+            case 139:
+                actualQuality = "low"
+                bitrateKbps = derivedKbps ?? 48
+                qualityLabel = "\(bitrateKbps!)k"
+            case 18:
+                actualQuality = "standard"
+                bitrateKbps = derivedKbps
+                qualityLabel = derivedKbps.map { "\($0)k" } ?? "MP4"
+            default:
+                bitrateKbps = derivedKbps
+                if let kbps = derivedKbps {
+                    actualQuality = kbps >= 200 ? "highest" : (kbps >= 96 ? "standard" : "low")
+                    qualityLabel = "\(kbps)k"
+                } else {
+                    actualQuality = "standard"
+                    qualityLabel = ext.uppercased()
+                }
+            }
+
+            candidates.append(StreamCandidate(
+                itag: itag,
+                url: url,
+                fileExtension: ext,
+                priority: priority,
+                bitrate: bitrate,
+                contentLength: contentLength,
+                actualQuality: actualQuality,
+                qualityLabel: qualityLabel,
+                bitrateKbps: bitrateKbps
+            ))
         }
 
         return candidates.sorted {
@@ -2129,8 +2276,15 @@ actor BilibiliClient {
 
     // MARK: Stream Resolution
 
-    func resolveStream(trackID: String, cookie: String?, forceRefresh: Bool = false) async throws -> CloudStreamResult {
-        if !forceRefresh, let cached = streamCache[trackID], cached.result.expiresAt > Date().addingTimeInterval(30) {
+    func resolveStream(
+        trackID: String,
+        cookie: String?,
+        qualityID: String? = nil,
+        forceRefresh: Bool = false
+    ) async throws -> CloudStreamResult {
+        let normalizedQuality = qualityID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let cacheKey = "\(trackID)|\(normalizedQuality?.isEmpty == false ? normalizedQuality! : "highest")"
+        if !forceRefresh, let cached = streamCache[cacheKey], cached.result.expiresAt > Date().addingTimeInterval(30) {
             return cached.result
         }
 
@@ -2171,7 +2325,7 @@ actor BilibiliClient {
                 playJSON = try? await getBilibiliJSON(url: url, cookie: cookie)
             }
         }
-        if playJSON == nil || Self.extractPlayURLCandidate(from: playJSON ?? [:]) == nil {
+        if playJSON == nil || Self.extractPlayURLCandidate(from: playJSON ?? [:], qualityID: normalizedQuality) == nil {
             var components = URLComponents(string: "https://api.bilibili.com/x/player/playurl")!
             components.queryItems = [
                 URLQueryItem(name: "bvid", value: bvid),
@@ -2185,7 +2339,7 @@ actor BilibiliClient {
             }
         }
 
-        guard let json = playJSON, let candidate = Self.extractPlayURLCandidate(from: json) else {
+        guard let json = playJSON, let candidate = Self.extractPlayURLCandidate(from: json, qualityID: normalizedQuality) else {
             throw CloudSourceError.noPlayableStream
         }
 
@@ -2202,9 +2356,12 @@ actor BilibiliClient {
             headers: headers,
             fileExtension: candidate.fileExtension,
             expiresAt: Date().addingTimeInterval(1800),
-            fallbackURLs: candidate.backups
+            fallbackURLs: candidate.backups,
+            actualQuality: candidate.actualQuality,
+            qualityLabel: candidate.qualityLabel,
+            bitrateKbps: candidate.bitrateKbps
         )
-        streamCache[trackID] = CachedStream(result: result)
+        streamCache[cacheKey] = CachedStream(result: result)
         return result
     }
 
@@ -2392,16 +2549,29 @@ actor BilibiliClient {
         var url: URL
         var backups: [URL]
         var fileExtension: String
+        var actualQuality: String? = nil
+        var qualityLabel: String? = nil
+        var bitrateKbps: Int? = nil
     }
 
-    nonisolated static func extractPlayURLCandidate(from json: [String: Any]) -> PlayURLCandidate? {
+    nonisolated static func extractPlayURLCandidate(from json: [String: Any], qualityID: String? = nil) -> PlayURLCandidate? {
         guard let data = json["data"] as? [String: Any] else { return nil }
         if let dash = data["dash"] as? [String: Any] {
             var audioStreams: [[String: Any]] = (dash["audio"] as? [[String: Any]]) ?? []
             if let flac = (dash["flac"] as? [String: Any])?["audio"] as? [String: Any] {
                 audioStreams.append(flac)
             }
-            let preferredIDs = [30280, 30232, 30216, 30251]
+            let preferredIDs: [Int]
+            switch qualityID?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+            case "high":
+                preferredIDs = [30280, 30232, 30216, 30251]
+            case "standard":
+                preferredIDs = [30232, 30280, 30216, 30251]
+            case "low":
+                preferredIDs = [30216, 30232, 30280, 30251]
+            default: // "highest" or nil
+                preferredIDs = [30251, 30280, 30232, 30216]
+            }
             let sorted = audioStreams.sorted { a, b in
                 let idA = a["id"] as? Int ?? 0
                 let idB = b["id"] as? Int ?? 0
@@ -2416,15 +2586,64 @@ actor BilibiliClient {
                 let backupStrs = (stream["backupUrl"] as? [String]) ?? (stream["backup_url"] as? [String]) ?? []
                 let backups = backupStrs.compactMap(URL.init(string:))
                 let id = stream["id"] as? Int ?? 0
+                let bandwidth = stream["bandwidth"] as? Int ?? 0
+                let derivedKbps = bandwidth > 0 ? max(1, Int((Double(bandwidth) / 1000.0).rounded())) : nil
                 let mime = (stream["mimeType"] as? String ?? stream["mime_type"] as? String ?? "").lowercased()
                 let ext = (id == 30251 || mime.contains("flac")) ? "flac" : "m4a"
-                return PlayURLCandidate(url: url, backups: backups, fileExtension: ext)
+                let actualQuality: String
+                let qualityLabel: String
+                let bitrateKbps: Int?
+                switch id {
+                case 30251:
+                    actualQuality = "highest"
+                    qualityLabel = "FLAC"
+                    bitrateKbps = derivedKbps
+                case 30280:
+                    actualQuality = "high"
+                    bitrateKbps = derivedKbps ?? 192
+                    qualityLabel = "192k"
+                case 30232:
+                    actualQuality = "standard"
+                    bitrateKbps = derivedKbps ?? 132
+                    qualityLabel = "132k"
+                case 30216:
+                    actualQuality = "low"
+                    bitrateKbps = derivedKbps ?? 64
+                    qualityLabel = "64k"
+                default:
+                    bitrateKbps = derivedKbps
+                    if ext == "flac" {
+                        actualQuality = "highest"
+                        qualityLabel = "FLAC"
+                    } else if let kbps = derivedKbps {
+                        actualQuality = kbps >= 250 ? "highest" : (kbps >= 160 ? "high" : (kbps >= 96 ? "standard" : "low"))
+                        qualityLabel = "\(kbps)k"
+                    } else {
+                        actualQuality = "standard"
+                        qualityLabel = "M4A"
+                    }
+                }
+                return PlayURLCandidate(
+                    url: url,
+                    backups: backups,
+                    fileExtension: ext,
+                    actualQuality: actualQuality,
+                    qualityLabel: qualityLabel,
+                    bitrateKbps: bitrateKbps
+                )
             }
         }
         if let durl = data["durl"] as? [[String: Any]], let first = durl.first,
            let urlStr = first["url"] as? String, let url = URL(string: urlStr) {
             let backups = ((first["backup_url"] as? [String]) ?? []).compactMap(URL.init(string:))
-            return PlayURLCandidate(url: url, backups: backups, fileExtension: "mp4")
+            return PlayURLCandidate(
+                url: url,
+                backups: backups,
+                fileExtension: "mp4",
+                actualQuality: "standard",
+                qualityLabel: "MP4",
+                bitrateKbps: nil
+            )
         }
         return nil
     }

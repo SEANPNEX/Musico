@@ -255,4 +255,15 @@
     <sys:String x:Key="Str_Preview_AddAsCloudFolder">添加为云端文件夹</sys:String>
     <sys:String x:Key="Str_Preview_PlayAll">全部播放</sys:String>
 
+    <!-- v1.2.7 Audio Quality & Edit Cloud Source -->
+    <sys:String x:Key="Str_FullPlayer_QualityTooltip">切换当前歌曲的播放音质</sys:String>
+    <sys:String x:Key="Str_Quality_StreamLabel">在线播放音质</sys:String>
+    <sys:String x:Key="Str_Quality_DownloadLabel">下载导出音质</sys:String>
+    <sys:String x:Key="Str_EditCloud_Title">编辑云端来源</sys:String>
+    <sys:String x:Key="Str_EditCloud_UrlLabel">来源链接</sys:String>
+    <sys:String x:Key="Str_EditCloud_UrlHint">修改链接或来源将安全地重新绑定此文件夹，并保留已有歌单与收藏。</sys:String>
+    <sys:String x:Key="Str_EditCloud_ProviderLabel">来源 / 提供方</sys:String>
+    <sys:String x:Key="Str_EditCloud_ProviderHint">保持“自动（匹配链接）”或为此链接指定已安装的提供方或扩展。</sys:String>
+    <sys:String x:Key="Str_EditCloud_Saving">正在更新云端来源...</sys:String>
+
 </ResourceDictionary>

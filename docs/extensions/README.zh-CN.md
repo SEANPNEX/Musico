@@ -396,6 +396,9 @@ module.exports = {
 | `urlPatterns` | `string[]` | 条件必填 | 原生端先做预筛选的正则表达式列表。声明 `"playlist"` 或 `"tree"` 时**必填**；其余扩展（如纯 `"lyrics"`、纯 `"search"` 或 `"search" + "stream"`）可省略或留空。 |
 | `searchKinds` | `string[]` | 否 | 支持 `"track"`、`"playlist"`、`"album"` 的子集，控制搜歌页面的分类筛选选项（省略或为空时默认开启全部三种）。 |
 | `permissions.hosts` | `string[]` | 条件必填 | 严格的 HTTP/HTTPS 域名白名单：支持精确域名（`example.com`）或二级以上通配子域（`*.sub.domain`，禁止裸 `*` 或 `*.com`）。当 `settings` 包含 `"server_url"` 配置项时可留空。 |
+| `qualities` | `array` | 否 | 可选的音质选项列表（最多 16 项）：`{ id, label, badge?, lossless? }`。省略或为空时宿主会隐藏音质选择器。 |
+| `defaultStreamQuality` | `string` | 否 | 可选默认播放音质 ID（需存在于 `qualities` 中，省略时按 `"standard"` 处理）。 |
+| `defaultDownloadQuality` | `string` | 否 | 可选默认下载/保存本地音质 ID（需存在于 `qualities` 中，省略时按 `"highest"` 处理）。 |
 | `settings` | `array` | 否 | 配置项列表 `{ key, label, type, default, options? }`，`type` 支持 `"boolean"`、`"string"`、`"select"`、`"server_url"`；`select` 的 `options` 支持纯字符串或 `{ value, label }` 对象；`"server_url"` 会将用户填写的 `http://` 或 `https://` 服务器精确主机名动态加入扩展的网络白名单。 |
 
 ---
@@ -412,8 +415,8 @@ module.exports = {
   - **入参：** `{ folderId, pathSegments, depth, cookie?, cursor?, extra? }`
   - **返回：** `{ folderId, tracks: ExtTrack[], subfolders?: ExtSubfolder[], nextCursor? }`
 - **`resolveStream(ctx, req)`** *（异步，声明 `"stream"` 时必填；临时试听传入扩展级 Cookie，已挂载云端文件夹传入各自独立的目录 Cookie）*
-  - **入参：** `{ remoteTrackId, relativePath?, cookie?, forceRefresh }`
-  - **返回：** `{ url, headers?, fileExtension, mimeType?, expiresAtMs?, fallbackUrls?, contentLength? }`
+  - **入参：** `{ remoteTrackId, relativePath?, cookie?, forceRefresh, quality?, purpose?: "stream" | "download" }`
+  - **返回：** `{ url, headers?, fileExtension, mimeType?, expiresAtMs?, fallbackUrls?, contentLength?, actualQuality?, qualityLabel?, bitrateKbps? }`
 - **`search(ctx, req)`** *（异步，声明 `"search"` 时必填）*
   - **入参：** `{ query, kind: "all" | "track" | "playlist" | "album", limit, cursor?, cookie? }`
   - **返回：** `{ items: ExtSearchResult[], nextCursor?: string | null }`（无结果也可返回 `null`）

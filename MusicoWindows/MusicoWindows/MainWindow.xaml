@@ -467,6 +467,7 @@
             <controls:EqualizerDialog x:Name="EqDialog" />
             <controls:SleepTimerDialog x:Name="SleepDialog" />
             <controls:AddCloudFolderDialog x:Name="CloudDialog" />
+            <controls:EditCloudSourceDialog x:Name="EditCloudDialog" />
             <controls:SaveCloudFolderDialog x:Name="SaveCloudDialog" />
             <controls:DownloadsDialog x:Name="DownloadsOverlay" />
             <controls:UpdateDialog x:Name="UpdateDialog" />

@@ -477,7 +477,11 @@ public partial class SaveCloudFolderDialog : UserControl
                 _updateRelativePath,
                 raw,
                 previousTracking?.Cookie ?? _root.Cookie,
-                previousTracking?.ProxyUrl ?? _root.ProxyUrl);
+                previousTracking?.ProxyUrl ?? _root.ProxyUrl,
+                preferredProviderId: null,
+                streamQualityId: previousTracking?.StreamQualityId,
+                downloadQualityId: previousTracking?.DownloadQualityId,
+                updateQualityPrefs: false);
         }
         catch (Exception ex)
         {

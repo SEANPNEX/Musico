@@ -14,7 +14,14 @@ namespace MusicoWindows.Controls;
 
 public partial class AddCloudFolderDialog : UserControl
 {
-    private sealed record ProviderOption(string? ProviderId, string Label, bool SupportsCookies, bool SupportsProxy);
+    private sealed record ProviderOption(
+        string? ProviderId,
+        string Label,
+        bool SupportsCookies,
+        bool SupportsProxy,
+        ICloudSourceProvider? Provider);
+
+    private sealed record QualityOptionItem(string? QualityId, string Label);
 
     private AppServices? _services;
     private bool _isBusy;
@@ -62,11 +69,11 @@ public partial class AddCloudFolderDialog : UserControl
         {
             var options = new List<ProviderOption>
             {
-                new(null, L.Get("AddCloud_AutoDetect"), true, true)
+                new(null, L.Get("AddCloud_AutoDetect"), true, true, null)
             };
             foreach (var p in _services.CloudProviders.AvailableProviders.Where(p => p.SupportsCollectionImport))
             {
-                options.Add(new ProviderOption(p.ProviderId, p.DisplayName, p.SupportsCookies, p.SupportsProxy));
+                options.Add(new ProviderOption(p.ProviderId, p.DisplayName, p.SupportsCookies, p.SupportsProxy, p));
             }
             ProviderCombo.ItemsSource = options;
             ProviderCombo.SelectedIndex = 0;
@@ -87,6 +94,8 @@ public partial class AddCloudFolderDialog : UserControl
         UrlBox.IsEnabled = !busy;
         CookieBox.IsEnabled = !busy;
         ProxyBox.IsEnabled = !busy;
+        StreamQualityCombo.IsEnabled = !busy;
+        DownloadQualityCombo.IsEnabled = !busy;
         CancelButton.IsEnabled = !busy;
         CloseIconButton.IsEnabled = !busy;
         BusyPanel.Visibility = busy ? Visibility.Visible : Visibility.Collapsed;
@@ -99,26 +108,78 @@ public partial class AddCloudFolderDialog : UserControl
 
         bool showCookies = true;
         bool showProxy = true;
+        ICloudSourceProvider? activeProvider = null;
 
         if (ProviderCombo.SelectedItem is ProviderOption selected && selected.ProviderId is not null)
         {
             showCookies = selected.SupportsCookies;
             showProxy = selected.SupportsProxy;
+            activeProvider = selected.Provider;
         }
         else if (!string.IsNullOrWhiteSpace(UrlBox.Text))
         {
-            string extracted = CloudUrlClassifier.ExtractCloudUrl(UrlBox.Text, _services.CloudProviders);
-            var detected = _services.CloudProviders.AvailableProviders
-                .FirstOrDefault(p => p.MatchesUrlPattern(extracted) || p.MatchesUrlPattern(UrlBox.Text));
+            var detected = _services.CloudProviders.GetBestCompatibleProvider(UrlBox.Text);
             if (detected is not null)
             {
                 showCookies = detected.SupportsCookies;
                 showProxy = detected.SupportsProxy;
+                activeProvider = detected;
             }
         }
 
         CookieSection.Visibility = showCookies ? Visibility.Visible : Visibility.Collapsed;
         ProxySection.Visibility = showProxy ? Visibility.Visible : Visibility.Collapsed;
+
+        UpdateQualitySection(activeProvider);
+    }
+
+    private void UpdateQualitySection(ICloudSourceProvider? provider)
+    {
+        var qualities = provider?.AvailableQualities ?? Array.Empty<ExtensionQualityOption>();
+        if (provider is null || qualities.Count == 0)
+        {
+            QualitySection.Visibility = Visibility.Collapsed;
+            StreamQualityCombo.ItemsSource = null;
+            DownloadQualityCombo.ItemsSource = null;
+            return;
+        }
+
+        QualitySection.Visibility = Visibility.Visible;
+        string? prevStream = (StreamQualityCombo.SelectedItem as QualityOptionItem)?.QualityId;
+        string? prevDownload = (DownloadQualityCombo.SelectedItem as QualityOptionItem)?.QualityId;
+
+        PopulateQualityCombo(StreamQualityCombo, qualities, provider.DefaultStreamQualityId, prevStream);
+        PopulateQualityCombo(DownloadQualityCombo, qualities, provider.DefaultDownloadQualityId, prevDownload);
+    }
+
+    private static void PopulateQualityCombo(
+        ComboBox combo,
+        IReadOnlyList<ExtensionQualityOption> qualities,
+        string? defaultQualityId,
+        string? previousSelection)
+    {
+        string? defaultLabel = qualities
+            .FirstOrDefault(q => string.Equals(q.Id, defaultQualityId, StringComparison.OrdinalIgnoreCase))
+            ?.Label;
+        string autoLabel = !string.IsNullOrWhiteSpace(defaultLabel)
+            ? L.Format("Quality_DefaultOption", defaultLabel)
+            : L.Get("Quality_AutoDefault");
+
+        var items = new List<QualityOptionItem> { new(null, autoLabel) };
+        foreach (var q in qualities)
+        {
+            string display = !string.IsNullOrWhiteSpace(q.Badge) ? $"{q.Label} ({q.Badge})" : q.Label;
+            items.Add(new QualityOptionItem(q.Id, display));
+        }
+
+        combo.ItemsSource = items;
+        int index = 0;
+        if (!string.IsNullOrWhiteSpace(previousSelection))
+        {
+            int found = items.FindIndex(i => string.Equals(i.QualityId, previousSelection, StringComparison.OrdinalIgnoreCase));
+            if (found >= 0) index = found;
+        }
+        combo.SelectedIndex = index;
     }
 
     private async void Submit_Click(object sender, RoutedEventArgs e) => await SubmitAsync();
@@ -134,6 +195,12 @@ public partial class AddCloudFolderDialog : UserControl
             : null;
         string? proxy = ProxySection.Visibility == Visibility.Visible && !string.IsNullOrWhiteSpace(ProxyBox.Text)
             ? ProxyBox.Text.Trim()
+            : null;
+        string? streamQualityId = QualitySection.Visibility == Visibility.Visible
+            ? (StreamQualityCombo.SelectedItem as QualityOptionItem)?.QualityId
+            : null;
+        string? downloadQualityId = QualitySection.Visibility == Visibility.Visible
+            ? (DownloadQualityCombo.SelectedItem as QualityOptionItem)?.QualityId
             : null;
 
         string effectiveUrl;
@@ -162,7 +229,9 @@ public partial class AddCloudFolderDialog : UserControl
                 effectiveUrl,
                 provider.SupportsCookies ? cookie : null,
                 provider.SupportsProxy ? proxy : null,
-                preferredProviderId: selectedProviderId);
+                preferredProviderId: selectedProviderId,
+                streamQualityId: streamQualityId,
+                downloadQualityId: downloadQualityId);
             _isBusy = false;
             Visibility = Visibility.Collapsed;
         }

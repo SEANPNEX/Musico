@@ -7,7 +7,9 @@ import androidx.media3.common.MediaMetadata
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.musico.cloud.CloudErrorCode
+import com.musico.cloud.CloudQualityOption
 import com.musico.cloud.CloudSourceException
+import com.musico.cloud.CloudStreamPurpose
 import com.musico.cloud.CloudStreamResolver
 import com.musico.cloud.ResolvedStream
 import com.musico.core.Persistence
@@ -34,6 +36,7 @@ import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.max
 
 sealed interface PlaybackError {
@@ -53,6 +56,9 @@ data class PlayerUiState(
     val sleepMode: SleepMode = SleepMode.Off,
     val eq: EqSettings = EqSettings(),
     val isLoadingCloud: Boolean = false,
+    val currentStreamQualityLabel: String? = null,
+    val currentStreamQualityId: String? = null,
+    val availableStreamQualities: List<CloudQualityOption> = emptyList(),
 )
 
 /**
@@ -88,6 +94,7 @@ class PlayerController(
     private var cloudRetryCount: Int = 0
     private var cloudAutoplayRequested: Boolean = false
     private var mediaControllerStarted = false
+    private val trackQualityOverrides = ConcurrentHashMap<String, String>()
 
     init {
         val loadedEq = Persistence.load<EqSettings>(settingsFile) ?: EqSettings()
@@ -131,6 +138,7 @@ class PlayerController(
             }
         }
         library.onTracksRemoved = { ids -> tracksRemoved(ids) }
+        library.onTracksRemapped = { idMap -> tracksRemapped(idMap) }
         library.onFolderAdded = { name, trackIds -> onFolderAdded(name, trackIds) }
         library.onTrackUpdated = { track -> onTrackUpdated(track) }
         if (library.referencedQueueTrackIdsProvider == null) {
@@ -210,6 +218,9 @@ class PlayerController(
             currentTrack = track,
             durationSec = track.durationSec,
             currentTimeSec = 0.0,
+            currentStreamQualityLabel = null,
+            currentStreamQualityId = null,
+            availableStreamQualities = emptyList(),
         )
 
         val uri = library.uriFor(track)
@@ -313,6 +324,7 @@ class PlayerController(
         positionSec: Double,
         forceRefresh: Boolean,
         consecutiveFailures: Int,
+        explicitQualityId: String? = null,
     ) {
         val gen = ++loadGeneration
         cloudLoadJob?.cancel()
@@ -321,20 +333,50 @@ class PlayerController(
         engine.unload()
         stopTicker()
 
+        val initialRoot = library.rootFor(track)
+        val initialProvider = cloudResolver.providerFor(track, initialRoot)
+        val initialQualities = initialProvider?.availableQualities.orEmpty()
+        val requestedQuality = if (initialQualities.isNotEmpty()) {
+            val candidate = explicitQualityId ?: trackQualityOverrides[track.id]
+            candidate?.takeIf { qId -> initialQualities.any { it.id == qId } }
+        } else {
+            null
+        }
+        val initialTargetQualityId = requestedQuality
+            ?: cloudResolver.effectiveQualityId(track, initialRoot, CloudStreamPurpose.STREAM, null)
+        val initialTargetLabel = if (initialQualities.isEmpty()) {
+            null
+        } else {
+            initialTargetQualityId?.let { qId ->
+                initialQualities.firstOrNull { it.id == qId }?.compactLabel ?: qId
+            }
+        }
+
         _state.value = _state.value.copy(
             currentTrack = track,
             durationSec = track.durationSec,
             currentTimeSec = positionSec.coerceAtLeast(0.0),
             isPlaying = false,
             isLoadingCloud = true,
+            currentStreamQualityLabel = initialTargetLabel,
+            currentStreamQualityId = initialTargetQualityId,
+            availableStreamQualities = initialQualities,
         )
 
         cloudLoadJob = scope.launch {
             val root = library.rootFor(track)
+            val provider = cloudResolver.providerFor(track, root)
+            val availableQualities = provider?.availableQualities.orEmpty()
             val resolved = try {
                 Result.success(
                     withContext(Dispatchers.IO) {
-                        cloudResolver.resolve(track, root, forceRefresh = forceRefresh)
+                        cloudResolver.resolve(
+                            track = track,
+                            root = root,
+                            forceRefresh = forceRefresh,
+                            purpose = CloudStreamPurpose.STREAM,
+                            requestedQualityId = requestedQuality,
+                        )
                     }
                 )
             } catch (cancel: CancellationException) {
@@ -367,12 +409,27 @@ class PlayerController(
                         stopTicker()
                     }
 
+                    val actualQualityId = stream.actualQuality?.takeIf { it.isNotBlank() }
+                        ?: requestedQuality
+                        ?: cloudResolver.effectiveQualityId(track, root, CloudStreamPurpose.STREAM, null)
+                    val qualityLabel = if (availableQualities.isEmpty()) {
+                        null
+                    } else {
+                        stream.qualityLabel?.trim()?.takeIf { it.isNotEmpty() }
+                            ?: actualQualityId?.let { qId ->
+                                availableQualities.firstOrNull { it.id == qId }?.compactLabel ?: qId
+                            }
+                    }
+
                     _state.value = _state.value.copy(
                         currentTrack = track,
                         durationSec = resolvedDur,
                         currentTimeSec = currentPos,
                         isPlaying = autoplay,
                         isLoadingCloud = false,
+                        currentStreamQualityLabel = qualityLabel,
+                        currentStreamQualityId = actualQualityId,
+                        availableStreamQualities = availableQualities,
                     )
                     prefetchNextCloudTrack()
                     return@launch
@@ -445,11 +502,43 @@ class PlayerController(
         val nextTrack = library.track(nextId) ?: return
         if (!nextTrack.isCloud) return
         val root = library.rootFor(nextTrack)
+        val overrideQuality = trackQualityOverrides[nextTrack.id]
         prefetchJob?.cancel()
         prefetchJob = scope.launch(Dispatchers.IO) {
-            cloudResolver.prefetch(nextTrack, root)
+            cloudResolver.prefetch(nextTrack, root, requestedQualityId = overrideQuality)
         }
     }
+
+    /**
+     * Switches audio quality strictly for the currently playing cloud track,
+     * preserving playback position and play/pause state without changing folder or extension defaults.
+     */
+    fun switchCurrentTrackQuality(qualityId: String) {
+        val current = _state.value.currentTrack ?: return
+        if (!current.isCloud) return
+        val root = library.rootFor(current)
+        val available = _state.value.availableStreamQualities.ifEmpty {
+            cloudResolver.providerFor(current, root)?.availableQualities.orEmpty()
+        }
+        val cleanId = qualityId.trim()
+        if (available.none { it.id == cleanId }) return
+
+        val resumePos = (if (isLoaded) engine.currentTimeSec else _state.value.currentTimeSec).coerceAtLeast(0.0)
+        val shouldPlay = isActiveOrLoadingToPlay
+        trackQualityOverrides[current.id] = cleanId
+        cloudRetryCount = 0
+        cloudResolver.audioCache?.evictTrack(current.id, keepQualityId = cleanId)
+        startCloudTrack(
+            track = current,
+            autoplay = shouldPlay,
+            positionSec = resumePos,
+            forceRefresh = true,
+            consecutiveFailures = 0,
+            explicitQualityId = cleanId,
+        )
+    }
+
+    fun trackQualityOverrideFor(trackId: String): String? = trackQualityOverrides[trackId]
 
     private fun clearPlayback() {
         loadGeneration += 1
@@ -464,6 +553,9 @@ class PlayerController(
             isLoadingCloud = false,
             durationSec = 0.0,
             currentTimeSec = 0.0,
+            currentStreamQualityLabel = null,
+            currentStreamQualityId = null,
+            availableStreamQualities = emptyList(),
         )
     }
 
@@ -806,10 +898,28 @@ class PlayerController(
     private fun tracksRemoved(ids: Set<String>) {
         val currentRemoved = _state.value.currentTrack?.id?.let { it in ids } ?: false
         val wasPlaying = isActiveOrLoadingToPlay
+        ids.forEach { trackQualityOverrides.remove(it) }
         queues.removeTracks(ids)
         history.removeTracks(ids)
         if (currentRemoved) {
             startCurrent(autoplay = wasPlaying)
+        }
+    }
+
+    private fun tracksRemapped(idMap: Map<String, String>) {
+        if (idMap.isEmpty()) return
+        for ((oldId, newId) in idMap) {
+            trackQualityOverrides.remove(oldId)?.let { q ->
+                trackQualityOverrides.putIfAbsent(newId, q)
+            }
+        }
+        queues.remapTracks(idMap)
+        val current = _state.value.currentTrack
+        val mappedCurrentId = current?.id?.let { idMap[it] }
+        if (mappedCurrentId != null) {
+            library.track(mappedCurrentId)?.let { updated ->
+                _state.value = _state.value.copy(currentTrack = updated)
+            }
         }
     }
 

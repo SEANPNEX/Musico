@@ -466,6 +466,127 @@ final class PlayerControllerTests: XCTestCase {
         XCTAssertEqual(queues.active.name, "Stats")
         XCTAssertEqual(queues.queues.first { $0.id == customID }?.trackIDs, [aID])
     }
+
+    func testCurrentTrackOnlyQualitySwitchingPreservesPositionAndResetsOnNextTrack() async throws {
+        let fixture = try XCTUnwrap(Bundle(for: PlayerControllerTests.self).url(forResource: "sample", withExtension: "mp3"))
+        let sampleData = try Data(contentsOf: fixture)
+
+        let fetcher = TestCloudFetcher(result: CloudPlaylistResult(
+            kind: .cloudBilibili,
+            remoteID: "BVqtest",
+            title: "Quality Play",
+            tracks: [
+                CloudTrackInfo(remoteTrackID: "q1", relativePath: "q1", title: "Track Q1", artist: "A", album: "Al", trackNumber: 1, duration: 58, artworkURL: nil),
+                CloudTrackInfo(remoteTrackID: "q2", relativePath: "q2", title: "Track Q2", artist: "B", album: "Al", trackNumber: 2, duration: 58, artworkURL: nil)
+            ]
+        ))
+        let cloudLib = LibraryStore(
+            directory: makeTempDir(),
+            documentsURL: makeTempDir(),
+            reader: StubReader(),
+            artwork: ArtworkCache(directory: makeTempDir()),
+            cloudFetcher: fetcher,
+            artworkDownloader: { _ in nil }
+        )
+        try await cloudLib.addCloudRoot(sourceURL: "https://www.bilibili.com/video/BVqtest")
+        let rootID = try XCTUnwrap(cloudLib.roots.first?.id)
+
+        let recordedLock = NSLock()
+        var recorded: [(trackID: String, purpose: CloudStreamPurpose, quality: String?, forceRefresh: Bool)] = []
+        let resolver = QualityAwareTestCloudResolver { track, _, purpose, quality, forceRefresh in
+            recordedLock.withLock {
+                recorded.append((track.remoteTrackID ?? "", purpose, quality, forceRefresh))
+            }
+            let label = (quality == "highest") ? "FLAC" : "132k"
+            return CloudStreamResult(
+                url: URL(string: "https://cdn.example/\(track.remoteTrackID ?? "x")-\(quality ?? "std").mp3")!,
+                headers: [:],
+                fileExtension: "mp3",
+                expiresAt: Date().addingTimeInterval(600),
+                actualQuality: quality,
+                qualityLabel: label
+            )
+        }
+        let cache = CloudAudioCache(
+            directory: makeTempDir(),
+            maxBytes: 50_000_000,
+            resolver: resolver,
+            downloader: { _, _ in
+                let tmp = makeTempDir().appendingPathComponent("q.mp3")
+                try sampleData.write(to: tmp)
+                return (tmp, 200, "audio/mpeg")
+            }
+        )
+
+        let cloudState = makeTempDir()
+        let cloudQueues = QueueStore(directory: cloudState)
+        let cloudHistory = PlayHistoryStore(directory: cloudState)
+        let cloudPlayer = PlayerController(
+            library: cloudLib,
+            queues: cloudQueues,
+            history: cloudHistory,
+            engine: AudioEngine(),
+            settingsURL: cloudState.appendingPathComponent("settings.json"),
+            cloudAudio: cache
+        )
+        defer { cloudPlayer.shutdown() }
+
+        let ids = cloudLib.tracks.sorted { $0.relativePath < $1.relativePath }.map(\.id)
+        cloudPlayer.play(ids, startAt: 0)
+        for _ in 0..<40 {
+            if cloudPlayer.isPlaying { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertTrue(cloudPlayer.isPlaying)
+        XCTAssertEqual(cloudPlayer.currentStreamQualityLabel, "132k")
+
+        // Seek partway into track 1 before switching quality
+        cloudPlayer.seek(to: 12)
+        XCTAssertGreaterThan(cloudPlayer.currentTime, 10)
+
+        cloudPlayer.switchCurrentTrackQuality(to: "highest")
+        for _ in 0..<40 {
+            if cloudPlayer.isPlaying && cloudPlayer.currentStreamQualityLabel == "FLAC" { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(cloudPlayer.currentStreamQualityLabel, "FLAC")
+        XCTAssertEqual(cloudPlayer.activeQualityIDForCurrentTrack, "highest")
+        XCTAssertGreaterThanOrEqual(cloudPlayer.currentTime, 11)
+        // Folder default must remain untouched (current-track-only!)
+        XCTAssertNil(cloudLib.root(rootID)?.streamQualityID)
+
+        // Advancing to track 2 resets quality back to provider/folder default ("standard")
+        cloudPlayer.next()
+        for _ in 0..<40 {
+            if cloudPlayer.currentTrack?.relativePath == "q2" && cloudPlayer.isPlaying { break }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        XCTAssertEqual(cloudPlayer.currentTrack?.relativePath, "q2")
+        XCTAssertEqual(cloudPlayer.currentStreamQualityLabel, "132k")
+
+        let calls = recordedLock.withLock { recorded }
+        XCTAssertTrue(calls.contains { $0.trackID == "q1" && $0.purpose == .stream && $0.quality == "standard" && !$0.forceRefresh })
+        XCTAssertTrue(calls.contains { $0.trackID == "q1" && $0.purpose == .stream && $0.quality == "highest" && $0.forceRefresh })
+        XCTAssertTrue(calls.contains { $0.trackID == "q2" && $0.purpose == .stream && $0.quality == "standard" && !$0.forceRefresh })
+    }
+}
+
+private struct QualityAwareTestCloudResolver: CloudStreamResolving {
+    let handler: @Sendable (Track, LibraryRoot?, CloudStreamPurpose, String?, Bool) async throws -> CloudStreamResult
+
+    func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult {
+        try await handler(track, root, .stream, nil, forceRefresh)
+    }
+
+    func resolveStream(
+        track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        qualityID: String?,
+        forceRefresh: Bool
+    ) async throws -> CloudStreamResult {
+        try await handler(track, root, purpose, qualityID, forceRefresh)
+    }
 }
 
 private struct TestCloudFetcher: CloudPlaylistFetching {

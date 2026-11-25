@@ -114,6 +114,16 @@ public partial class FullPlayerView : UserControl
         RepeatButton.IsEnabled = hasTrack;
         ScrubberSlider.IsEnabled = hasTrack;
 
+        var qualities = player.CurrentTrackAvailableQualities;
+        bool showQuality = hasTrack && qualities.Count > 0;
+        QualityButton.Visibility = showQuality ? Visibility.Visible : Visibility.Collapsed;
+        if (showQuality)
+        {
+            QualityButton.Content = !string.IsNullOrWhiteSpace(player.CurrentQualityLabel)
+                ? player.CurrentQualityLabel
+                : L.Get("Quality_Select");
+        }
+
         bool isFav = track != null && services.Library.IsFavourite(track.Id);
         FavouriteButton.Content = isFav ? "\uEB52" : "\uEB51";
         FavouriteButton.SetResourceReference(ForegroundProperty, isFav ? "AccentBrush" : "TextSecondaryBrush");
@@ -158,6 +168,49 @@ public partial class FullPlayerView : UserControl
     {
         if (_ctx?.Services.Player.CurrentTrack is { } track)
             _ctx.OpenSongInfo?.Invoke(track);
+    }
+
+    private void Quality_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ctx is null) return;
+        var player = _ctx.Services.Player;
+        var qualities = player.CurrentTrackAvailableQualities;
+        if (qualities.Count == 0) return;
+
+        string? currentId = player.CurrentQualityId;
+        var menu = new ContextMenu();
+        foreach (var opt in qualities)
+        {
+            string label = !string.IsNullOrWhiteSpace(opt.Badge)
+                ? $"{opt.Label} ({opt.Badge})"
+                : opt.Label;
+            bool isCurrent = string.Equals(opt.Id, currentId, StringComparison.OrdinalIgnoreCase);
+            string qualityId = opt.Id;
+            menu.Items.Add(TrackMenuHelper.CreateItem(
+                label,
+                isCurrent ? "\uE73E" : null,
+                () => _ = SwitchTrackQualityAsync(qualityId)));
+        }
+
+        menu.PlacementTarget = QualityButton;
+        menu.IsOpen = true;
+    }
+
+    private async System.Threading.Tasks.Task SwitchTrackQualityAsync(string qualityId)
+    {
+        if (_ctx is null) return;
+        try
+        {
+            bool switched = await _ctx.Services.Player.SwitchCurrentTrackQualityAsync(qualityId);
+            if (!switched && _ctx.Services.Player.LastError is { Length: > 0 } err)
+            {
+                ErrorOccurred?.Invoke(L.Get("Quality_SwitchFailedTitle"), err);
+            }
+        }
+        catch (Exception ex)
+        {
+            ErrorOccurred?.Invoke(L.Get("Quality_SwitchFailedTitle"), ex.Message);
+        }
     }
 
     private void TrackInfo_MouseRightButtonUp(object sender, MouseButtonEventArgs e)

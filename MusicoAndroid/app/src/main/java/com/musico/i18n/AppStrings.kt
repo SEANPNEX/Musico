@@ -144,6 +144,17 @@ interface AppStrings {
     val editCloudSourceEllipsis: String
     val editCloudSourceTitle: String
     val cloudSourceUpdated: String
+    val switchSourceEllipsis: String
+    val switchSourceAction: String
+    val audioQualityLabel: String
+    val streamingQualityLabel: String
+    val downloadQualityLabel: String
+    val currentTrackOnlyHint: String
+    val qualityLosslessBadge: String
+    val providerAutoMatchUrl: String
+    fun providerMissingLabel(name: String): String
+    fun providerDisabledLabel(name: String): String
+    fun extensionRecoveryBanner(providerId: String, bestProviderName: String): String
 
     // Extensions & custom providers
     val extensionsTitle: String
@@ -713,6 +724,18 @@ object EnStrings : AppStrings {
     override val editCloudSourceEllipsis = "Edit Cloud Source…"
     override val editCloudSourceTitle = "Edit Cloud Source"
     override val cloudSourceUpdated = "Cloud source updated."
+    override val switchSourceEllipsis = "Switch Source…"
+    override val switchSourceAction = "Switch Source"
+    override val audioQualityLabel = "Audio Quality"
+    override val streamingQualityLabel = "Streaming Quality"
+    override val downloadQualityLabel = "Download Quality"
+    override val currentTrackOnlyHint = "Applies to current song only"
+    override val qualityLosslessBadge = "Lossless"
+    override val providerAutoMatchUrl = "Auto (Match URL)"
+    override fun providerMissingLabel(name: String) = "$name (Missing)"
+    override fun providerDisabledLabel(name: String) = "$name (Disabled)"
+    override fun extensionRecoveryBanner(providerId: String, bestProviderName: String) =
+        "Extension “$providerId” is unavailable. Switch to $bestProviderName to restore playback."
 
     override val extensionsTitle = "Extensions"
     override val importFromFile = "Import File"
@@ -1277,6 +1300,18 @@ object ZhHansStrings : AppStrings {
     override val editCloudSourceEllipsis = "编辑云端来源…"
     override val editCloudSourceTitle = "编辑云端来源"
     override val cloudSourceUpdated = "云端来源已更新。"
+    override val switchSourceEllipsis = "切换来源…"
+    override val switchSourceAction = "切换来源"
+    override val audioQualityLabel = "音质"
+    override val streamingQualityLabel = "在线播放音质"
+    override val downloadQualityLabel = "下载音质"
+    override val currentTrackOnlyHint = "仅对当前播放歌曲生效"
+    override val qualityLosslessBadge = "无损"
+    override val providerAutoMatchUrl = "自动（匹配链接）"
+    override fun providerMissingLabel(name: String) = "$name（未安装）"
+    override fun providerDisabledLabel(name: String) = "$name（已停用）"
+    override fun extensionRecoveryBanner(providerId: String, bestProviderName: String) =
+        "扩展“$providerId”不可用，可切换至 $bestProviderName 以恢复播放。"
 
     override val extensionsTitle = "扩展管理"
     override val importFromFile = "导入文件"

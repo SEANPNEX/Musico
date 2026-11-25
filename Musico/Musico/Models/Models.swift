@@ -8,6 +8,8 @@ struct CloudTrackingInfo: Codable, Equatable, Hashable, Sendable {
     var cookie: String? = nil
     var lastSynced: Date? = nil
     var providerID: String? = nil
+    var streamQualityID: String? = nil
+    var downloadQualityID: String? = nil
 
     var resolvedProviderID: String? {
         if let providerID, !providerID.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
@@ -66,6 +68,8 @@ struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
     var trackedSubfolders: [String: CloudTrackingInfo]? = nil
     var providerID: String? = nil
     var linkedProviderID: String? = nil
+    var streamQualityID: String? = nil
+    var downloadQualityID: String? = nil
 
     var isCloudTrackedLocal: Bool {
         kind.isLocal && !(sourceURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty

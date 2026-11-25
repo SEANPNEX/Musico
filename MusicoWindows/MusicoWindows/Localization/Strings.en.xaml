@@ -255,4 +255,15 @@
     <sys:String x:Key="Str_Preview_AddAsCloudFolder">Add as Cloud Folder</sys:String>
     <sys:String x:Key="Str_Preview_PlayAll">Play All</sys:String>
 
+    <!-- v1.2.7 Audio Quality & Edit Cloud Source -->
+    <sys:String x:Key="Str_FullPlayer_QualityTooltip">Switch audio quality for current song</sys:String>
+    <sys:String x:Key="Str_Quality_StreamLabel">Streaming Quality</sys:String>
+    <sys:String x:Key="Str_Quality_DownloadLabel">Download Quality</sys:String>
+    <sys:String x:Key="Str_EditCloud_Title">Edit Cloud Source</sys:String>
+    <sys:String x:Key="Str_EditCloud_UrlLabel">Source URL</sys:String>
+    <sys:String x:Key="Str_EditCloud_UrlHint">Changing the URL or provider will safely re-bind this folder while keeping your playlists and favourites.</sys:String>
+    <sys:String x:Key="Str_EditCloud_ProviderLabel">Provider / Source</sys:String>
+    <sys:String x:Key="Str_EditCloud_ProviderHint">Keep Auto (Match URL) or choose a specific installed provider or extension for this URL.</sys:String>
+    <sys:String x:Key="Str_EditCloud_Saving">Updating cloud source...</sys:String>
+
 </ResourceDictionary>

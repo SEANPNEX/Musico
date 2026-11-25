@@ -2,7 +2,9 @@ package com.musico.extensions
 
 import com.musico.cloud.CloudErrorCode
 import com.musico.cloud.CloudPlaylistResult
+import com.musico.cloud.CloudQualityOption
 import com.musico.cloud.CloudSourceException
+import com.musico.cloud.CloudStreamPurpose
 import com.musico.cloud.CloudTrackMetadata
 import com.musico.cloud.GoogleDriveClient
 import com.musico.cloud.ResolvedStream
@@ -48,6 +50,12 @@ class JsExtensionCloudProvider(
         ExtensionCapability.PLAYLIST in extension.manifest.capabilities ||
             ExtensionCapability.TREE in extension.manifest.capabilities
     override val supportsStream: Boolean = ExtensionCapability.STREAM in extension.manifest.capabilities
+    override val availableQualities: List<CloudQualityOption> =
+        extension.manifest.qualities.map { it.toCloudQualityOption() }
+    override val defaultStreamQualityId: String? =
+        extension.manifest.effectiveDefaultStreamQuality
+    override val defaultDownloadQualityId: String? =
+        extension.manifest.effectiveDefaultDownloadQuality
 
     override fun matchesUrlPatternFast(rawInput: String): Boolean {
         val extracted = extractCloudSourceInput(rawInput)
@@ -377,6 +385,8 @@ class JsExtensionCloudProvider(
         relativePath: String?,
         cookie: String?,
         forceRefresh: Boolean,
+        quality: String?,
+        purpose: CloudStreamPurpose,
     ): ResolvedStream {
         if (ExtensionCapability.STREAM !in extension.manifest.capabilities) {
             throw CloudSourceException(
@@ -384,16 +394,22 @@ class JsExtensionCloudProvider(
                 "${extension.manifest.name} does not support audio stream resolution.",
             )
         }
+        val cleanQuality = quality?.trim()?.takeIf { it.isNotEmpty() }
         val res = runtime.resolveStream(
             extension = extension,
             remoteTrackId = remoteTrackId,
             relativePath = relativePath,
             cookie = isolateCookie(cookie),
             forceRefresh = forceRefresh,
+            quality = cleanQuality,
+            purpose = purpose,
         )
         val ext = res.fileExtension?.trim()?.trimStart('.')?.lowercase()?.takeIf { it.isNotEmpty() }
         val mime = res.mimeType?.trim()?.takeIf { it.isNotEmpty() }
             ?: GoogleDriveClient.mimeTypeForExtension(ext)
+        val actualQuality = res.actualQuality?.trim()?.takeIf { it.isNotEmpty() } ?: cleanQuality
+        val resolvedLabel = res.qualityLabel?.trim()?.takeIf { it.isNotEmpty() }
+            ?: actualQuality?.let { qId -> availableQualities.firstOrNull { it.id == qId }?.compactLabel }
         return ResolvedStream(
             url = res.url,
             headers = res.headers.orEmpty(),
@@ -402,6 +418,9 @@ class JsExtensionCloudProvider(
             contentLength = res.contentLength,
             fileExtension = ext,
             fallbackUrls = res.fallbackUrls.orEmpty(),
+            actualQuality = actualQuality,
+            qualityLabel = resolvedLabel,
+            bitrateKbps = res.bitrateKbps?.takeIf { it > 0 },
         )
     }
 

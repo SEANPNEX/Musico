@@ -37,6 +37,8 @@ data class CloudTrackingInfo(
     val providerId: String? = null,
     val cookie: String? = null,
     val lastSyncedEpochMs: Long? = null,
+    val streamQualityId: String? = null,
+    val downloadQualityId: String? = null,
 ) {
     val resolvedProviderId: String?
         get() = providerId?.trim()?.takeIf { it.isNotEmpty() } ?: cloudKind.builtinProviderId
@@ -57,6 +59,8 @@ data class LibraryRoot(
     val linkedCloudKind: RootKind? = null,
     val providerId: String? = null,
     val linkedProviderId: String? = null,
+    val streamQualityId: String? = null,
+    val downloadQualityId: String? = null,
     val trackedSubfolderName: String? = null,
     val trackedSubfolders: Map<String, CloudTrackingInfo> = emptyMap(),
 ) {
@@ -106,6 +110,8 @@ data class LibraryRoot(
                 providerId = effectiveProviderId,
                 cookie = cookie,
                 lastSyncedEpochMs = lastSyncedEpochMs,
+                streamQualityId = streamQualityId,
+                downloadQualityId = downloadQualityId,
             )
         }
         trackedSubfolders[norm]?.let { return it }
@@ -120,6 +126,8 @@ data class LibraryRoot(
                 providerId = effectiveProviderId,
                 cookie = cookie,
                 lastSyncedEpochMs = lastSyncedEpochMs,
+                streamQualityId = streamQualityId,
+                downloadQualityId = downloadQualityId,
             )
         }
         return null

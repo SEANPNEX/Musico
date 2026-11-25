@@ -131,6 +131,7 @@ class LibraryStore(
     )
 
     var onTracksRemoved: ((Set<String>) -> Unit)? = null
+    var onTracksRemapped: ((Map<String, String>) -> Unit)? = null
     var onFolderAdded: ((folderName: String, trackIds: List<String>) -> Unit)? = null
     var onTrackUpdated: ((Track) -> Unit)? = null
     var referencedQueueTrackIdsProvider: (() -> Set<String>)? = null
@@ -181,6 +182,8 @@ class LibraryStore(
                 excludedPaths = savedAppRoot?.excludedPaths.orEmpty(),
                 linkedCloudKind = savedAppRoot?.linkedCloudKind,
                 linkedProviderId = savedAppRoot?.linkedProviderId,
+                streamQualityId = savedAppRoot?.streamQualityId,
+                downloadQualityId = savedAppRoot?.downloadQualityId,
                 trackedSubfolderName = savedAppRoot?.trackedSubfolderName,
                 trackedSubfolders = savedAppRoot?.trackedSubfolders.orEmpty(),
             )
@@ -260,6 +263,19 @@ class LibraryStore(
         if (!root.kind.isCloud) return CloudProviderAvailability.AVAILABLE
         return providerRegistry.availabilityFor(root.resolvedProviderId)
     }
+
+    fun compatibleProvidersForRoot(root: LibraryRoot): List<CloudSourceProvider> {
+        val url = root.sourceUrl?.trim()?.takeIf { it.isNotEmpty() }
+            ?: root.remoteId?.trim()?.takeIf { it.isNotEmpty() }
+            ?: return emptyList()
+        return providerRegistry.compatibleProvidersForUrl(
+            rawInput = url,
+            excludingProviderId = root.resolvedProviderId,
+        )
+    }
+
+    fun bestCompatibleProviderForRoot(root: LibraryRoot): CloudSourceProvider? =
+        compatibleProvidersForRoot(root).firstOrNull()
 
     fun supportsTreeCrawling(root: LibraryRoot): Boolean {
         if (!root.kind.isCloud) return false
@@ -428,6 +444,8 @@ class LibraryStore(
                     providerId = if (kind == RootKind.CLOUD_EXTENSION) pid else root.linkedProviderId,
                     cookie = root.cookie,
                     lastSyncedEpochMs = root.lastSyncedEpochMs,
+                    streamQualityId = root.streamQualityId,
+                    downloadQualityId = root.downloadQualityId,
                 )
                 )
         } else {
@@ -440,6 +458,8 @@ class LibraryStore(
             lastSyncedEpochMs = null,
             linkedCloudKind = null,
             linkedProviderId = null,
+            streamQualityId = null,
+            downloadQualityId = null,
             trackedSubfolderName = null,
             trackedSubfolders = nextSubs,
         )
@@ -716,6 +736,8 @@ class LibraryStore(
                         providerId = explicitTrackingProviderId,
                         cookie = cloudSourceRoot.cookie,
                         lastSyncedEpochMs = System.currentTimeMillis(),
+                        streamQualityId = cloudSourceRoot.streamQualityId,
+                        downloadQualityId = cloudSourceRoot.downloadQualityId,
                     )
                 } else null
             }
@@ -728,6 +750,8 @@ class LibraryStore(
                     linkedProviderId = cloudProviderId ?: existing.linkedProviderId,
                     cookie = cloudSourceRoot.cookie ?: existing.cookie,
                     lastSyncedEpochMs = System.currentTimeMillis(),
+                    streamQualityId = cloudSourceRoot.streamQualityId ?: existing.streamQualityId,
+                    downloadQualityId = cloudSourceRoot.downloadQualityId ?: existing.downloadQualityId,
                     trackedSubfolderName = null,
                 )
             } else {
@@ -812,6 +836,8 @@ class LibraryStore(
                     providerId = explicitChildPid,
                     cookie = cloudSourceRoot?.cookie,
                     lastSyncedEpochMs = trackingSyncedMs,
+                    streamQualityId = cloudSourceRoot?.streamQualityId ?: manifest?.streamQualityId,
+                    downloadQualityId = cloudSourceRoot?.downloadQualityId ?: manifest?.downloadQualityId,
                 )
             }
             LibraryRoot(
@@ -835,6 +861,8 @@ class LibraryStore(
                 excludedPaths = migratedExcluded.distinct(),
                 linkedCloudKind = cloudKind,
                 linkedProviderId = cloudProviderId,
+                streamQualityId = cloudSourceRoot?.streamQualityId ?: manifest?.streamQualityId,
+                downloadQualityId = cloudSourceRoot?.downloadQualityId ?: manifest?.downloadQualityId,
                 trackedSubfolders = migratedSubfolders,
             )
         }
@@ -893,21 +921,33 @@ class LibraryStore(
         newSourceUrl: String,
         cookie: String? = null,
         providerIdHint: String? = null,
+        streamQualityId: String? = null,
+        downloadQualityId: String? = null,
     ): Result<CloudTrackingInfo> {
         val classified = try {
-            providerRegistry.classifyUrl(newSourceUrl, providerIdHint)
-                ?: return Result.failure(LibraryException.UnsupportedCloudUrl)
+            withContext(Dispatchers.IO) {
+                providerRegistry.classifyUrl(newSourceUrl, providerIdHint)
+            } ?: return Result.failure(LibraryException.UnsupportedCloudUrl)
         } catch (err: Exception) {
             return Result.failure(err)
         }
         val cleanedUrl = classified.normalizedUrl
-        val newCloudKind = classified.provider.rootKind
-        val newProviderId = classified.provider.providerId
-        val cleanCookie = cookie?.trim()?.takeIf { it.isNotEmpty() }
+        val newProvider = classified.provider
+        val newCloudKind = newProvider.rootKind
+        val newProviderId = newProvider.providerId
+        val cleanCookie = if (newProvider.supportsCookie) {
+            cookie?.trim()?.takeIf { it.isNotEmpty() }
+        } else {
+            null
+        }
+        val validQualityIds = newProvider.availableQualities.mapTo(HashSet()) { it.id }
+        val cleanStreamQuality = streamQualityId?.trim()?.takeIf { it.isNotEmpty() && it in validQualityIds }
+        val cleanDownloadQuality = downloadQualityId?.trim()?.takeIf { it.isNotEmpty() && it in validQualityIds }
         val normPath = LibraryRoot.normalizeFolderPath(path)
 
         var updatedRoot: LibraryRoot? = null
         var updatedInfo: CloudTrackingInfo? = null
+        var needsCloudResync = false
 
         synchronized(stateLock) {
             val current = _state.value
@@ -915,30 +955,47 @@ class LibraryStore(
             if (index < 0) return Result.failure(LibraryException.NotAFolder)
             val root = current.roots[index]
             val prevTracking = root.trackingFor(normPath)
-            val preservedRemoteId = if (prevTracking?.sourceUrl == cleanedUrl) prevTracking.remoteId else classified.remoteId
+            val preservedRemoteId = if (prevTracking?.sourceUrl == cleanedUrl && prevTracking.resolvedProviderId == newProviderId) {
+                prevTracking.remoteId
+            } else {
+                classified.remoteId
+            }
             val info = CloudTrackingInfo(
                 sourceUrl = cleanedUrl,
                 remoteId = preservedRemoteId,
                 cloudKind = newCloudKind,
-                providerId = if (newCloudKind == RootKind.CLOUD_EXTENSION) newProviderId else prevTracking?.providerId,
+                providerId = newProviderId,
                 cookie = cleanCookie,
                 lastSyncedEpochMs = prevTracking?.lastSyncedEpochMs,
+                streamQualityId = cleanStreamQuality,
+                downloadQualityId = cleanDownloadQuality,
             )
 
             val nextRoot = when {
-                root.kind.isCloud -> root.copy(
-                    kind = newCloudKind,
-                    sourceUrl = cleanedUrl,
-                    remoteId = preservedRemoteId,
-                    providerId = newProviderId,
-                    cookie = cleanCookie,
-                )
+                root.kind.isCloud -> {
+                    needsCloudResync = root.kind != newCloudKind ||
+                        root.resolvedProviderId != newProviderId ||
+                        root.sourceUrl != cleanedUrl ||
+                        root.cookie != cleanCookie ||
+                        root.id !in current.availableRootIds
+                    root.copy(
+                        kind = newCloudKind,
+                        sourceUrl = cleanedUrl,
+                        remoteId = preservedRemoteId,
+                        providerId = newProviderId,
+                        cookie = cleanCookie,
+                        streamQualityId = cleanStreamQuality,
+                        downloadQualityId = cleanDownloadQuality,
+                    )
+                }
                 normPath.isEmpty() -> root.copy(
                     sourceUrl = cleanedUrl,
                     remoteId = preservedRemoteId,
                     linkedCloudKind = newCloudKind,
                     linkedProviderId = newProviderId,
                     cookie = cleanCookie,
+                    streamQualityId = cleanStreamQuality,
+                    downloadQualityId = cleanDownloadQuality,
                     trackedSubfolderName = null,
                 )
                 else -> {
@@ -954,6 +1011,8 @@ class LibraryStore(
                             linkedProviderId = null,
                             cookie = null,
                             lastSyncedEpochMs = null,
+                            streamQualityId = null,
+                            downloadQualityId = null,
                             trackedSubfolderName = null,
                             trackedSubfolders = nextSubs,
                         )
@@ -965,7 +1024,15 @@ class LibraryStore(
 
             val nextRoots = current.roots.toMutableList()
             nextRoots[index] = nextRoot
-            _state.value = current.copy(roots = nextRoots)
+            val nextAvailable = if (nextRoot.kind.isCloud) {
+                current.availableRootIds + nextRoot.id
+            } else {
+                current.availableRootIds
+            }
+            _state.value = current.copy(
+                roots = nextRoots,
+                availableRootIds = nextAvailable,
+            )
             updatedRoot = nextRoot
             updatedInfo = info
         }
@@ -977,8 +1044,169 @@ class LibraryStore(
             withContext(Dispatchers.IO) {
                 rewriteManifestOnDisk(finalRoot, normPath, finalInfo)
             }
+        } else if (needsCloudResync) {
+            resyncReboundCloudRoot(finalRoot, newProvider)
         }
         return Result.success(finalInfo)
+    }
+
+    private suspend fun resyncReboundCloudRoot(
+        root: LibraryRoot,
+        provider: CloudSourceProvider,
+    ) {
+        if (provider.supportsTree) {
+            val signal = CompletableDeferred<Result<Unit>>()
+            launchCloudTreeSync(
+                provider = provider,
+                root = root,
+                isNewRoot = false,
+                firstBatchSignal = signal,
+            )
+            runCatching { signal.await() }
+            return
+        }
+
+        val url = root.sourceUrl ?: root.remoteId ?: return
+        val effectiveCookie = if (provider.supportsCookie) {
+            root.cookie?.trim()?.takeIf { it.isNotEmpty() }
+                ?: providerRegistry.extensionCookieFor(provider.providerId)
+        } else {
+            null
+        }
+        val playlist = try {
+            withContext(Dispatchers.IO) {
+                provider.fetchCollection(url, effectiveCookie)
+            }
+        } catch (cancel: CancellationException) {
+            throw cancel
+        } catch (_: Exception) {
+            return
+        }
+
+        val existingTracks = synchronized(stateLock) {
+            _state.value.tracks.filter { it.rootId == root.id }
+        }
+        val existingByRel = LinkedHashMap<String, Track>(existingTracks.size)
+        val existingByRemoteId = LinkedHashMap<String, Track>(existingTracks.size)
+        for (t in existingTracks) {
+            existingByRel.putIfAbsent(t.relativePath, t)
+            t.remoteTrackId?.takeIf { it.isNotBlank() }?.let { rid ->
+                existingByRemoteId.putIfAbsent(rid, t)
+            }
+        }
+
+        val syncNow = System.currentTimeMillis()
+        val syncedTracks = withContext(Dispatchers.IO) {
+            buildCloudTracks(
+                root = root,
+                provider = provider,
+                items = playlist.tracks,
+                existingByRel = existingByRel,
+                nowMs = syncNow,
+                existingByRemoteId = existingByRemoteId,
+            )
+        }
+
+        val idRemap = LinkedHashMap<String, String>()
+        val matchedOldIds = HashSet<String>()
+        for (newTrack in syncedTracks) {
+            val matchedOld = existingByRel[newTrack.relativePath]
+                ?: newTrack.remoteTrackId?.let { existingByRemoteId[it] }
+            if (matchedOld != null) {
+                matchedOldIds.add(matchedOld.id)
+                if (matchedOld.id != newTrack.id) {
+                    idRemap[matchedOld.id] = newTrack.id
+                }
+            }
+        }
+        val removedIds = existingTracks
+            .filter { it.id !in matchedOldIds && it.id !in syncedTracks.mapTo(HashSet()) { s -> s.id } }
+            .mapTo(HashSet()) { it.id }
+
+        var playlistsUpdated = false
+        synchronized(stateLock) {
+            val current = _state.value
+            for ((oldId, newId) in idRemap) {
+                metadataOverrides.remove(oldId)?.let { ov ->
+                    metadataOverrides.putIfAbsent(newId, ov)
+                }
+            }
+            for (rid in removedIds) {
+                trackUris.remove(rid)
+                metadataOverrides.remove(rid)
+            }
+
+            val finalSyncedTracks = syncedTracks.map { applyMetadataOverride(it) }
+            val nextRoots = current.roots.map { r ->
+                if (r.id == root.id) {
+                    r.copy(
+                        name = r.name.ifBlank { playlist.title },
+                        remoteId = playlist.remoteId,
+                        lastSyncedEpochMs = syncNow,
+                    )
+                } else {
+                    r
+                }
+            }
+            val activeRoots = nextRoots.associateBy { it.id }
+            val combined = (current.tracks.filter { it.rootId != root.id } + finalSyncedTracks)
+                .filter { track ->
+                    val r = activeRoots[track.rootId] ?: return@filter false
+                    !r.isExcluded(track.relativePath)
+                }
+                .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.title })
+
+            var nextPlaylists = current.playlists
+            var nextFavs = current.favourites
+            if (idRemap.isNotEmpty()) {
+                nextPlaylists = current.playlists.map { pl ->
+                    val mapped = pl.trackIds.map { idRemap[it] ?: it }
+                    if (mapped != pl.trackIds) {
+                        playlistsUpdated = true
+                        pl.copy(trackIds = mapped)
+                    } else {
+                        pl
+                    }
+                }
+                val mappedFavs = current.favourites.mapTo(HashSet()) { idRemap[it] ?: it }
+                if (mappedFavs != current.favourites) {
+                    playlistsUpdated = true
+                    nextFavs = mappedFavs
+                }
+                val rootPrefix = "${root.id}\u001F"
+                for (key in folderTrackOrders.keys.filter { it.startsWith(rootPrefix) }.toList()) {
+                    val order = folderTrackOrders[key] ?: continue
+                    val mappedOrder = order.map { idRemap[it] ?: it }
+                    if (mappedOrder != order) {
+                        folderTrackOrders[key] = mappedOrder
+                    }
+                }
+            }
+
+            val (albums, artists, idMap) = buildIndices(combined)
+            byId = idMap
+            _state.value = current.copy(
+                roots = nextRoots,
+                availableRootIds = current.availableRootIds + root.id,
+                tracks = combined,
+                albums = albums,
+                artists = artists,
+                playlists = nextPlaylists,
+                favourites = nextFavs,
+                folderTrackOrders = folderTrackOrders.toMap(),
+            )
+        }
+
+        if (playlistsUpdated) {
+            savePlaylists()
+        }
+        if (idRemap.isNotEmpty()) {
+            onTracksRemapped?.invoke(idRemap)
+        }
+        if (removedIds.isNotEmpty()) {
+            forget(removedIds)
+        }
+        saveLibrary()
     }
 
     private fun rewriteManifestOnDisk(
@@ -1008,6 +1236,8 @@ class LibraryStore(
                         cloudKind = info.cloudKind.name,
                         providerId = info.resolvedProviderId,
                         lastSyncedEpochMs = info.lastSyncedEpochMs ?: existing?.lastSyncedEpochMs ?: 0L,
+                        streamQualityId = info.streamQualityId,
+                        downloadQualityId = info.downloadQualityId,
                         tracks = existing?.tracks ?: emptyMap(),
                     ),
                 )
@@ -1038,6 +1268,8 @@ class LibraryStore(
                     cloudKind = info.cloudKind.name,
                     providerId = info.resolvedProviderId,
                     lastSyncedEpochMs = info.lastSyncedEpochMs ?: existing?.lastSyncedEpochMs ?: 0L,
+                    streamQualityId = info.streamQualityId,
+                    downloadQualityId = info.downloadQualityId,
                     tracks = existing?.tracks ?: emptyMap(),
                 ),
             )
@@ -1938,6 +2170,8 @@ class LibraryStore(
                         linkedCloudKind = parsedKind,
                         linkedProviderId = pid,
                         lastSyncedEpochMs = manifest.lastSyncedEpochMs.takeIf { it > 0L } ?: nextRoot.lastSyncedEpochMs,
+                        streamQualityId = nextRoot.streamQualityId ?: manifest.streamQualityId,
+                        downloadQualityId = nextRoot.downloadQualityId ?: manifest.downloadQualityId,
                     )
                 }
             } else if (!nextRoot.isExcluded(normPath) && !nextSubs.containsKey(normPath)) {
@@ -1947,6 +2181,8 @@ class LibraryStore(
                     cloudKind = parsedKind,
                     providerId = if (parsedKind == RootKind.CLOUD_EXTENSION) pid else manifest.providerId,
                     lastSyncedEpochMs = manifest.lastSyncedEpochMs.takeIf { it > 0L },
+                    streamQualityId = manifest.streamQualityId,
+                    downloadQualityId = manifest.downloadQualityId,
                 )
             }
         }
@@ -1964,6 +2200,7 @@ class LibraryStore(
         items: List<CloudTrackMetadata>,
         existingByRel: Map<String, Track>,
         nowMs: Long,
+        existingByRemoteId: Map<String, Track> = emptyMap(),
     ): List<Track> {
         val artKeysByUrl = HashMap<String, String?>()
         val seenRel = HashSet<String>()
@@ -1994,7 +2231,7 @@ class LibraryStore(
                 ?: "$sourceSlug/${meta.remoteTrackId}"
             if (root.isExcluded(relPath)) continue
             if (!seenRel.add(relPath)) continue
-            val old = existingByRel[relPath]
+            val old = existingByRel[relPath] ?: existingByRemoteId[meta.remoteTrackId]
             val artUrl = meta.artworkUrl
 
             val artworkKey = when {

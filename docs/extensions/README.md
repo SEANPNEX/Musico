@@ -396,6 +396,9 @@ Package the included starter directory into a `.musicoext` bundle:
 | `urlPatterns` | `string[]` | Conditional | Native regex strings tested before starting a JS VM. **Required** when `"playlist"` or `"tree"` is declared; optional/empty allowed otherwise. |
 | `searchKinds` | `string[]` | No | Subset of `"track"`, `"playlist"`, `"album"`. Controls available filter pills when `"search"` is declared (defaults to all three when omitted/empty). |
 | `permissions.hosts` | `string[]` | Conditional | Strict HTTP/HTTPS allowlist: exact domain (`example.com`) or `*.sub.domain` (≥ 2 domain labels after `*.`; bare `*` and `*.tld` are rejected). May be empty when `settings` includes a `"server_url"` entry. |
+| `qualities` | `array` | No | Optional list (max 16) of selectable audio qualities `{ id, label, badge?, lossless? }`. When omitted/empty, Musico hides quality pickers. |
+| `defaultStreamQuality` | `string` | No | Optional quality `id` from `qualities` used as the default for live playback (`"standard"` when omitted). |
+| `defaultDownloadQuality` | `string` | No | Optional quality `id` from `qualities` used as the default for Save to Local / Export (`"highest"` when omitted). |
 | `settings` | `array` | No | List of `{ key, label, type, default, options? }` where `type` is `"boolean"`, `"string"`, `"select"`, or `"server_url"`. Select `options` may be strings (`["us", "jp"]`) or `{ value, label }` objects. Setting `type: "server_url"` allows the exact `http://` or `https://` hostname configured by the user at runtime. |
 
 ---
@@ -412,8 +415,8 @@ Package the included starter directory into a `.musicoext` bundle:
   - **Input:** `{ folderId, pathSegments, depth, cookie?, cursor?, extra? }`
   - **Returns:** `{ folderId, tracks: ExtTrack[], subfolders?: ExtSubfolder[], nextCursor? }`
 - **`resolveStream(ctx, req)`** *(async — required when `"stream"` capability is declared; receives extension cookie on ephemeral tracks or root cookie on mounted Cloud Folders)*
-  - **Input:** `{ remoteTrackId, relativePath?, cookie?, forceRefresh }`
-  - **Returns:** `{ url, headers?, fileExtension, mimeType?, expiresAtMs?, fallbackUrls?, contentLength? }`
+  - **Input:** `{ remoteTrackId, relativePath?, cookie?, forceRefresh, quality?, purpose?: "stream" | "download" }`
+  - **Returns:** `{ url, headers?, fileExtension, mimeType?, expiresAtMs?, fallbackUrls?, contentLength?, actualQuality?, qualityLabel?, bitrateKbps? }`
 - **`search(ctx, req)`** *(async — required when `"search"` capability is declared)*
   - **Input:** `{ query, kind: "all" | "track" | "playlist" | "album", limit, cursor?, cookie? }`
   - **Returns:** `{ items: ExtSearchResult[], nextCursor?: string | null }` (or `null` when empty)

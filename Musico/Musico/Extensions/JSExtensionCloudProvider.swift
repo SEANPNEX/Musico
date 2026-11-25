@@ -10,6 +10,8 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
     let runtime: JSExtensionRuntime
     private let compiledURLRegexes: [NSRegularExpression]
     private let extensionCookieProvider: (@Sendable () -> String?)?
+    private let extensionStreamQualityProvider: (@Sendable () -> String?)?
+    private let extensionDownloadQualityProvider: (@Sendable () -> String?)?
 
     var id: String { manifest.providerID }
     var displayName: String { manifest.name }
@@ -19,17 +21,65 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
     var supportsTree: Bool { manifest.capabilities.contains(.tree) }
     var supportsCookie: Bool { manifest.supportsCookieAuth }
     var supportsCollection: Bool { manifest.capabilities.contains(.playlist) || manifest.capabilities.contains(.tree) }
+    var availableQualities: [CloudQualityOption] { manifest.effectiveQualities }
+    var defaultStreamQualityID: String? { manifest.effectiveDefaultStreamQualityID }
+    var defaultDownloadQualityID: String? { manifest.effectiveDefaultDownloadQualityID }
 
     init(
         manifest: ExtensionManifest,
         runtime: JSExtensionRuntime,
-        extensionCookieProvider: (@Sendable () -> String?)? = nil
+        extensionCookieProvider: (@Sendable () -> String?)? = nil,
+        extensionStreamQualityProvider: (@Sendable () -> String?)? = nil,
+        extensionDownloadQualityProvider: (@Sendable () -> String?)? = nil
     ) {
         self.manifest = manifest
         self.runtime = runtime
         self.extensionCookieProvider = extensionCookieProvider
+        self.extensionStreamQualityProvider = extensionStreamQualityProvider
+        self.extensionDownloadQualityProvider = extensionDownloadQualityProvider
         self.compiledURLRegexes = manifest.urlPatterns.compactMap {
             try? NSRegularExpression(pattern: $0, options: [.caseInsensitive])
+        }
+    }
+
+    func effectiveQualityID(
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        overrideQualityID: String?
+    ) -> String? {
+        let qualities = availableQualities
+        guard !qualities.isEmpty else { return nil }
+        let validIDs = Set(qualities.map(\.id))
+        if let override = overrideQualityID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty,
+           validIDs.contains(override) {
+            return override
+        }
+        switch purpose {
+        case .stream:
+            if let rootQ = root?.streamQualityID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !rootQ.isEmpty,
+               validIDs.contains(rootQ) {
+                return rootQ
+            }
+            if let extQ = extensionStreamQualityProvider?()?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !extQ.isEmpty,
+               validIDs.contains(extQ) {
+                return extQ
+            }
+            return defaultStreamQualityID ?? qualities.first?.id
+        case .download:
+            if let rootQ = root?.downloadQualityID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !rootQ.isEmpty,
+               validIDs.contains(rootQ) {
+                return rootQ
+            }
+            if let extQ = extensionDownloadQualityProvider?()?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !extQ.isEmpty,
+               validIDs.contains(extQ) {
+                return extQ
+            }
+            return defaultDownloadQualityID ?? qualities.first?.id
         }
     }
 
@@ -247,6 +297,16 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
     }
 
     func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult {
+        try await resolveStream(track: track, root: root, purpose: .stream, qualityID: nil, forceRefresh: forceRefresh)
+    }
+
+    func resolveStream(
+        track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        qualityID: String?,
+        forceRefresh: Bool
+    ) async throws -> CloudStreamResult {
         guard manifest.capabilities.contains(.stream) else {
             throw CloudSourceError.noPlayableStream
         }
@@ -262,11 +322,14 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
             }
             return nil
         }()
+        let effectiveQuality = effectiveQualityID(root: root, purpose: purpose, overrideQualityID: qualityID)
         let remoteTrackID = track.remoteTrackID ?? track.relativePath
         let resolution = try await runtime.resolveStream(
             remoteTrackID: remoteTrackID,
             relativePath: track.relativePath,
             cookie: effectiveCookie,
+            quality: effectiveQuality,
+            purpose: purpose,
             forceRefresh: forceRefresh
         )
         guard let streamURL = URL(string: resolution.url) else {
@@ -280,13 +343,28 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
             }
             return Date().addingTimeInterval(1800)
         }()
+        let rawActual = resolution.actualQuality?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let actualQuality = (rawActual?.isEmpty == false) ? rawActual : effectiveQuality
+        let rawLabel = resolution.qualityLabel?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let fallbackLabel: String? = {
+            guard let targetID = actualQuality ?? effectiveQuality,
+                  let option = availableQualities.first(where: { $0.id == targetID }) else {
+                return nil
+            }
+            return option.badge ?? option.label
+        }()
+        let qualityLabel = (rawLabel?.isEmpty == false) ? rawLabel : fallbackLabel
+        let bitrateKbps = resolution.bitrateKbps.flatMap { ($0.isFinite && $0 > 0) ? Int($0.rounded()) : nil }
         return CloudStreamResult(
             url: streamURL,
             headers: resolution.headers ?? [:],
             fileExtension: ext,
             expiresAt: expiresAt,
             fallbackURLs: fallbackURLs,
-            contentLength: resolution.contentLength
+            contentLength: resolution.contentLength,
+            actualQuality: actualQuality,
+            qualityLabel: qualityLabel,
+            bitrateKbps: bitrateKbps
         )
     }
 

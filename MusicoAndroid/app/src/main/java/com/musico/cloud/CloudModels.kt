@@ -2,6 +2,7 @@ package com.musico.cloud
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -69,6 +70,22 @@ data class CloudPlaylistResult(
     val tracks: List<CloudTrackMetadata>,
 )
 
+enum class CloudStreamPurpose(val wireName: String) {
+    STREAM("stream"),
+    DOWNLOAD("download"),
+}
+
+@Serializable
+data class CloudQualityOption(
+    val id: String,
+    val label: String,
+    val badge: String? = null,
+    val lossless: Boolean = false,
+) {
+    val compactLabel: String
+        get() = badge?.trim()?.takeIf { it.isNotEmpty() } ?: label
+}
+
 data class ResolvedStream(
     val url: String,
     val headers: Map<String, String> = emptyMap(),
@@ -77,6 +94,9 @@ data class ResolvedStream(
     val contentLength: Long? = null,
     val fileExtension: String? = null,
     val fallbackUrls: List<String> = emptyList(),
+    val actualQuality: String? = null,
+    val qualityLabel: String? = null,
+    val bitrateKbps: Int? = null,
 )
 
 data class CloudHttpResponse(

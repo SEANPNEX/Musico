@@ -288,6 +288,24 @@ public partial class FoldersView : UserControl
             }
             else if (!available && root.Kind == RootKind.CloudExtension)
             {
+                var recoveryMatches = lib.GetCompatibleRecoveryProviders(root);
+                if (recoveryMatches.Count > 0)
+                {
+                    var bestMatchId = recoveryMatches[0].ProviderId;
+                    var switchBtn = new Button
+                    {
+                        Content = L.Get("Folders_SwitchSource"),
+                        Style = (Style)FindResource("Win10PrimaryButtonStyle"),
+                        Margin = new Thickness(0, 0, 8, 0)
+                    };
+                    switchBtn.Click += (_, e) =>
+                    {
+                        e.Handled = true;
+                        PromptEditCloudSource(root, string.Empty, bestMatchId);
+                    };
+                    actions.Children.Add(switchBtn);
+                }
+
                 var extBtn = new Button
                 {
                     Content = L.Get("Folders_ManageExtensions"),
@@ -441,7 +459,23 @@ public partial class FoldersView : UserControl
                             L.Get("Folders_SaveToLocal"),
                             "\uE896",
                             () => _ctx.OpenSaveCloudPlaylist?.Invoke(root, rootTracks),
-                            rootTracks.Count > 0));
+                            rootTracks.Count > 0 && available));
+                        if (!available && root.Kind == RootKind.CloudExtension)
+                        {
+                            var recoveryMatches = lib.GetCompatibleRecoveryProviders(root);
+                            if (recoveryMatches.Count > 0)
+                            {
+                                string bestMatchId = recoveryMatches[0].ProviderId;
+                                menu.Items.Add(TrackMenuHelper.CreateItem(
+                                    L.Get("Folders_SwitchSource"),
+                                    "\uE8AB",
+                                    () => PromptEditCloudSource(root, string.Empty, bestMatchId)));
+                            }
+                        }
+                        menu.Items.Add(TrackMenuHelper.CreateItem(
+                            L.Get("Folders_EditCloudSource"),
+                            "\uE70F",
+                            () => PromptEditCloudSource(root, string.Empty)));
                     }
                     if (root.IsCloudTrackedLocal)
                     {
@@ -530,7 +564,8 @@ public partial class FoldersView : UserControl
         UpdateTrackedFolderButton.Visibility = root.IsLocal && currentTracking is not null && lib.IsAvailable(root)
             ? Visibility.Visible
             : Visibility.Collapsed;
-        EditCloudSourceButton.Visibility = root.IsLocal && currentTracking is not null
+        EditCloudSourceButton.Visibility = (root.IsCloud && string.IsNullOrEmpty(_currentPath))
+            || (root.IsLocal && currentTracking is not null)
             ? Visibility.Visible
             : Visibility.Collapsed;
         RemoveRootButton.Visibility = Visibility.Visible;
@@ -966,8 +1001,13 @@ public partial class FoldersView : UserControl
     {
         if (_ctx is null || _currentRootId is not Guid rid) return;
         var root = _ctx.Services.Library.GetRoot(rid);
-        if (root is null || !root.IsLocal) return;
-        if (_ctx.Services.Library.GetCloudTracking(rid, _currentPath) is null) return;
+        if (root is null) return;
+        if (root.IsCloud && string.IsNullOrEmpty(_currentPath))
+        {
+            PromptEditCloudSource(root, string.Empty);
+            return;
+        }
+        if (!root.IsLocal || _ctx.Services.Library.GetCloudTracking(rid, _currentPath) is null) return;
         PromptEditCloudSource(root, _currentPath);
     }
 
@@ -985,32 +1025,10 @@ public partial class FoldersView : UserControl
         }
     }
 
-    private void PromptEditCloudSource(LibraryRoot root, string relativePath)
+    private void PromptEditCloudSource(LibraryRoot root, string relativePath, string? preselectedProviderId = null)
     {
         if (_ctx is null) return;
-        var tracking = _ctx.Services.Library.GetCloudTracking(root.Id, relativePath);
-        string initialUrl = tracking?.SourceUrl ?? root.SourceUrl ?? string.Empty;
-        _ctx.OpenTextPrompt(
-            L.Get("Folders_EditCloudSourceTitle"),
-            L.Get("Folders_EditCloudSourceMessage"),
-            initialUrl,
-            L.Get("Common_Save"),
-            value =>
-            {
-                try
-                {
-                    _ctx.Services.Library.UpdateCloudTrackingAddress(
-                        root.Id,
-                        relativePath,
-                        value,
-                        tracking?.Cookie ?? root.Cookie,
-                        tracking?.ProxyUrl ?? root.ProxyUrl);
-                }
-                catch (Exception ex)
-                {
-                    _ctx.OpenConfirm(L.Get("Folders_CouldNotUpdateSourceTitle"), ex.Message, L.Get("Common_OK"), null, false);
-                }
-            });
+        _ctx.OpenEditCloudSource?.Invoke(root, relativePath, preselectedProviderId);
     }
 
     private Border BuildExtensionUnavailableBanner(LibraryRoot root)
@@ -1019,6 +1037,8 @@ public partial class FoldersView : UserControl
             _ctx?.Services.CloudProviders,
             root.EffectiveProviderId,
             root.Kind);
+        var recoveryMatches = _ctx?.Services.Library.GetCompatibleRecoveryProviders(root)
+            ?? Array.Empty<ICloudSourceProvider>();
 
         var banner = new Border
         {
@@ -1057,7 +1077,9 @@ public partial class FoldersView : UserControl
         titleTb.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
         var descTb = new TextBlock
         {
-            Text = L.Get("Folders_ExtensionBannerDesc"),
+            Text = recoveryMatches.Count > 0
+                ? L.Format("Folders_ExtensionRecoveryBannerDesc", recoveryMatches[0].DisplayName)
+                : L.Get("Folders_ExtensionBannerDesc"),
             FontFamily = (FontFamily)FindResource("Win10Font"),
             FontSize = 12,
             TextWrapping = TextWrapping.Wrap,
@@ -1068,6 +1090,25 @@ public partial class FoldersView : UserControl
         textPanel.Children.Add(descTb);
         Grid.SetColumn(textPanel, 1);
 
+        var actionPanel = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center
+        };
+        if (recoveryMatches.Count > 0)
+        {
+            string bestMatchId = recoveryMatches[0].ProviderId;
+            var switchBtn = new Button
+            {
+                Style = (Style)FindResource("Win10PrimaryButtonStyle"),
+                Content = L.Get("Folders_SwitchSource"),
+                Margin = new Thickness(0, 0, 8, 0),
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            switchBtn.Click += (_, _) => PromptEditCloudSource(root, string.Empty, bestMatchId);
+            actionPanel.Children.Add(switchBtn);
+        }
+
         var manageBtn = new Button
         {
             Style = (Style)FindResource("Win10ButtonStyle"),
@@ -1075,11 +1116,12 @@ public partial class FoldersView : UserControl
             VerticalAlignment = VerticalAlignment.Center
         };
         manageBtn.Click += (_, _) => _ctx?.OpenExtensions?.Invoke();
-        Grid.SetColumn(manageBtn, 2);
+        actionPanel.Children.Add(manageBtn);
+        Grid.SetColumn(actionPanel, 2);
 
         grid.Children.Add(warnGlyph);
         grid.Children.Add(textPanel);
-        grid.Children.Add(manageBtn);
+        grid.Children.Add(actionPanel);
         banner.Child = grid;
         return banner;
     }

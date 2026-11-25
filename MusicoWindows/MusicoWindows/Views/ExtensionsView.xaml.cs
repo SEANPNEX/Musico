@@ -360,8 +360,10 @@ public partial class ExtensionsView : UserControl
             rootPanel.Children.Add(BuildCookieSection(ext, store));
         }
 
-        // Dynamic Settings Editor
-        if (ext.Manifest.Settings is { Count: > 0 } settings)
+        // Dynamic Settings & Audio Quality Editor
+        var qualities = ext.Manifest.EffectiveQualities;
+        var settings = ext.Manifest.Settings;
+        if (qualities.Count > 0 || settings is { Count: > 0 })
         {
             var settingsPanel = new StackPanel
             {
@@ -386,9 +388,29 @@ public partial class ExtensionsView : UserControl
             settingsHeader.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
             settingsPanel.Children.Add(settingsHeader);
 
-            foreach (var spec in settings)
+            if (qualities.Count > 0)
             {
-                settingsPanel.Children.Add(BuildSettingRow(ext.Id, spec, store));
+                string? currentStream = store.GetStreamQualityId(ext.Id) ?? ext.Manifest.EffectiveDefaultStreamQualityId;
+                settingsPanel.Children.Add(BuildQualitySettingRow(
+                    L.Get("Quality_StreamLabel"),
+                    qualities,
+                    currentStream,
+                    selected => store.SetStreamQualityId(ext.Id, selected)));
+
+                string? currentDownload = store.GetDownloadQualityId(ext.Id) ?? ext.Manifest.EffectiveDefaultDownloadQualityId;
+                settingsPanel.Children.Add(BuildQualitySettingRow(
+                    L.Get("Quality_DownloadLabel"),
+                    qualities,
+                    currentDownload,
+                    selected => store.SetDownloadQualityId(ext.Id, selected)));
+            }
+
+            if (settings is { Count: > 0 })
+            {
+                foreach (var spec in settings)
+                {
+                    settingsPanel.Children.Add(BuildSettingRow(ext.Id, spec, store));
+                }
             }
 
             settingsBorder.Child = settingsPanel;
@@ -620,6 +642,66 @@ public partial class ExtensionsView : UserControl
 
         Grid.SetColumn(editor, 1);
         row.Children.Add(editor);
+        return row;
+    }
+
+    private sealed record QualityChoiceItem(string Id, string DisplayLabel);
+
+    private Grid BuildQualitySettingRow(
+        string label,
+        IReadOnlyList<ExtensionQualityOption> qualities,
+        string? currentValue,
+        Action<string> onChanged)
+    {
+        var row = new Grid { Margin = new Thickness(0, 0, 0, 8) };
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(220) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+
+        var labelTb = new TextBlock
+        {
+            Text = label,
+            FontFamily = (FontFamily)FindResource("Win10Font"),
+            FontSize = 12,
+            VerticalAlignment = VerticalAlignment.Center,
+            Margin = new Thickness(0, 0, 12, 0)
+        };
+        labelTb.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+        Grid.SetColumn(labelTb, 0);
+        row.Children.Add(labelTb);
+
+        var items = qualities
+            .Select(q => new QualityChoiceItem(
+                q.Id,
+                !string.IsNullOrWhiteSpace(q.Badge) ? $"{q.Label} ({q.Badge})" : q.Label))
+            .ToList();
+
+        var combo = new ComboBox
+        {
+            Style = (Style)FindResource("Win10ComboBoxStyle"),
+            MaxWidth = 260,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            DisplayMemberPath = nameof(QualityChoiceItem.DisplayLabel),
+            SelectedValuePath = nameof(QualityChoiceItem.Id),
+            ItemsSource = items
+        };
+        if (!string.IsNullOrWhiteSpace(currentValue))
+        {
+            combo.SelectedValue = currentValue;
+        }
+        if (combo.SelectedIndex < 0 && items.Count > 0)
+        {
+            combo.SelectedIndex = 0;
+        }
+        combo.SelectionChanged += (_, _) =>
+        {
+            if (combo.SelectedValue is string selected)
+            {
+                onChanged(selected);
+            }
+        };
+
+        Grid.SetColumn(combo, 1);
+        row.Children.Add(combo);
         return row;
     }
 

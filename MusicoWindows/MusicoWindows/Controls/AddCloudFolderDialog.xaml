@@ -118,6 +118,41 @@
                                Margin="0,4,0,14" />
                 </StackPanel>
 
+                <!-- Optional Audio Quality -->
+                <StackPanel x:Name="QualitySection" Visibility="Collapsed">
+                    <Grid Margin="0,0,0,14">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="10" />
+                            <ColumnDefinition Width="*" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0">
+                            <TextBlock Text="{DynamicResource Str_Quality_StreamLabel}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       Margin="0,0,0,6" />
+                            <ComboBox x:Name="StreamQualityCombo"
+                                      Style="{StaticResource Win10ComboBoxStyle}"
+                                      DisplayMemberPath="Label"
+                                      SelectedValuePath="QualityId" />
+                        </StackPanel>
+                        <StackPanel Grid.Column="2">
+                            <TextBlock Text="{DynamicResource Str_Quality_DownloadLabel}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       Margin="0,0,0,6" />
+                            <ComboBox x:Name="DownloadQualityCombo"
+                                      Style="{StaticResource Win10ComboBoxStyle}"
+                                      DisplayMemberPath="Label"
+                                      SelectedValuePath="QualityId" />
+                        </StackPanel>
+                    </Grid>
+                </StackPanel>
+
                 <!-- Validation / Network Error Banner -->
                 <Border x:Name="ErrorBanner"
                         Background="{DynamicResource WarningBannerBrush}"

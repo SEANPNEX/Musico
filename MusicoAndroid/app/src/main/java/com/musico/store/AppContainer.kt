@@ -5,6 +5,7 @@ import android.os.Environment
 import com.musico.audio.AudioEngine
 import com.musico.audio.PlayerController
 import com.musico.cloud.BilibiliClient
+import com.musico.cloud.CloudAudioCache
 import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudHttpClient
 import com.musico.cloud.CloudStreamResolver
@@ -52,7 +53,8 @@ class AppContainer(context: Context) {
         httpClient = cloudHttpClient,
         providerRegistry = cloudProviderRegistry,
     )
-    val cloudStreamResolver: CloudStreamResolver = CloudStreamResolver(cloudProviderRegistry)
+    val cloudAudioCache: CloudAudioCache = CloudAudioCache(File(appContext.cacheDir, "cloud_audio"))
+    val cloudStreamResolver: CloudStreamResolver = CloudStreamResolver(cloudProviderRegistry, cloudAudioCache)
     val cloudExporter: CloudExporter = CloudExporter(
         context = appContext,
         cloudResolver = cloudStreamResolver,

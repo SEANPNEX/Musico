@@ -527,8 +527,35 @@ struct ExtensionSemVer: Comparable, Equatable, Hashable, Sendable {
     }
 }
 
+/// Supported stream resolution purpose passed to providers/extensions.
+enum CloudStreamPurpose: String, Codable, Hashable, Sendable {
+    case stream
+    case download
+}
+
+/// Selectable audio quality tier declared by a cloud provider or extension `manifest.qualities`.
+struct CloudQualityOption: Codable, Hashable, Identifiable, Sendable {
+    var id: String
+    var label: String
+    var badge: String? = nil
+    var lossless: Bool? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case id, label, badge, lossless
+    }
+
+    init(id: String, label: String, badge: String? = nil, lossless: Bool? = nil) {
+        self.id = id
+        self.label = label
+        self.badge = badge
+        self.lossless = lossless
+    }
+}
+
 /// Parsed and validated `manifest.json` describing an extension package.
 struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
+    static let maxQualitiesCount = 16
+
     var apiVersion: Int
     var id: String
     var name: String
@@ -543,9 +570,12 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
     var permissions: ExtensionPermissions
     var settings: [ExtensionSettingSpec]? = nil
     var searchKinds: [ExtensionSearchKind]? = nil
+    var qualities: [CloudQualityOption]? = nil
+    var defaultStreamQuality: String? = nil
+    var defaultDownloadQuality: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case apiVersion, id, name, version, author, description, badgeLabel, entry, updateUrl, capabilities, urlPatterns, permissions, settings, searchKinds
+        case apiVersion, id, name, version, author, description, badgeLabel, entry, updateUrl, capabilities, urlPatterns, permissions, settings, searchKinds, qualities, defaultStreamQuality, defaultDownloadQuality
     }
 
     var providerID: String { "ext.\(id)" }
@@ -598,6 +628,49 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
 
     var hasServerURLSetting: Bool {
         (settings ?? []).contains { $0.type == .serverURL }
+    }
+
+    var effectiveQualities: [CloudQualityOption] {
+        (qualities ?? []).compactMap { option in
+            let id = option.id.trimmingCharacters(in: .whitespacesAndNewlines)
+            let label = option.label.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !id.isEmpty, !label.isEmpty else { return nil }
+            let badge = option.badge?.trimmingCharacters(in: .whitespacesAndNewlines)
+            return CloudQualityOption(
+                id: id,
+                label: label,
+                badge: (badge?.isEmpty == false) ? badge : nil,
+                lossless: option.lossless
+            )
+        }
+    }
+
+    var effectiveDefaultStreamQualityID: String? {
+        let options = effectiveQualities
+        guard !options.isEmpty else { return nil }
+        if let raw = defaultStreamQuality?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty,
+           options.contains(where: { $0.id == raw }) {
+            return raw
+        }
+        if let standard = options.first(where: { $0.id == "standard" }) {
+            return standard.id
+        }
+        return options.first?.id
+    }
+
+    var effectiveDefaultDownloadQualityID: String? {
+        let options = effectiveQualities
+        guard !options.isEmpty else { return nil }
+        if let raw = defaultDownloadQuality?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !raw.isEmpty,
+           options.contains(where: { $0.id == raw }) {
+            return raw
+        }
+        if let highest = options.first(where: { $0.id == "highest" }) {
+            return highest.id
+        }
+        return options.first?.id
     }
 
     func effectiveAllowedHosts(settingLookup: (String) -> ExtensionSettingValue?) -> [String] {
@@ -674,6 +747,45 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
                 }
             }
         }
+
+        if let qualities {
+            guard qualities.count <= Self.maxQualitiesCount else {
+                throw ExtensionManifestError.invalidManifest("Manifest qualities cannot exceed \(Self.maxQualitiesCount) entries.")
+            }
+            var seenQualityIDs = Set<String>()
+            for option in qualities {
+                let cleanID = option.id.trimmingCharacters(in: .whitespacesAndNewlines)
+                let cleanLabel = option.label.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !cleanID.isEmpty else {
+                    throw ExtensionManifestError.invalidManifest("Manifest quality entry is missing a non-empty id.")
+                }
+                guard !cleanLabel.isEmpty else {
+                    throw ExtensionManifestError.invalidManifest("Manifest quality '\(cleanID)' is missing a non-empty label.")
+                }
+                guard seenQualityIDs.insert(cleanID).inserted else {
+                    throw ExtensionManifestError.invalidManifest("Duplicate quality id '\(cleanID)'.")
+                }
+            }
+            if let defaultStreamQuality {
+                let clean = defaultStreamQuality.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !clean.isEmpty, seenQualityIDs.contains(clean) else {
+                    throw ExtensionManifestError.invalidManifest("defaultStreamQuality '\(defaultStreamQuality)' must match an id in manifest.qualities.")
+                }
+            }
+            if let defaultDownloadQuality {
+                let clean = defaultDownloadQuality.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !clean.isEmpty, seenQualityIDs.contains(clean) else {
+                    throw ExtensionManifestError.invalidManifest("defaultDownloadQuality '\(defaultDownloadQuality)' must match an id in manifest.qualities.")
+                }
+            }
+        } else {
+            if let defaultStreamQuality, !defaultStreamQuality.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw ExtensionManifestError.invalidManifest("defaultStreamQuality requires manifest.qualities to be declared.")
+            }
+            if let defaultDownloadQuality, !defaultDownloadQuality.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                throw ExtensionManifestError.invalidManifest("defaultDownloadQuality requires manifest.qualities to be declared.")
+            }
+        }
     }
 
     private static func matchesRegex(_ value: String, pattern: String) -> Bool {
@@ -700,6 +812,9 @@ extension ExtensionManifest {
         self.permissions = try c.decode(ExtensionPermissions.self, forKey: .permissions)
         self.settings = try c.decodeIfPresent([ExtensionSettingSpec].self, forKey: .settings)
         self.searchKinds = try c.decodeIfPresent([ExtensionSearchKind].self, forKey: .searchKinds)
+        self.qualities = try c.decodeIfPresent([CloudQualityOption].self, forKey: .qualities)
+        self.defaultStreamQuality = try c.decodeIfPresent(String.self, forKey: .defaultStreamQuality)
+        self.defaultDownloadQuality = try c.decodeIfPresent(String.self, forKey: .defaultDownloadQuality)
     }
 }
 
@@ -712,6 +827,47 @@ struct ExtensionState: Codable, Equatable, Sendable {
     var updatedAt: Date = Date()
     var sourceURL: String? = nil
     var cookie: String? = nil
+    var streamQualityID: String? = nil
+    var downloadQualityID: String? = nil
+
+    enum CodingKeys: String, CodingKey {
+        case isEnabled, permissionApproved, settings, installedAt, updatedAt, sourceURL, cookie, streamQualityID, downloadQualityID
+    }
+
+    init(
+        isEnabled: Bool = false,
+        permissionApproved: Bool = false,
+        settings: [String: ExtensionSettingValue] = [:],
+        installedAt: Date = Date(),
+        updatedAt: Date = Date(),
+        sourceURL: String? = nil,
+        cookie: String? = nil,
+        streamQualityID: String? = nil,
+        downloadQualityID: String? = nil
+    ) {
+        self.isEnabled = isEnabled
+        self.permissionApproved = permissionApproved
+        self.settings = settings
+        self.installedAt = installedAt
+        self.updatedAt = updatedAt
+        self.sourceURL = sourceURL
+        self.cookie = cookie
+        self.streamQualityID = streamQualityID
+        self.downloadQualityID = downloadQualityID
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.isEnabled = try c.decodeIfPresent(Bool.self, forKey: .isEnabled) ?? false
+        self.permissionApproved = try c.decodeIfPresent(Bool.self, forKey: .permissionApproved) ?? false
+        self.settings = try c.decodeIfPresent([String: ExtensionSettingValue].self, forKey: .settings) ?? [:]
+        self.installedAt = try c.decodeIfPresent(Date.self, forKey: .installedAt) ?? Date()
+        self.updatedAt = try c.decodeIfPresent(Date.self, forKey: .updatedAt) ?? Date()
+        self.sourceURL = try c.decodeIfPresent(String.self, forKey: .sourceURL)
+        self.cookie = try c.decodeIfPresent(String.self, forKey: .cookie)
+        self.streamQualityID = try c.decodeIfPresent(String.self, forKey: .streamQualityID)
+        self.downloadQualityID = try c.decodeIfPresent(String.self, forKey: .downloadQualityID)
+    }
 
     var isActive: Bool {
         isEnabled && permissionApproved

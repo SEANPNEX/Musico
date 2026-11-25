@@ -366,6 +366,66 @@ public sealed class ExtensionStore : IExtensionHostServices
         Changed?.Invoke();
     }
 
+    public string? GetStreamQualityId(string extensionId)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId)) return null;
+        lock (_stateLock)
+        {
+            var ext = _extensions.FirstOrDefault(e => string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase));
+            if (ext is null) return null;
+            return ext.Manifest.FindQuality(ext.State.StreamQualityId)?.Id.Trim();
+        }
+    }
+
+    public void SetStreamQualityId(string extensionId, string? qualityId)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId)) return;
+        lock (_stateLock)
+        {
+            int idx = FindIndexLocked(extensionId);
+            if (idx < 0) return;
+            var ext = _extensions[idx];
+            string? normalized = ext.Manifest.FindQuality(qualityId)?.Id.Trim();
+            if (string.Equals(ext.State.StreamQualityId, normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+            ext.State.StreamQualityId = normalized;
+            SaveStateLocked();
+        }
+        Changed?.Invoke();
+    }
+
+    public string? GetDownloadQualityId(string extensionId)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId)) return null;
+        lock (_stateLock)
+        {
+            var ext = _extensions.FirstOrDefault(e => string.Equals(e.Id, extensionId, StringComparison.OrdinalIgnoreCase));
+            if (ext is null) return null;
+            return ext.Manifest.FindQuality(ext.State.DownloadQualityId)?.Id.Trim();
+        }
+    }
+
+    public void SetDownloadQualityId(string extensionId, string? qualityId)
+    {
+        if (string.IsNullOrWhiteSpace(extensionId)) return;
+        lock (_stateLock)
+        {
+            int idx = FindIndexLocked(extensionId);
+            if (idx < 0) return;
+            var ext = _extensions[idx];
+            string? normalized = ext.Manifest.FindQuality(qualityId)?.Id.Trim();
+            if (string.Equals(ext.State.DownloadQualityId, normalized, StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+            ext.State.DownloadQualityId = normalized;
+            SaveStateLocked();
+        }
+        Changed?.Invoke();
+    }
+
     public async Task<ExtQrLoginSession> StartQrLoginAsync(
         string extensionId,
         string? proxyUrl = null,
@@ -833,7 +893,9 @@ public sealed class ExtensionStore : IExtensionHostServices
             SourceUrl = existing.State.SourceUrl,
             InstalledUtc = DateTimeOffset.UtcNow,
             Cookie = pkg.Manifest.SupportsCookieAuth ? existing.State.Cookie : null,
-            Settings = settings
+            Settings = settings,
+            StreamQualityId = pkg.Manifest.FindQuality(existing.State.StreamQualityId)?.Id.Trim(),
+            DownloadQualityId = pkg.Manifest.FindQuality(existing.State.DownloadQualityId)?.Id.Trim()
         };
 
         var updated = BuildInstalledExtension(pkg.Manifest, state, extDir);
@@ -874,7 +936,9 @@ public sealed class ExtensionStore : IExtensionHostServices
                 SourceUrl = normalizedSourceUrl,
                 InstalledUtc = DateTimeOffset.UtcNow,
                 Cookie = pkg.Manifest.SupportsCookieAuth ? existing?.State.Cookie : null,
-                Settings = settings
+                Settings = settings,
+                StreamQualityId = pkg.Manifest.FindQuality(existing?.State.StreamQualityId)?.Id.Trim(),
+                DownloadQualityId = pkg.Manifest.FindQuality(existing?.State.DownloadQualityId)?.Id.Trim()
             };
 
             installed = BuildInstalledExtension(pkg.Manifest, state, extDir);

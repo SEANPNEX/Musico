@@ -433,7 +433,11 @@ class YouTubeClient(
         )
     }
 
-    suspend fun resolveStream(videoId: String, cookie: String? = null): ResolvedStream {
+    suspend fun resolveStream(
+        videoId: String,
+        cookie: String? = null,
+        quality: String? = null,
+    ): ResolvedStream {
         val visitorData = fetchVisitorData()
         val clients = listOf(
             VISIONOS_CLIENT,
@@ -449,7 +453,7 @@ class YouTubeClient(
                 .onFailure { lastError = it }
                 .getOrNull() ?: continue
 
-            val candidates = parseAudioCandidates(playerJson)
+            val candidates = parseAudioCandidates(playerJson, quality = quality)
             if (candidates.isEmpty()) continue
 
             val headers = buildHeaders(
@@ -481,12 +485,18 @@ class YouTubeClient(
                     }
 
                     val ttlMs = ((expiresInSec - 120L).coerceAtLeast(300L)) * 1000L
+                    val kbps = (candidate.bitrate / 1000).takeIf { it > 0 } ?: defaultKbpsForItag(candidate.itag)
+                    val actualQuality = actualQualityForItag(candidate.itag, kbps)
+                    val qualityLabel = if (kbps > 0) "${kbps}k" else actualQuality
                     return ResolvedStream(
                         url = candidate.url,
                         headers = headers,
                         mimeType = candidate.mimeType,
                         expiresAtEpochMs = System.currentTimeMillis() + ttlMs,
                         contentLength = candidate.contentLength,
+                        actualQuality = actualQuality,
+                        qualityLabel = qualityLabel,
+                        bitrateKbps = kbps.takeIf { it > 0 },
                     )
                 }
             }
@@ -584,7 +594,10 @@ class YouTubeClient(
         val contentLength: Long? = null,
     )
 
-    internal fun parseAudioCandidates(playerJson: JsonObject): List<AudioCandidate> {
+    internal fun parseAudioCandidates(
+        playerJson: JsonObject,
+        quality: String? = null,
+    ): List<AudioCandidate> {
         val streamingData = playerJson.obj("streamingData") ?: return emptyList()
         val raw = mutableListOf<AudioCandidate>()
 
@@ -617,12 +630,15 @@ class YouTubeClient(
         collectFrom(streamingData.arr("adaptiveFormats"))
         collectFrom(streamingData.arr("formats"))
 
-        val preferredOrder = listOf(251, 250, 140, 141, 18)
+        val preferredOrder = preferredItagsForQuality(quality)
+        val sortAscendingBitrate = quality?.trim()?.equals("low", ignoreCase = true) == true
         return raw.sortedWith(
             compareBy<AudioCandidate> {
                 val idx = preferredOrder.indexOf(it.itag)
                 if (idx >= 0) idx else Int.MAX_VALUE
-            }.thenByDescending { it.bitrate }
+            }.let { base ->
+                if (sortAscendingBitrate) base.thenBy { it.bitrate } else base.thenByDescending { it.bitrate }
+            }
         )
     }
 
@@ -996,6 +1012,47 @@ class YouTubeClient(
     }
 
     companion object {
+        val AVAILABLE_QUALITIES: List<CloudQualityOption> = listOf(
+            CloudQualityOption(id = "highest", label = "Highest (256k / Opus)", badge = "256k"),
+            CloudQualityOption(id = "high", label = "High (160k)", badge = "160k"),
+            CloudQualityOption(id = "standard", label = "Standard (128k)", badge = "128k"),
+            CloudQualityOption(id = "low", label = "Low (48k)", badge = "48k"),
+        )
+        const val DEFAULT_STREAM_QUALITY_ID = "standard"
+        const val DEFAULT_DOWNLOAD_QUALITY_ID = "highest"
+
+        private fun preferredItagsForQuality(quality: String?): List<Int> = when (quality?.trim()?.lowercase()) {
+            "highest" -> listOf(141, 251, 140, 250, 249, 139, 18)
+            "high" -> listOf(251, 140, 141, 250, 249, 139, 18)
+            "standard" -> listOf(140, 250, 251, 249, 139, 141, 18)
+            "low" -> listOf(139, 249, 250, 140, 251, 141, 18)
+            else -> listOf(251, 250, 140, 141, 18)
+        }
+
+        private fun defaultKbpsForItag(itag: Int): Int = when (itag) {
+            141 -> 256
+            251 -> 160
+            140 -> 128
+            18 -> 96
+            250 -> 70
+            249 -> 50
+            139 -> 48
+            else -> 0
+        }
+
+        private fun actualQualityForItag(itag: Int, kbps: Int): String = when (itag) {
+            141 -> "highest"
+            251 -> "high"
+            140, 250, 18 -> "standard"
+            139, 249 -> "low"
+            else -> when {
+                kbps >= 220 -> "highest"
+                kbps >= 140 -> "high"
+                kbps >= 64 -> "standard"
+                else -> "low"
+            }
+        }
+
         private const val MAX_BROWSE_PAGES = 20
         private const val DEFAULT_EXPIRE_SEC = 18_000L
         private const val VISITOR_DATA_TTL_MS = 30L * 60L * 1000L

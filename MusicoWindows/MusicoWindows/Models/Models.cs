@@ -40,6 +40,8 @@ public sealed class CloudTrackingInfo
     public string? ProxyUrl { get; set; }
     public DateTimeOffset? LastSynced { get; set; }
     public string? ProviderId { get; set; }
+    public string? StreamQualityId { get; set; }
+    public string? DownloadQualityId { get; set; }
 
     public CloudTrackingInfo() { }
 
@@ -50,7 +52,9 @@ public sealed class CloudTrackingInfo
         string? cookie = null,
         string? proxyUrl = null,
         DateTimeOffset? lastSynced = null,
-        string? providerId = null)
+        string? providerId = null,
+        string? streamQualityId = null,
+        string? downloadQualityId = null)
     {
         SourceUrl = sourceUrl;
         RemoteId = remoteId;
@@ -59,6 +63,8 @@ public sealed class CloudTrackingInfo
         ProxyUrl = proxyUrl;
         LastSynced = lastSynced;
         ProviderId = providerId;
+        StreamQualityId = streamQualityId;
+        DownloadQualityId = downloadQualityId;
     }
 
     [JsonIgnore]
@@ -82,7 +88,9 @@ public sealed record LibraryRoot(
     RootKind? LinkedCloudKind = null,
     Dictionary<string, CloudTrackingInfo>? TrackedSubfolders = null,
     string? ProviderId = null,
-    string? LinkedProviderId = null)
+    string? LinkedProviderId = null,
+    string? StreamQualityId = null,
+    string? DownloadQualityId = null)
 {
     public static readonly Guid AppFolderId = Guid.Parse("00000000-0000-0000-0000-00000000A990");
 

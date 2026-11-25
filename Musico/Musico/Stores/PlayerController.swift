@@ -17,6 +17,8 @@ final class PlayerController {
     private(set) var isPlaying = false
     private(set) var isBuffering = false
     private(set) var bufferingProgress: CloudDownloadProgress?
+    private(set) var currentStreamQualityID: String?
+    private(set) var currentStreamQualityLabel: String?
     private(set) var duration: TimeInterval = 0
     private(set) var currentTime: TimeInterval = 0
     var errorMessage: String?
@@ -43,6 +45,7 @@ final class PlayerController {
     @ObservationIgnored private var isLoaded = false
     @ObservationIgnored private var cloudLoadTask: Task<Void, Never>?
     @ObservationIgnored private var cloudLoadGeneration = 0
+    @ObservationIgnored private var currentTrackQualityOverride: (trackID: String, qualityID: String)?
     @ObservationIgnored private var ticker: Timer?
     @ObservationIgnored private var tickCount = 0
     @ObservationIgnored private var sleepTask: Task<Void, Never>?
@@ -116,6 +119,9 @@ final class PlayerController {
     /// Loads the active queue's current track. Returns false if there is none or it cannot be opened.
     private func loadCurrent(autoplay: Bool, at position: TimeInterval) -> Bool {
         bufferingProgress = nil
+        currentStreamQualityID = nil
+        currentStreamQualityLabel = nil
+        currentTrackQualityOverride = nil
         isLoaded = false
         guard let id = queues.active.currentTrackID, let track = library.track(id) else { return false }
         currentTrack = track
@@ -163,6 +169,10 @@ final class PlayerController {
     /// Loads the current track, skipping forward over files that will not open.
     private func startCurrent(autoplay: Bool, at position: TimeInterval = 0, startingFailures: Int = 0) {
         cancelCloudLoad()
+        if let activeID = queues.active.currentTrackID,
+           currentTrackQualityOverride?.trackID != activeID {
+            currentTrackQualityOverride = nil
+        }
         var failures = startingFailures
         var position = position
         while true {
@@ -171,6 +181,9 @@ final class PlayerController {
                 return
             }
             if let track = library.track(id), track.isCloud {
+                if currentTrackQualityOverride?.trackID != track.id {
+                    currentTrackQualityOverride = nil
+                }
                 startCloudTrack(track, autoplay: autoplay, at: position, failures: failures)
                 return
             }
@@ -193,7 +206,71 @@ final class PlayerController {
         }
     }
 
-    private func startCloudTrack(_ track: Track, autoplay: Bool, at position: TimeInterval, failures: Int) {
+    var availableQualitiesForCurrentTrack: [CloudQualityOption] {
+        guard let track = currentTrack, track.isCloud else { return [] }
+        let root = library.root(track.rootID)
+        return library.provider(for: track, root: root)?.availableQualities ?? []
+    }
+
+    var activeQualityIDForCurrentTrack: String? {
+        guard let track = currentTrack, track.isCloud else { return nil }
+        if let override = currentTrackQualityOverride, override.trackID == track.id {
+            return override.qualityID
+        }
+        return currentStreamQualityID
+    }
+
+    /// Switches audio quality strictly for the currently loaded cloud track, preserving playback position.
+    func switchCurrentTrackQuality(to qualityID: String) {
+        guard let track = currentTrack, track.isCloud else { return }
+        let cleanID = qualityID.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleanID.isEmpty else { return }
+        let root = library.root(track.rootID)
+        let validIDs = Set((library.provider(for: track, root: root)?.availableQualities ?? []).map(\.id))
+        guard validIDs.isEmpty || validIDs.contains(cleanID) else { return }
+
+        let wasPlaying = isPlaying || isBuffering
+        let savedPosition = max(0, isLoaded ? engine.currentTime : currentTime)
+        cancelCloudLoad()
+        currentTrackQualityOverride = (trackID: track.id, qualityID: cleanID)
+        startCloudTrack(
+            track,
+            autoplay: wasPlaying,
+            at: savedPosition,
+            failures: 0,
+            qualityOverride: cleanID,
+            forceRefresh: true
+        )
+    }
+
+    private func fallbackQualityLabel(
+        for qualityID: String?,
+        track: Track,
+        root: LibraryRoot?,
+        cachedURL: URL? = nil
+    ) -> String? {
+        let provider = library.provider(for: track, root: root)
+        let qualities = provider?.availableQualities ?? []
+        guard !qualities.isEmpty else { return nil }
+        if cachedURL?.pathExtension.lowercased() == "flac",
+           qualityID == "highest" || qualityID == nil {
+            return "FLAC"
+        }
+        let targetID = qualityID ?? provider?.effectiveQualityID(root: root, purpose: .stream, overrideQualityID: nil)
+        if let targetID, let opt = qualities.first(where: { $0.id == targetID }) {
+            return opt.badge ?? opt.label
+        }
+        return qualities.first.map { $0.badge ?? $0.label }
+    }
+
+    private func startCloudTrack(
+        _ track: Track,
+        autoplay: Bool,
+        at position: TimeInterval,
+        failures: Int,
+        qualityOverride: String? = nil,
+        forceRefresh: Bool = false
+    ) {
         cloudLoadGeneration += 1
         let gen = cloudLoadGeneration
         engine.unload()
@@ -205,19 +282,44 @@ final class PlayerController {
         errorMessage = nil
         bufferingProgress = nil
         isBuffering = true
-        updateNowPlaying()
 
         let root = library.root(track.rootID)
         let cache = cloudAudio
+        let activeOverride = qualityOverride ?? (currentTrackQualityOverride?.trackID == track.id ? currentTrackQualityOverride?.qualityID : nil)
+        let initialQuality = library.provider(for: track, root: root)?
+            .effectiveQualityID(root: root, purpose: .stream, overrideQualityID: activeOverride)
+            ?? activeOverride
+            ?? root?.streamQualityID
+        currentStreamQualityID = initialQuality
+        currentStreamQualityLabel = fallbackQualityLabel(for: initialQuality, track: track, root: root)
+        updateNowPlaying()
 
         cloudLoadTask = Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                if let cachedURL = await cache.cachedURLIfPresent(for: track.id) {
+                let effectiveQuality = await cache.effectiveQualityID(
+                    for: track,
+                    root: root,
+                    purpose: .stream,
+                    overrideQualityID: activeOverride
+                ) ?? initialQuality
+                if self.currentStreamQualityID != effectiveQuality {
+                    self.currentStreamQualityID = effectiveQuality
+                    self.currentStreamQualityLabel = self.fallbackQualityLabel(for: effectiveQuality, track: track, root: root)
+                }
+
+                if !forceRefresh, let cachedURL = await cache.cachedURLIfPresent(for: track.id, qualityID: effectiveQuality) {
+                    self.currentStreamQualityLabel = self.fallbackQualityLabel(
+                        for: effectiveQuality,
+                        track: track,
+                        root: root,
+                        cachedURL: cachedURL
+                    )
                     try await self.loadCachedCloudFile(
                         cachedURL,
                         track: track,
                         root: root,
+                        qualityID: effectiveQuality,
                         cache: cache,
                         autoplay: autoplay,
                         position: position,
@@ -226,17 +328,32 @@ final class PlayerController {
                     return
                 }
 
+                var didResolveForStreamCheck = false
                 if !cache.usesCustomDownloader {
-                    let stream = try await cache.resolveStream(track: track, root: root, forceRefresh: false)
+                    let stream = try await cache.resolveStream(
+                        track: track,
+                        root: root,
+                        purpose: .stream,
+                        qualityID: effectiveQuality,
+                        forceRefresh: forceRefresh
+                    )
                     guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
+                    didResolveForStreamCheck = true
+                    self.currentStreamQualityID = stream.actualQuality ?? effectiveQuality
+                    self.currentStreamQualityLabel = stream.qualityLabel
+                        ?? self.fallbackQualityLabel(for: self.currentStreamQualityID, track: track, root: root)
 
                     let shouldStream = (stream.contentLength ?? 0) > CloudAudioCache.streamingThresholdBytes
                         || track.duration > 600
                     if shouldStream {
+                        if forceRefresh {
+                            await cache.remove(trackID: track.id)
+                        }
                         self.startProgressiveStream(
                             stream,
                             track: track,
                             root: root,
+                            qualityID: effectiveQuality,
                             cache: cache,
                             autoplay: autoplay,
                             position: position,
@@ -248,10 +365,15 @@ final class PlayerController {
                     }
                 }
 
+                if forceRefresh && didResolveForStreamCheck {
+                    await cache.remove(trackID: track.id)
+                }
                 var cachedURL = try await cache.resolveAndCache(
                     track: track,
                     root: root,
-                    forceRefresh: false,
+                    purpose: .stream,
+                    qualityID: effectiveQuality,
+                    forceRefresh: didResolveForStreamCheck ? false : forceRefresh,
                     onProgress: { [weak self] progress in
                         Task { @MainActor [weak self] in
                             guard let self, self.cloudLoadGeneration == gen else { return }
@@ -260,6 +382,14 @@ final class PlayerController {
                     }
                 )
                 guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
+                if self.currentStreamQualityLabel == nil {
+                    self.currentStreamQualityLabel = self.fallbackQualityLabel(
+                        for: self.currentStreamQualityID ?? effectiveQuality,
+                        track: track,
+                        root: root,
+                        cachedURL: cachedURL
+                    )
+                }
 
                 do {
                     try self.engine.load(url: cachedURL)
@@ -269,6 +399,8 @@ final class PlayerController {
                     cachedURL = try await cache.resolveAndCache(
                         track: track,
                         root: root,
+                        purpose: .stream,
+                        qualityID: effectiveQuality,
                         forceRefresh: true,
                         onProgress: { [weak self] progress in
                             Task { @MainActor [weak self] in
@@ -296,6 +428,7 @@ final class PlayerController {
         _ initialURL: URL,
         track: Track,
         root: LibraryRoot?,
+        qualityID: String?,
         cache: CloudAudioCache,
         autoplay: Bool,
         position: TimeInterval,
@@ -309,6 +442,8 @@ final class PlayerController {
             cachedURL = try await cache.resolveAndCache(
                 track: track,
                 root: root,
+                purpose: .stream,
+                qualityID: qualityID,
                 forceRefresh: true,
                 onProgress: { [weak self] progress in
                     Task { @MainActor [weak self] in
@@ -346,6 +481,7 @@ final class PlayerController {
         _ stream: CloudStreamResult,
         track: Track,
         root: LibraryRoot?,
+        qualityID: String?,
         cache: CloudAudioCache,
         autoplay: Bool,
         position: TimeInterval,
@@ -375,12 +511,22 @@ final class PlayerController {
                 self.cloudLoadTask = Task { @MainActor [weak self] in
                     guard let self else { return }
                     do {
-                        let refreshed = try await cache.resolveStream(track: track, root: root, forceRefresh: true)
+                        let refreshed = try await cache.resolveStream(
+                            track: track,
+                            root: root,
+                            purpose: .stream,
+                            qualityID: qualityID,
+                            forceRefresh: true
+                        )
                         guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
+                        self.currentStreamQualityID = refreshed.actualQuality ?? qualityID
+                        self.currentStreamQualityLabel = refreshed.qualityLabel
+                            ?? self.fallbackQualityLabel(for: self.currentStreamQualityID, track: track, root: root)
                         self.startProgressiveStream(
                             refreshed,
                             track: track,
                             root: root,
+                            qualityID: qualityID,
                             cache: cache,
                             autoplay: autoplay,
                             position: position,
@@ -460,6 +606,9 @@ final class PlayerController {
         engine.unload()
         isLoaded = false
         currentTrack = nil
+        currentStreamQualityID = nil
+        currentStreamQualityLabel = nil
+        currentTrackQualityOverride = nil
         isPlaying = false
         duration = 0
         currentTime = 0
@@ -789,6 +938,12 @@ final class PlayerController {
             cancelCloudLoad()
             isLoaded = false
             currentTrack = track
+            let root = library.root(track.rootID)
+            let defaultQ = library.provider(for: track, root: root)?
+                .effectiveQualityID(root: root, purpose: .stream, overrideQualityID: nil)
+            currentStreamQualityID = defaultQ
+            currentStreamQualityLabel = fallbackQualityLabel(for: defaultQ, track: track, root: root)
+            currentTrackQualityOverride = nil
             duration = track.duration
             currentTime = min(max(queues.active.position, 0), track.duration)
             isPlaying = false

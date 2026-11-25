@@ -634,6 +634,18 @@ public static class L
         ["CloudLyrics_PartialFailureHint"] = "Some sources could not be reached.",
         ["CloudLyrics_SelectPreview"] = "Select a candidate to preview lyrics.",
         ["CloudLyrics_Retry"] = "Try Again",
+
+        // v1.2.7 Audio Quality & Source Recovery
+        ["Quality_Select"] = "Quality",
+        ["Quality_SwitchFailedTitle"] = "Couldn't Switch Quality",
+        ["Quality_StreamLabel"] = "Streaming Quality",
+        ["Quality_DownloadLabel"] = "Download Quality",
+        ["Quality_DefaultOption"] = "Default ({0})",
+        ["Quality_AutoDefault"] = "Auto (Provider Default)",
+        ["EditCloud_MissingProviderOption"] = "{0} (Unavailable / Missing)",
+        ["EditCloud_SelectAvailableProvider"] = "Choose Auto (Match URL) or an available provider to re-bind this folder.",
+        ["Folders_SwitchSource"] = "Switch Source…",
+        ["Folders_ExtensionRecoveryBannerDesc"] = "Its original extension isn't available, but {0} matches this URL. Switch source to restore playback without losing playlists or favourites.",
     };
 
     private static readonly Dictionary<string, string> ZhHans = new(StringComparer.Ordinal)
@@ -1147,5 +1159,17 @@ public static class L
         ["CloudLyrics_PartialFailureHint"] = "部分来源暂时无法访问。",
         ["CloudLyrics_SelectPreview"] = "选择一条候选结果以预览歌词。",
         ["CloudLyrics_Retry"] = "重试",
+
+        // v1.2.7 Audio Quality & Source Recovery
+        ["Quality_Select"] = "音质",
+        ["Quality_SwitchFailedTitle"] = "无法切换音质",
+        ["Quality_StreamLabel"] = "在线播放音质",
+        ["Quality_DownloadLabel"] = "下载导出音质",
+        ["Quality_DefaultOption"] = "默认 ({0})",
+        ["Quality_AutoDefault"] = "自动（来源默认）",
+        ["EditCloud_MissingProviderOption"] = "{0}（不可用 / 缺失）",
+        ["EditCloud_SelectAvailableProvider"] = "请选择“自动（匹配链接）”或一个可用的来源以重新绑定此文件夹。",
+        ["Folders_SwitchSource"] = "切换来源…",
+        ["Folders_ExtensionRecoveryBannerDesc"] = "原扩展当前不可用，但 {0} 可匹配此链接。切换来源即可恢复播放，且不会丢失歌单或收藏。",
     };
 }

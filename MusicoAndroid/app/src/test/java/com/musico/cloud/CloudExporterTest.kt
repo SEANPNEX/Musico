@@ -55,6 +55,14 @@ class CloudExporterTest {
             forceRefresh: Boolean,
         ): ResolvedStream = onResolve(track, root, forceRefresh)
 
+        override suspend fun resolve(
+            track: Track,
+            root: LibraryRoot?,
+            forceRefresh: Boolean,
+            purpose: CloudStreamPurpose,
+            requestedQualityId: String?,
+        ): ResolvedStream = onResolve(track, root, forceRefresh)
+
         override fun invalidate(track: Track, root: LibraryRoot?) {
             invalidateCalls.add(track.id)
         }

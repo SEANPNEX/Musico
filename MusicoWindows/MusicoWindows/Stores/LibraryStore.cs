@@ -137,7 +137,9 @@ public sealed class LibraryStore : ObservableStore
                 ExcludedPaths = savedAppRoot?.ExcludedPaths,
                 LinkedCloudKind = savedAppRoot?.LinkedCloudKind,
                 TrackedSubfolders = savedAppRoot?.TrackedSubfolders,
-                LinkedProviderId = savedAppRoot?.LinkedProviderId
+                LinkedProviderId = savedAppRoot?.LinkedProviderId,
+                StreamQualityId = savedAppRoot?.StreamQualityId,
+                DownloadQualityId = savedAppRoot?.DownloadQualityId
             });
             _rootPaths[LibraryRoot.AppFolderId] = _musicDirectory;
         }
@@ -270,6 +272,16 @@ public sealed class LibraryStore : ObservableStore
         return root.IsCloud || _rootPaths.ContainsKey(root.Id);
     }
 
+    public IReadOnlyList<ICloudSourceProvider> GetCompatibleRecoveryProviders(LibraryRoot root)
+    {
+        ArgumentNullException.ThrowIfNull(root);
+        if (root.Kind != RootKind.CloudExtension || IsAvailable(root))
+        {
+            return Array.Empty<ICloudSourceProvider>();
+        }
+        return _providerRegistry.GetCompatibleProviders(root.SourceUrl);
+    }
+
     public bool IsAvailable(Track track)
     {
         if (track.IsCloud)
@@ -382,6 +394,8 @@ public sealed class LibraryStore : ObservableStore
         DateTimeOffset? lastSyncedUtc = null;
         RootKind? linkedCloudKind = null;
         string? linkedProviderId = null;
+        string? streamQualityId = null;
+        string? downloadQualityId = null;
 
         if (cloudSourceRoot is not null &&
             (cloudSourceRoot.EffectiveCloudKind is not null || !string.IsNullOrWhiteSpace(cloudSourceRoot.EffectiveProviderId)) &&
@@ -394,6 +408,8 @@ public sealed class LibraryStore : ObservableStore
             lastSyncedUtc = DateTimeOffset.UtcNow;
             linkedCloudKind = cloudSourceRoot.EffectiveCloudKind ?? RootKind.CloudExtension;
             linkedProviderId = cloudSourceRoot.EffectiveProviderId;
+            streamQualityId = cloudSourceRoot.StreamQualityId;
+            downloadQualityId = cloudSourceRoot.DownloadQualityId;
         }
         else if (CloudExporter.LoadManifest(normalized) is { } manifest)
         {
@@ -401,6 +417,8 @@ public sealed class LibraryStore : ObservableStore
             remoteId = manifest.RemoteId;
             lastSyncedUtc = manifest.LastSyncedUtc;
             (linkedCloudKind, linkedProviderId) = ResolveCloudFromManifest(manifest, sourceUrl);
+            streamQualityId = manifest.StreamQualityId;
+            downloadQualityId = manifest.DownloadQualityId;
         }
 
         var migratedTrackedSubfolders = new Dictionary<string, CloudTrackingInfo>(StringComparer.Ordinal);
@@ -428,7 +446,9 @@ public sealed class LibraryStore : ObservableStore
                     existingRoot.Cookie,
                     existingRoot.ProxyUrl,
                     existingRoot.LastSyncedUtc,
-                    existingRoot.EffectiveProviderId);
+                    existingRoot.EffectiveProviderId,
+                    existingRoot.StreamQualityId,
+                    existingRoot.DownloadQualityId);
             }
 
             if (existingRoot.TrackedSubfolders is { Count: > 0 })
@@ -507,7 +527,9 @@ public sealed class LibraryStore : ObservableStore
             ExcludedPaths: migratedExcluded.Count > 0 ? migratedExcluded : null,
             LinkedCloudKind: linkedCloudKind,
             TrackedSubfolders: migratedTrackedSubfolders.Count > 0 ? migratedTrackedSubfolders : null,
-            LinkedProviderId: linkedProviderId);
+            LinkedProviderId: linkedProviderId,
+            StreamQualityId: streamQualityId,
+            DownloadQualityId: downloadQualityId);
         _roots = [.. _roots, root];
         _rootPaths[root.Id] = normalized;
         OnPropertyChanged(nameof(Roots));
@@ -533,7 +555,9 @@ public sealed class LibraryStore : ObservableStore
                 cloudRoot.Cookie,
                 cloudRoot.ProxyUrl,
                 DateTimeOffset.UtcNow,
-                cloudRoot.EffectiveProviderId);
+                cloudRoot.EffectiveProviderId,
+                cloudRoot.StreamQualityId,
+                cloudRoot.DownloadQualityId);
         }
 
         for (int i = 0; i < _roots.Count; i++)
@@ -555,7 +579,9 @@ public sealed class LibraryStore : ObservableStore
                         ProxyUrl = tracking.ProxyUrl ?? root.ProxyUrl,
                         LastSyncedUtc = tracking.LastSynced,
                         LinkedCloudKind = tracking.CloudKind,
-                        LinkedProviderId = tracking.ResolvedProviderId
+                        LinkedProviderId = tracking.ResolvedProviderId,
+                        StreamQualityId = tracking.StreamQualityId ?? root.StreamQualityId,
+                        DownloadQualityId = tracking.DownloadQualityId ?? root.DownloadQualityId
                     };
                     _roots = updated;
                     OnPropertyChanged(nameof(Roots));
@@ -641,7 +667,9 @@ public sealed class LibraryStore : ObservableStore
             ProxyUrl = cloudSourceRoot.ProxyUrl ?? updated[idx].ProxyUrl,
             LastSyncedUtc = DateTimeOffset.UtcNow,
             LinkedCloudKind = cloudSourceRoot.EffectiveCloudKind ?? RootKind.CloudExtension,
-            LinkedProviderId = cloudSourceRoot.EffectiveProviderId
+            LinkedProviderId = cloudSourceRoot.EffectiveProviderId,
+            StreamQualityId = cloudSourceRoot.StreamQualityId ?? updated[idx].StreamQualityId,
+            DownloadQualityId = cloudSourceRoot.DownloadQualityId ?? updated[idx].DownloadQualityId
         };
         _roots = updated;
         OnPropertyChanged(nameof(Roots));
@@ -673,7 +701,9 @@ public sealed class LibraryStore : ObservableStore
                 entry.Value.Cookie,
                 entry.Value.ProxyUrl,
                 DateTimeOffset.UtcNow,
-                entry.Value.ProviderId);
+                entry.Value.ProviderId,
+                entry.Value.StreamQualityId,
+                entry.Value.DownloadQualityId);
             updated[idx] = current with { TrackedSubfolders = nextTracked };
         }
         else
@@ -704,12 +734,26 @@ public sealed class LibraryStore : ObservableStore
                     root.Cookie,
                     root.ProxyUrl,
                     root.LastSyncedUtc,
-                    root.EffectiveProviderId);
+                    root.EffectiveProviderId,
+                    root.StreamQualityId,
+                    root.DownloadQualityId);
             }
             return null;
         }
 
         return FindTrackedSubfolderEntry(root.TrackedSubfolders, norm)?.Value;
+    }
+
+    private static string? NormalizeQualityForProvider(ICloudSourceProvider provider, string? qualityId)
+    {
+        if (provider.AvailableQualities.Count == 0 || string.IsNullOrWhiteSpace(qualityId))
+        {
+            return null;
+        }
+        string trimmed = qualityId.Trim();
+        var match = provider.AvailableQualities.FirstOrDefault(q =>
+            string.Equals(q.Id.Trim(), trimmed, StringComparison.OrdinalIgnoreCase));
+        return match?.Id.Trim();
     }
 
     public void UpdateCloudTrackingAddress(
@@ -718,7 +762,10 @@ public sealed class LibraryStore : ObservableStore
         string newSourceUrl,
         string? cookie,
         string? proxyUrl,
-        string? preferredProviderId = null)
+        string? preferredProviderId = null,
+        string? streamQualityId = null,
+        string? downloadQualityId = null,
+        bool updateQualityPrefs = false)
     {
         var (provider, match) = Task.Run(() =>
             CloudUrlClassifier.ClassifyAsync(newSourceUrl, _providerRegistry, preferredProviderId, CancellationToken.None))
@@ -729,8 +776,8 @@ public sealed class LibraryStore : ObservableStore
             ? match.NormalizedUrl!
             : CloudUrlClassifier.ExtractCloudUrl(newSourceUrl, _providerRegistry);
         RootKind newKind = provider.RootKind;
-        string? normalizedProxy = YouTubeClient.NormalizeProxyUrl(proxyUrl);
-        string? trimmedCookie = string.IsNullOrWhiteSpace(cookie) ? null : cookie.Trim();
+        string? normalizedProxy = provider.SupportsProxy ? YouTubeClient.NormalizeProxyUrl(proxyUrl) : null;
+        string? trimmedCookie = provider.SupportsCookies && !string.IsNullOrWhiteSpace(cookie) ? cookie.Trim() : null;
         string? resolvedRemoteId = match.RemoteId ?? provider.TryExtractRemoteId(extractedUrl);
 
         int idx = _roots.FindIndex(r => r.Id == rootId);
@@ -742,6 +789,13 @@ public sealed class LibraryStore : ObservableStore
 
         if (norm.Length == 0)
         {
+            string? resolvedStreamQuality = updateQualityPrefs
+                ? NormalizeQualityForProvider(provider, streamQualityId)
+                : NormalizeQualityForProvider(provider, streamQualityId ?? current.StreamQualityId);
+            string? resolvedDownloadQuality = updateQualityPrefs
+                ? NormalizeQualityForProvider(provider, downloadQualityId)
+                : NormalizeQualityForProvider(provider, downloadQualityId ?? current.DownloadQualityId);
+
             updated[idx] = current.IsCloud
                 ? current with
                 {
@@ -751,7 +805,9 @@ public sealed class LibraryStore : ObservableStore
                     RemoteId = resolvedRemoteId ?? current.RemoteId,
                     Cookie = trimmedCookie,
                     ProxyUrl = normalizedProxy,
-                    ProviderId = provider.ProviderId
+                    ProviderId = provider.ProviderId,
+                    StreamQualityId = resolvedStreamQuality,
+                    DownloadQualityId = resolvedDownloadQuality
                 }
                 : current with
                 {
@@ -760,12 +816,21 @@ public sealed class LibraryStore : ObservableStore
                     LinkedCloudKind = newKind,
                     Cookie = trimmedCookie,
                     ProxyUrl = normalizedProxy,
-                    LinkedProviderId = provider.ProviderId
+                    LinkedProviderId = provider.ProviderId,
+                    StreamQualityId = resolvedStreamQuality,
+                    DownloadQualityId = resolvedDownloadQuality
                 };
 
             if (current.IsLocal && _rootPaths.TryGetValue(rootId, out string? rootDiskPath) && Directory.Exists(rootDiskPath))
             {
-                UpdateManifestOnDisk(rootDiskPath, extractedUrl, resolvedRemoteId ?? current.RemoteId, newKind, provider.ProviderId);
+                UpdateManifestOnDisk(
+                    rootDiskPath,
+                    extractedUrl,
+                    resolvedRemoteId ?? current.RemoteId,
+                    newKind,
+                    provider.ProviderId,
+                    resolvedStreamQuality,
+                    resolvedDownloadQuality);
             }
         }
         else
@@ -776,6 +841,13 @@ public sealed class LibraryStore : ObservableStore
             var existing = FindTrackedSubfolderEntry(nextTracked, norm);
             string key = existing?.Key ?? norm;
 
+            string? resolvedStreamQuality = updateQualityPrefs
+                ? NormalizeQualityForProvider(provider, streamQualityId)
+                : NormalizeQualityForProvider(provider, streamQualityId ?? existing?.Value.StreamQualityId);
+            string? resolvedDownloadQuality = updateQualityPrefs
+                ? NormalizeQualityForProvider(provider, downloadQualityId)
+                : NormalizeQualityForProvider(provider, downloadQualityId ?? existing?.Value.DownloadQualityId);
+
             nextTracked[key] = new CloudTrackingInfo(
                 sourceUrl: extractedUrl,
                 remoteId: resolvedRemoteId ?? existing?.Value.RemoteId,
@@ -783,7 +855,9 @@ public sealed class LibraryStore : ObservableStore
                 cookie: trimmedCookie,
                 proxyUrl: normalizedProxy,
                 lastSynced: existing?.Value.LastSynced,
-                providerId: provider.ProviderId);
+                providerId: provider.ProviderId,
+                streamQualityId: resolvedStreamQuality,
+                downloadQualityId: resolvedDownloadQuality);
 
             updated[idx] = current with { TrackedSubfolders = nextTracked };
 
@@ -792,7 +866,14 @@ public sealed class LibraryStore : ObservableStore
                 string subDiskPath = FolderScanner.CombinePath(rootDiskPath, norm);
                 if (Directory.Exists(subDiskPath))
                 {
-                    UpdateManifestOnDisk(subDiskPath, extractedUrl, resolvedRemoteId ?? existing?.Value.RemoteId, newKind, provider.ProviderId);
+                    UpdateManifestOnDisk(
+                        subDiskPath,
+                        extractedUrl,
+                        resolvedRemoteId ?? existing?.Value.RemoteId,
+                        newKind,
+                        provider.ProviderId,
+                        resolvedStreamQuality,
+                        resolvedDownloadQuality);
                 }
             }
         }
@@ -807,7 +888,9 @@ public sealed class LibraryStore : ObservableStore
         string sourceUrl,
         string? remoteId,
         RootKind cloudKind,
-        string? providerId)
+        string? providerId,
+        string? streamQualityId = null,
+        string? downloadQualityId = null)
     {
         var existing = CloudExporter.LoadManifest(folderPath);
         var manifest = new CloudFolderManifest(
@@ -818,7 +901,9 @@ public sealed class LibraryStore : ObservableStore
             Tracks: existing?.Tracks is not null
                 ? new Dictionary<string, string>(existing.Tracks, StringComparer.Ordinal)
                 : new Dictionary<string, string>(StringComparer.Ordinal),
-            ProviderId: providerId ?? existing?.ProviderId);
+            ProviderId: providerId ?? existing?.ProviderId,
+            StreamQualityId: streamQualityId,
+            DownloadQualityId: downloadQualityId);
         CloudExporter.SaveManifest(folderPath, manifest);
     }
 
@@ -893,9 +978,10 @@ public sealed class LibraryStore : ObservableStore
         }
     }
 
-    private bool IsDuplicateCloudRoot(RootKind kind, string? providerId, string? remoteId) =>
+    private bool IsDuplicateCloudRoot(RootKind kind, string? providerId, string? remoteId, Guid? excludeRootId = null) =>
         !string.IsNullOrWhiteSpace(remoteId) &&
         _roots.Any(r =>
+            r.Id != excludeRootId &&
             r.Kind == kind &&
             string.Equals(r.ResolvedProviderId, providerId, StringComparison.OrdinalIgnoreCase) &&
             string.Equals(r.RemoteId, remoteId, StringComparison.OrdinalIgnoreCase));
@@ -905,7 +991,9 @@ public sealed class LibraryStore : ObservableStore
         string? cookie = null,
         string? proxyUrl = null,
         CancellationToken ct = default,
-        string? preferredProviderId = null)
+        string? preferredProviderId = null,
+        string? streamQualityId = null,
+        string? downloadQualityId = null)
     {
         var (provider, match) = await CloudUrlClassifier
             .ClassifyAsync(sourceUrl, _providerRegistry, preferredProviderId, ct)
@@ -913,8 +1001,10 @@ public sealed class LibraryStore : ObservableStore
         string effectiveUrl = !string.IsNullOrWhiteSpace(match.NormalizedUrl)
             ? match.NormalizedUrl!
             : CloudUrlClassifier.ExtractCloudUrl(sourceUrl, _providerRegistry);
-        string? normalizedProxy = YouTubeClient.NormalizeProxyUrl(proxyUrl);
-        string? trimmedCookie = string.IsNullOrWhiteSpace(cookie) ? null : cookie.Trim();
+        string? normalizedProxy = provider.SupportsProxy ? YouTubeClient.NormalizeProxyUrl(proxyUrl) : null;
+        string? trimmedCookie = provider.SupportsCookies && !string.IsNullOrWhiteSpace(cookie) ? cookie.Trim() : null;
+        string? normalizedStreamQuality = NormalizeQualityForProvider(provider, streamQualityId);
+        string? normalizedDownloadQuality = NormalizeQualityForProvider(provider, downloadQualityId);
 
         if (!provider.UsesFlatCloudListing)
         {
@@ -942,7 +1032,9 @@ public sealed class LibraryStore : ObservableStore
                     Cookie: trimmedCookie,
                     ProxyUrl: normalizedProxy,
                     LastSyncedUtc: DateTimeOffset.UtcNow,
-                    ProviderId: resolvedProviderId);
+                    ProviderId: resolvedProviderId,
+                    StreamQualityId: normalizedStreamQuality,
+                    DownloadQualityId: normalizedDownloadQuality);
 
                 var initialTracks = await BuildCloudTracksAsync(root, rootResult, Array.Empty<Track>(), ct, provider: provider)
                     .ConfigureAwait(false);
@@ -1011,7 +1103,9 @@ public sealed class LibraryStore : ObservableStore
             Cookie: trimmedCookie,
             ProxyUrl: normalizedProxy,
             LastSyncedUtc: DateTimeOffset.UtcNow,
-            ProviderId: flatProviderId);
+            ProviderId: flatProviderId,
+            StreamQualityId: normalizedStreamQuality,
+            DownloadQualityId: normalizedDownloadQuality);
 
         var newTracks = await BuildCloudTracksAsync(flatRoot, result, Array.Empty<Track>(), ct, provider: provider)
             .ConfigureAwait(false);
@@ -1021,6 +1115,247 @@ public sealed class LibraryStore : ObservableStore
         Publish([.. _tracks, .. newTracks]);
         OnFolderAdded?.Invoke(flatRoot.Name, newTracks.Select(t => t.Id).ToList());
         return flatRoot;
+    }
+
+    public async Task<LibraryRoot> UpdateCloudRootSourceAsync(
+        Guid rootId,
+        string newSourceUrl,
+        string? cookie,
+        string? proxyUrl,
+        string? preferredProviderId = null,
+        string? streamQualityId = null,
+        string? downloadQualityId = null,
+        bool updateQualityPrefs = true,
+        CancellationToken ct = default)
+    {
+        var current = GetRoot(rootId);
+        if (current is null || !current.IsCloud)
+        {
+            throw new InvalidOperationException("Cloud folder was not found.");
+        }
+
+        var (provider, match) = await CloudUrlClassifier
+            .ClassifyAsync(newSourceUrl, _providerRegistry, preferredProviderId, ct)
+            .ConfigureAwait(false);
+
+        string effectiveUrl = !string.IsNullOrWhiteSpace(match.NormalizedUrl)
+            ? match.NormalizedUrl!
+            : CloudUrlClassifier.ExtractCloudUrl(newSourceUrl, _providerRegistry);
+        string? normalizedProxy = provider.SupportsProxy ? YouTubeClient.NormalizeProxyUrl(proxyUrl) : null;
+        string? trimmedCookie = provider.SupportsCookies && !string.IsNullOrWhiteSpace(cookie) ? cookie.Trim() : null;
+        string? normalizedStreamQuality = updateQualityPrefs
+            ? NormalizeQualityForProvider(provider, streamQualityId)
+            : NormalizeQualityForProvider(provider, streamQualityId ?? current.StreamQualityId);
+        string? normalizedDownloadQuality = updateQualityPrefs
+            ? NormalizeQualityForProvider(provider, downloadQualityId)
+            : NormalizeQualityForProvider(provider, downloadQualityId ?? current.DownloadQualityId);
+
+        bool providerChanged = !string.Equals(current.ResolvedProviderId, provider.ProviderId, StringComparison.OrdinalIgnoreCase) ||
+                               current.Kind != provider.RootKind;
+        bool urlChanged = !string.Equals(current.SourceUrl, effectiveUrl, StringComparison.Ordinal);
+        bool authOrProxyChanged = !string.Equals(current.Cookie, trimmedCookie, StringComparison.Ordinal) ||
+                                  !string.Equals(current.ProxyUrl, normalizedProxy, StringComparison.Ordinal);
+        bool needsResync = providerChanged || urlChanged || authOrProxyChanged || !IsAvailable(current);
+
+        if (!needsResync)
+        {
+            int idx = _roots.FindIndex(r => r.Id == rootId);
+            if (idx < 0) throw new InvalidOperationException("Cloud folder was not found.");
+            var updatedNoSync = _roots[idx] with
+            {
+                StreamQualityId = normalizedStreamQuality,
+                DownloadQualityId = normalizedDownloadQuality
+            };
+            var nextRoots = new List<LibraryRoot>(_roots);
+            nextRoots[idx] = updatedNoSync;
+            _roots = nextRoots;
+            OnPropertyChanged(nameof(Roots));
+            SaveLibrary();
+            return updatedNoSync;
+        }
+
+        CancelCloudSync(rootId);
+        var existingTracks = _tracks.Where(t => t.RootId == rootId).ToList();
+
+        static string ResolveRootName(LibraryRoot oldRoot, string nextUrl, string? fetchedTitle)
+        {
+            bool sameUrl = string.Equals(oldRoot.SourceUrl, nextUrl, StringComparison.OrdinalIgnoreCase);
+            if (sameUrl && !string.IsNullOrWhiteSpace(oldRoot.Name))
+            {
+                return oldRoot.Name;
+            }
+            return string.IsNullOrWhiteSpace(fetchedTitle) ? oldRoot.Name : fetchedTitle;
+        }
+
+        if (!provider.UsesFlatCloudListing)
+        {
+            var session = await provider
+                .StartProgressiveFetchAsync(effectiveUrl, trimmedCookie, normalizedProxy, ct)
+                .ConfigureAwait(false);
+
+            if (session is not null)
+            {
+                var rootResult = session.RootResult;
+                string resolvedProviderId = rootResult.ResolvedProviderId ?? provider.ProviderId;
+                if (IsDuplicateCloudRoot(rootResult.Kind, resolvedProviderId, rootResult.RemoteId, excludeRootId: rootId))
+                {
+                    session.Dispose();
+                    throw new InvalidOperationException("That cloud playlist is already in your library.");
+                }
+
+                var updatedRoot = current with
+                {
+                    Name = ResolveRootName(current, rootResult.SourceUrl, rootResult.Title),
+                    Kind = rootResult.Kind,
+                    Path = rootResult.SourceUrl,
+                    SourceUrl = rootResult.SourceUrl,
+                    RemoteId = rootResult.RemoteId,
+                    Cookie = trimmedCookie,
+                    ProxyUrl = normalizedProxy,
+                    LastSyncedUtc = DateTimeOffset.UtcNow,
+                    ProviderId = resolvedProviderId,
+                    StreamQualityId = normalizedStreamQuality,
+                    DownloadQualityId = normalizedDownloadQuality
+                };
+
+                var idMigrations = new Dictionary<string, string>(StringComparer.Ordinal);
+                var initialTracks = await BuildCloudTracksAsync(updatedRoot, rootResult, existingTracks, ct, idMigrations, provider)
+                    .ConfigureAwait(false);
+
+                int rootIdx = _roots.FindIndex(r => r.Id == rootId);
+                if (rootIdx < 0)
+                {
+                    session.Dispose();
+                    throw new InvalidOperationException("Cloud folder was removed.");
+                }
+
+                var nextRoots = new List<LibraryRoot>(_roots);
+                nextRoots[rootIdx] = updatedRoot;
+                _roots = nextRoots;
+                OnPropertyChanged(nameof(Roots));
+
+                if (!session.HasMoreSubfolders)
+                {
+                    ApplyReboundCloudTracks(rootId, existingTracks, initialTracks, idMigrations, clearExistingCache: providerChanged || urlChanged);
+                    session.Dispose();
+                    return updatedRoot;
+                }
+
+                lock (_cloudSyncLock)
+                {
+                    if (session.DiscoveredSubfolderPaths.Count > 0)
+                    {
+                        var known = new HashSet<string>(StringComparer.Ordinal);
+                        foreach (string sub in session.DiscoveredSubfolderPaths)
+                        {
+                            string normSub = LibraryRoot.NormalizeFolderPath(sub);
+                            if (normSub.Length > 0) known.Add(normSub);
+                        }
+                        _knownCloudSubfolders[rootId] = known;
+                    }
+
+                    _cloudSyncProgress[rootId] = new CloudSyncProgress(
+                        RootId: rootId,
+                        FoldersDone: 1,
+                        FoldersTotal: 1 + session.DiscoveredSubfolderPaths.Count,
+                        TracksDiscovered: initialTracks.Count,
+                        IsCompleted: false);
+                }
+
+                ApplyReboundCloudTracks(rootId, existingTracks, initialTracks, idMigrations, clearExistingCache: providerChanged || urlChanged);
+
+                var active = new ActiveCloudSync { Handle = session.TraversalHandle };
+                lock (_cloudSyncLock)
+                {
+                    _activeCloudSyncs[rootId] = active;
+                }
+                active.Task = Task.Run(() => RunTreeBackgroundSyncAsync(updatedRoot, provider, session, active, initialTracks), CancellationToken.None);
+                return updatedRoot;
+            }
+        }
+
+        CloudPlaylistResult result = await provider
+            .FetchPlaylistAsync(effectiveUrl, trimmedCookie, normalizedProxy, ct)
+            .ConfigureAwait(false);
+
+        string flatProviderId = result.ResolvedProviderId ?? provider.ProviderId;
+        if (IsDuplicateCloudRoot(result.Kind, flatProviderId, result.RemoteId, excludeRootId: rootId))
+        {
+            throw new InvalidOperationException("That cloud playlist is already in your library.");
+        }
+
+        var updatedFlatRoot = current with
+        {
+            Name = ResolveRootName(current, result.SourceUrl, result.Title),
+            Kind = result.Kind,
+            Path = result.SourceUrl,
+            SourceUrl = result.SourceUrl,
+            RemoteId = result.RemoteId,
+            Cookie = trimmedCookie,
+            ProxyUrl = normalizedProxy,
+            LastSyncedUtc = DateTimeOffset.UtcNow,
+            ProviderId = flatProviderId,
+            StreamQualityId = normalizedStreamQuality,
+            DownloadQualityId = normalizedDownloadQuality
+        };
+
+        var flatMigrations = new Dictionary<string, string>(StringComparer.Ordinal);
+        var syncedTracks = await BuildCloudTracksAsync(updatedFlatRoot, result, existingTracks, ct, flatMigrations, provider)
+            .ConfigureAwait(false);
+
+        int idx2 = _roots.FindIndex(r => r.Id == rootId);
+        if (idx2 < 0)
+        {
+            throw new InvalidOperationException("Cloud folder was removed.");
+        }
+
+        var updatedList = new List<LibraryRoot>(_roots);
+        updatedList[idx2] = updatedFlatRoot;
+        _roots = updatedList;
+        OnPropertyChanged(nameof(Roots));
+
+        ApplyReboundCloudTracks(rootId, existingTracks, syncedTracks, flatMigrations, clearExistingCache: providerChanged || urlChanged);
+        return updatedFlatRoot;
+    }
+
+    private void ApplyReboundCloudTracks(
+        Guid rootId,
+        List<Track> existingTracks,
+        List<Track> syncedTracks,
+        Dictionary<string, string> idMigrations,
+        bool clearExistingCache)
+    {
+        if (idMigrations.Count > 0)
+        {
+            MigrateTrackReferences(idMigrations);
+        }
+
+        var syncedIds = new HashSet<string>(syncedTracks.Select(t => t.Id), StringComparer.Ordinal);
+        var removedIds = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var old in existingTracks)
+        {
+            if (!syncedIds.Contains(old.Id) && !idMigrations.ContainsKey(old.Id))
+            {
+                removedIds.Add(old.Id);
+            }
+        }
+
+        var otherTracks = _tracks.Where(t => t.RootId != rootId).ToList();
+        Publish([.. otherTracks, .. syncedTracks]);
+
+        if (removedIds.Count > 0)
+        {
+            Forget(removedIds);
+        }
+
+        if (clearExistingCache)
+        {
+            _cloudCache?.RemoveForTracks(existingTracks.Select(t => t.Id).Concat(syncedTracks.Select(t => t.Id)));
+        }
+        else if (removedIds.Count > 0)
+        {
+            _cloudCache?.RemoveForTracks(removedIds);
+        }
     }
 
     private async Task RunTreeBackgroundSyncAsync(
@@ -1677,7 +2012,9 @@ public sealed class LibraryStore : ObservableStore
                 cookie: existingEntry?.Cookie,
                 proxyUrl: existingEntry?.ProxyUrl,
                 lastSynced: manifest.LastSyncedUtc,
-                providerId: resolvedProviderId ?? existingEntry?.ProviderId);
+                providerId: resolvedProviderId ?? existingEntry?.ProviderId,
+                streamQualityId: manifest.StreamQualityId ?? existingEntry?.StreamQualityId,
+                downloadQualityId: manifest.DownloadQualityId ?? existingEntry?.DownloadQualityId);
         }
 
         var normalizedNext = nextTracked.Count > 0 ? nextTracked : null;
@@ -1710,7 +2047,9 @@ public sealed class LibraryStore : ObservableStore
                 !string.Equals(kvp.Value.ResolvedProviderId, other.ResolvedProviderId, StringComparison.OrdinalIgnoreCase) ||
                 kvp.Value.LastSynced != other.LastSynced ||
                 !string.Equals(kvp.Value.Cookie, other.Cookie, StringComparison.Ordinal) ||
-                !string.Equals(kvp.Value.ProxyUrl, other.ProxyUrl, StringComparison.Ordinal))
+                !string.Equals(kvp.Value.ProxyUrl, other.ProxyUrl, StringComparison.Ordinal) ||
+                !string.Equals(kvp.Value.StreamQualityId, other.StreamQualityId, StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(kvp.Value.DownloadQualityId, other.DownloadQualityId, StringComparison.OrdinalIgnoreCase))
             {
                 return false;
             }

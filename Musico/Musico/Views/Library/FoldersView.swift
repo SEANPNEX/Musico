@@ -25,8 +25,16 @@ struct FoldersView: View {
     @State private var exportingRoot: LibraryRoot?
     /// Local folder linked to a cloud source queued for incremental sync.
     @State private var updatingTrackedRoot: LibraryRoot?
-    /// Local folder linked to a cloud source queued for address editing.
-    @State private var editingTrackingRoot: LibraryRoot?
+    /// Cloud folder or tracked local folder queued for source/provider editing.
+    @State private var editingSourceTarget: CloudSourceEditTarget?
+
+    private struct CloudSourceEditTarget: Identifiable {
+        let root: LibraryRoot
+        let path: String
+        let preselectedProviderID: String?
+
+        var id: String { "\(root.id.uuidString)::\(path)::\(preselectedProviderID ?? "")" }
+    }
 
     private var unavailableExtensionRoots: [(root: LibraryRoot, availability: CloudExtensionAvailability)] {
         library.roots.compactMap { root in
@@ -190,10 +198,17 @@ struct FoldersView: View {
                 .environment(\.downloadManager, downloadManager)
                 .environment(\.locale, languageManager.effectiveLocale)
         }
-        .sheet(item: $editingTrackingRoot) { root in
-            EditCloudTrackingSheet(root: root, path: "", library: library)
-                .environment(library)
-                .environment(\.locale, languageManager.effectiveLocale)
+        .sheet(item: $editingSourceTarget) { target in
+            EditCloudTrackingSheet(
+                root: target.root,
+                path: target.path,
+                library: library,
+                preselectedProviderID: target.preselectedProviderID
+            )
+            .environment(library)
+            .environment(\.extensionStore, extensionStore)
+            .environment(\.languageManager, languageManager)
+            .environment(\.locale, languageManager.effectiveLocale)
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
             guard case .success(let url) = result else { return }
@@ -427,6 +442,24 @@ struct FoldersView: View {
                 }
             }
             if root.kind.isCloud {
+                if root.kind == .cloudExtension,
+                   extAvailability != .available,
+                   let suggested = library.compatibleProviders(for: root).first {
+                    Button(L10n.tr("Switch Source…"), systemImage: "arrow.triangle.2.circlepath") {
+                        editingSourceTarget = CloudSourceEditTarget(
+                            root: root,
+                            path: "",
+                            preselectedProviderID: suggested.id
+                        )
+                    }
+                }
+                Button(L10n.tr("Edit Cloud Source…"), systemImage: "link") {
+                    editingSourceTarget = CloudSourceEditTarget(
+                        root: root,
+                        path: "",
+                        preselectedProviderID: nil
+                    )
+                }
                 Button(L10n.tr("Save to Local Folder…"), systemImage: "square.and.arrow.down") {
                     exportingRoot = root
                 }
@@ -436,7 +469,11 @@ struct FoldersView: View {
                     updatingTrackedRoot = root
                 }
                 Button(L10n.tr("Edit Cloud Source…"), systemImage: "link") {
-                    editingTrackingRoot = root
+                    editingSourceTarget = CloudSourceEditTarget(
+                        root: root,
+                        path: "",
+                        preselectedProviderID: nil
+                    )
                 }
             }
             if root.kind == .picked {
@@ -601,8 +638,9 @@ struct FolderDetailView: View {
         let root: LibraryRoot
         let path: String
         let displayName: String
+        var preselectedProviderID: String? = nil
 
-        var id: String { "\(root.id.uuidString)::\(path)" }
+        var id: String { "\(root.id.uuidString)::\(path)::\(preselectedProviderID ?? "")" }
     }
 
     let ref: FolderRef
@@ -639,6 +677,7 @@ struct FolderDetailView: View {
 
         List {
             if let root, root.kind == .cloudExtension, extAvailability != .available {
+                let compatible = library.compatibleProviders(for: root)
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .top, spacing: 10) {
                         Image(systemName: "puzzlepiece.extension")
@@ -651,10 +690,24 @@ struct FolderDetailView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    Button(L10n.tr("Manage Extensions")) {
-                        showExtensionsSheet = true
+                    HStack(spacing: 12) {
+                        if let suggested = compatible.first {
+                            Button(L10n.tr("Switch Source…")) {
+                                editingTarget = FolderTrackingTarget(
+                                    root: root,
+                                    path: "",
+                                    displayName: currentName,
+                                    preselectedProviderID: suggested.id
+                                )
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .controlSize(.small)
+                        }
+                        Button(L10n.tr("Manage Extensions")) {
+                            showExtensionsSheet = true
+                        }
+                        .font(.subheadline.weight(.medium))
                     }
-                    .font(.subheadline.weight(.medium))
                 }
                 .padding(.vertical, 4)
             }
@@ -796,6 +849,10 @@ struct FolderDetailView: View {
                     }
                 }
                 if ref.path.isEmpty, let root, root.kind.isCloud {
+                    Button(L10n.tr("Edit Cloud Source…"), systemImage: "link") {
+                        editingTarget = FolderTrackingTarget(root: root, path: "", displayName: currentName)
+                    }
+                    .help(L10n.tr("Edit Cloud Source…"))
                     Button(L10n.tr("Save to Local Folder…"), systemImage: "square.and.arrow.down") {
                         showExportSheet = true
                     }
@@ -858,9 +915,12 @@ struct FolderDetailView: View {
                 root: target.root,
                 path: target.path,
                 folderName: target.displayName,
-                library: library
+                library: library,
+                preselectedProviderID: target.preselectedProviderID
             )
             .environment(library)
+            .environment(\.extensionStore, extensionStore)
+            .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
         }
         .confirmationDialog(L10n.tr("Remove “%@” from your library?", currentName),
@@ -1267,6 +1327,7 @@ struct UpdateTrackedFolderSheet: View {
                         restartUpdateAfterAddressEdit()
                     }
                 )
+                .environment(\.extensionStore, ExtensionStore.shared)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
                 if let library {
@@ -1326,6 +1387,7 @@ struct EditCloudTrackingSheet: View {
     let root: LibraryRoot
     let path: String
     let folderName: String?
+    let preselectedProviderID: String?
     var onSaved: (() -> Void)? = nil
     private let explicitLibrary: LibraryStore?
     @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
@@ -1334,6 +1396,10 @@ struct EditCloudTrackingSheet: View {
 
     @State private var urlText: String
     @State private var cookieText: String
+    @State private var selectedProviderID: String?
+    @State private var selectedStreamQualityID: String?
+    @State private var selectedDownloadQualityID: String?
+    @State private var isSaving = false
     @State private var errorMessage: String?
 
     init(
@@ -1341,6 +1407,7 @@ struct EditCloudTrackingSheet: View {
         path: String = "",
         folderName: String? = nil,
         library: LibraryStore? = nil,
+        preselectedProviderID: String? = nil,
         onSaved: (() -> Void)? = nil
     ) {
         self.root = root
@@ -1348,6 +1415,7 @@ struct EditCloudTrackingSheet: View {
         self.path = normPath
         self.folderName = folderName
         self.explicitLibrary = library
+        self.preselectedProviderID = preselectedProviderID
         self.onSaved = onSaved
 
         let existingTracking = library?.cloudTracking(rootID: root.id, path: normPath)
@@ -1359,12 +1427,17 @@ struct EditCloudTrackingSheet: View {
                         cloudKind: root.effectiveCloudKind ?? .cloudYouTube,
                         cookie: root.cookie,
                         lastSynced: root.lastSynced,
-                        providerID: root.effectiveProviderID
+                        providerID: root.effectiveProviderID,
+                        streamQualityID: root.streamQualityID,
+                        downloadQualityID: root.downloadQualityID
                     )
                 }
                 : root.normalizedTrackedSubfolders[normPath])
         _urlText = State(initialValue: existingTracking?.sourceURL ?? "")
         _cookieText = State(initialValue: existingTracking?.cookie ?? "")
+        _selectedProviderID = State(initialValue: preselectedProviderID ?? existingTracking?.resolvedProviderID)
+        _selectedStreamQualityID = State(initialValue: existingTracking?.streamQualityID)
+        _selectedDownloadQualityID = State(initialValue: existingTracking?.downloadQualityID)
     }
 
     private var library: LibraryStore? { explicitLibrary ?? envLibrary }
@@ -1383,6 +1456,76 @@ struct EditCloudTrackingSheet: View {
         CloudSourceInput.extract(from: urlText, registry: extensionStore.registry)
     }
 
+    private var compatibleProviders: [any CloudSourceProvider] {
+        let all = extensionStore.registry.allProviders().filter(\.supportsCollection)
+        let extracted = extractedURL
+        guard !extracted.isEmpty else { return all }
+        return all.filter { provider in
+            if provider.canHandle(rawText: urlText, extractedURL: extracted) != nil {
+                return true
+            }
+            if provider.id == BuiltInProviderID.googleDrive, GoogleDriveClient.isValidDriveID(extracted) {
+                return true
+            }
+            return false
+        }
+    }
+
+    private var missingSelectedProviderLabel: String? {
+        guard let pid = selectedProviderID,
+              !pid.isEmpty,
+              extensionStore.registry.provider(forID: pid) == nil else {
+            return nil
+        }
+        switch extensionStore.availability(forProviderID: pid) {
+        case .available:
+            return nil
+        case .disabled(let name):
+            return L10n.tr("%@ (Disabled)", name)
+        case .missing(let providerID):
+            return L10n.tr("%@ (Missing)", providerID)
+        }
+    }
+
+    private var detectedProvider: (any CloudSourceProvider)? {
+        guard selectedProviderID == nil, !extractedURL.isEmpty else { return nil }
+        guard let match = extensionStore.registry.match(rawText: urlText, extractedURL: extractedURL) else {
+            return nil
+        }
+        return extensionStore.registry.provider(forID: match.providerID)
+    }
+
+    private var effectiveProviderForUI: (any CloudSourceProvider)? {
+        if let selectedProviderID, !selectedProviderID.isEmpty {
+            return extensionStore.registry.provider(forID: selectedProviderID)
+        }
+        return detectedProvider
+    }
+
+    private var availableQualities: [CloudQualityOption] {
+        effectiveProviderForUI?.availableQualities ?? []
+    }
+
+    private var shouldShowCookieField: Bool {
+        effectiveProviderForUI?.supportsCookie ?? false
+    }
+
+    private func defaultStreamLabel(for provider: (any CloudSourceProvider)?, qualities: [CloudQualityOption]) -> String {
+        let defID = provider?.defaultStreamQualityID
+        if let defID, let opt = qualities.first(where: { $0.id == defID }) {
+            return L10n.tr("Default (%@)", opt.label)
+        }
+        return L10n.tr("Default")
+    }
+
+    private func defaultDownloadLabel(for provider: (any CloudSourceProvider)?, qualities: [CloudQualityOption]) -> String {
+        let defID = provider?.defaultDownloadQualityID
+        if let defID, let opt = qualities.first(where: { $0.id == defID }) {
+            return L10n.tr("Default (%@)", opt.label)
+        }
+        return L10n.tr("Default")
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -1391,24 +1534,66 @@ struct EditCloudTrackingSheet: View {
                         .foregroundStyle(.secondary)
                 }
 
+                Section(L10n.tr("Source Provider")) {
+                    Picker(L10n.tr("Provider"), selection: $selectedProviderID) {
+                        Text(L10n.tr("Auto (Match URL)")).tag(nil as String?)
+                        if let missingLabel = missingSelectedProviderLabel, let missingID = selectedProviderID {
+                            Text(missingLabel).tag(Optional(missingID))
+                        }
+                        ForEach(compatibleProviders, id: \.id) { provider in
+                            Text(provider.displayName).tag(Optional(provider.id))
+                        }
+                    }
+                    if let detectedProvider {
+                        LabeledContent(L10n.tr("Detected")) {
+                            Text(detectedProvider.displayName)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+
                 Section {
-                    TextField(L10n.tr("YouTube, Bilibili, or Google Drive URL or ID"), text: $urlText)
+                    TextField(L10n.tr("Cloud URL or ID"), text: $urlText)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .keyboardType(.URL)
                 } header: {
-                    Text(L10n.tr("Cloud Tracking Address"))
+                    Text(root.kind.isCloud ? L10n.tr("Cloud Source Address") : L10n.tr("Cloud Tracking Address"))
                 } footer: {
-                    Text(L10n.tr("Updating the address links this local folder to the new cloud playlist or folder on future updates."))
+                    Text(root.kind.isCloud
+                         ? L10n.tr("Changing the URL or provider re-syncs this cloud folder while keeping its playlists and queues where possible.")
+                         : L10n.tr("Updating the address links this local folder to the new cloud playlist or folder on future updates."))
                 }
 
-                Section {
-                    TextField(L10n.tr("Cookie (optional)"), text: $cookieText, axis: .vertical)
-                        .textInputAutocapitalization(.never)
-                        .autocorrectionDisabled()
-                        .lineLimit(2...4)
-                } header: {
-                    Text(L10n.tr("Authentication"))
+                if shouldShowCookieField {
+                    Section {
+                        TextField(L10n.tr("Cookie (optional)"), text: $cookieText, axis: .vertical)
+                            .textInputAutocapitalization(.never)
+                            .autocorrectionDisabled()
+                            .lineLimit(2...4)
+                    } header: {
+                        Text(L10n.tr("Authentication"))
+                    }
+                }
+
+                if !availableQualities.isEmpty {
+                    Section(L10n.tr("Audio Quality")) {
+                        Picker(L10n.tr("Streaming Quality"), selection: $selectedStreamQualityID) {
+                            Text(defaultStreamLabel(for: effectiveProviderForUI, qualities: availableQualities))
+                                .tag(nil as String?)
+                            ForEach(availableQualities) { quality in
+                                Text(quality.label).tag(Optional(quality.id))
+                            }
+                        }
+
+                        Picker(L10n.tr("Download Quality"), selection: $selectedDownloadQualityID) {
+                            Text(defaultDownloadLabel(for: effectiveProviderForUI, qualities: availableQualities))
+                                .tag(nil as String?)
+                            ForEach(availableQualities) { quality in
+                                Text(quality.label).tag(Optional(quality.id))
+                            }
+                        }
+                    }
                 }
 
                 if let errorMessage {
@@ -1424,15 +1609,38 @@ struct EditCloudTrackingSheet: View {
                 if urlText.isEmpty, let live = library?.cloudTracking(rootID: root.id, path: path) {
                     urlText = live.sourceURL
                     cookieText = live.cookie ?? ""
+                    if selectedProviderID == nil {
+                        selectedProviderID = preselectedProviderID ?? live.resolvedProviderID
+                    }
+                    if selectedStreamQualityID == nil {
+                        selectedStreamQualityID = live.streamQualityID
+                    }
+                    if selectedDownloadQualityID == nil {
+                        selectedDownloadQualityID = live.downloadQualityID
+                    }
+                }
+            }
+            .onChange(of: effectiveProviderForUI?.id) { _, _ in
+                let validIDs = Set(availableQualities.map(\.id))
+                if let sq = selectedStreamQualityID, !validIDs.contains(sq) {
+                    selectedStreamQualityID = nil
+                }
+                if let dq = selectedDownloadQualityID, !validIDs.contains(dq) {
+                    selectedDownloadQualityID = nil
                 }
             }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(L10n.tr("Cancel")) { dismiss() }
+                        .disabled(isSaving)
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(L10n.tr("Save")) { save() }
-                        .disabled(extractedURL.isEmpty || library == nil)
+                    if isSaving {
+                        ProgressView()
+                    } else {
+                        Button(L10n.tr("Save")) { save() }
+                            .disabled(extractedURL.isEmpty || library == nil || missingSelectedProviderLabel != nil)
+                    }
                 }
             }
         }
@@ -1441,17 +1649,46 @@ struct EditCloudTrackingSheet: View {
     private func save() {
         guard let library else { return }
         errorMessage = nil
-        do {
-            try library.updateCloudTrackingAddress(
-                rootID: root.id,
-                path: path,
-                sourceURL: urlText,
-                cookie: cookieText
-            )
-            onSaved?()
-            dismiss()
-        } catch {
-            errorMessage = error.localizedDescription
+        let effectiveCookie = shouldShowCookieField ? cookieText : nil
+        if root.kind.isCloud {
+            isSaving = true
+            let sourceURL = urlText
+            let providerID = selectedProviderID
+            let streamQ = selectedStreamQualityID
+            let downloadQ = selectedDownloadQualityID
+            Task {
+                do {
+                    try await library.rebindCloudRoot(
+                        root.id,
+                        sourceURL: sourceURL,
+                        cookie: effectiveCookie,
+                        preferredProviderID: providerID,
+                        streamQualityID: streamQ,
+                        downloadQualityID: downloadQ
+                    )
+                    onSaved?()
+                    dismiss()
+                } catch {
+                    errorMessage = error.localizedDescription
+                    isSaving = false
+                }
+            }
+        } else {
+            do {
+                try library.updateCloudTrackingAddress(
+                    rootID: root.id,
+                    path: path,
+                    sourceURL: urlText,
+                    cookie: effectiveCookie,
+                    preferredProviderID: selectedProviderID,
+                    streamQualityID: selectedStreamQualityID,
+                    downloadQualityID: selectedDownloadQualityID
+                )
+                onSaved?()
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+            }
         }
     }
 }

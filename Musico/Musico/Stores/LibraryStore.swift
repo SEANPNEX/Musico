@@ -282,6 +282,37 @@ final class LibraryStore {
         return providerRegistry.provider(forID: pid)
     }
 
+    func provider(for track: Track, root: LibraryRoot? = nil) -> (any CloudSourceProvider)? {
+        let resolvedRoot = root ?? self.root(track.rootID)
+        guard let pid = CloudProviderRegistry.providerID(for: track, root: resolvedRoot) else { return nil }
+        return providerRegistry.provider(forID: pid)
+    }
+
+    func compatibleProviders(
+        forSourceURL sourceURL: String?,
+        excludingProviderID: String? = nil
+    ) -> [any CloudSourceProvider] {
+        let raw = (sourceURL ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return [] }
+        let extracted = CloudSourceInput.extract(from: raw, registry: providerRegistry)
+        guard !extracted.isEmpty else { return [] }
+        return providerRegistry.allProviders().filter { provider in
+            guard provider.supportsCollection else { return false }
+            if let excludingProviderID, provider.id == excludingProviderID { return false }
+            if provider.canHandle(rawText: raw, extractedURL: extracted) != nil {
+                return true
+            }
+            if provider.id == BuiltInProviderID.googleDrive, GoogleDriveClient.isValidDriveID(extracted) {
+                return true
+            }
+            return false
+        }
+    }
+
+    func compatibleProviders(for root: LibraryRoot) -> [any CloudSourceProvider] {
+        compatibleProviders(forSourceURL: root.sourceURL, excludingProviderID: root.effectiveProviderID)
+    }
+
     func cloudExtensionAvailability(for root: LibraryRoot) -> CloudExtensionAvailability {
         guard root.kind == .cloudExtension else { return .available }
         guard let pid = root.resolvedProviderID, !pid.isEmpty else {
@@ -468,6 +499,8 @@ final class LibraryStore {
             roots[index].linkedCloudKind = cloudRoot.effectiveCloudKind
             roots[index].linkedProviderID = cloudRoot.effectiveProviderID
             roots[index].cookie = cloudRoot.cookie
+            roots[index].streamQualityID = cloudRoot.streamQualityID
+            roots[index].downloadQualityID = cloudRoot.downloadQualityID
             roots[index].lastSynced = Date()
         } else if let sourceURL = cloudRoot.sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines),
                   !sourceURL.isEmpty,
@@ -479,7 +512,9 @@ final class LibraryStore {
                 cloudKind: cloudKind,
                 cookie: cloudRoot.cookie,
                 lastSynced: Date(),
-                providerID: cloudRoot.effectiveProviderID
+                providerID: cloudRoot.effectiveProviderID,
+                streamQualityID: cloudRoot.streamQualityID,
+                downloadQualityID: cloudRoot.downloadQualityID
             )
             roots[index].trackedSubfolders = map
         }
@@ -500,7 +535,9 @@ final class LibraryStore {
                 cloudKind: cloudKind,
                 cookie: cloudRoot.cookie,
                 lastSynced: now,
-                providerID: cloudRoot.effectiveProviderID
+                providerID: cloudRoot.effectiveProviderID,
+                streamQualityID: cloudRoot.streamQualityID,
+                downloadQualityID: cloudRoot.downloadQualityID
             )
         }()
 
@@ -515,6 +552,8 @@ final class LibraryStore {
                     roots[index].linkedCloudKind = info.cloudKind
                     roots[index].linkedProviderID = info.resolvedProviderID
                     roots[index].cookie = info.cookie
+                    roots[index].streamQualityID = info.streamQualityID
+                    roots[index].downloadQualityID = info.downloadQualityID
                     roots[index].lastSynced = info.lastSynced
                 }
             } else {
@@ -555,7 +594,9 @@ final class LibraryStore {
                     cloudKind: root.kind,
                     cookie: root.cookie,
                     lastSynced: root.lastSynced,
-                    providerID: root.resolvedProviderID
+                    providerID: root.resolvedProviderID,
+                    streamQualityID: root.streamQualityID,
+                    downloadQualityID: root.downloadQualityID
                 )
             }
             guard root.isCloudTrackedLocal, let src = root.sourceURL else { return nil }
@@ -565,7 +606,9 @@ final class LibraryStore {
                 cloudKind: root.linkedCloudKind ?? .cloudYouTube,
                 cookie: root.cookie,
                 lastSynced: root.lastSynced,
-                providerID: root.effectiveProviderID
+                providerID: root.effectiveProviderID,
+                streamQualityID: root.streamQualityID,
+                downloadQualityID: root.downloadQualityID
             )
         }
         return root.normalizedTrackedSubfolders[normPath]
@@ -576,7 +619,9 @@ final class LibraryStore {
         path: String,
         sourceURL: String,
         cookie: String?,
-        preferredProviderID: String? = nil
+        preferredProviderID: String? = nil,
+        streamQualityID: String? = nil,
+        downloadQualityID: String? = nil
     ) throws {
         guard let index = roots.firstIndex(where: { $0.id == rootID }) else {
             throw LibraryError.notAFolder
@@ -590,14 +635,38 @@ final class LibraryStore {
             preferredProviderID: preferredProviderID,
             registry: providerRegistry
         )
+        if normPath.isEmpty,
+           roots[index].kind.isCloud,
+           let remoteID = classified.remoteID,
+           !remoteID.isEmpty,
+           roots.contains(where: {
+               $0.id != rootID
+                   && $0.kind == classified.kind
+                   && $0.resolvedProviderID == classified.providerID
+                   && $0.remoteID == remoteID
+           }) {
+            throw LibraryError.duplicateRoot
+        }
+
+        let targetProvider = classified.providerID.flatMap { providerRegistry.provider(forID: $0) }
+        let validQualities = Set((targetProvider?.availableQualities ?? []).map(\.id))
+        let trimmedStreamQ = streamQualityID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanStreamQ = (trimmedStreamQ?.isEmpty == false && validQualities.contains(trimmedStreamQ!)) ? trimmedStreamQ : nil
+        let trimmedDownloadQ = downloadQualityID?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanDownloadQ = (trimmedDownloadQ?.isEmpty == false && validQualities.contains(trimmedDownloadQ!)) ? trimmedDownloadQ : nil
+
         let trimmedCookie = cookie?.trimmingCharacters(in: .whitespacesAndNewlines)
-        let cleanCookie = (trimmedCookie?.isEmpty == false) ? trimmedCookie : nil
+        let cleanCookie = (targetProvider?.supportsCookie == false)
+            ? nil
+            : ((trimmedCookie?.isEmpty == false) ? trimmedCookie : nil)
         let now = Date()
 
         if normPath.isEmpty {
             roots[index].sourceURL = classified.extracted
             roots[index].remoteID = classified.remoteID
             roots[index].cookie = cleanCookie
+            roots[index].streamQualityID = cleanStreamQ
+            roots[index].downloadQualityID = cleanDownloadQ
             roots[index].lastSynced = now
             if roots[index].kind.isLocal {
                 roots[index].linkedCloudKind = classified.kind
@@ -605,6 +674,7 @@ final class LibraryStore {
             } else if roots[index].kind.isCloud {
                 roots[index].kind = classified.kind
                 roots[index].providerID = classified.providerID
+                cloudSyncErrors[rootID] = nil
             }
         } else {
             var map = roots[index].normalizedTrackedSubfolders
@@ -614,7 +684,9 @@ final class LibraryStore {
                 cloudKind: classified.kind,
                 cookie: cleanCookie,
                 lastSynced: now,
-                providerID: classified.providerID
+                providerID: classified.providerID,
+                streamQualityID: cleanStreamQ,
+                downloadQualityID: cleanDownloadQ
             )
             roots[index].trackedSubfolders = map
         }
@@ -630,10 +702,54 @@ final class LibraryStore {
                     cloudKind: classified.kind,
                     lastSyncedEpochMs: Int64(now.timeIntervalSince1970 * 1000),
                     tracks: existingManifest?.tracks ?? [:],
-                    providerID: classified.providerID
+                    providerID: classified.providerID,
+                    streamQualityID: cleanStreamQ,
+                    downloadQualityID: cleanDownloadQ
                 )
                 try? CloudExporter.saveManifest(updatedManifest, in: folderURL)
             }
+        }
+    }
+
+    /// Updates a cloud folder's source URL, provider binding, cookie, and quality preferences while keeping `root.id`,
+    /// triggering a clean re-sync when the source binding or cookie changed.
+    func rebindCloudRoot(
+        _ rootID: UUID,
+        sourceURL: String,
+        cookie: String?,
+        preferredProviderID: String?,
+        streamQualityID: String? = nil,
+        downloadQualityID: String? = nil
+    ) async throws {
+        guard let oldRoot = root(rootID), oldRoot.kind.isCloud else {
+            throw LibraryError.notAFolder
+        }
+        try updateCloudTrackingAddress(
+            rootID: rootID,
+            path: "",
+            sourceURL: sourceURL,
+            cookie: cookie,
+            preferredProviderID: preferredProviderID,
+            streamQualityID: streamQualityID,
+            downloadQualityID: downloadQualityID
+        )
+        guard let newRoot = root(rootID) else { return }
+        let bindingChanged = oldRoot.kind != newRoot.kind
+            || oldRoot.resolvedProviderID != newRoot.resolvedProviderID
+            || oldRoot.sourceURL != newRoot.sourceURL
+            || oldRoot.remoteID != newRoot.remoteID
+        let cookieChanged = oldRoot.cookie != newRoot.cookie
+
+        if bindingChanged {
+            driveCrawlTasks[rootID]?.cancel()
+            driveCrawlTasks[rootID] = nil
+            driveCrawlPriorities[rootID] = nil
+            cloudSyncProgress[rootID] = nil
+            knownDriveSubfolders[rootID] = nil
+        }
+
+        if bindingChanged || cookieChanged {
+            await rescan()
         }
     }
 
@@ -690,6 +806,8 @@ final class LibraryStore {
         lookupRoot.linkedCloudKind = tracking.cloudKind
         lookupRoot.linkedProviderID = tracking.resolvedProviderID
         lookupRoot.cookie = tracking.cookie
+        lookupRoot.streamQualityID = tracking.streamQualityID
+        lookupRoot.downloadQualityID = tracking.downloadQualityID
 
         let summary: CloudExporter.CloudUpdateSummary
         if let onDetailedProgress {
@@ -1307,11 +1425,15 @@ final class LibraryStore {
                     || roots[rootIndex].remoteID != rootManifest.remoteID
                     || roots[rootIndex].linkedCloudKind != rootManifest.cloudKind
                     || roots[rootIndex].linkedProviderID != rootManifest.resolvedProviderID
+                    || roots[rootIndex].streamQualityID != rootManifest.streamQualityID
+                    || roots[rootIndex].downloadQualityID != rootManifest.downloadQualityID
                     || roots[rootIndex].lastSynced != manifestDate {
                     roots[rootIndex].sourceURL = rootManifest.sourceURL
                     roots[rootIndex].remoteID = rootManifest.remoteID
                     roots[rootIndex].linkedCloudKind = rootManifest.cloudKind
                     roots[rootIndex].linkedProviderID = rootManifest.resolvedProviderID
+                    roots[rootIndex].streamQualityID = rootManifest.streamQualityID
+                    roots[rootIndex].downloadQualityID = rootManifest.downloadQualityID
                     roots[rootIndex].lastSynced = manifestDate
                     changed = true
                 }
@@ -1337,7 +1459,9 @@ final class LibraryStore {
                         cloudKind: manifest.cloudKind,
                         cookie: existingInfo.cookie,
                         lastSynced: manifestDate,
-                        providerID: manifest.resolvedProviderID
+                        providerID: manifest.resolvedProviderID,
+                        streamQualityID: manifest.streamQualityID ?? existingInfo.streamQualityID,
+                        downloadQualityID: manifest.downloadQualityID ?? existingInfo.downloadQualityID
                     )
                 } else {
                     updatedSubfolders[path] = existingInfo
@@ -1358,7 +1482,9 @@ final class LibraryStore {
                 cloudKind: manifest.cloudKind,
                 cookie: nil,
                 lastSynced: Date(timeIntervalSince1970: Double(manifest.lastSyncedEpochMs) / 1000.0),
-                providerID: manifest.resolvedProviderID
+                providerID: manifest.resolvedProviderID,
+                streamQualityID: manifest.streamQualityID,
+                downloadQualityID: manifest.downloadQualityID
             )
         }
 
@@ -1759,6 +1885,13 @@ final class LibraryStore {
         var migratedIDs: [String: String] = [:]
         var consumedOldIDs = Set<String>()
 
+        var remainingByRemoteID: [String: Track] = [:]
+        for track in existing.values {
+            if let rid = track.remoteTrackID, !rid.isEmpty, remainingByRemoteID[rid] == nil {
+                remainingByRemoteID[rid] = track
+            }
+        }
+
         for item in items {
             if root.isExcluded(item.relativePath) { continue }
             guard seen.insert(item.relativePath).inserted else { continue }
@@ -1768,7 +1901,15 @@ final class LibraryStore {
                 let fileID = GoogleDriveClient.decodeTrackID(item.remoteTrackID).fileID
                 return legacyByFileID[fileID]
             }()
-            let old = directMatch ?? legacyMatch
+            let remoteMatch: Track? = {
+                guard directMatch == nil, legacyMatch == nil, !item.remoteTrackID.isEmpty else { return nil }
+                guard let candidate = remainingByRemoteID[item.remoteTrackID],
+                      !consumedOldIDs.contains(candidate.id) else {
+                    return nil
+                }
+                return candidate
+            }()
+            let old = directMatch ?? legacyMatch ?? remoteMatch
             if let old {
                 consumedOldIDs.insert(old.id)
             }
@@ -1791,8 +1932,8 @@ final class LibraryStore {
 
             changed = true
             let newID = Track.makeID(rootID: root.id, relativePath: item.relativePath)
-            if let legacyMatch, legacyMatch.id != newID {
-                migratedIDs[legacyMatch.id] = newID
+            if let old, old.id != newID {
+                migratedIDs[old.id] = newID
             }
             let keepArtworkKey = (old?.remoteArtworkURL == item.artworkURL) ? old?.artworkKey : nil
             result.append(Track(

@@ -1,6 +1,7 @@
 package com.musico.extensions
 
 import com.musico.cloud.CloudErrorCode
+import com.musico.cloud.CloudQualityOption
 import com.musico.cloud.CloudSourceException
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
@@ -172,6 +173,21 @@ data class ExtensionSettingSpec(
 }
 
 @Serializable
+data class ExtensionQualityOption(
+    val id: String,
+    val label: String,
+    val badge: String? = null,
+    val lossless: Boolean = false,
+) {
+    fun toCloudQualityOption(): CloudQualityOption = CloudQualityOption(
+        id = id,
+        label = label,
+        badge = badge,
+        lossless = lossless,
+    )
+}
+
+@Serializable
 data class ExtensionPermissions(
     val hosts: List<String> = emptyList(),
 )
@@ -191,6 +207,9 @@ data class ExtensionManifest(
     val searchKinds: List<ExtensionSearchKind> = emptyList(),
     val permissions: ExtensionPermissions = ExtensionPermissions(),
     val settings: List<ExtensionSettingSpec> = emptyList(),
+    val qualities: List<ExtensionQualityOption> = emptyList(),
+    val defaultStreamQuality: String? = null,
+    val defaultDownloadQuality: String? = null,
     val updateUrl: String? = null,
 ) {
     val providerId: String
@@ -201,6 +220,12 @@ data class ExtensionManifest(
 
     val effectiveSearchKinds: List<ExtensionSearchKind>
         get() = searchKinds.distinct().ifEmpty { ExtensionSearchKind.DEFAULT_ALL }
+
+    val effectiveDefaultStreamQuality: String?
+        get() = defaultStreamQuality?.trim()?.takeIf { it.isNotEmpty() } ?: qualities.firstOrNull()?.id
+
+    val effectiveDefaultDownloadQuality: String?
+        get() = defaultDownloadQuality?.trim()?.takeIf { it.isNotEmpty() } ?: qualities.firstOrNull()?.id
 
     val supportsCookieAuth: Boolean
         get() = ExtensionCapability.COOKIE in capabilities || ExtensionCapability.QR_LOGIN in capabilities
@@ -229,6 +254,7 @@ data class ExtensionManifest(
     companion object {
         const val CURRENT_API_VERSION = 1
         const val MAX_BADGE_LENGTH = 16
+        const val MAX_QUALITIES = 16
     }
 }
 
@@ -372,11 +398,43 @@ object ExtensionManifestValidator {
                 require(spec.options.isNotEmpty()) { "Select setting '${spec.key}' must define options" }
             }
         }
+        require(manifest.qualities.size <= ExtensionManifest.MAX_QUALITIES) {
+            "Extension manifest.qualities supports at most ${ExtensionManifest.MAX_QUALITIES} entries"
+        }
+        val seenQualityIds = HashSet<String>()
+        val cleanedQualities = manifest.qualities.map { opt ->
+            val cleanId = opt.id.trim()
+            val cleanLabel = opt.label.trim()
+            require(cleanId.isNotEmpty()) { "Quality option id must not be blank" }
+            require(cleanLabel.isNotEmpty()) { "Quality option label for '$cleanId' must not be blank" }
+            require(seenQualityIds.add(cleanId)) { "Duplicate quality option id '$cleanId'" }
+            ExtensionQualityOption(
+                id = cleanId,
+                label = cleanLabel,
+                badge = opt.badge?.trim()?.takeIf { it.isNotEmpty() },
+                lossless = opt.lossless,
+            )
+        }
+        val cleanDefaultStream = manifest.defaultStreamQuality?.trim()?.takeIf { it.isNotEmpty() }
+        if (cleanDefaultStream != null) {
+            require(cleanDefaultStream in seenQualityIds) {
+                "defaultStreamQuality '$cleanDefaultStream' is not declared in manifest.qualities"
+            }
+        }
+        val cleanDefaultDownload = manifest.defaultDownloadQuality?.trim()?.takeIf { it.isNotEmpty() }
+        if (cleanDefaultDownload != null) {
+            require(cleanDefaultDownload in seenQualityIds) {
+                "defaultDownloadQuality '$cleanDefaultDownload' is not declared in manifest.qualities"
+            }
+        }
         return manifest.copy(
             name = manifest.name.trim(),
             version = manifest.version.trim(),
             entry = cleanEntry,
             searchKinds = manifest.searchKinds.distinct(),
+            qualities = cleanedQualities,
+            defaultStreamQuality = cleanDefaultStream,
+            defaultDownloadQuality = cleanDefaultDownload,
             updateUrl = cleanUpdateUrl,
         )
     }
@@ -438,6 +496,8 @@ data class ExtensionState(
     val hasIcon: Boolean = false,
     val settings: Map<String, JsonPrimitive> = emptyMap(),
     val cookie: String? = null,
+    val streamQualityId: String? = null,
+    val downloadQualityId: String? = null,
 )
 
 data class InstalledExtension(
@@ -513,6 +573,9 @@ data class ExtResolveStreamResult(
     val expiresAtMs: Long? = null,
     val fallbackUrls: List<String>? = null,
     val contentLength: Long? = null,
+    val actualQuality: String? = null,
+    val qualityLabel: String? = null,
+    val bitrateKbps: Int? = null,
 )
 
 data class SearchExtensionDescriptor(

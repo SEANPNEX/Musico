@@ -1108,10 +1108,15 @@ public sealed class YouTubeClient
         string videoId,
         string? cookie = null,
         string? proxyUrl = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? quality = null)
     {
         if (string.IsNullOrWhiteSpace(videoId))
             throw new ArgumentException("Video ID is required.", nameof(videoId));
+
+        string normalizedQuality = string.IsNullOrWhiteSpace(quality)
+            ? "standard"
+            : quality.Trim().ToLowerInvariant();
 
         using var http = CloudHttpHelper.CreateClient(proxyUrl, _handler);
         string? visitorData = await GetVisitorDataAsync(http, forceRefresh: false, ct).ConfigureAwait(false);
@@ -1142,7 +1147,7 @@ public sealed class YouTubeClient
                     continue;
                 }
 
-                var candidates = SelectAudioFormatCandidates(doc.RootElement);
+                var candidates = SelectAudioFormatCandidates(doc.RootElement, normalizedQuality);
                 foreach (var candidate in candidates)
                 {
                     bool readable = await ProbeStreamReadableAsync(
@@ -1154,11 +1159,15 @@ public sealed class YouTubeClient
                         ["User-Agent"] = client.UserAgent,
                         ["Range"] = "bytes=0-"
                     };
+                    var (actualQuality, qualityLabel, bitrateKbps) = DescribeYouTubeQuality(candidate, normalizedQuality);
                     return new CloudAudioStream(
                         candidate.Url,
                         candidate.Extension,
                         headers,
-                        candidate.ContentLength > 0 ? candidate.ContentLength : null);
+                        candidate.ContentLength > 0 ? candidate.ContentLength : null,
+                        ActualQuality: actualQuality,
+                        QualityLabel: qualityLabel,
+                        BitrateKbps: bitrateKbps);
                 }
             }
             catch (OperationCanceledException)
@@ -1180,12 +1189,14 @@ public sealed class YouTubeClient
 
     /// <summary>
     /// Selects NAudio/MediaFoundation-compatible AAC M4A (or MP4 fallback) format from Innertube player JSON.
-    /// Priority: itag 140 (128k AAC) -> itag 141 (256k AAC) -> itag 139 -> audio/mp4 -> itag 18 (360p mp4).
+    /// Default priority: itag 140 (128k AAC) -> itag 141 (256k AAC) -> itag 139 -> audio/mp4 -> itag 18 (360p mp4).
     /// </summary>
-    public static AudioFormatCandidate? SelectBestAudioFormat(JsonElement playerRoot) =>
-        SelectAudioFormatCandidates(playerRoot).FirstOrDefault();
+    public static AudioFormatCandidate? SelectBestAudioFormat(JsonElement playerRoot, string? quality = null) =>
+        SelectAudioFormatCandidates(playerRoot, quality).FirstOrDefault();
 
-    public static IReadOnlyList<AudioFormatCandidate> SelectAudioFormatCandidates(JsonElement playerRoot)
+    public static IReadOnlyList<AudioFormatCandidate> SelectAudioFormatCandidates(
+        JsonElement playerRoot,
+        string? quality = null)
     {
         if (!playerRoot.TryGetProperty("streamingData", out var sd)) return [];
 
@@ -1241,17 +1252,99 @@ public sealed class YouTubeClient
 
         if (candidates.Count == 0) return [];
 
+        string normalizedQuality = string.IsNullOrWhiteSpace(quality)
+            ? "standard"
+            : quality.Trim().ToLowerInvariant();
+
+        if (normalizedQuality == "low")
+        {
+            return candidates
+                .OrderBy(c => RankYouTubeCandidate(c, normalizedQuality))
+                .ThenBy(c => c.Bitrate > 0 ? c.Bitrate : long.MaxValue)
+                .ToList();
+        }
+
         return candidates
-            .OrderBy(c => c.Itag switch
-            {
-                140 => 0,
-                141 => 1,
-                139 => 2,
-                18 => 4,
-                _ => c.Extension == ".m4a" ? 3 : 5
-            })
+            .OrderBy(c => RankYouTubeCandidate(c, normalizedQuality))
             .ThenByDescending(c => c.Bitrate)
             .ToList();
+    }
+
+    private static int RankYouTubeCandidate(AudioFormatCandidate c, string normalizedQuality) => normalizedQuality switch
+    {
+        "highest" => c.Itag switch
+        {
+            141 => 0,
+            140 => 1,
+            139 => 3,
+            18 => 4,
+            _ => c.Extension == ".m4a" ? 2 : 5
+        },
+        "high" => c.Itag switch
+        {
+            140 => 0,
+            141 => 1,
+            139 => 3,
+            18 => 4,
+            _ => c.Extension == ".m4a" ? 2 : 5
+        },
+        "low" => c.Itag switch
+        {
+            139 => 0,
+            140 => 2,
+            141 => 3,
+            18 => 4,
+            _ => c.Extension == ".m4a" ? 1 : 5
+        },
+        _ => c.Itag switch // "standard"
+        {
+            140 => 0,
+            141 => 1,
+            139 => 2,
+            18 => 4,
+            _ => c.Extension == ".m4a" ? 3 : 5
+        }
+    };
+
+    private static (string ActualQuality, string QualityLabel, int? BitrateKbps) DescribeYouTubeQuality(
+        AudioFormatCandidate candidate,
+        string requestedQuality)
+    {
+        int? kbps = candidate.Bitrate > 0
+            ? (int)Math.Max(1, Math.Round(candidate.Bitrate / 1000.0))
+            : candidate.Itag switch
+            {
+                141 => 256,
+                140 => 128,
+                139 => 48,
+                _ => null
+            };
+
+        string actualQuality = candidate.Itag switch
+        {
+            141 => "highest",
+            140 => string.Equals(requestedQuality, "high", StringComparison.Ordinal) ? "high" : "standard",
+            139 => "low",
+            18 => "low",
+            _ => kbps switch
+            {
+                >= 200 => "highest",
+                >= 110 => string.Equals(requestedQuality, "high", StringComparison.Ordinal) ? "high" : "standard",
+                > 0 => "low",
+                _ => requestedQuality
+            }
+        };
+
+        string label = candidate.Itag switch
+        {
+            141 => kbps is > 0 ? $"{kbps}k" : "256k",
+            140 => kbps is > 0 ? $"{kbps}k" : "128k",
+            139 => kbps is > 0 ? $"{kbps}k" : "48k",
+            18 => kbps is > 0 ? $"{kbps}k" : "MP4",
+            _ => kbps is > 0 ? $"{kbps}k" : (candidate.Extension == ".mp4" ? "MP4" : "AAC")
+        };
+
+        return (actualQuality, label, kbps);
     }
 
     public static async Task<bool> ProbeStreamReadableAsync(

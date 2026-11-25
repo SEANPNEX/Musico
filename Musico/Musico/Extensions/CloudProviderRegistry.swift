@@ -24,14 +24,73 @@ protocol CloudSourceProvider: Sendable {
     var supportsTree: Bool { get }
     var supportsCookie: Bool { get }
     var supportsCollection: Bool { get }
+    var availableQualities: [CloudQualityOption] { get }
+    var defaultStreamQualityID: String? { get }
+    var defaultDownloadQualityID: String? { get }
 
     func canHandle(rawText: String, extractedURL: String) -> CloudMatchResult?
     func fetchCollection(sourceURL: String, cookie: String?) async throws -> CloudPlaylistResult
     func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult
+    func resolveStream(
+        track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        qualityID: String?,
+        forceRefresh: Bool
+    ) async throws -> CloudStreamResult
+    func effectiveQualityID(
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        overrideQualityID: String?
+    ) -> String?
 }
 
 extension CloudSourceProvider {
     var supportsCollection: Bool { true }
+    var availableQualities: [CloudQualityOption] { [] }
+    var defaultStreamQualityID: String? { nil }
+    var defaultDownloadQualityID: String? { nil }
+
+    func resolveStream(
+        track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        qualityID: String?,
+        forceRefresh: Bool
+    ) async throws -> CloudStreamResult {
+        try await resolveStream(track: track, root: root, forceRefresh: forceRefresh)
+    }
+
+    func effectiveQualityID(
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        overrideQualityID: String?
+    ) -> String? {
+        let qualities = availableQualities
+        guard !qualities.isEmpty else { return nil }
+        let validIDs = Set(qualities.map(\.id))
+        if let override = overrideQualityID?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !override.isEmpty,
+           validIDs.contains(override) {
+            return override
+        }
+        switch purpose {
+        case .stream:
+            if let rootQ = root?.streamQualityID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !rootQ.isEmpty,
+               validIDs.contains(rootQ) {
+                return rootQ
+            }
+            return defaultStreamQualityID ?? qualities.first?.id
+        case .download:
+            if let rootQ = root?.downloadQualityID?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !rootQ.isEmpty,
+               validIDs.contains(rootQ) {
+                return rootQ
+            }
+            return defaultDownloadQualityID ?? qualities.first?.id
+        }
+    }
 }
 
 protocol CloudProgressiveTreeProvider: CloudSourceProvider {
@@ -94,6 +153,16 @@ struct YouTubeCloudProvider: CloudSourceProvider {
     let trackCloudSource = "youtube"
     let supportsTree = false
     let supportsCookie = true
+    var availableQualities: [CloudQualityOption] {
+        [
+            CloudQualityOption(id: "highest", label: L10n.trNonisolated("Highest (256k)"), badge: "256k", lossless: false),
+            CloudQualityOption(id: "high", label: L10n.trNonisolated("High (128k–160k)"), badge: "128k", lossless: false),
+            CloudQualityOption(id: "standard", label: L10n.trNonisolated("Standard (128k)"), badge: "128k", lossless: false),
+            CloudQualityOption(id: "low", label: L10n.trNonisolated("Low (48k)"), badge: "48k", lossless: false)
+        ]
+    }
+    let defaultStreamQualityID: String? = "standard"
+    let defaultDownloadQualityID: String? = "highest"
 
     let client: YouTubeClient
 
@@ -131,8 +200,24 @@ struct YouTubeCloudProvider: CloudSourceProvider {
     }
 
     func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult {
+        try await resolveStream(track: track, root: root, purpose: .stream, qualityID: nil, forceRefresh: forceRefresh)
+    }
+
+    func resolveStream(
+        track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        qualityID: String?,
+        forceRefresh: Bool
+    ) async throws -> CloudStreamResult {
         let videoID = track.remoteTrackID ?? track.relativePath
-        return try await client.resolveStream(videoID: videoID, cookie: root?.cookie, forceRefresh: forceRefresh)
+        let effectiveQuality = effectiveQualityID(root: root, purpose: purpose, overrideQualityID: qualityID)
+        return try await client.resolveStream(
+            videoID: videoID,
+            cookie: root?.cookie,
+            qualityID: effectiveQuality,
+            forceRefresh: forceRefresh
+        )
     }
 }
 
@@ -144,6 +229,16 @@ struct BilibiliCloudProvider: CloudSourceProvider {
     let trackCloudSource = "bilibili"
     let supportsTree = false
     let supportsCookie = true
+    var availableQualities: [CloudQualityOption] {
+        [
+            CloudQualityOption(id: "highest", label: L10n.trNonisolated("Highest (FLAC / 192k)"), badge: "FLAC", lossless: true),
+            CloudQualityOption(id: "high", label: L10n.trNonisolated("High (192k)"), badge: "192k", lossless: false),
+            CloudQualityOption(id: "standard", label: L10n.trNonisolated("Standard (132k)"), badge: "132k", lossless: false),
+            CloudQualityOption(id: "low", label: L10n.trNonisolated("Low (64k)"), badge: "64k", lossless: false)
+        ]
+    }
+    let defaultStreamQualityID: String? = "standard"
+    let defaultDownloadQualityID: String? = "highest"
 
     let client: BilibiliClient
 
@@ -190,8 +285,24 @@ struct BilibiliCloudProvider: CloudSourceProvider {
     }
 
     func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult {
+        try await resolveStream(track: track, root: root, purpose: .stream, qualityID: nil, forceRefresh: forceRefresh)
+    }
+
+    func resolveStream(
+        track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        qualityID: String?,
+        forceRefresh: Bool
+    ) async throws -> CloudStreamResult {
         let trackID = track.remoteTrackID ?? track.relativePath
-        return try await client.resolveStream(trackID: trackID, cookie: root?.cookie, forceRefresh: forceRefresh)
+        let effectiveQuality = effectiveQualityID(root: root, purpose: purpose, overrideQualityID: qualityID)
+        return try await client.resolveStream(
+            trackID: trackID,
+            cookie: root?.cookie,
+            qualityID: effectiveQuality,
+            forceRefresh: forceRefresh
+        )
     }
 }
 

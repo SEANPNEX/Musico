@@ -12,6 +12,7 @@ import com.musico.cloud.CloudPlaylistResult
 import com.musico.cloud.CloudSource
 import com.musico.cloud.CloudSourceException
 import com.musico.cloud.CloudStreamDownloader
+import com.musico.cloud.CloudStreamPurpose
 import com.musico.cloud.CloudStreamResolver
 import com.musico.cloud.CloudTrackMetadata
 import com.musico.cloud.GoogleDriveClient
@@ -93,6 +94,8 @@ class CloudProviderRegistryTest {
             relativePath: String?,
             cookie: String?,
             forceRefresh: Boolean,
+            quality: String?,
+            purpose: CloudStreamPurpose,
         ): ResolvedStream = ResolvedStream(
             url = "https://cdn.example.com/$remoteTrackId.flac",
             headers = mapOf("X-Provider" to providerId),

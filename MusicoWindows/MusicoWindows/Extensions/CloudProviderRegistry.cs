@@ -99,6 +99,9 @@ public interface ICloudSourceProvider
     bool SupportsProgressiveTree { get; }
     bool SupportsCollectionImport { get; }
     bool IsAvailable { get; }
+    IReadOnlyList<ExtensionQualityOption> AvailableQualities { get; }
+    string? DefaultStreamQualityId { get; }
+    string? DefaultDownloadQualityId { get; }
 
     bool MatchesUrlPattern(string? candidate);
 
@@ -124,13 +127,23 @@ public interface ICloudSourceProvider
         string? cookie,
         string? proxyUrl,
         bool forceRefresh = false,
-        CancellationToken ct = default);
+        CancellationToken ct = default,
+        string? quality = null,
+        CloudStreamPurpose purpose = CloudStreamPurpose.Stream);
 
     void ConfigureArtworkRequest(HttpRequestMessage request);
 }
 
 internal sealed class YouTubeCloudProvider : ICloudSourceProvider
 {
+    private static readonly IReadOnlyList<ExtensionQualityOption> YouTubeQualities =
+    [
+        new("highest", "Highest (256k AAC)", "256k"),
+        new("high", "High (128k AAC)", "128k"),
+        new("standard", "Standard (128k AAC)", "128k"),
+        new("low", "Low (48k AAC)", "48k")
+    ];
+
     private readonly YouTubeClient _client;
 
     public YouTubeCloudProvider(YouTubeClient client)
@@ -149,6 +162,9 @@ internal sealed class YouTubeCloudProvider : ICloudSourceProvider
     public bool SupportsProgressiveTree => false;
     public bool SupportsCollectionImport => true;
     public bool IsAvailable => true;
+    public IReadOnlyList<ExtensionQualityOption> AvailableQualities => YouTubeQualities;
+    public string? DefaultStreamQualityId => "standard";
+    public string? DefaultDownloadQualityId => "highest";
 
     public bool MatchesUrlPattern(string? candidate)
     {
@@ -208,14 +224,29 @@ internal sealed class YouTubeCloudProvider : ICloudSourceProvider
         string? cookie,
         string? proxyUrl,
         bool forceRefresh = false,
-        CancellationToken ct = default) =>
-        _client.ResolveAudioStreamAsync(remoteTrackId, cookie, proxyUrl, ct);
+        CancellationToken ct = default,
+        string? quality = null,
+        CloudStreamPurpose purpose = CloudStreamPurpose.Stream)
+    {
+        string effectiveQuality = string.IsNullOrWhiteSpace(quality)
+            ? (purpose == CloudStreamPurpose.Download ? DefaultDownloadQualityId : DefaultStreamQualityId) ?? "standard"
+            : quality.Trim();
+        return _client.ResolveAudioStreamAsync(remoteTrackId, cookie, proxyUrl, ct, effectiveQuality);
+    }
 
     public void ConfigureArtworkRequest(HttpRequestMessage request) { }
 }
 
 internal sealed class BilibiliCloudProvider : ICloudSourceProvider
 {
+    private static readonly IReadOnlyList<ExtensionQualityOption> BilibiliQualities =
+    [
+        new("highest", "Highest (FLAC / 192k)", "FLAC", Lossless: true),
+        new("high", "High (192k)", "192k"),
+        new("standard", "Standard (132k)", "132k"),
+        new("low", "Low (64k)", "64k")
+    ];
+
     private readonly BilibiliClient _client;
 
     public BilibiliCloudProvider(BilibiliClient client)
@@ -234,6 +265,9 @@ internal sealed class BilibiliCloudProvider : ICloudSourceProvider
     public bool SupportsProgressiveTree => false;
     public bool SupportsCollectionImport => true;
     public bool IsAvailable => true;
+    public IReadOnlyList<ExtensionQualityOption> AvailableQualities => BilibiliQualities;
+    public string? DefaultStreamQualityId => "standard";
+    public string? DefaultDownloadQualityId => "highest";
 
     public bool MatchesUrlPattern(string? candidate)
     {
@@ -293,8 +327,15 @@ internal sealed class BilibiliCloudProvider : ICloudSourceProvider
         string? cookie,
         string? proxyUrl,
         bool forceRefresh = false,
-        CancellationToken ct = default) =>
-        _client.ResolveAudioStreamAsync(remoteTrackId, cookie, proxyUrl, ct);
+        CancellationToken ct = default,
+        string? quality = null,
+        CloudStreamPurpose purpose = CloudStreamPurpose.Stream)
+    {
+        string effectiveQuality = string.IsNullOrWhiteSpace(quality)
+            ? (purpose == CloudStreamPurpose.Download ? DefaultDownloadQualityId : DefaultStreamQualityId) ?? "standard"
+            : quality.Trim();
+        return _client.ResolveAudioStreamAsync(remoteTrackId, cookie, proxyUrl, ct, effectiveQuality);
+    }
 
     public void ConfigureArtworkRequest(HttpRequestMessage request)
     {
@@ -323,6 +364,9 @@ internal sealed class GoogleDriveCloudProvider : ICloudSourceProvider
     public bool SupportsProgressiveTree => true;
     public bool SupportsCollectionImport => true;
     public bool IsAvailable => true;
+    public IReadOnlyList<ExtensionQualityOption> AvailableQualities => Array.Empty<ExtensionQualityOption>();
+    public string? DefaultStreamQualityId => null;
+    public string? DefaultDownloadQualityId => null;
 
     public bool MatchesUrlPattern(string? candidate)
     {
@@ -409,7 +453,9 @@ internal sealed class GoogleDriveCloudProvider : ICloudSourceProvider
         string? cookie,
         string? proxyUrl,
         bool forceRefresh = false,
-        CancellationToken ct = default) =>
+        CancellationToken ct = default,
+        string? quality = null,
+        CloudStreamPurpose purpose = CloudStreamPurpose.Stream) =>
         _client.ResolveAudioStreamAsync(remoteTrackId, cookie, proxyUrl, ct);
 
     public void ConfigureArtworkRequest(HttpRequestMessage request) { }
@@ -522,6 +568,29 @@ public sealed class CloudProviderRegistry
         };
         return GetById(mapped);
     }
+
+    public IReadOnlyList<ICloudSourceProvider> GetCompatibleProviders(string? url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            return Array.Empty<ICloudSourceProvider>();
+        }
+
+        string extracted = CloudUrlClassifier.ExtractCloudUrl(url, this);
+        var candidates = new List<ICloudSourceProvider>();
+        foreach (var provider in AvailableProviders)
+        {
+            if (!provider.SupportsCollectionImport) continue;
+            if (provider.MatchesUrlPattern(extracted) || provider.MatchesUrlPattern(url))
+            {
+                candidates.Add(provider);
+            }
+        }
+        return candidates;
+    }
+
+    public ICloudSourceProvider? GetBestCompatibleProvider(string? url) =>
+        GetCompatibleProviders(url).FirstOrDefault();
 
     public ICloudSourceProvider? GetProvider(LibraryRoot root)
     {

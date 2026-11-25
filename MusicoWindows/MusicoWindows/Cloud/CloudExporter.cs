@@ -18,7 +18,9 @@ public sealed record CloudFolderManifest(
     string CloudKind,
     DateTimeOffset LastSyncedUtc,
     Dictionary<string, string> Tracks,
-    string? ProviderId = null);
+    string? ProviderId = null,
+    string? StreamQualityId = null,
+    string? DownloadQualityId = null);
 
 public sealed record CloudUpdateResult(
     int AddedCount,
@@ -285,7 +287,9 @@ public sealed class CloudExporter
                         CloudKind: (cloudKind ?? RootKind.CloudExtension).ToString(),
                         LastSyncedUtc: DateTimeOffset.UtcNow,
                         Tracks: trackedMap,
-                        ProviderId: providerId));
+                        ProviderId: providerId,
+                        StreamQualityId: root.StreamQualityId,
+                        DownloadQualityId: root.DownloadQualityId));
             }
             catch
             {
@@ -410,7 +414,9 @@ public sealed class CloudExporter
             RemoteId = playlist.RemoteId,
             Cookie = effectiveCookie,
             ProxyUrl = effectiveProxy,
-            ProviderId = effectiveProviderId
+            ProviderId = effectiveProviderId,
+            StreamQualityId = trackingOverride?.StreamQualityId ?? root.StreamQualityId,
+            DownloadQualityId = trackingOverride?.DownloadQualityId ?? root.DownloadQualityId
         };
 
         int addedCount = 0;
@@ -486,7 +492,9 @@ public sealed class CloudExporter
                 CloudKind: playlist.Kind.ToString(),
                 LastSyncedUtc: DateTimeOffset.UtcNow,
                 Tracks: trackedMap,
-                ProviderId: effectiveProviderId));
+                ProviderId: effectiveProviderId,
+                StreamQualityId: lookupRoot.StreamQualityId ?? existingManifest?.StreamQualityId,
+                DownloadQualityId: lookupRoot.DownloadQualityId ?? existingManifest?.DownloadQualityId));
 
         progress?.Report(new CloudExportProgress(playlist.Items.Count, playlist.Items.Count, string.Empty, failedCount));
         return new CloudUpdateResult(addedCount, skippedCount, failedCount, playlist.Items.Count, errors);
@@ -588,12 +596,21 @@ public sealed class CloudExporter
                     BytesPerSecond: dl.BytesPerSecond));
             };
 
+        ICloudSourceProvider? streamProvider = CloudStreamResolver.GetProvider(_providerRegistry, track, root);
+        string? downloadQuality = CloudStreamResolver.ResolveRequestedQuality(
+            streamProvider,
+            track,
+            root,
+            _extensions,
+            CloudStreamPurpose.Download);
+
         string cachedPath = await _cloudCache.GetOrDownloadAsync(
             track.Id,
             token => ResolveCloudStreamAsync(track, root, token),
             root?.ProxyUrl,
             ct,
-            onDownloadProgress).ConfigureAwait(false);
+            onDownloadProgress,
+            quality: downloadQuality).ConfigureAwait(false);
 
         ct.ThrowIfCancellationRequested();
         Directory.CreateDirectory(destinationDirectory);
@@ -734,7 +751,14 @@ public sealed class CloudExporter
     }
 
     private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct) =>
-        CloudStreamResolver.ResolveAsync(_providerRegistry, track, root, _extensions, forceRefresh: false, ct: ct);
+        CloudStreamResolver.ResolveAsync(
+            _providerRegistry,
+            track,
+            root,
+            _extensions,
+            forceRefresh: false,
+            ct: ct,
+            purpose: CloudStreamPurpose.Download);
 
     private static bool IsNonEmbeddableContainer(string filePath)
     {

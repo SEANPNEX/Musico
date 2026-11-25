@@ -703,7 +703,8 @@ public sealed class BilibiliClient
         string remoteTrackId,
         string? cookie = null,
         string? proxyUrl = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? quality = null)
     {
         if (string.IsNullOrWhiteSpace(remoteTrackId))
             throw new ArgumentException("Remote track ID is required.", nameof(remoteTrackId));
@@ -756,7 +757,7 @@ public sealed class BilibiliClient
             using var wbiDoc = await GetJsonAsync(http, wbiUrl, effectiveCookie, ct).ConfigureAwait(false);
             if (wbiDoc is not null)
             {
-                stream = SelectBestAudioFromPlayUrl(wbiDoc.RootElement, effectiveCookie);
+                stream = SelectBestAudioFromPlayUrl(wbiDoc.RootElement, effectiveCookie, quality);
             }
         }
         catch (OperationCanceledException)
@@ -775,14 +776,17 @@ public sealed class BilibiliClient
             using var fbDoc = await GetJsonAsync(http, fallbackUrl, effectiveCookie, ct).ConfigureAwait(false);
             if (fbDoc is not null)
             {
-                stream = SelectBestAudioFromPlayUrl(fbDoc.RootElement, effectiveCookie);
+                stream = SelectBestAudioFromPlayUrl(fbDoc.RootElement, effectiveCookie, quality);
             }
         }
 
         return stream ?? throw new InvalidOperationException($"Could not resolve audio stream for Bilibili track \"{remoteTrackId}\".");
     }
 
-    public static CloudAudioStream? SelectBestAudioFromPlayUrl(JsonElement root, string? cookie)
+    public static CloudAudioStream? SelectBestAudioFromPlayUrl(
+        JsonElement root,
+        string? cookie,
+        string? quality = null)
     {
         int code = root.TryGetProperty("code", out var codeEl) ? codeEl.GetInt32() : -1;
         if (code != 0 || !root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
@@ -799,6 +803,10 @@ public sealed class BilibiliClient
         {
             headers["Cookie"] = cookie;
         }
+
+        string normalizedQuality = string.IsNullOrWhiteSpace(quality)
+            ? "highest"
+            : quality.Trim().ToLowerInvariant();
 
         if (data.TryGetProperty("dash", out var dash) && dash.ValueKind == JsonValueKind.Object)
         {
@@ -835,17 +843,22 @@ public sealed class BilibiliClient
             if (candidates.Count > 0)
             {
                 var best = candidates
-                    .OrderBy(c => c.Id switch
-                    {
-                        30280 => 0,
-                        30232 => 1,
-                        30216 => 2,
-                        30251 => 3,
-                        _ => 4
-                    })
+                    .OrderBy(c => RankBilibiliAudioId(c.Id, normalizedQuality))
                     .ThenByDescending(c => c.Bandwidth)
                     .First();
-                return new CloudAudioStream(best.Url, best.Ext, headers);
+                var (actualQuality, qualityLabel, defaultKbps) = DescribeBilibiliQuality(best.Id, normalizedQuality);
+                int? bitrateKbps = best.Bandwidth > 0
+                    ? (int)Math.Max(1, Math.Round(best.Bandwidth / 1000.0))
+                    : defaultKbps;
+                string effectiveLabel = qualityLabel
+                    ?? (bitrateKbps is > 0 ? $"{bitrateKbps}k" : "Audio");
+                return new CloudAudioStream(
+                    best.Url,
+                    best.Ext,
+                    headers,
+                    ActualQuality: actualQuality,
+                    QualityLabel: effectiveLabel,
+                    BitrateKbps: bitrateKbps);
             }
         }
 
@@ -858,7 +871,12 @@ public sealed class BilibiliClient
                     string? url = urlEl.GetString();
                     if (!string.IsNullOrWhiteSpace(url))
                     {
-                        return new CloudAudioStream(url, ".mp4", headers);
+                        return new CloudAudioStream(
+                            url,
+                            ".mp4",
+                            headers,
+                            ActualQuality: normalizedQuality,
+                            QualityLabel: "MP4");
                     }
                 }
             }
@@ -866,6 +884,53 @@ public sealed class BilibiliClient
 
         return null;
     }
+
+    private static int RankBilibiliAudioId(int id, string normalizedQuality) => normalizedQuality switch
+    {
+        "high" => id switch
+        {
+            30280 => 0,
+            30232 => 1,
+            30216 => 2,
+            30251 => 3,
+            _ => 4
+        },
+        "standard" => id switch
+        {
+            30232 => 0,
+            30280 => 1,
+            30216 => 2,
+            30251 => 3,
+            _ => 4
+        },
+        "low" => id switch
+        {
+            30216 => 0,
+            30232 => 1,
+            30280 => 2,
+            30251 => 3,
+            _ => 4
+        },
+        _ => id switch // "highest"
+        {
+            30251 => 0,
+            30280 => 1,
+            30232 => 2,
+            30216 => 3,
+            _ => 4
+        }
+    };
+
+    private static (string ActualQuality, string? QualityLabel, int? DefaultKbps) DescribeBilibiliQuality(
+        int id,
+        string requestedQuality) => id switch
+    {
+        30251 => ("highest", "FLAC", null),
+        30280 => ("high", "192k", 192),
+        30232 => ("standard", "132k", 132),
+        30216 => ("low", "64k", 64),
+        _ => (requestedQuality, null, null)
+    };
 
     private static string? ExtractDashStreamUrl(JsonElement node)
     {

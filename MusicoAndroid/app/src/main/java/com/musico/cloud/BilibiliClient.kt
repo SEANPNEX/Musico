@@ -274,7 +274,19 @@ class BilibiliClient(
         )
     }
 
-    suspend fun resolveStream(remoteTrackId: String, cookie: String? = null): ResolvedStream {
+    internal data class SelectedAudioStream(
+        val url: String,
+        val actualQuality: String?,
+        val qualityLabel: String?,
+        val bitrateKbps: Int?,
+        val mimeType: String = "audio/mp4",
+    )
+
+    suspend fun resolveStream(
+        remoteTrackId: String,
+        cookie: String? = null,
+        quality: String? = null,
+    ): ResolvedStream {
         val effectiveCookie = resolveCookie(cookie)
         val parts = remoteTrackId.split('#', limit = 2)
         val rawId = parts[0]
@@ -307,7 +319,7 @@ class BilibiliClient(
             "bvid" to resolvedBvid,
             "cid" to resolvedCid.toString(),
             "qn" to "80",
-            "fnval" to "16",
+            "fnval" to "4048",
             "fnver" to "0",
             "fourk" to "1",
         )
@@ -321,7 +333,7 @@ class BilibiliClient(
             getJson("https://api.bilibili.com/x/player/playurl?$plainQuery", effectiveCookie)
         }
 
-        val streamUrl = extractBestAudioUrl(playJson)
+        val selected = extractBestAudioStream(playJson, quality = quality)
             ?: throw IOException("No playable audio stream in Bilibili playurl response.")
 
         val headers = baseHeaders(
@@ -329,29 +341,43 @@ class BilibiliClient(
             referer = "https://www.bilibili.com/video/$resolvedBvid",
         )
         return ResolvedStream(
-            url = streamUrl,
+            url = selected.url,
             headers = headers,
-            mimeType = "audio/mp4",
+            mimeType = selected.mimeType,
             expiresAtEpochMs = System.currentTimeMillis() + DEFAULT_STREAM_TTL_MS,
+            actualQuality = selected.actualQuality,
+            qualityLabel = selected.qualityLabel,
+            bitrateKbps = selected.bitrateKbps,
         )
     }
 
-    internal fun extractBestAudioUrl(playJson: JsonObject): String? {
+    internal fun extractBestAudioUrl(playJson: JsonObject, quality: String? = null): String? =
+        extractBestAudioStream(playJson, quality)?.url
+
+    internal fun extractBestAudioStream(playJson: JsonObject, quality: String? = null): SelectedAudioStream? {
         val data = playJson.obj("data") ?: return null
         val dash = data.obj("dash")
         if (dash != null) {
-            val candidates = mutableListOf<Pair<Int, Pair<Int, String>>>()
+            data class DashAudioCandidate(
+                val id: Int,
+                val bandwidth: Int,
+                val url: String,
+                val mimeType: String?,
+            )
+            val candidates = mutableListOf<DashAudioCandidate>()
 
             fun addAudioObj(obj: JsonObject?) {
                 if (obj == null) return
                 val id = obj.int("id") ?: 0
                 val bandwidth = obj.int("bandwidth") ?: 0
+                val mimeType = obj.str("mimeType")?.takeIf { it.isNotBlank() }
+                    ?: obj.str("mime_type")?.takeIf { it.isNotBlank() }
                 val rawUrl = obj.str("baseUrl").orEmpty()
                     .ifBlank { obj.str("base_url").orEmpty() }
                     .ifBlank { (obj.arr("backupUrl")?.getOrNull(0) as? JsonPrimitive)?.contentOrNull.orEmpty() }
                     .ifBlank { (obj.arr("backup_url")?.getOrNull(0) as? JsonPrimitive)?.contentOrNull.orEmpty() }
                 val normalized = normalizeHttpsUrl(rawUrl) ?: return
-                candidates.add(id to (bandwidth to normalized))
+                candidates.add(DashAudioCandidate(id = id, bandwidth = bandwidth, url = normalized, mimeType = mimeType))
             }
 
             val audioArr = dash.arr("audio")
@@ -363,14 +389,23 @@ class BilibiliClient(
             dash.obj("flac")?.obj("audio")?.let { addAudioObj(it) }
 
             if (candidates.isNotEmpty()) {
-                val preferredIds = listOf(30280, 30232, 30216, 30251)
+                val preferredIds = preferredIdsForQuality(quality)
                 val best = candidates.sortedWith(
-                    compareBy<Pair<Int, Pair<Int, String>>> { (id, _) ->
-                        val idx = preferredIds.indexOf(id)
+                    compareBy<DashAudioCandidate> { cand ->
+                        val idx = preferredIds.indexOf(cand.id)
                         if (idx >= 0) idx else Int.MAX_VALUE
-                    }.thenByDescending { (_, bwUrl) -> bwUrl.first }
+                    }.thenByDescending { it.bandwidth }
                 ).first()
-                return best.second.second
+                val (actualQuality, qualityLabel, defaultKbps) = metadataForDashId(best.id, best.bandwidth)
+                val kbps = (best.bandwidth / 1000).takeIf { it > 0 } ?: defaultKbps
+                val mime = best.mimeType?.substringBefore(';')?.trim()?.takeIf { it.isNotEmpty() } ?: "audio/mp4"
+                return SelectedAudioStream(
+                    url = best.url,
+                    actualQuality = actualQuality,
+                    qualityLabel = qualityLabel,
+                    bitrateKbps = kbps,
+                    mimeType = mime,
+                )
             }
         }
 
@@ -379,7 +414,14 @@ class BilibiliClient(
             val first = durl.objAt(0)
             val url = first?.str("url").orEmpty()
                 .ifBlank { (first?.arr("backup_url")?.getOrNull(0) as? JsonPrimitive)?.contentOrNull.orEmpty() }
-            return normalizeHttpsUrl(url)
+            val normalized = normalizeHttpsUrl(url) ?: return null
+            return SelectedAudioStream(
+                url = normalized,
+                actualQuality = quality?.trim()?.takeIf { it.isNotEmpty() } ?: "standard",
+                qualityLabel = "132k",
+                bitrateKbps = 132,
+                mimeType = "audio/mp4",
+            )
         }
         return null
     }
@@ -469,6 +511,40 @@ class BilibiliClient(
     }
 
     companion object {
+        val AVAILABLE_QUALITIES: List<CloudQualityOption> = listOf(
+            CloudQualityOption(id = "highest", label = "Highest (FLAC / 192k)", badge = "Hi-Res", lossless = true),
+            CloudQualityOption(id = "high", label = "High (192k)", badge = "192k"),
+            CloudQualityOption(id = "standard", label = "Standard (132k)", badge = "132k"),
+            CloudQualityOption(id = "low", label = "Low (64k)", badge = "64k"),
+        )
+        const val DEFAULT_STREAM_QUALITY_ID = "standard"
+        const val DEFAULT_DOWNLOAD_QUALITY_ID = "highest"
+
+        private fun preferredIdsForQuality(quality: String?): List<Int> = when (quality?.trim()?.lowercase()) {
+            "low" -> listOf(30216, 30232, 30280, 30251)
+            "standard" -> listOf(30232, 30280, 30216, 30251)
+            "high" -> listOf(30280, 30232, 30216, 30251)
+            "highest", null, "" -> listOf(30251, 30280, 30232, 30216)
+            else -> listOf(30251, 30280, 30232, 30216)
+        }
+
+        private fun metadataForDashId(id: Int, bandwidth: Int): Triple<String, String, Int> = when (id) {
+            30251 -> Triple("highest", "FLAC", 1411)
+            30280 -> Triple("high", "192k", 192)
+            30232 -> Triple("standard", "132k", 132)
+            30216 -> Triple("low", "64k", 64)
+            else -> {
+                val kbps = (bandwidth / 1000).takeIf { it > 0 } ?: 132
+                val qId = when {
+                    kbps >= 500 -> "highest"
+                    kbps >= 170 -> "high"
+                    kbps >= 96 -> "standard"
+                    else -> "low"
+                }
+                Triple(qId, "${kbps}k", kbps)
+            }
+        }
+
         private const val MAX_PAGES = 20
         private const val WBI_CACHE_TTL_MS = 6L * 60L * 60L * 1000L
         private const val DEFAULT_STREAM_TTL_MS = 90L * 60L * 1000L

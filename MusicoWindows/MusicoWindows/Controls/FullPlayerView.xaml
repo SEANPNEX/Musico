@@ -82,6 +82,7 @@
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="Auto" />
                         <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Grid.Column="0" VerticalAlignment="Center">
                         <TextBlock x:Name="TitleText"
@@ -99,8 +100,21 @@
                                    TextTrimming="CharacterEllipsis"
                                    Margin="0,4,0,0" />
                     </StackPanel>
-                    <Button x:Name="SongInfoButton"
+                    <Button x:Name="QualityButton"
                             Grid.Column="1"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            Height="26"
+                            MinHeight="26"
+                            Padding="10,2"
+                            FontSize="11"
+                            FontWeight="SemiBold"
+                            VerticalAlignment="Center"
+                            Margin="8,0,4,0"
+                            Visibility="Collapsed"
+                            ToolTip="{DynamicResource Str_FullPlayer_QualityTooltip}"
+                            Click="Quality_Click" />
+                    <Button x:Name="SongInfoButton"
+                            Grid.Column="2"
                             Style="{StaticResource Win10IconButtonStyle}"
                             Width="40"
                             Height="40"
@@ -110,7 +124,7 @@
                             Margin="4,0,2,0"
                             Click="SongInfo_Click" />
                     <Button x:Name="FavouriteButton"
-                            Grid.Column="2"
+                            Grid.Column="3"
                             Style="{StaticResource Win10IconButtonStyle}"
                             Width="40"
                             Height="40"

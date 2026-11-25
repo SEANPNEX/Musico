@@ -196,4 +196,32 @@ class QueueStore(
         _state.value = current.copy(queues = nextQueues)
         save()
     }
+
+    fun remapTracks(idMap: Map<String, String>) {
+        if (idMap.isEmpty()) return
+        val current = _state.value
+        var changed = false
+        val nextQueues = current.queues.map { queue ->
+            var qChanged = false
+            val mappedIds = queue.trackIds.map { tid ->
+                val next = idMap[tid]
+                if (next != null && next != tid) {
+                    qChanged = true
+                    next
+                } else {
+                    tid
+                }
+            }
+            if (qChanged) {
+                changed = true
+                queue.copy(trackIds = mappedIds)
+            } else {
+                queue
+            }
+        }
+        if (changed) {
+            _state.value = current.copy(queues = nextQueues)
+            save()
+        }
+    }
 }

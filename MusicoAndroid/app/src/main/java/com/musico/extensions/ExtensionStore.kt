@@ -95,6 +95,7 @@ class ExtensionStore(
     init {
         providerRegistry.extensionStatusLookup = { providerId -> availabilityForProvider(providerId) }
         providerRegistry.extensionCookieLookup = { providerId -> cookieForProvider(providerId) }
+        providerRegistry.extensionQualityLookup = { providerId -> qualityPrefsForProvider(providerId) }
         loadUpdatePrefs()
         loadFromDisk()
         syncProviderRegistry()
@@ -260,6 +261,15 @@ class ExtensionStore(
         return result
     }
 
+    fun qualityPrefsForProvider(providerId: String?): Pair<String?, String?>? {
+        val extId = CloudProviderIds.extensionIdFromProviderId(providerId) ?: return null
+        val ext = findById(extId) ?: return null
+        val validIds = ext.manifest.qualities.mapTo(HashSet()) { it.id }
+        val streamId = ext.state.streamQualityId?.trim()?.takeIf { it.isNotEmpty() && it in validIds }
+        val downloadId = ext.state.downloadQualityId?.trim()?.takeIf { it.isNotEmpty() && it in validIds }
+        return streamId to downloadId
+    }
+
     fun cookieForProvider(providerId: String?): String? {
         val extId = CloudProviderIds.extensionIdFromProviderId(providerId) ?: return null
         return cookieForExtension(extId)
@@ -409,6 +419,13 @@ class ExtensionStore(
             } else {
                 null
             }
+            val validQualityIds = manifest.qualities.mapTo(HashSet()) { it.id }
+            val preservedStreamQuality = existing?.state?.streamQualityId
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() && it in validQualityIds }
+            val preservedDownloadQuality = existing?.state?.downloadQualityId
+                ?.trim()
+                ?.takeIf { it.isNotEmpty() && it in validQualityIds }
 
             val manifestJsonText = json.encodeToString(manifest)
             File(extDir, MANIFEST_FILE).writeText(manifestJsonText, Charsets.UTF_8)
@@ -433,6 +450,8 @@ class ExtensionStore(
                 hasIcon = hasIcon,
                 settings = preservedSettings,
                 cookie = preservedCookie,
+                streamQualityId = preservedStreamQuality,
+                downloadQualityId = preservedDownloadQuality,
             )
             Persistence.save(nextState, File(extDir, STATE_FILE))
 
@@ -671,13 +690,46 @@ class ExtensionStore(
         syncProviderRegistry()
     }
 
+    fun updateQualityPreferences(
+        extensionId: String,
+        streamQualityId: String?,
+        downloadQualityId: String?,
+    ) {
+        synchronized(storeLock) {
+            val cur = _extensions.value
+            val idx = cur.indexOfFirst { it.id == extensionId }
+            if (idx < 0) return
+            val existing = cur[idx]
+            val validIds = existing.manifest.qualities.mapTo(HashSet()) { it.id }
+            val nextStream = streamQualityId?.trim()?.takeIf { it.isNotEmpty() && it in validIds }
+            val nextDownload = downloadQualityId?.trim()?.takeIf { it.isNotEmpty() && it in validIds }
+            if (existing.state.streamQualityId == nextStream && existing.state.downloadQualityId == nextDownload) return
+            val nextState = existing.state.copy(
+                streamQualityId = nextStream,
+                downloadQualityId = nextDownload,
+                updatedAtMs = clockMs(),
+            )
+            Persistence.save(nextState, File(File(extensionsDir, extensionId), STATE_FILE))
+            val updated = existing.copy(state = nextState)
+            val list = cur.toMutableList()
+            list[idx] = updated
+            _extensions.value = list
+        }
+        syncProviderRegistry()
+    }
+
     fun resetSettings(extensionId: String) {
         synchronized(storeLock) {
             val cur = _extensions.value
             val idx = cur.indexOfFirst { it.id == extensionId }
             if (idx < 0) return
             val existing = cur[idx]
-            val nextState = existing.state.copy(settings = emptyMap(), updatedAtMs = clockMs())
+            val nextState = existing.state.copy(
+                settings = emptyMap(),
+                streamQualityId = null,
+                downloadQualityId = null,
+                updatedAtMs = clockMs(),
+            )
             Persistence.save(nextState, File(File(extensionsDir, extensionId), STATE_FILE))
             val updated = existing.copy(state = nextState)
             val list = cur.toMutableList()

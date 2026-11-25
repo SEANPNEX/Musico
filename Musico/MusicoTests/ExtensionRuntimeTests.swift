@@ -1223,6 +1223,159 @@ final class ExtensionRuntimeTests: XCTestCase {
             }
         }
     }
+
+    @MainActor
+    func testManifestQualitiesValidationAndResolveStreamQualityPurpose() async throws {
+        // 1. Valid qualities + defaults
+        let validScript = """
+        'use strict';
+        var manifest = {
+          apiVersion: 1,
+          id: 'com.test.qualities',
+          name: 'Quality Ext',
+          version: '1.0.0',
+          capabilities: ['playlist', 'stream'],
+          urlPatterns: ['^https://q\\\\.test/list/[a-z0-9]+$'],
+          permissions: { hosts: ['q.test'] },
+          qualities: [
+            { id: 'highest', label: 'Highest (FLAC)', badge: 'FLAC', lossless: true },
+            { id: 'standard', label: 'Standard (128k)', badge: '128k', lossless: false }
+          ],
+          defaultStreamQuality: 'standard',
+          defaultDownloadQuality: 'highest'
+        };
+        function canHandle(input) {
+          var m = String(input.extractedUrl || '').match(/\\/list\\/([a-z0-9]+)$/);
+          return m ? { matched: true, normalizedUrl: 'https://q.test/list/' + m[1], remoteId: m[1], kind: 'playlist' } : { matched: false };
+        }
+        async function fetchCollection(ctx, req) {
+          return { remoteId: '1', title: 'Q', tracks: [] };
+        }
+        async function resolveStream(ctx, req) {
+          return {
+            url: 'https://q.test/audio/' + req.remoteTrackId + '?q=' + (req.quality || '') + '&p=' + (req.purpose || ''),
+            fileExtension: req.quality === 'highest' ? 'flac' : 'm4a',
+            actualQuality: req.quality,
+            qualityLabel: req.quality === 'highest' ? 'FLAC' : '128k',
+            bitrateKbps: req.quality === 'highest' ? 980 : 128
+          };
+        }
+        module.exports = { manifest: manifest, canHandle: canHandle, fetchCollection: fetchCollection, resolveStream: resolveStream };
+        """
+        let manifest = try await JSExtensionRuntime.extractManifest(from: validScript)
+        XCTAssertEqual(manifest.effectiveQualities.count, 2)
+        XCTAssertEqual(manifest.effectiveDefaultStreamQualityID, "standard")
+        XCTAssertEqual(manifest.effectiveDefaultDownloadQualityID, "highest")
+
+        // 2. Rejects invalid quality manifests (>16 entries, duplicate id, empty label, invalid default)
+        let tooMany = (0..<17).map { ["id": "q\($0)", "label": "Q\($0)"] }
+        let tooManyManifest = ExtensionManifest(
+            apiVersion: 1,
+            id: "com.test.toomany",
+            name: "Too Many",
+            version: "1.0.0",
+            capabilities: [.stream],
+            permissions: ExtensionPermissions(hosts: ["q.test"]),
+            qualities: tooMany.map { CloudQualityOption(id: $0["id"]!, label: $0["label"]!) }
+        )
+        XCTAssertThrowsError(try tooManyManifest.validate())
+
+        var dupManifest = manifest
+        dupManifest.qualities = [
+            CloudQualityOption(id: "std", label: "Standard"),
+            CloudQualityOption(id: "std", label: "Duplicate")
+        ]
+        dupManifest.defaultStreamQuality = "std"
+        dupManifest.defaultDownloadQuality = "std"
+        XCTAssertThrowsError(try dupManifest.validate())
+
+        var emptyLabel = manifest
+        emptyLabel.qualities = [CloudQualityOption(id: "std", label: "   ")]
+        XCTAssertThrowsError(try emptyLabel.validate())
+
+        var badDefault = manifest
+        badDefault.defaultStreamQuality = "missing"
+        XCTAssertThrowsError(try badDefault.validate())
+
+        var defaultWithoutQualities = manifest
+        defaultWithoutQualities.qualities = nil
+        defaultWithoutQualities.defaultStreamQuality = "standard"
+        XCTAssertThrowsError(try defaultWithoutQualities.validate())
+
+        // 3. Backward-compatible ExtensionState decoding without streamQualityID/downloadQualityID
+        let legacyStateJSON = #"{"isEnabled":true,"permissionApproved":true,"settings":{}}"#
+        let decodedLegacy = try JSONDecoder().decode(ExtensionState.self, from: Data(legacyStateJSON.utf8))
+        XCTAssertTrue(decodedLegacy.isEnabled)
+        XCTAssertNil(decodedLegacy.streamQualityID)
+        XCTAssertNil(decodedLegacy.downloadQualityID)
+
+        // 4. ExtensionStore quality preferences flow into JSExtensionCloudProvider.resolveStream
+        let registry = CloudProviderRegistry(transport: FixtureTransport { req in
+            HTTPResponseData(statusCode: 200, headers: [:], data: Data(), finalURL: req.url)
+        })
+        let extStore = ExtensionStore(baseDirectory: makeTempDir(), registry: registry)
+        let staged = try await extStore.importPackageData(Data(validScript.utf8), fileName: "q.musico.js", sourceURL: nil)
+        extStore.approvePermissionsAndEnable(id: staged.id)
+
+        let provider = try XCTUnwrap(registry.provider(forID: "ext.com.test.qualities") as? JSExtensionCloudProvider)
+        XCTAssertEqual(provider.availableQualities.count, 2)
+        XCTAssertEqual(provider.defaultStreamQualityID, "standard")
+        XCTAssertEqual(provider.defaultDownloadQualityID, "highest")
+
+        let track = Track(
+            id: "t-q1",
+            rootID: UUID(),
+            relativePath: "tr1",
+            title: "Song",
+            artist: "Art",
+            album: "Alb",
+            albumArtist: "Art",
+            duration: 100,
+            fileSize: 0,
+            modified: Date(),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(),
+            cloudSource: "ext.com.test.qualities",
+            remoteTrackID: "tr1"
+        )
+
+        // Default stream & download purposes
+        let streamDefault = try await provider.resolveStream(track: track, root: nil, purpose: .stream, qualityID: nil, forceRefresh: false)
+        XCTAssertEqual(streamDefault.url.absoluteString, "https://q.test/audio/tr1?q=standard&p=stream")
+        XCTAssertEqual(streamDefault.actualQuality, "standard")
+        XCTAssertEqual(streamDefault.qualityLabel, "128k")
+        XCTAssertEqual(streamDefault.bitrateKbps, 128)
+
+        let downloadDefault = try await provider.resolveStream(track: track, root: nil, purpose: .download, qualityID: nil, forceRefresh: false)
+        XCTAssertEqual(downloadDefault.url.absoluteString, "https://q.test/audio/tr1?q=highest&p=download")
+        XCTAssertEqual(downloadDefault.fileExtension, "flac")
+        XCTAssertEqual(downloadDefault.actualQuality, "highest")
+        XCTAssertEqual(downloadDefault.qualityLabel, "FLAC")
+        XCTAssertEqual(downloadDefault.bitrateKbps, 980)
+
+        // Extension-level preference overrides manifest default when root doesn't override
+        extStore.updateQualityPreferences(extensionID: staged.id, streamQualityID: "highest", downloadQualityID: "standard")
+        let streamAfterExtPref = try await provider.resolveStream(track: track, root: nil, purpose: .stream, qualityID: nil, forceRefresh: false)
+        XCTAssertEqual(streamAfterExtPref.url.absoluteString, "https://q.test/audio/tr1?q=highest&p=stream")
+
+        // Folder-level override wins over extension preference, and explicit qualityID wins over folder
+        let rootOverride = LibraryRoot(
+            id: track.rootID,
+            name: "Q Folder",
+            kind: .cloudExtension,
+            bookmark: nil,
+            sourceURL: "https://q.test/list/1",
+            remoteID: "1",
+            providerID: "ext.com.test.qualities",
+            streamQualityID: "standard",
+            downloadQualityID: "highest"
+        )
+        let streamRootOverride = try await provider.resolveStream(track: track, root: rootOverride, purpose: .stream, qualityID: nil, forceRefresh: false)
+        XCTAssertEqual(streamRootOverride.url.absoluteString, "https://q.test/audio/tr1?q=standard&p=stream")
+
+        let streamTrackOverride = try await provider.resolveStream(track: track, root: rootOverride, purpose: .stream, qualityID: "highest", forceRefresh: true)
+        XCTAssertEqual(streamTrackOverride.url.absoluteString, "https://q.test/audio/tr1?q=highest&p=stream")
+    }
 }
 
 private final class NSLockBox<Value>: @unchecked Sendable {

@@ -31,10 +31,13 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
+import androidx.compose.material.icons.rounded.ArrowDropDown
 import androidx.compose.material.icons.rounded.Bedtime
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Equalizer
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
+import androidx.compose.material.icons.rounded.HighQuality
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.Lyrics
@@ -46,16 +49,23 @@ import androidx.compose.material.icons.rounded.RepeatOne
 import androidx.compose.material.icons.rounded.Shuffle
 import androidx.compose.material.icons.rounded.SkipNext
 import androidx.compose.material.icons.rounded.SkipPrevious
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledIconButton
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -71,6 +81,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.musico.audio.PlayerController
 import com.musico.audio.PlayerUiState
+import com.musico.cloud.CloudQualityOption
 import com.musico.core.LyricsStore
 import com.musico.extensions.ExtensionStore
 import com.musico.i18n.AppStrings
@@ -94,7 +105,8 @@ enum class PlayerModalSheet {
     QUEUE,
     LYRICS,
     EQUALIZER,
-    SLEEP
+    SLEEP,
+    QUALITY,
 }
 
 enum class PlayerSidePane {
@@ -272,6 +284,15 @@ fun FullPlayerScreen(
             onSetSleep = { playerController.setSleep(it) },
             onDismiss = { activeSheet = null }
         )
+        PlayerModalSheet.QUALITY -> StreamQualitySheet(
+            qualities = playerState.availableStreamQualities,
+            selectedQualityId = playerState.currentStreamQualityId,
+            onSelectQuality = { qualityId ->
+                playerController.switchCurrentTrackQuality(qualityId)
+                activeSheet = null
+            },
+            onDismiss = { activeSheet = null },
+        )
         null -> Unit
     }
 }
@@ -312,11 +333,53 @@ private fun PlayerControlsPane(
                 )
             }
             if (track != null) {
-                IconButton(onClick = { onOpenSongInfo(track.id) }) {
-                    Icon(
-                        imageVector = Icons.Rounded.Info,
-                        contentDescription = strings.songInfo
-                    )
+                val showQualityPill = track.isCloud &&
+                    playerState.availableStreamQualities.isNotEmpty() &&
+                    !playerState.currentStreamQualityLabel.isNullOrBlank()
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    if (showQualityPill) {
+                        Surface(
+                            onClick = { onOpenSheet(PlayerModalSheet.QUALITY) },
+                            color = MaterialTheme.colorScheme.secondaryContainer,
+                            shape = RoundedCornerShape(50),
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(3.dp),
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Rounded.HighQuality,
+                                    contentDescription = strings.audioQualityLabel,
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.size(14.dp),
+                                )
+                                Text(
+                                    text = playerState.currentStreamQualityLabel.orEmpty(),
+                                    style = MaterialTheme.typography.labelMedium,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                                Icon(
+                                    imageVector = Icons.Rounded.ArrowDropDown,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    modifier = Modifier.size(16.dp),
+                                )
+                            }
+                        }
+                    }
+                    IconButton(onClick = { onOpenSongInfo(track.id) }) {
+                        Icon(
+                            imageVector = Icons.Rounded.Info,
+                            contentDescription = strings.songInfo
+                        )
+                    }
                 }
             }
         }
@@ -615,5 +678,91 @@ private fun PlayerActionButton(
             style = MaterialTheme.typography.labelSmall,
             color = tint
         )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun StreamQualitySheet(
+    qualities: List<CloudQualityOption>,
+    selectedQualityId: String?,
+    onSelectQuality: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val strings = LocalStrings.current
+    val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+    ModalBottomSheet(
+        onDismissRequest = onDismiss,
+        sheetState = sheetState,
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 20.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = strings.audioQualityLabel,
+                    style = MaterialTheme.typography.titleLarge,
+                )
+                Text(
+                    text = strings.currentTrackOnlyHint,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            HorizontalDivider()
+            LazyColumn(
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                items(qualities, key = { it.id }) { option ->
+                    val isSelected = option.id == selectedQualityId
+                    ListItem(
+                        modifier = Modifier.clickable { onSelectQuality(option.id) },
+                        headlineContent = {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    text = option.label,
+                                    fontWeight = if (isSelected) FontWeight.SemiBold else FontWeight.Normal,
+                                    modifier = Modifier.weight(1f, fill = false),
+                                )
+                                if (option.lossless) {
+                                    Surface(
+                                        color = MaterialTheme.colorScheme.primaryContainer,
+                                        shape = RoundedCornerShape(6.dp),
+                                    ) {
+                                        Text(
+                                            text = strings.qualityLosslessBadge,
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = MaterialTheme.colorScheme.onPrimaryContainer,
+                                            modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        },
+                        trailingContent = if (isSelected) {
+                            {
+                                Icon(
+                                    imageVector = Icons.Rounded.Check,
+                                    contentDescription = null,
+                                    tint = MaterialTheme.colorScheme.primary,
+                                )
+                            }
+                        } else {
+                            null
+                        },
+                    )
+                }
+            }
+        }
     }
 }

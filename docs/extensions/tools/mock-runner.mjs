@@ -105,6 +105,28 @@ export function validateManifest(manifest) {
   for (const hostPat of manifest.permissions.hosts) {
     validateHostPattern(hostPat);
   }
+  if (manifest.qualities !== undefined) {
+    assert.ok(Array.isArray(manifest.qualities), 'qualities must be an array');
+    assert.ok(manifest.qualities.length <= 16, 'qualities supports at most 16 entries');
+    const seenIds = new Set();
+    for (const q of manifest.qualities) {
+      assert.ok(q && typeof q === 'object', 'quality entry must be an object');
+      const qid = typeof q.id === 'string' ? q.id.trim() : '';
+      const qlabel = typeof q.label === 'string' ? q.label.trim() : '';
+      assert.ok(qid.length > 0, 'quality id required');
+      assert.ok(qlabel.length > 0, 'quality label required');
+      assert.ok(!seenIds.has(qid), `Duplicate quality id: ${qid}`);
+      seenIds.add(qid);
+    }
+    if (manifest.qualities.length > 0) {
+      if (manifest.defaultStreamQuality !== undefined && String(manifest.defaultStreamQuality).trim() !== '') {
+        assert.ok(seenIds.has(String(manifest.defaultStreamQuality).trim()), 'defaultStreamQuality must match an id in qualities');
+      }
+      if (manifest.defaultDownloadQuality !== undefined && String(manifest.defaultDownloadQuality).trim() !== '') {
+        assert.ok(seenIds.has(String(manifest.defaultDownloadQuality).trim()), 'defaultDownloadQuality must match an id in qualities');
+      }
+    }
+  }
   if (manifest.settings !== undefined) {
     assert.ok(Array.isArray(manifest.settings), 'settings must be an array');
     for (const spec of manifest.settings) {
@@ -216,7 +238,7 @@ export function evaluateCommonJS(source, timeoutMs = 15000) {
   return mod.exports;
 }
 
-export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = new Map(), httpResponder = null, platform = 'macos', appVersion = '1.2.6-dev' } = {}) {
+export function createHostBridge(manifest, { settingsOverrides = {}, kvStore = new Map(), httpResponder = null, platform = 'macos', appVersion = '1.2.7-dev' } = {}) {
   const logs = [];
   const defaultSettings = {};
   for (const s of manifest.settings || []) {
@@ -950,8 +972,48 @@ async function runSelfTest() {
   assert.equal(extractApprovedHost('file:///etc/passwd'), null);
   assert.equal(extractApprovedHost('https://*.example.com'), null);
 
+  // 8. Test manifest.qualities & resolveStream quality/purpose
+  const qualitySource = `
+    var manifest = {
+      apiVersion: 1,
+      id: 'com.example.test.quality',
+      name: 'Test Quality',
+      version: '1.0.0',
+      capabilities: ['stream'],
+      qualities: [
+        { id: 'standard', label: 'Standard (128k)', badge: '128k' },
+        { id: 'highest', label: 'Lossless (FLAC)', badge: 'FLAC', lossless: true }
+      ],
+      defaultStreamQuality: 'standard',
+      defaultDownloadQuality: 'highest',
+      permissions: { hosts: ['edge1.cdn.fixture.test'] }
+    };
+    async function resolveStream(ctx, req) {
+      var q = req.quality || (req.purpose === 'download' ? 'highest' : 'standard');
+      return {
+        url: 'https://edge1.cdn.fixture.test/' + q + '.flac',
+        fileExtension: q === 'highest' ? 'flac' : 'm4a',
+        actualQuality: q,
+        qualityLabel: q === 'highest' ? 'FLAC' : '128k',
+        bitrateKbps: q === 'highest' ? 999 : 128
+      };
+    }
+    module.exports = { manifest: manifest, resolveStream: resolveStream };
+  `;
+  const qualityExports = evaluateCommonJS(qualitySource);
+  validateManifest(qualityExports.manifest);
+  const qualityExt = { manifest: qualityExports.manifest, source: qualitySource, exportsObj: qualityExports };
+  const qualityBridge = createHostBridge(qualityExports.manifest, {});
+  const qStream = await runResolveStream(qualityExt, qualityBridge, { remoteTrackId: 'q1', forceRefresh: false, quality: 'standard', purpose: 'stream' });
+  assert.equal(qStream.actualQuality, 'standard');
+  assert.equal(qStream.qualityLabel, '128k');
+  assert.equal(qStream.bitrateKbps, 128);
+  const qDown = await runResolveStream(qualityExt, qualityBridge, { remoteTrackId: 'q1', forceRefresh: false, quality: 'highest', purpose: 'download' });
+  assert.equal(qDown.actualQuality, 'highest');
+  assert.equal(qDown.fileExtension, 'flac');
+
   console.log('ALL_SELF_TESTS_PASSED', {
-    testedFixtures: ['basic-playlist.musico.js', 'tree-source', 'security-and-errors.musico.js', 'starter', 'starter-single-file.musico.js', 'in-memory-lyrics', 'in-memory-search', 'in-memory-qr-login', 'in-memory-server-url'],
+    testedFixtures: ['basic-playlist.musico.js', 'tree-source', 'security-and-errors.musico.js', 'starter', 'starter-single-file.musico.js', 'in-memory-lyrics', 'in-memory-search', 'in-memory-qr-login', 'in-memory-server-url', 'in-memory-quality'],
     httpRequestsExecuted: capturedRequests.length
   });
 }

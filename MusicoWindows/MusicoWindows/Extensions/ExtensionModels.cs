@@ -241,6 +241,17 @@ public sealed class ExtensionSettingSpec
     }
 }
 
+public sealed record ExtensionQualityOption(
+    string Id,
+    string Label,
+    string? Badge = null,
+    bool? Lossless = null)
+{
+    [JsonIgnore]
+    public string EffectiveBadge =>
+        !string.IsNullOrWhiteSpace(Badge) ? Badge.Trim() : Label;
+}
+
 public sealed class ExtensionPermissions
 {
     public List<string> Hosts { get; set; } = new();
@@ -250,6 +261,7 @@ public sealed class ExtensionManifest
 {
     public const int CurrentApiVersion = 1;
     public const int MaxBadgeLength = 16;
+    public const int MaxQualityOptions = 16;
 
     public int ApiVersion { get; set; }
     public string Id { get; set; } = string.Empty;
@@ -265,6 +277,45 @@ public sealed class ExtensionManifest
     public List<string> UrlPatterns { get; set; } = new();
     public ExtensionPermissions Permissions { get; set; } = new();
     public List<ExtensionSettingSpec>? Settings { get; set; }
+    public List<ExtensionQualityOption>? Qualities { get; set; }
+    public string? DefaultStreamQuality { get; set; }
+    public string? DefaultDownloadQuality { get; set; }
+
+    [JsonIgnore]
+    public IReadOnlyList<ExtensionQualityOption> EffectiveQualities =>
+        Qualities is { Count: > 0 } ? Qualities : Array.Empty<ExtensionQualityOption>();
+
+    [JsonIgnore]
+    public string? EffectiveDefaultStreamQualityId =>
+        ResolveDefaultQualityId(DefaultStreamQuality, preferredFallbackId: "standard");
+
+    [JsonIgnore]
+    public string? EffectiveDefaultDownloadQualityId =>
+        ResolveDefaultQualityId(DefaultDownloadQuality, preferredFallbackId: "highest");
+
+    public ExtensionQualityOption? FindQuality(string? qualityId)
+    {
+        if (string.IsNullOrWhiteSpace(qualityId) || Qualities is not { Count: > 0 })
+        {
+            return null;
+        }
+        string target = qualityId.Trim();
+        return Qualities.FirstOrDefault(q => string.Equals(q.Id?.Trim(), target, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private string? ResolveDefaultQualityId(string? explicitDefault, string preferredFallbackId)
+    {
+        if (Qualities is not { Count: > 0 }) return null;
+        if (FindQuality(explicitDefault) is { } explicitMatch)
+        {
+            return explicitMatch.Id.Trim();
+        }
+        if (FindQuality(preferredFallbackId) is { } fallbackMatch)
+        {
+            return fallbackMatch.Id.Trim();
+        }
+        return Qualities[0].Id.Trim();
+    }
 
     [JsonIgnore]
     public IReadOnlyList<ExtensionSearchKind> EffectiveSearchKinds =>
@@ -608,6 +659,50 @@ public static class ExtensionManifestValidator
                 }
             }
         }
+
+        var qualityIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (manifest.Qualities is not null)
+        {
+            if (manifest.Qualities.Count > ExtensionManifest.MaxQualityOptions)
+            {
+                throw new InvalidDataException(
+                    $"Extension manifest.qualities cannot exceed {ExtensionManifest.MaxQualityOptions} entries.");
+            }
+
+            foreach (var q in manifest.Qualities)
+            {
+                if (q is null)
+                {
+                    throw new InvalidDataException("Extension manifest.qualities entries cannot be null.");
+                }
+                if (string.IsNullOrWhiteSpace(q.Id))
+                {
+                    throw new InvalidDataException("Extension quality option id cannot be empty.");
+                }
+                if (string.IsNullOrWhiteSpace(q.Label))
+                {
+                    throw new InvalidDataException($"Extension quality option '{q.Id}' must specify a non-empty label.");
+                }
+                if (!qualityIds.Add(q.Id.Trim()))
+                {
+                    throw new InvalidDataException($"Duplicate extension quality option id '{q.Id}'.");
+                }
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(manifest.DefaultStreamQuality) &&
+            !qualityIds.Contains(manifest.DefaultStreamQuality.Trim()))
+        {
+            throw new InvalidDataException(
+                $"Extension manifest.defaultStreamQuality '{manifest.DefaultStreamQuality}' must match an id in manifest.qualities.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(manifest.DefaultDownloadQuality) &&
+            !qualityIds.Contains(manifest.DefaultDownloadQuality.Trim()))
+        {
+            throw new InvalidDataException(
+                $"Extension manifest.defaultDownloadQuality '{manifest.DefaultDownloadQuality}' must match an id in manifest.qualities.");
+        }
     }
 }
 
@@ -628,6 +723,8 @@ public sealed class ExtensionStateRecord
     public DateTimeOffset InstalledUtc { get; set; }
     public string? Cookie { get; set; }
     public Dictionary<string, JsonElement> Settings { get; set; } = new(StringComparer.Ordinal);
+    public string? StreamQualityId { get; set; }
+    public string? DownloadQualityId { get; set; }
 }
 
 public enum ExtensionUpdateOutcome
@@ -917,6 +1014,8 @@ public sealed class ExtResolveStreamRequest
     public string? RelativePath { get; set; }
     public string? Cookie { get; set; }
     public bool ForceRefresh { get; set; }
+    public string? Quality { get; set; }
+    public string? Purpose { get; set; }
 }
 
 public sealed class ExtTrackDto
@@ -965,6 +1064,9 @@ public sealed class ExtStreamResult
     public double? ExpiresAtMs { get; set; }
     public List<string>? FallbackUrls { get; set; }
     public long? ContentLength { get; set; }
+    public string? ActualQuality { get; set; }
+    public string? QualityLabel { get; set; }
+    public double? BitrateKbps { get; set; }
 }
 
 public sealed class ExtSearchRequest

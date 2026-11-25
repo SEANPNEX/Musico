@@ -36,6 +36,8 @@ data class CloudFolderManifest(
     val cloudKind: String,
     val providerId: String? = null,
     val lastSyncedEpochMs: Long = 0L,
+    val streamQualityId: String? = null,
+    val downloadQualityId: String? = null,
     val tracks: Map<String, String> = emptyMap(),
 )
 
@@ -641,6 +643,8 @@ class CloudExporter(
                         cloudKind = cloudKind.name,
                         providerId = root.effectiveProviderId,
                         lastSyncedEpochMs = System.currentTimeMillis(),
+                        streamQualityId = root.streamQualityId,
+                        downloadQualityId = root.downloadQualityId,
                         tracks = trackedMap,
                     )
                 )
@@ -805,12 +809,20 @@ class CloudExporter(
         val resolvedProviderId = CloudProviderIds.fromLegacySlug(playlist.source)
             ?: providerIdHint
             ?: cloudKind.builtinProviderId
+        val resolvedStreamQualityId = trackedSubInfo?.streamQualityId
+            ?: (if (rootMatchesTarget) root.streamQualityId else null)
+            ?: existingManifest?.streamQualityId
+        val resolvedDownloadQualityId = trackedSubInfo?.downloadQualityId
+            ?: (if (rootMatchesTarget) root.downloadQualityId else null)
+            ?: existingManifest?.downloadQualityId
         val lookupRoot = root.copy(
             kind = cloudKind,
             sourceUrl = rawSource,
             remoteId = playlist.remoteId,
             cookie = effectiveCookie,
             providerId = resolvedProviderId,
+            streamQualityId = resolvedStreamQualityId,
+            downloadQualityId = resolvedDownloadQualityId,
         )
         val trackedMap = (existingManifest?.tracks ?: emptyMap()).toMutableMap()
         val coverCacheByUrl = HashMap<String, DetectedImageInfo?>()
@@ -917,6 +929,8 @@ class CloudExporter(
                 cloudKind = cloudKind.name,
                 providerId = resolvedProviderId,
                 lastSyncedEpochMs = System.currentTimeMillis(),
+                streamQualityId = resolvedStreamQualityId,
+                downloadQualityId = resolvedDownloadQualityId,
                 tracks = trackedMap,
             )
         )
@@ -1331,7 +1345,13 @@ class CloudExporter(
         onBytesProgress: ((ByteTransferProgress) -> Unit)? = null,
         block: suspend (ResolvedStream) -> T,
     ): T {
-        val firstStream = cloudResolver.resolve(track, root, forceRefresh = false)
+        val firstStream = cloudResolver.resolve(
+            track = track,
+            root = root,
+            forceRefresh = false,
+            purpose = CloudStreamPurpose.DOWNLOAD,
+            requestedQualityId = null,
+        )
         return try {
             block(firstStream)
         } catch (cancel: CancellationException) {
@@ -1339,7 +1359,13 @@ class CloudExporter(
         } catch (_: Exception) {
             onBytesProgress?.invoke(ByteTransferProgress(0L, null, 0.0))
             cloudResolver.invalidate(track, root)
-            val refreshed = cloudResolver.resolve(track, root, forceRefresh = true)
+            val refreshed = cloudResolver.resolve(
+                track = track,
+                root = root,
+                forceRefresh = true,
+                purpose = CloudStreamPurpose.DOWNLOAD,
+                requestedQualityId = null,
+            )
             block(refreshed)
         }
     }

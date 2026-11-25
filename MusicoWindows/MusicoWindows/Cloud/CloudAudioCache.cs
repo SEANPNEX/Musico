@@ -278,31 +278,94 @@ public sealed class CloudAudioCache
 
     public string DirectoryPath { get; }
 
-    public string? TryGetCachedPath(string trackId)
+    public static string? SanitizeQualityKey(string? quality)
+    {
+        if (string.IsNullOrWhiteSpace(quality)) return null;
+        string trimmed = quality.Trim();
+        Span<char> buf = trimmed.Length <= 64 ? stackalloc char[trimmed.Length] : new char[trimmed.Length];
+        for (int i = 0; i < trimmed.Length; i++)
+        {
+            char c = trimmed[i];
+            buf[i] = (char.IsAsciiLetterOrDigit(c) || c == '-' || c == '_') ? c : '_';
+        }
+        string cleaned = new string(buf).Trim('_');
+        return cleaned.Length > 0 ? cleaned : "default";
+    }
+
+    public static string BuildCacheFileStem(string trackId, string? quality = null)
+    {
+        string safeTrack = Persistence.SafeTrackFileKey(trackId);
+        string? safeQuality = SanitizeQualityKey(quality);
+        return safeQuality is null ? safeTrack : $"{safeTrack}__{safeQuality}";
+    }
+
+    private static string BuildInFlightKey(string trackId, string? quality)
+    {
+        string? safeQuality = SanitizeQualityKey(quality);
+        return safeQuality is null ? trackId : $"{trackId}\u001F{safeQuality}";
+    }
+
+    public string? TryGetCachedPath(string trackId, string? quality = null, bool fallbackToLegacy = true)
     {
         if (string.IsNullOrWhiteSpace(trackId) || !Directory.Exists(DirectoryPath))
         {
             return null;
         }
 
-        foreach (string file in Directory.EnumerateFiles(DirectoryPath, $"{Persistence.SafeTrackFileKey(trackId)}.*"))
+        string? hit = TryFindNonEmptyCacheFile(BuildCacheFileStem(trackId, quality));
+        if (hit is not null)
         {
-            if (file.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;
-            var info = new FileInfo(file);
-            if (info.Exists && info.Length > 0)
+            return hit;
+        }
+
+        string safeTrack = Persistence.SafeTrackFileKey(trackId);
+        if (string.IsNullOrWhiteSpace(quality))
+        {
+            foreach (string file in Directory.EnumerateFiles(DirectoryPath, $"{safeTrack}__*.*"))
             {
-                try
+                if (TryAcceptCachedFile(file)) return file;
+            }
+            return null;
+        }
+
+        if (fallbackToLegacy)
+        {
+            foreach (string file in Directory.EnumerateFiles(DirectoryPath, $"{safeTrack}.*"))
+            {
+                if (!Path.GetFileNameWithoutExtension(file).Equals(safeTrack, StringComparison.OrdinalIgnoreCase))
                 {
-                    File.SetLastAccessTimeUtc(file, DateTime.UtcNow);
+                    continue;
                 }
-                catch
-                {
-                    // Best-effort LRU touch.
-                }
-                return file;
+                if (TryAcceptCachedFile(file)) return file;
             }
         }
+
         return null;
+    }
+
+    private string? TryFindNonEmptyCacheFile(string stem)
+    {
+        foreach (string file in Directory.EnumerateFiles(DirectoryPath, $"{stem}.*"))
+        {
+            if (TryAcceptCachedFile(file)) return file;
+        }
+        return null;
+    }
+
+    private static bool TryAcceptCachedFile(string file)
+    {
+        if (file.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) return false;
+        var info = new FileInfo(file);
+        if (!info.Exists || info.Length <= 0) return false;
+        try
+        {
+            File.SetLastAccessTimeUtc(file, DateTime.UtcNow);
+        }
+        catch
+        {
+            // Best-effort LRU touch.
+        }
+        return true;
     }
 
     public async Task<string> GetOrDownloadAsync(
@@ -310,35 +373,44 @@ public sealed class CloudAudioCache
         Func<CancellationToken, Task<CloudAudioStream>> resolver,
         string? proxyUrl = null,
         CancellationToken ct = default,
-        Action<CloudDownloadProgress>? onProgress = null)
+        Action<CloudDownloadProgress>? onProgress = null,
+        string? quality = null,
+        bool forceRefresh = false)
     {
         ct.ThrowIfCancellationRequested();
 
-        string? cached = TryGetCachedPath(trackId);
-        if (cached is not null)
+        if (!forceRefresh)
         {
-            if (onProgress is not null)
+            string? cached = TryGetCachedPath(trackId, quality);
+            if (cached is not null)
             {
-                try
+                if (onProgress is not null)
                 {
-                    long len = new FileInfo(cached).Length;
-                    onProgress(new CloudDownloadProgress(len, len, 0));
+                    try
+                    {
+                        long len = new FileInfo(cached).Length;
+                        onProgress(new CloudDownloadProgress(len, len, 0));
+                    }
+                    catch
+                    {
+                        // Ignore stat failure on cache hit.
+                    }
                 }
-                catch
-                {
-                    // Ignore stat failure on cache hit.
-                }
+                return cached;
             }
-            return cached;
         }
 
-        // Coalesce concurrent requests (e.g. prefetch + immediate play) per trackId,
+        string inFlightKey = BuildInFlightKey(trackId, quality);
+
+        // Coalesce concurrent requests (e.g. prefetch + immediate play) per trackId + quality,
         // cancelling the underlying download only once all waiters cancel.
         InFlightDownload entry;
         bool isOwner = false;
         lock (_inFlightLock)
         {
-            if (_inFlight.TryGetValue(trackId, out var existing) && existing.TryAddWaiter(onProgress))
+            if (!forceRefresh &&
+                _inFlight.TryGetValue(inFlightKey, out var existing) &&
+                existing.TryAddWaiter(onProgress))
             {
                 entry = existing;
             }
@@ -346,14 +418,14 @@ public sealed class CloudAudioCache
             {
                 entry = new InFlightDownload();
                 entry.TryAddWaiter(onProgress);
-                _inFlight[trackId] = entry;
+                _inFlight[inFlightKey] = entry;
                 isOwner = true;
             }
         }
 
         if (isOwner)
         {
-            _ = RunAndCleanupAsync(trackId, entry, resolver, proxyUrl);
+            _ = RunAndCleanupAsync(trackId, quality, inFlightKey, forceRefresh, entry, resolver, proxyUrl);
         }
 
         bool released = false;
@@ -368,9 +440,9 @@ public sealed class CloudAudioCache
             {
                 lock (_inFlightLock)
                 {
-                    if (_inFlight.TryGetValue(trackId, out var current) && ReferenceEquals(current, entry))
+                    if (_inFlight.TryGetValue(inFlightKey, out var current) && ReferenceEquals(current, entry))
                     {
-                        _inFlight.Remove(trackId);
+                        _inFlight.Remove(inFlightKey);
                     }
                 }
             }
@@ -387,6 +459,9 @@ public sealed class CloudAudioCache
 
     private async Task RunAndCleanupAsync(
         string trackId,
+        string? quality,
+        string inFlightKey,
+        bool forceRefresh,
         InFlightDownload entry,
         Func<CancellationToken, Task<CloudAudioStream>> resolver,
         string? proxyUrl)
@@ -395,6 +470,8 @@ public sealed class CloudAudioCache
         {
             string path = await DownloadCoreAsync(
                 trackId,
+                quality,
+                forceRefresh,
                 resolver,
                 proxyUrl,
                 entry.ReportProgress,
@@ -413,9 +490,9 @@ public sealed class CloudAudioCache
         {
             lock (_inFlightLock)
             {
-                if (_inFlight.TryGetValue(trackId, out var current) && ReferenceEquals(current, entry))
+                if (_inFlight.TryGetValue(inFlightKey, out var current) && ReferenceEquals(current, entry))
                 {
-                    _inFlight.Remove(trackId);
+                    _inFlight.Remove(inFlightKey);
                 }
             }
             entry.Dispose();
@@ -424,6 +501,8 @@ public sealed class CloudAudioCache
 
     private async Task<string> DownloadCoreAsync(
         string trackId,
+        string? quality,
+        bool forceRefresh,
         Func<CancellationToken, Task<CloudAudioStream>> resolver,
         string? proxyUrl,
         Action<CloudDownloadProgress> onProgress,
@@ -431,19 +510,22 @@ public sealed class CloudAudioCache
     {
         ct.ThrowIfCancellationRequested();
 
-        string? cached = TryGetCachedPath(trackId);
-        if (cached is not null)
+        if (!forceRefresh)
         {
-            try
+            string? cached = TryGetCachedPath(trackId, quality);
+            if (cached is not null)
             {
-                long len = new FileInfo(cached).Length;
-                onProgress(new CloudDownloadProgress(len, len, 0));
+                try
+                {
+                    long len = new FileInfo(cached).Length;
+                    onProgress(new CloudDownloadProgress(len, len, 0));
+                }
+                catch
+                {
+                    // Ignore stat failure on cache hit.
+                }
+                return cached;
             }
-            catch
-            {
-                // Ignore stat failure on cache hit.
-            }
-            return cached;
         }
 
         var streamInfo = await resolver(ct).ConfigureAwait(false);
@@ -452,7 +534,7 @@ public sealed class CloudAudioCache
             : streamInfo.Extension.StartsWith('.') ? streamInfo.Extension : "." + streamInfo.Extension;
 
         Directory.CreateDirectory(DirectoryPath);
-        string targetPath = Path.Combine(DirectoryPath, $"{Persistence.SafeTrackFileKey(trackId)}{ext}");
+        string targetPath = Path.Combine(DirectoryPath, $"{BuildCacheFileStem(trackId, quality)}{ext}");
         string tempPath = $"{targetPath}.{Guid.NewGuid():N}.tmp";
 
         using var http = CloudHttpHelper.CreateClient(proxyUrl, _handler, TimeSpan.FromMinutes(3));
@@ -476,6 +558,7 @@ public sealed class CloudAudioCache
 
             File.Move(tempPath, targetPath, overwrite: true);
             File.SetLastAccessTimeUtc(targetPath, DateTime.UtcNow);
+            EvictStaleQualityVariants(trackId, keepPath: targetPath);
             EvictIfNeeded(protectedPath: targetPath);
             return targetPath;
         }
@@ -773,6 +856,30 @@ public sealed class CloudAudioCache
         }
     }
 
+    public void EvictStaleQualityVariants(string trackId, string? keepPath = null)
+    {
+        if (string.IsNullOrWhiteSpace(trackId) || !Directory.Exists(DirectoryPath)) return;
+        string fileKey = Persistence.SafeTrackFileKey(trackId);
+        string? normalizedKeep = string.IsNullOrWhiteSpace(keepPath) ? null : Path.GetFullPath(keepPath);
+
+        lock (_evictLock)
+        {
+            foreach (string pattern in (string[])[$"{fileKey}.*", $"{fileKey}__*"])
+            {
+                foreach (string file in Directory.EnumerateFiles(DirectoryPath, pattern))
+                {
+                    if (file.EndsWith(".tmp", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (normalizedKeep is not null &&
+                        string.Equals(Path.GetFullPath(file), normalizedKeep, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+                    try { File.Delete(file); } catch { /* ignore locked by playback */ }
+                }
+            }
+        }
+    }
+
     public void RemoveForTracks(IEnumerable<string> trackIds)
     {
         if (!Directory.Exists(DirectoryPath)) return;
@@ -780,9 +887,12 @@ public sealed class CloudAudioCache
         {
             if (string.IsNullOrWhiteSpace(id)) continue;
             string fileKey = Persistence.SafeTrackFileKey(id);
-            foreach (string file in Directory.EnumerateFiles(DirectoryPath, $"{fileKey}.*"))
+            foreach (string pattern in (string[])[$"{fileKey}.*", $"{fileKey}__*"])
             {
-                try { File.Delete(file); } catch { /* ignore locked */ }
+                foreach (string file in Directory.EnumerateFiles(DirectoryPath, pattern))
+                {
+                    try { File.Delete(file); } catch { /* ignore locked */ }
+                }
             }
         }
     }

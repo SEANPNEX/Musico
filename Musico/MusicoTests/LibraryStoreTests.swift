@@ -807,6 +807,117 @@ final class LibraryStoreTests: XCTestCase {
         await store.rescan()
         XCTAssertNil(store.cloudTracking(rootID: parentRoot.id, path: "ExternalBili"))
     }
+
+    func testCloudFolderSafeRebindingAndOptionAOrphanedRecovery() async throws {
+        let dir = makeTempDir()
+        let docs = makeTempDir()
+        let registry = CloudProviderRegistry()
+
+        // Backward-compatible LibraryRoot decoding without streamQualityID/downloadQualityID
+        let legacyRootJSON = """
+        {
+          "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+          "name": "Orphaned YT",
+          "kind": "cloudExtension",
+          "sourceURL": "https://music.youtube.com/playlist?list=PLorphan1",
+          "remoteID": "PLorphan1",
+          "providerID": "ext.missing-yt"
+        }
+        """
+        let decodedRoot = try JSONDecoder().decode(LibraryRoot.self, from: Data(legacyRootJSON.utf8))
+        XCTAssertNil(decodedRoot.streamQualityID)
+        XCTAssertNil(decodedRoot.downloadQualityID)
+
+        struct SavedLib: Codable {
+            var roots: [LibraryRoot]
+            var tracks: [Track]
+        }
+        let orphanTrack = Track(
+            id: Track.makeID(rootID: decodedRoot.id, relativePath: "vid-1"),
+            rootID: decodedRoot.id,
+            relativePath: "vid-1",
+            title: "Orphan Song",
+            artist: "Artist",
+            album: "Album",
+            albumArtist: "Artist",
+            duration: 180,
+            fileSize: 0,
+            modified: Date(),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(),
+            cloudSource: "ext.missing-yt",
+            remoteTrackID: "vid-1"
+        )
+        try Persistence.save(SavedLib(roots: [decodedRoot], tracks: [orphanTrack]), to: dir.appendingPathComponent("library.json"))
+
+        let fetcher = MutableCloudFetcher(result: .success(CloudPlaylistResult(
+            kind: .cloudYouTube,
+            remoteID: "PLorphan1",
+            title: "Recovered YT",
+            tracks: [
+                CloudTrackInfo(
+                    remoteTrackID: "vid-1",
+                    relativePath: "vid-1",
+                    title: "Recovered Song",
+                    artist: "Artist",
+                    album: "Album",
+                    trackNumber: 1,
+                    duration: 180,
+                    artworkURL: nil
+                )
+            ],
+            providerID: BuiltInProviderID.youtube
+        )))
+
+        let store = LibraryStore(
+            directory: dir,
+            documentsURL: docs,
+            reader: StubReader(),
+            artwork: ArtworkCache(directory: makeTempDir()),
+            cloudFetcher: fetcher,
+            providerRegistry: registry,
+            extensionAvailability: { pid in .missing(providerID: pid) },
+            artworkDownloader: { _ in nil }
+        )
+
+        let orphanRoot = try XCTUnwrap(store.root(decodedRoot.id))
+        XCTAssertEqual(store.cloudExtensionAvailability(for: orphanRoot), .missing(providerID: "ext.missing-yt"))
+        XCTAssertFalse(store.isAvailable(orphanRoot))
+
+        // Option A: compatibleProviders finds built-in YouTube matching sourceURL
+        let compatible = store.compatibleProviders(for: orphanRoot)
+        XCTAssertEqual(compatible.map(\.id), [BuiltInProviderID.youtube])
+
+        let playlistID = store.createPlaylist(name: "Saved Mix")
+        store.add([orphanTrack.id], toPlaylist: playlistID)
+        store.toggleFavourite(orphanTrack.id)
+
+        // Safe re-binding to builtin.youtube keeps root.id, updates kind/provider/qualities, and triggers clean re-sync
+        try await store.rebindCloudRoot(
+            orphanRoot.id,
+            sourceURL: "https://music.youtube.com/playlist?list=PLorphan1",
+            cookie: "CONSENT=YES",
+            preferredProviderID: BuiltInProviderID.youtube,
+            streamQualityID: "high",
+            downloadQualityID: "highest"
+        )
+
+        let rebound = try XCTUnwrap(store.root(orphanRoot.id))
+        XCTAssertEqual(rebound.id, orphanRoot.id)
+        XCTAssertEqual(rebound.kind, .cloudYouTube)
+        XCTAssertEqual(rebound.resolvedProviderID, BuiltInProviderID.youtube)
+        XCTAssertEqual(rebound.cookie, "CONSENT=YES")
+        XCTAssertEqual(rebound.streamQualityID, "high")
+        XCTAssertEqual(rebound.downloadQualityID, "highest")
+        XCTAssertTrue(store.isAvailable(rebound))
+
+        let syncedTrack = try XCTUnwrap(store.tracks.first { $0.rootID == orphanRoot.id })
+        XCTAssertEqual(syncedTrack.cloudSource, "youtube")
+        XCTAssertEqual(syncedTrack.remoteTrackID, "vid-1")
+        XCTAssertEqual(syncedTrack.title, "Recovered Song")
+        XCTAssertEqual(store.playlists.first { $0.id == playlistID }?.trackIDs, [syncedTrack.id])
+        XCTAssertTrue(store.isFavourite(syncedTrack.id))
+    }
 }
 
 private final class MutableCloudFetcher: CloudPlaylistFetching, @unchecked Sendable {

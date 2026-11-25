@@ -171,19 +171,29 @@ private struct PlayerPage: View {
                     .accessibilityAddTraits(.isButton)
                     .accessibilityLabel(L10n.tr("Show lyrics"))
 
-                HStack(alignment: .center) {
+                HStack(alignment: .center, spacing: 8) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(track.title)
                             .font(.title2.weight(.semibold))
                             .lineLimit(2)
                             .contentTransition(.opacity)
-                        Text("\(L10n.displayArtist(track.artist)) — \(L10n.displayAlbum(track.album))")
-                            .foregroundStyle(.secondary)
-                            .lineLimit(1)
-                            .contentTransition(.opacity)
+                        HStack(spacing: 6) {
+                            Text("\(L10n.displayArtist(track.artist)) — \(L10n.displayAlbum(track.album))")
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .contentTransition(.opacity)
+                            if !player.availableQualitiesForCurrentTrack.isEmpty,
+                               let pillLabel = currentQualityPillLabel {
+                                qualityPillMenu(
+                                    label: pillLabel,
+                                    qualities: player.availableQualitiesForCurrentTrack,
+                                    activeID: player.activeQualityIDForCurrentTrack
+                                )
+                            }
+                        }
                     }
                     .animation(.easeInOut(duration: 0.2), value: track.id)
-                    Spacer()
+                    Spacer(minLength: 4)
                     if !track.isEphemeral {
                         let isFavourite = library.isFavourite(track.id)
                         Button {
@@ -305,6 +315,53 @@ private struct PlayerPage: View {
     private var positionText: String {
         guard let index = queues.active.currentIndex else { return "" }
         return L10n.tr("%@ of %@", String(index + 1), String(queues.active.trackIDs.count))
+    }
+
+    private var currentQualityPillLabel: String? {
+        if let label = player.currentStreamQualityLabel?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !label.isEmpty {
+            return label
+        }
+        let qualities = player.availableQualitiesForCurrentTrack
+        guard !qualities.isEmpty else { return nil }
+        if let activeID = player.activeQualityIDForCurrentTrack,
+           let matched = qualities.first(where: { $0.id == activeID }) {
+            return matched.badge ?? matched.label
+        }
+        return qualities.first.map { $0.badge ?? $0.label }
+    }
+
+    private func qualityPillMenu(label: String, qualities: [CloudQualityOption], activeID: String?) -> some View {
+        Menu {
+            Section(L10n.tr("Audio Quality (This Track)")) {
+                ForEach(qualities) { option in
+                    Button {
+                        player.switchCurrentTrackQuality(to: option.id)
+                    } label: {
+                        if option.id == activeID {
+                            Label(option.label, systemImage: "checkmark")
+                        } else {
+                            Text(option.label)
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 3) {
+                Text(label)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+            }
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+            .background(Color.accentColor.opacity(0.14), in: Capsule())
+            .foregroundStyle(Color.accentColor)
+            .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(.plain)
+        .layoutPriority(1)
+        .accessibilityLabel(L10n.tr("Audio Quality"))
     }
 
     private var transport: some View {

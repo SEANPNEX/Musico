@@ -49,6 +49,7 @@ import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.rounded.SwapHoriz
 import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
@@ -163,7 +164,27 @@ private data class EditCloudSourceTarget(
     val root: LibraryRoot,
     val subfolderPath: String = "",
     val tracking: CloudTrackingInfo,
+    val preferredProviderId: String? = null,
     val reopenUpdateOnSave: Boolean = false,
+)
+
+private fun editTargetForCloudRoot(
+    root: LibraryRoot,
+    preferredProviderId: String? = null,
+): EditCloudSourceTarget = EditCloudSourceTarget(
+    root = root,
+    subfolderPath = "",
+    tracking = root.trackingFor("") ?: CloudTrackingInfo(
+        sourceUrl = root.sourceUrl?.takeIf { it.isNotBlank() } ?: root.remoteId.orEmpty(),
+        remoteId = root.remoteId,
+        cloudKind = root.kind,
+        providerId = root.resolvedProviderId,
+        cookie = root.cookie,
+        lastSyncedEpochMs = root.lastSyncedEpochMs,
+        streamQualityId = root.streamQualityId,
+        downloadQualityId = root.downloadQualityId,
+    ),
+    preferredProviderId = preferredProviderId,
 )
 
 private fun folderDepth(ref: FolderRef?): Int {
@@ -539,6 +560,33 @@ fun FoldersScreen(
                                                 savingCloudTarget = rootForMenu to cloudTracks
                                             }
                                         )
+                                        DropdownMenuItem(
+                                            text = { Text(strings.editCloudSourceEllipsis) },
+                                            leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                            onClick = {
+                                                detailMenuExpanded = false
+                                                editingCloudSource = editTargetForCloudRoot(rootForMenu)
+                                            }
+                                        )
+                                        val detailAvailability = libraryStore.cloudProviderAvailability(rootForMenu)
+                                        val detailBestMatch = if (detailAvailability != CloudProviderAvailability.AVAILABLE) {
+                                            libraryStore.bestCompatibleProviderForRoot(rootForMenu)
+                                        } else {
+                                            null
+                                        }
+                                        if (detailBestMatch != null) {
+                                            DropdownMenuItem(
+                                                text = { Text(strings.switchSourceEllipsis) },
+                                                leadingIcon = { Icon(Icons.Rounded.SwapHoriz, contentDescription = null) },
+                                                onClick = {
+                                                    detailMenuExpanded = false
+                                                    editingCloudSource = editTargetForCloudRoot(
+                                                        root = rootForMenu,
+                                                        preferredProviderId = detailBestMatch.providerId,
+                                                    )
+                                                }
+                                            )
+                                        }
                                     }
                                     if (rootForMenu != null && currentTracking != null) {
                                         DropdownMenuItem(
@@ -675,6 +723,12 @@ fun FoldersScreen(
                                 tracking = tracking,
                             )
                         },
+                        onEditCloudRootSource = { root, preferredProviderId ->
+                            editingCloudSource = editTargetForCloudRoot(
+                                root = root,
+                                preferredProviderId = preferredProviderId,
+                            )
+                        },
                         onRestoreExcluded = { rootId -> scope.launch { libraryStore.restoreExcludedFolders(rootId) } },
                         onOpenExtensions = if (extensionStore != null) {
                             { showExtensionsScreen = true }
@@ -707,6 +761,12 @@ fun FoldersScreen(
                                 root = r,
                                 subfolderPath = subPath,
                                 tracking = tracking,
+                            )
+                        },
+                        onEditCloudRootSource = { r, preferredProviderId ->
+                            editingCloudSource = editTargetForCloudRoot(
+                                root = r,
+                                preferredProviderId = preferredProviderId,
                             )
                         },
                         onOpenExtensions = if (extensionStore != null) {
@@ -798,6 +858,8 @@ fun FoldersScreen(
         EditCloudSourceDialog(
             target = pendingEditCloud,
             libraryStore = libraryStore,
+            activeProviders = activeProviders,
+            providerRegistry = providerRegistry,
             onDismiss = { editingCloudSource = null },
             onSaved = {
                 val updatedRoot = libraryStore.state.value.roots.firstOrNull { it.id == pendingEditCloud.root.id }
@@ -1112,13 +1174,17 @@ private fun ExtensionUnavailableBanner(
     availability: CloudProviderAvailability,
     providerId: String?,
     onOpenExtensions: (() -> Unit)?,
+    bestRecoveryProvider: CloudSourceProvider? = null,
+    onSwitchSource: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val strings = LocalStrings.current
-    val message = when (availability) {
-        CloudProviderAvailability.DISABLED -> strings.extensionDisabledBanner
-        CloudProviderAvailability.MISSING -> strings.extensionMissingBanner(providerId.orEmpty())
-        CloudProviderAvailability.AVAILABLE -> return
+    val message = when {
+        bestRecoveryProvider != null && onSwitchSource != null ->
+            strings.extensionRecoveryBanner(providerId.orEmpty(), bestRecoveryProvider.displayName)
+        availability == CloudProviderAvailability.DISABLED -> strings.extensionDisabledBanner
+        availability == CloudProviderAvailability.MISSING -> strings.extensionMissingBanner(providerId.orEmpty())
+        else -> return
     }
     ElevatedCard(
         modifier = modifier.fillMaxWidth(),
@@ -1126,29 +1192,52 @@ private fun ExtensionUnavailableBanner(
             containerColor = MaterialTheme.colorScheme.errorContainer,
         ),
     ) {
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            Icon(
-                imageVector = Icons.Rounded.WarningAmber,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.size(20.dp),
-            )
-            Spacer(Modifier.width(10.dp))
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onErrorContainer,
-                modifier = Modifier.weight(1f),
-            )
-            if (onOpenExtensions != null) {
-                Spacer(Modifier.width(8.dp))
-                FilledTonalButton(onClick = onOpenExtensions) {
-                    Text(strings.manageExtensions)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Icon(
+                    imageVector = Icons.Rounded.WarningAmber,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.size(20.dp),
+                )
+                Spacer(Modifier.width(10.dp))
+                Text(
+                    text = message,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onErrorContainer,
+                    modifier = Modifier.weight(1f),
+                )
+            }
+            if ((bestRecoveryProvider != null && onSwitchSource != null) || onOpenExtensions != null) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    if (onOpenExtensions != null) {
+                        TextButton(onClick = onOpenExtensions) {
+                            Text(strings.manageExtensions)
+                        }
+                    }
+                    if (bestRecoveryProvider != null && onSwitchSource != null) {
+                        FilledTonalButton(onClick = onSwitchSource) {
+                            Icon(
+                                imageVector = Icons.Rounded.SwapHoriz,
+                                contentDescription = null,
+                                modifier = Modifier.size(16.dp),
+                            )
+                            Spacer(Modifier.width(6.dp))
+                            Text(strings.switchSourceAction)
+                        }
+                    }
                 }
             }
         }
@@ -1750,15 +1839,73 @@ private fun UpdateTrackedFolderDialog(
 private fun EditCloudSourceDialog(
     target: EditCloudSourceTarget,
     libraryStore: LibraryStore,
+    activeProviders: List<CloudSourceProvider>,
+    providerRegistry: CloudProviderRegistry,
     onDismiss: () -> Unit,
     onSaved: () -> Unit,
 ) {
     val strings = LocalStrings.current
     val scope = rememberCoroutineScope()
+    val collectionProviders = remember(activeProviders) {
+        activeProviders.filter { it.supportsCollections }
+    }
     var url by remember(target) { mutableStateOf(target.tracking.sourceUrl) }
+    val initialProviderId = remember(target) {
+        target.preferredProviderId ?: target.tracking.resolvedProviderId
+    }
+    var selectedProviderId by remember(target) { mutableStateOf(initialProviderId) }
+    var providerMenuExpanded by remember { mutableStateOf(false) }
     var cookie by remember(target) { mutableStateOf(target.tracking.cookie.orEmpty()) }
+    var streamQualityId by remember(target) { mutableStateOf(target.tracking.streamQualityId) }
+    var downloadQualityId by remember(target) { mutableStateOf(target.tracking.downloadQualityId) }
+    var streamQualityMenuExpanded by remember { mutableStateOf(false) }
+    var downloadQualityMenuExpanded by remember { mutableStateOf(false) }
     var isSaving by remember(target) { mutableStateOf(false) }
     var errorText by remember(target) { mutableStateOf<String?>(null) }
+
+    val compatibleProviders = remember(url, collectionProviders) {
+        providerRegistry.compatibleProvidersForUrl(url)
+    }
+    val selectedActiveProvider = remember(selectedProviderId, collectionProviders) {
+        selectedProviderId?.let { id -> collectionProviders.firstOrNull { it.providerId == id } }
+    }
+    val detectedProvider = remember(url, selectedProviderId, collectionProviders) {
+        if (selectedProviderId == null) {
+            providerRegistry.previewProvider(url)
+        } else {
+            null
+        }
+    }
+    val effectiveProvider = selectedActiveProvider ?: detectedProvider
+
+    val missingCurrentId = target.tracking.resolvedProviderId
+        ?.takeIf { id -> collectionProviders.none { it.providerId == id } }
+    val missingCurrentAvailability = remember(missingCurrentId, activeProviders) {
+        missingCurrentId?.let { providerRegistry.availabilityFor(it) }
+    }
+    fun missingDisplayLabel(providerId: String): String {
+        val rawName = providerId.removePrefix("ext.")
+        return if (missingCurrentAvailability == CloudProviderAvailability.DISABLED) {
+            strings.providerDisabledLabel(rawName)
+        } else {
+            strings.providerMissingLabel(rawName)
+        }
+    }
+
+    val selectedProviderLabel = when {
+        selectedProviderId == null -> strings.providerAutoMatchUrl
+        selectedActiveProvider != null -> selectedActiveProvider.displayName
+        else -> missingDisplayLabel(selectedProviderId!!)
+    }
+
+    val showCookieField = effectiveProvider?.supportsCookie ?: target.tracking.cookie?.isNotBlank() == true
+    val qualities = effectiveProvider?.availableQualities.orEmpty()
+    val effectiveStreamQualityId = streamQualityId
+        ?.takeIf { q -> qualities.any { it.id == q } }
+        ?: effectiveProvider?.defaultStreamQualityId
+    val effectiveDownloadQualityId = downloadQualityId
+        ?.takeIf { q -> qualities.any { it.id == q } }
+        ?: effectiveProvider?.defaultDownloadQualityId
 
     AlertDialog(
         onDismissRequest = { if (!isSaving) onDismiss() },
@@ -1784,16 +1931,180 @@ private fun EditCloudSourceDialog(
                     enabled = !isSaving,
                     modifier = Modifier.fillMaxWidth(),
                 )
-                OutlinedTextField(
-                    value = cookie,
-                    onValueChange = { cookie = it },
-                    label = { Text(strings.cookieOptionalLabel) },
-                    placeholder = { Text(strings.cookiePlaceholder) },
-                    minLines = 2,
-                    maxLines = 3,
-                    enabled = !isSaving,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                    Text(
+                        text = strings.cloudProviderLabel,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Box {
+                        OutlinedButton(
+                            enabled = !isSaving,
+                            onClick = { providerMenuExpanded = true },
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Text(
+                                text = selectedProviderLabel,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                        DropdownMenu(
+                            expanded = providerMenuExpanded,
+                            onDismissRequest = { providerMenuExpanded = false },
+                        ) {
+                            DropdownMenuItem(
+                                text = { Text(strings.providerAutoMatchUrl) },
+                                leadingIcon = if (selectedProviderId == null) {
+                                    { Icon(Icons.Rounded.Check, contentDescription = null) }
+                                } else null,
+                                onClick = {
+                                    selectedProviderId = null
+                                    providerMenuExpanded = false
+                                    errorText = null
+                                },
+                            )
+                            val dropdownProviders = compatibleProviders.ifEmpty { collectionProviders }
+                            dropdownProviders.forEach { provider ->
+                                DropdownMenuItem(
+                                    text = { Text(provider.displayName) },
+                                    leadingIcon = if (selectedProviderId == provider.providerId) {
+                                        { Icon(Icons.Rounded.Check, contentDescription = null) }
+                                    } else null,
+                                    onClick = {
+                                        selectedProviderId = provider.providerId
+                                        providerMenuExpanded = false
+                                        errorText = null
+                                    },
+                                )
+                            }
+                            if (missingCurrentId != null) {
+                                DropdownMenuItem(
+                                    text = {
+                                        Text(
+                                            text = missingDisplayLabel(missingCurrentId),
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    },
+                                    leadingIcon = if (selectedProviderId == missingCurrentId) {
+                                        { Icon(Icons.Rounded.Check, contentDescription = null) }
+                                    } else null,
+                                    onClick = {
+                                        selectedProviderId = missingCurrentId
+                                        providerMenuExpanded = false
+                                        errorText = null
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    if (selectedProviderId == null && detectedProvider != null) {
+                        Text(
+                            text = strings.detectedProviderHint(detectedProvider.displayName),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+
+                if (showCookieField) {
+                    OutlinedTextField(
+                        value = cookie,
+                        onValueChange = { cookie = it },
+                        label = { Text(strings.cookieOptionalLabel) },
+                        placeholder = { Text(strings.cookiePlaceholder) },
+                        minLines = 2,
+                        maxLines = 3,
+                        enabled = !isSaving,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+
+                if (qualities.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = strings.streamingQualityLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Box {
+                            FilledTonalButton(
+                                enabled = !isSaving,
+                                onClick = { streamQualityMenuExpanded = true },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                val label = qualities.firstOrNull { it.id == effectiveStreamQualityId }?.label
+                                    ?: effectiveStreamQualityId.orEmpty()
+                                Text(
+                                    text = label,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = streamQualityMenuExpanded,
+                                onDismissRequest = { streamQualityMenuExpanded = false },
+                            ) {
+                                qualities.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.label) },
+                                        leadingIcon = if (option.id == effectiveStreamQualityId) {
+                                            { Icon(Icons.Rounded.Check, contentDescription = null) }
+                                        } else null,
+                                        onClick = {
+                                            streamQualityId = option.id
+                                            streamQualityMenuExpanded = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = strings.downloadQualityLabel,
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                        Box {
+                            FilledTonalButton(
+                                enabled = !isSaving,
+                                onClick = { downloadQualityMenuExpanded = true },
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                val label = qualities.firstOrNull { it.id == effectiveDownloadQualityId }?.label
+                                    ?: effectiveDownloadQualityId.orEmpty()
+                                Text(
+                                    text = label,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                            DropdownMenu(
+                                expanded = downloadQualityMenuExpanded,
+                                onDismissRequest = { downloadQualityMenuExpanded = false },
+                            ) {
+                                qualities.forEach { option ->
+                                    DropdownMenuItem(
+                                        text = { Text(option.label) },
+                                        leadingIcon = if (option.id == effectiveDownloadQualityId) {
+                                            { Icon(Icons.Rounded.Check, contentDescription = null) }
+                                        } else null,
+                                        onClick = {
+                                            downloadQualityId = option.id
+                                            downloadQualityMenuExpanded = false
+                                        },
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+
                 if (isSaving) {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
@@ -1818,7 +2129,10 @@ private fun EditCloudSourceDialog(
                             rootId = target.root.id,
                             path = target.subfolderPath,
                             newSourceUrl = url,
-                            cookie = cookie.takeIf { it.isNotBlank() },
+                            cookie = if (showCookieField) cookie.takeIf { it.isNotBlank() } else null,
+                            providerIdHint = selectedProviderId,
+                            streamQualityId = if (qualities.isNotEmpty()) effectiveStreamQualityId else null,
+                            downloadQualityId = if (qualities.isNotEmpty()) effectiveDownloadQualityId else null,
                         )
                         isSaving = false
                         res.onSuccess {
@@ -1871,6 +2185,7 @@ private fun FolderRootList(
     onSaveCloudRoot: (LibraryRoot) -> Unit,
     onUpdateTrackedRoot: (LibraryRoot) -> Unit,
     onEditTrackedRootSource: (LibraryRoot, CloudTrackingInfo) -> Unit,
+    onEditCloudRootSource: (LibraryRoot, String?) -> Unit,
     onRestoreExcluded: (String) -> Unit,
     onOpenExtensions: (() -> Unit)?,
     onAddFolder: () -> Unit,
@@ -1971,10 +2286,16 @@ private fun FolderRootList(
                             }
                         }
                     ) {
+                        val bestRecoveryProvider = if (!available && root.kind == RootKind.CLOUD_EXTENSION) {
+                            libraryStore.bestCompatibleProviderForRoot(root)
+                        } else {
+                            null
+                        }
                         RootItemRow(
                             root = root,
                             available = available,
                             cloudAvailability = availability,
+                            bestRecoveryProvider = bestRecoveryProvider,
                             customBadgeLabel = customBadgeLabel,
                             songCount = count,
                             rootTrackIds = rootTrackIds,
@@ -1988,6 +2309,7 @@ private fun FolderRootList(
                             onSaveCloudRoot = { onSaveCloudRoot(root) },
                             onUpdateTrackedRoot = { onUpdateTrackedRoot(root) },
                             onEditTrackedRootSource = { info -> onEditTrackedRootSource(root, info) },
+                            onEditCloudRootSource = { preferredId -> onEditCloudRootSource(root, preferredId) },
                             onRestoreExcluded = { onRestoreExcluded(root.id) },
                             onOpenExtensions = onOpenExtensions,
                             onRemove = { onRequestRemove(root) }
@@ -1998,6 +2320,7 @@ private fun FolderRootList(
                         root = root,
                         available = available,
                         cloudAvailability = availability,
+                        bestRecoveryProvider = null,
                         customBadgeLabel = customBadgeLabel,
                         songCount = count,
                         rootTrackIds = rootTrackIds,
@@ -2011,6 +2334,7 @@ private fun FolderRootList(
                         onSaveCloudRoot = {},
                         onUpdateTrackedRoot = { onUpdateTrackedRoot(root) },
                         onEditTrackedRootSource = { info -> onEditTrackedRootSource(root, info) },
+                        onEditCloudRootSource = {},
                         onRestoreExcluded = { onRestoreExcluded(root.id) },
                         onOpenExtensions = onOpenExtensions,
                         onRemove = {}
@@ -2068,6 +2392,7 @@ private fun RootItemRow(
     root: LibraryRoot,
     available: Boolean,
     cloudAvailability: CloudProviderAvailability,
+    bestRecoveryProvider: CloudSourceProvider?,
     customBadgeLabel: String?,
     songCount: Int,
     rootTrackIds: List<String>,
@@ -2081,6 +2406,7 @@ private fun RootItemRow(
     onSaveCloudRoot: () -> Unit,
     onUpdateTrackedRoot: () -> Unit,
     onEditTrackedRootSource: (CloudTrackingInfo) -> Unit,
+    onEditCloudRootSource: (String?) -> Unit,
     onRestoreExcluded: () -> Unit,
     onOpenExtensions: (() -> Unit)?,
     onRemove: () -> Unit
@@ -2194,6 +2520,24 @@ private fun RootItemRow(
                                     onSaveCloudRoot()
                                 }
                             )
+                            DropdownMenuItem(
+                                text = { Text(strings.editCloudSourceEllipsis) },
+                                leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                onClick = {
+                                    menuExpanded = false
+                                    onEditCloudRootSource(null)
+                                }
+                            )
+                            if (cloudAvailability != CloudProviderAvailability.AVAILABLE && bestRecoveryProvider != null) {
+                                DropdownMenuItem(
+                                    text = { Text(strings.switchSourceEllipsis) },
+                                    leadingIcon = { Icon(Icons.Rounded.SwapHoriz, contentDescription = null) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        onEditCloudRootSource(bestRecoveryProvider.providerId)
+                                    }
+                                )
+                            }
                         }
                         if (!root.kind.isCloud && rootTracking != null) {
                             DropdownMenuItem(
@@ -2249,7 +2593,7 @@ private fun RootItemRow(
                                 }
                             )
                         }
-                        if ((isRemovable || root.kind == RootKind.PICKED || root.excludedPaths.isNotEmpty() || (!root.kind.isCloud && rootTracking != null)) && rootTrackIds.isNotEmpty()) {
+                        if ((isRemovable || root.kind.isCloud || root.kind == RootKind.PICKED || root.excludedPaths.isNotEmpty() || (!root.kind.isCloud && rootTracking != null)) && rootTrackIds.isNotEmpty()) {
                             HorizontalDivider()
                         }
                         if (rootTrackIds.isNotEmpty()) {
@@ -2272,6 +2616,10 @@ private fun RootItemRow(
                 availability = cloudAvailability,
                 providerId = root.resolvedProviderId,
                 onOpenExtensions = onOpenExtensions,
+                bestRecoveryProvider = bestRecoveryProvider,
+                onSwitchSource = if (bestRecoveryProvider != null) {
+                    { onEditCloudRootSource(bestRecoveryProvider.providerId) }
+                } else null,
                 modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 12.dp),
             )
         } else if (!available && root.kind == RootKind.PICKED) {
@@ -2330,6 +2678,7 @@ private fun FolderDetailContent(
     onRequestRemoveSubfolder: (FolderRef) -> Unit,
     onUpdateTrackedSubfolder: (LibraryRoot, String) -> Unit,
     onEditTrackedSubfolderSource: (LibraryRoot, String, CloudTrackingInfo) -> Unit,
+    onEditCloudRootSource: (LibraryRoot, String?) -> Unit,
     onOpenExtensions: (() -> Unit)?,
 ) {
     val strings = LocalStrings.current
@@ -2341,6 +2690,13 @@ private fun FolderDetailContent(
         root.kind == RootKind.CLOUD_EXTENSION &&
         extAvailability != null &&
         extAvailability != CloudProviderAvailability.AVAILABLE
+    val detailBestRecoveryProvider = remember(root, showExtUnavailableBanner, providerRegistry.providers.collectAsStateWithLifecycle().value) {
+        if (showExtUnavailableBanner && root != null) {
+            libraryStore.bestCompatibleProviderForRoot(root)
+        } else {
+            null
+        }
+    }
     val (subfolders, directTracks) = remember(
         libraryState.tracks,
         libraryState.folderSortOrders,
@@ -2407,6 +2763,10 @@ private fun FolderDetailContent(
                     availability = extAvailability,
                     providerId = root.resolvedProviderId,
                     onOpenExtensions = onOpenExtensions,
+                    bestRecoveryProvider = detailBestRecoveryProvider,
+                    onSwitchSource = if (detailBestRecoveryProvider != null) {
+                        { onEditCloudRootSource(root, detailBestRecoveryProvider.providerId) }
+                    } else null,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
                 )
             }
