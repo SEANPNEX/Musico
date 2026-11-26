@@ -53,6 +53,7 @@
                                     FontSize="9"
                                     Content="&#xE711;"
                                     ToolTip="{DynamicResource Str_Songs_ClearFieldFilter}"
+                                    AutomationProperties.Name="{DynamicResource Str_Songs_ClearFieldFilter}"
                                     Click="ClearSearchField_Click" />
                         </StackPanel>
                     </Border>
@@ -90,6 +91,8 @@
                                 HorizontalAlignment="Right"
                                 VerticalAlignment="Center"
                                 Margin="0,0,2,0"
+                                ToolTip="{DynamicResource Str_Songs_ClearSearch}"
+                                AutomationProperties.Name="{DynamicResource Str_Songs_ClearSearch}"
                                 Visibility="Collapsed"
                                 Click="ClearSearch_Click" />
                     </Grid>

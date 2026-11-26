@@ -115,6 +115,9 @@ public partial class SongInfoDialog : UserControl
         LastPlayedValue.Text = lastPlayed is DateTimeOffset lp ? FormatTimestamp(lp) : L.Get("SongInfo_Never");
         PlayedTimesValue.Text = history.GetCount(track.Id).ToString();
 
+        FileNameValue.Text = string.IsNullOrWhiteSpace(track.FileName) ? "—" : track.FileName;
+        FileNameValue.ToolTip = FileNameValue.Text;
+
         string? filePath = !track.IsCloud ? _ctx.Services.Library.GetFilePath(track) : null;
         string sourceText = !string.IsNullOrWhiteSpace(filePath)
             ? filePath

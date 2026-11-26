@@ -151,6 +151,7 @@ public partial class PlaylistsView : UserControl
                 Style = (Style)FindResource("Win10IconButtonStyle"),
                 Margin = new Thickness(0, 0, 4, 0)
             };
+            System.Windows.Automation.AutomationProperties.SetName(renameBtn, L.Get("Playlists_RenameTooltip"));
             renameBtn.Click += (_, e) =>
             {
                 e.Handled = true;
@@ -162,6 +163,7 @@ public partial class PlaylistsView : UserControl
                 ToolTip = L.Get("Playlists_DeleteTooltip"),
                 Style = (Style)FindResource("Win10IconButtonStyle")
             };
+            System.Windows.Automation.AutomationProperties.SetName(delBtn, L.Get("Playlists_DeleteTooltip"));
             delBtn.Click += (_, e) =>
             {
                 e.Handled = true;

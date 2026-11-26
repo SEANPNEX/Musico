@@ -1220,6 +1220,82 @@ class LibraryStoreTest {
         assertNull(store.cloudTracking(LibraryRoot.APP_FOLDER_ID, "Nested/Album"))
     }
 
+    @Test
+    fun deleteTrackFileAndSubfolderAndAppFolderGuardAndRemoveFromLibrary() = runBlocking {
+        val fileOne = touch("Mix/one.mp3")
+        val fileTwo = touch("Mix/Sub/two.mp3")
+        val fileKeep = touch("Keep/keep.mp3")
+
+        val store = makeStore()
+        store.rescan()
+
+        val trackOne = store.state.value.tracks.first { it.relativePath == "Mix/one.mp3" }
+        val trackTwo = store.state.value.tracks.first { it.relativePath == "Mix/Sub/two.mp3" }
+        val trackKeep = store.state.value.tracks.first { it.relativePath == "Keep/keep.mp3" }
+
+        assertEquals(fileOne.absolutePath, store.displayLocation(trackOne))
+        assertEquals(File(docsDir, "Mix/Sub").absolutePath, store.displayFolderLocation(LibraryRoot.APP_FOLDER_ID, "Mix/Sub"))
+
+        val pid = store.createPlaylist("My List")
+        store.addToPlaylist(listOf(trackOne.id, trackTwo.id, trackKeep.id), pid)
+        store.toggleFavourite(trackOne.id)
+        store.toggleFavourite(trackKeep.id)
+
+        val beforeDeleting = mutableListOf<Set<String>>()
+        val removedCallbacks = mutableSetOf<String>()
+        store.onBeforeDeletingTracks = { beforeDeleting.add(it) }
+        store.onTracksRemoved = { removedCallbacks.addAll(it) }
+
+        // 1. Delete individual track from APP_FOLDER
+        val delOne = store.deleteTrackFile(trackOne.id)
+        assertTrue(delOne.isSuccess)
+        assertFalse(fileOne.exists())
+        assertNull(store.track(trackOne.id))
+        assertEquals(listOf(setOf(trackOne.id)), beforeDeleting)
+        assertEquals(setOf(trackOne.id), removedCallbacks)
+        assertFalse(store.isFavourite(trackOne.id))
+        assertEquals(listOf(trackTwo.id, trackKeep.id), store.state.value.playlists.first().trackIds)
+
+        // 2. Delete subfolder from APP_FOLDER
+        val delSub = store.deleteFolderFiles(LibraryRoot.APP_FOLDER_ID, "Mix")
+        assertTrue(delSub.isSuccess)
+        assertFalse(File(docsDir, "Mix").exists())
+        assertFalse(fileTwo.exists())
+        assertNull(store.track(trackTwo.id))
+        assertTrue(setOf(trackTwo.id) in beforeDeleting)
+        assertTrue(trackTwo.id in removedCallbacks)
+        assertEquals(listOf(trackKeep.id), store.state.value.playlists.first().trackIds)
+
+        // 3. Deleting missing file fails and leaves library intact
+        assertTrue(fileKeep.delete())
+        val delMissing = store.deleteTrackFile(trackKeep.id)
+        assertTrue(delMissing.isFailure)
+        assertNotNull(store.track(trackKeep.id))
+
+        // Restore fileKeep on disk for next checks
+        touch("Keep/keep.mp3")
+
+        // 4. Guard against deleting APP_FOLDER root
+        val delAppRoot = store.deleteFolderFiles(LibraryRoot.APP_FOLDER_ID, "")
+        assertTrue(delAppRoot.isFailure)
+        assertTrue(docsDir.exists())
+        assertNotNull(store.track(trackKeep.id))
+
+        // 5. removeTrackFromLibrary excludes without deleting file, and restoreExcludedFolders restores it
+        store.removeTrackFromLibrary(trackKeep.id)
+        assertTrue(fileKeep.exists())
+        assertNull(store.track(trackKeep.id))
+        val appRoot = store.state.value.roots.first { it.id == LibraryRoot.APP_FOLDER_ID }
+        assertTrue("Keep/keep.mp3" in appRoot.excludedPaths)
+
+        store.rescan()
+        assertNull(store.track(trackKeep.id))
+
+        store.restoreExcludedFolders(LibraryRoot.APP_FOLDER_ID)
+        assertNotNull(store.track(trackKeep.id))
+        assertTrue(store.state.value.roots.first { it.id == LibraryRoot.APP_FOLDER_ID }.excludedPaths.isEmpty())
+    }
+
     private fun createValidPngBytes(): ByteArray = byteArrayOf(
         0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
     )

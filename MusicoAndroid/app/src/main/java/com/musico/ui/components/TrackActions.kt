@@ -13,6 +13,7 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.AddToQueue
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
@@ -33,13 +34,17 @@ import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.musico.audio.PlayerController
 import com.musico.cloud.CloudExporter
+import com.musico.core.LyricsStore
 import com.musico.i18n.LocalStrings
 import com.musico.model.PlayQueue
 import com.musico.model.Playlist
@@ -51,6 +56,10 @@ import com.musico.store.CloudDownloadManager
 import com.musico.store.CloudDownloadStatus
 import com.musico.store.LibraryStore
 import com.musico.store.PlayHistoryUiState
+import com.musico.ui.LocalShowMessage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 sealed interface SingleTrackSaveTarget {
     data class FolderUri(val uri: Uri) : SingleTrackSaveTarget
@@ -72,6 +81,7 @@ class TrackActionState(
     val onPickFolder: ((Uri) -> Unit) -> Unit,
     val onPickImage: ((Uri) -> Unit) -> Unit,
     val onQuickSearch: (String, SearchField) -> Unit,
+    val lyricsStore: LyricsStore? = null,
 ) {
     var queuePickerIds: List<String>? by mutableStateOf(null)
     var playlistPickerIds: List<String>? by mutableStateOf(null)
@@ -79,6 +89,8 @@ class TrackActionState(
     var pendingSaveTrackDestination: Track? by mutableStateOf(null)
     var savingCloudTrack: PendingSingleTrackSave? by mutableStateOf(null)
     var songInfoTrackId: String? by mutableStateOf(null)
+    var deleteTargetTrack: Track? by mutableStateOf(null)
+    var deleteErrorMessage: String? by mutableStateOf(null)
 
     fun requestSaveCloudTrack(track: Track) {
         pendingSaveTrackDestination = track
@@ -96,9 +108,10 @@ fun rememberTrackActionState(
     onPickFolder: ((Uri) -> Unit) -> Unit,
     onPickImage: ((Uri) -> Unit) -> Unit,
     onQuickSearch: (String, SearchField) -> Unit,
+    lyricsStore: LyricsStore? = null,
 ): TrackActionState {
-    return remember(libraryStore, playerController, cloudExporter, cloudDownloadManager, onPickFolder, onPickImage, onQuickSearch) {
-        TrackActionState(libraryStore, playerController, cloudExporter, cloudDownloadManager, onPickFolder, onPickImage, onQuickSearch)
+    return remember(libraryStore, playerController, cloudExporter, cloudDownloadManager, onPickFolder, onPickImage, onQuickSearch, lyricsStore) {
+        TrackActionState(libraryStore, playerController, cloudExporter, cloudDownloadManager, onPickFolder, onPickImage, onQuickSearch, lyricsStore)
     }
 }
 
@@ -115,6 +128,8 @@ fun TrackMenuItems(
     addTargetQueueId: String? = null,
 ) {
     val strings = LocalStrings.current
+    val showMessage = LocalShowMessage.current
+    val haptic = LocalHapticFeedback.current
     val singleResolved = if (ids.size == 1) actionState.libraryStore.track(ids[0]) else null
     val hasEphemeral = ids.any { id ->
         Track.isEphemeralId(id) || actionState.libraryStore.track(id)?.isEphemeral == true
@@ -136,6 +151,7 @@ fun TrackMenuItems(
         enabled = ids.isNotEmpty(),
         onClick = {
             actionState.playerController.playNext(ids)
+            showMessage(strings.playingNextNotice)
             onDismiss()
         }
     )
@@ -145,6 +161,7 @@ fun TrackMenuItems(
         enabled = ids.isNotEmpty(),
         onClick = {
             actionState.playerController.addToQueue(ids, queueId = addTargetQueueId)
+            showMessage(strings.addedToQueueNotice)
             onDismiss()
         }
     )
@@ -193,6 +210,7 @@ fun TrackMenuItems(
                     )
                 },
                 onClick = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                     actionState.libraryStore.toggleFavourite(favouriteId)
                     onDismiss()
                 }
@@ -220,6 +238,32 @@ fun TrackMenuItems(
             }
         )
     }
+    if (ids.size == 1 && singleResolved != null && !singleResolved.isEphemeral) {
+        HorizontalDivider()
+        DropdownMenuItem(
+            text = {
+                Text(
+                    text = if (singleResolved.isCloud) {
+                        strings.removeFromLibrary
+                    } else {
+                        strings.removeOrDeleteEllipsis
+                    },
+                    color = MaterialTheme.colorScheme.error,
+                )
+            },
+            leadingIcon = {
+                Icon(
+                    imageVector = Icons.Rounded.Delete,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                )
+            },
+            onClick = {
+                onDismiss()
+                actionState.deleteTargetTrack = singleResolved
+            }
+        )
+    }
 }
 
 @Composable
@@ -231,6 +275,9 @@ fun TrackActionDialogs(
     historyState: PlayHistoryUiState,
 ) {
     val strings = LocalStrings.current
+    val showMessage = LocalShowMessage.current
+    val haptic = LocalHapticFeedback.current
+    val scope = rememberCoroutineScope()
     val queueIds = state.queuePickerIds
     if (queueIds != null) {
         val otherQueues = queues.filter { it.id != activeQueueId }
@@ -246,6 +293,7 @@ fun TrackActionDialogs(
             onDismiss = { state.queuePickerIds = null },
             onSelect = { selectedQueueId ->
                 state.playerController.addToQueue(queueIds, queueId = selectedQueueId)
+                showMessage(strings.addedToQueueNotice)
             }
         )
     }
@@ -444,6 +492,67 @@ fun TrackActionDialogs(
             onPickImage = state.onPickImage,
             onQuickSearch = state.onQuickSearch,
             onDismiss = { state.songInfoTrackId = null },
+        )
+    }
+
+    val deleteTarget = state.deleteTargetTrack
+    if (deleteTarget != null) {
+        if (deleteTarget.isCloud) {
+            ConfirmDialog(
+                title = strings.deleteItemConfirmTitle(deleteTarget.title),
+                message = strings.removeSongConfirmMessage,
+                confirmLabel = strings.removeFromLibrary,
+                onDismiss = { state.deleteTargetTrack = null },
+                onConfirm = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    state.libraryStore.removeTrackFromLibrary(deleteTarget.id)
+                    showMessage(strings.removedFromLibraryNotice)
+                },
+            )
+        } else {
+            val locationPath = remember(deleteTarget.id, deleteTarget.rootId, deleteTarget.relativePath) {
+                state.libraryStore.displayLocation(deleteTarget)
+            }
+            LocalDeleteOptionsDialog(
+                title = strings.deleteSongDialogTitle,
+                itemName = deleteTarget.fileName,
+                locationPath = locationPath,
+                message = strings.deleteLocalTrackMessage,
+                onRemoveFromLibrary = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    state.libraryStore.removeTrackFromLibrary(deleteTarget.id)
+                    showMessage(strings.removedFromLibraryNotice)
+                },
+                onDeleteFromDevice = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            state.libraryStore.deleteTrackFile(deleteTarget.id)
+                        }
+                        result.onSuccess {
+                            state.lyricsStore?.removeImported(deleteTarget.id)
+                            showMessage(strings.deletedFromDeviceNotice)
+                        }.onFailure { err ->
+                            state.deleteErrorMessage = err.message ?: strings.deleteFailedFallback
+                        }
+                    }
+                },
+                onDismiss = { state.deleteTargetTrack = null },
+            )
+        }
+    }
+
+    val deleteErr = state.deleteErrorMessage
+    if (deleteErr != null) {
+        AlertDialog(
+            onDismissRequest = { state.deleteErrorMessage = null },
+            title = { Text(strings.deleteFailedTitle) },
+            text = { Text(deleteErr) },
+            confirmButton = {
+                TextButton(onClick = { state.deleteErrorMessage = null }) {
+                    Text(strings.ok)
+                }
+            },
         )
     }
 }

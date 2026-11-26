@@ -52,6 +52,7 @@
                             FontSize="11"
                             Content="&#xE8BB;"
                             ToolTip="{DynamicResource Str_Common_Close}"
+                            AutomationProperties.Name="{DynamicResource Str_Common_Close}"
                             Click="CloseIcon_Click" />
                 </Grid>
 
@@ -289,6 +290,7 @@
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
                                     <RowDefinition Height="Auto" />
+                                    <RowDefinition Height="Auto" />
                                 </Grid.RowDefinitions>
 
                                 <TextBlock Grid.Row="0" Grid.Column="0" Text="{DynamicResource Str_SongInfo_Precision}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
@@ -321,8 +323,11 @@
                                 <TextBlock Grid.Row="9" Grid.Column="0" Text="{DynamicResource Str_SongInfo_PlayedTimes}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
                                 <TextBlock x:Name="PlayedTimesValue" Grid.Row="9" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" Margin="0,3" />
 
-                                <TextBlock Grid.Row="10" Grid.Column="0" Text="{DynamicResource Str_SongInfo_Source}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
-                                <TextBlock x:Name="LocationValue" Grid.Row="10" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" TextTrimming="CharacterEllipsis" Margin="0,3" />
+                                <TextBlock Grid.Row="10" Grid.Column="0" Text="{DynamicResource Str_SongInfo_FileName}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
+                                <TextBlock x:Name="FileNameValue" Grid.Row="10" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextPrimaryBrush}" TextWrapping="Wrap" Margin="0,3" />
+
+                                <TextBlock Grid.Row="11" Grid.Column="0" Text="{DynamicResource Str_SongInfo_Location}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" Margin="0,3" />
+                                <TextBlock x:Name="LocationValue" Grid.Row="11" Grid.Column="1" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" TextWrapping="Wrap" Margin="0,3" />
                             </Grid>
                         </Border>
                     </StackPanel>

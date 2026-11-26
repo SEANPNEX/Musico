@@ -31,6 +31,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -61,6 +63,7 @@ fun PlayerBar(
     modifier: Modifier = Modifier
 ) {
     val strings = LocalStrings.current
+    val haptic = LocalHapticFeedback.current
     val track = playerState.currentTrack
 
     Surface(
@@ -143,7 +146,10 @@ fun PlayerBar(
                             Icon(Icons.Rounded.SkipPrevious, contentDescription = strings.previous)
                         }
                         IconButton(
-                            onClick = { playerController.togglePlayPause() },
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                playerController.togglePlayPause()
+                            },
                             enabled = track != null
                         ) {
                             Icon(

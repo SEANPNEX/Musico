@@ -41,6 +41,7 @@
                         <Button Style="{StaticResource Win10IconButtonStyle}"
                                 Content="&#xE711;"
                                 ToolTip="{DynamicResource Str_Common_Close}"
+                                AutomationProperties.Name="{DynamicResource Str_Common_Close}"
                                 Click="Close_Click" />
                     </StackPanel>
                 </Grid>

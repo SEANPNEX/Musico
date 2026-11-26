@@ -6,6 +6,7 @@ using System.Windows.Media;
 using MusicoWindows.Converters;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
+using MusicoWindows.Views;
 
 namespace MusicoWindows.Controls;
 
@@ -42,7 +43,9 @@ public partial class TrackRowControl : UserControl
         Action<ContextMenu>? extraMenuItems = null,
         Action<Track, string>? openSaveCloudTrack = null,
         Action<Track>? openSongInfo = null,
-        Guid? targetQueueId = null)
+        Guid? targetQueueId = null,
+        Action<DeleteChoiceRequest>? openDeleteChoice = null,
+        Action<string, string?, Action?>? showToast = null)
     {
         _onClick = onClick;
         _isAvailable = isAvailable;
@@ -80,7 +83,9 @@ public partial class TrackRowControl : UserControl
             openSaveCloudTrack,
             openSongInfo,
             explicitTrack: track,
-            targetQueueId: targetQueueId);
+            targetQueueId: targetQueueId,
+            openDeleteChoice: openDeleteChoice,
+            showToast: showToast);
     }
 
     public void EnableDragReorder(string scopeKey, int index, int itemCount, Action<int, int> onDropReorder)
@@ -107,6 +112,7 @@ public partial class TrackRowControl : UserControl
             Margin = new Thickness(2, 0, 0, 0),
             Style = (Style)FindResource("Win10IconButtonStyle")
         };
+        System.Windows.Automation.AutomationProperties.SetName(btn, tooltip);
         btn.Click += (_, e) =>
         {
             e.Handled = true;

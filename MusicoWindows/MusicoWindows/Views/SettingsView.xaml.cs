@@ -4,6 +4,7 @@ using System.IO;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using MusicoWindows.Cloud;
@@ -143,11 +144,12 @@ public partial class SettingsView : UserControl
             WindowOpacitySlider.Value = Math.Clamp(bgPct, 25, 100);
             WindowOpacityValueText.Text = $"{bgPct}%";
 
-            // Background image preview + visibility slider
+            // Background image preview + visibility & blur sliders
             string? imagePath = ThemeManager.ResolveBackgroundImagePath();
             bool hasImage = !string.IsNullOrWhiteSpace(imagePath) && File.Exists(imagePath);
             RemoveBgImageButton.Visibility = hasImage ? Visibility.Visible : Visibility.Collapsed;
             ImageVisibilityRow.Visibility = hasImage ? Visibility.Visible : Visibility.Collapsed;
+            ImageBlurRow.Visibility = hasImage ? Visibility.Visible : Visibility.Collapsed;
 
             if (!hasImage)
             {
@@ -155,6 +157,10 @@ public partial class SettingsView : UserControl
                 BgImagePreview.Source = null;
                 BgImagePreview.Visibility = Visibility.Collapsed;
                 BgImagePlaceholderGlyph.Visibility = Visibility.Visible;
+                LivePreviewBgImage.Source = null;
+                LivePreviewBgImage.Effect = null;
+                LivePreviewBgImage.Visibility = Visibility.Collapsed;
+                LivePreviewBgScrim.Visibility = Visibility.Collapsed;
                 _cachedPreviewPath = null;
             }
             else
@@ -162,11 +168,45 @@ public partial class SettingsView : UserControl
                 BgImageStatusText.ClearValue(TextBlock.TextProperty);
                 BgImageStatusText.Text = L.Get("Settings_ImageActive");
                 LoadPreviewImage(imagePath!);
+
+                LivePreviewBgImage.Source = BgImagePreview.Source;
+                LivePreviewBgImage.Opacity = settings.BackgroundImageOpacity;
+                LivePreviewBgImage.Effect = settings.BackgroundImageBlur > 0.05
+                    ? new BlurEffect { Radius = settings.BackgroundImageBlur, KernelType = KernelType.Gaussian }
+                    : null;
+                LivePreviewBgImage.Visibility = BgImagePreview.Source is not null ? Visibility.Visible : Visibility.Collapsed;
+
+                ThemePalette? previewPalette = ThemeManager.CurrentPalette;
+                RgbColor scrimRgb = previewPalette is not null
+                    ? new RgbColor(previewPalette.ContentBackground.R, previewPalette.ContentBackground.G, previewPalette.ContentBackground.B)
+                    : (ThemeManager.IsDark ? new RgbColor(0x14, 0x14, 0x14) : new RgbColor(0xF2, 0xF2, 0xF2));
+                byte scrimAlpha = ColorMath.ComputeBackgroundScrimAlpha(settings);
+                var scrimBrush = new SolidColorBrush(Color.FromArgb(scrimAlpha, scrimRgb.R, scrimRgb.G, scrimRgb.B));
+                scrimBrush.Freeze();
+                LivePreviewBgScrim.Background = scrimBrush;
+                LivePreviewBgScrim.Visibility = LivePreviewBgImage.Visibility;
             }
 
             int imgPct = (int)Math.Round(settings.BackgroundImageOpacity * 100.0);
             ImageOpacitySlider.Value = Math.Clamp(imgPct, 10, 100);
             ImageOpacityValueText.Text = $"{imgPct}%";
+
+            double blurVal = AppearanceSettings.ClampBackgroundImageBlur(settings.BackgroundImageBlur);
+            ImageBlurSlider.Value = Math.Round(blurVal);
+            ImageBlurValueText.Text = L.Format("Settings_BlurPxFormat", (int)Math.Round(blurVal));
+
+            // WCAG 2.1 contrast check
+            RgbColor effectiveBg = ResolveEffectiveBackgroundRgb(settings);
+            RgbColor effectiveFg = AppearancePresets.ResolveForegroundColor(settings, ThemeManager.IsDark);
+            RgbColor effectiveAccent = AppearancePresets.ResolveAccentColor(settings);
+            double fgRatio = ColorMath.ContrastRatio(effectiveBg, effectiveFg);
+            double accentRatio = ColorMath.ContrastRatio(effectiveBg, effectiveAccent);
+            bool lowContrast = fgRatio < 4.5 || accentRatio < 3.0;
+            ContrastWarningBanner.Visibility = lowContrast ? Visibility.Visible : Visibility.Collapsed;
+            if (lowContrast)
+            {
+                ContrastWarningText.Text = L.Format("Settings_LowContrastDesc", fgRatio, accentRatio);
+            }
         }
         finally
         {
@@ -521,6 +561,42 @@ public partial class SettingsView : UserControl
         double opacity = Math.Round(e.NewValue) / 100.0;
         ImageOpacityValueText.Text = $"{(int)Math.Round(e.NewValue)}%";
         ThemeManager.SetBackgroundImageOpacity(Application.Current, opacity);
+    }
+
+    private void ImageBlurSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_isUpdatingUi || !IsLoaded) return;
+        double blur = Math.Round(e.NewValue);
+        ImageBlurValueText.Text = L.Format("Settings_BlurPxFormat", (int)blur);
+        ThemeManager.SetBackgroundImageBlur(Application.Current, blur);
+    }
+
+    private void AutoFixContrast_Click(object sender, RoutedEventArgs e)
+    {
+        AppearanceSettings settings = ThemeManager.CurrentSettings;
+        RgbColor effectiveBg = ResolveEffectiveBackgroundRgb(settings);
+        RgbColor effectiveFg = AppearancePresets.ResolveForegroundColor(settings, ThemeManager.IsDark);
+        RgbColor effectiveAccent = AppearancePresets.ResolveAccentColor(settings);
+
+        string? fixedFgHex = ColorMath.ContrastRatio(effectiveBg, effectiveFg) < 4.5
+            ? ColorMath.ToHex(ColorMath.AutoFixForeground(effectiveBg, effectiveFg))
+            : null;
+        string? fixedAccentHex = ColorMath.ContrastRatio(effectiveBg, effectiveAccent) < 3.0
+            ? ColorMath.ToHex(ColorMath.AutoFixAccent(effectiveBg, effectiveAccent))
+            : null;
+
+        ThemeManager.ApplyContrastFix(Application.Current, fixedFgHex, fixedAccentHex);
+    }
+
+    private static RgbColor ResolveEffectiveBackgroundRgb(AppearanceSettings settings)
+    {
+        if (AppearancePresets.ResolveBackgroundColor(settings) is RgbColor explicitBg)
+            return explicitBg;
+
+        if (ThemeManager.CurrentPalette is { } palette)
+            return new RgbColor(palette.ContentBackground.R, palette.ContentBackground.G, palette.ContentBackground.B);
+
+        return ThemeManager.IsDark ? new RgbColor(0x17, 0x17, 0x17) : new RgbColor(0xFF, 0xFF, 0xFF);
     }
 
     private void ResetAppearance_Click(object sender, RoutedEventArgs e)

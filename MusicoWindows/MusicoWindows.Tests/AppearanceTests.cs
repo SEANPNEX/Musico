@@ -251,4 +251,73 @@ public sealed class AppearanceTests : IDisposable
         Assert.False(File.Exists(Path.Combine(store.AppearanceDirectory, "background.jpg")));
         Assert.Null(store.ResolveBackgroundImagePath(secondFileName));
     }
+
+    [Fact]
+    public void WcagContrastRatioAndAutoFixMeetAaThresholds()
+    {
+        var black = new RgbColor(0x00, 0x00, 0x00);
+        var white = new RgbColor(0xFF, 0xFF, 0xFF);
+        Assert.Equal(21.0, ColorMath.ContrastRatio(black, white), precision: 2);
+        Assert.Equal(1.0, ColorMath.ContrastRatio(white, white), precision: 2);
+
+        // Low-contrast foreground on dark background must be fixed to >= 4.5
+        var darkBg = new RgbColor(0x18, 0x18, 0x1B);
+        var lowFgOnDark = new RgbColor(0x38, 0x38, 0x42);
+        Assert.True(ColorMath.ContrastRatio(darkBg, lowFgOnDark) < 4.5);
+        RgbColor fixedDarkFg = ColorMath.AutoFixForeground(darkBg, lowFgOnDark);
+        Assert.True(ColorMath.ContrastRatio(darkBg, fixedDarkFg) >= 4.5);
+
+        // Low-contrast foreground on light background must be fixed to >= 4.5
+        var lightBg = new RgbColor(0xF8, 0xF6, 0xF1);
+        var lowFgOnLight = new RgbColor(0xD6, 0xD3, 0xCE);
+        Assert.True(ColorMath.ContrastRatio(lightBg, lowFgOnLight) < 4.5);
+        RgbColor fixedLightFg = ColorMath.AutoFixForeground(lightBg, lowFgOnLight);
+        Assert.True(ColorMath.ContrastRatio(lightBg, fixedLightFg) >= 4.5);
+
+        // Already accessible foreground is returned unchanged
+        Assert.Equal(white, ColorMath.AutoFixForeground(darkBg, white));
+
+        // Low-contrast accent must be fixed to >= 3.0
+        var lowAccent = new RgbColor(0x22, 0x24, 0x2C);
+        Assert.True(ColorMath.ContrastRatio(darkBg, lowAccent) < 3.0);
+        RgbColor fixedAccent = ColorMath.AutoFixAccent(darkBg, lowAccent);
+        Assert.True(ColorMath.ContrastRatio(darkBg, fixedAccent) >= 3.0);
+    }
+
+    [Fact]
+    public void BlurClampingAndLyricsAppearanceSettingsPersist()
+    {
+        Assert.Equal(0.0, AppearanceSettings.ClampBackgroundImageBlur(-5.0));
+        Assert.Equal(24.0, AppearanceSettings.ClampBackgroundImageBlur(60.0));
+        Assert.Equal(0.0, AppearanceSettings.ClampBackgroundImageBlur(double.NaN));
+        Assert.Equal(0.0, AppearanceSettings.ClampBackgroundImageBlur(double.PositiveInfinity));
+        Assert.Equal(12.5, AppearanceSettings.ClampBackgroundImageBlur(12.5));
+
+        string dir = NewTempDir();
+        var store = new AppearanceStore(dir);
+        var saved = store.Save(new AppearanceSettings
+        {
+            BackgroundImageBlur = 99.0,
+            LyricsFontSize = LyricsFontSize.Large,
+            LyricsAlignment = LyricsAlignment.Center
+        });
+
+        Assert.Equal(24.0, saved.BackgroundImageBlur);
+        Assert.Equal(LyricsFontSize.Large, saved.LyricsFontSize);
+        Assert.Equal(LyricsAlignment.Center, saved.LyricsAlignment);
+
+        AppearanceSettings reloaded = store.Load();
+        Assert.Equal(24.0, reloaded.BackgroundImageBlur);
+        Assert.Equal(LyricsFontSize.Large, reloaded.LyricsFontSize);
+        Assert.Equal(LyricsAlignment.Center, reloaded.LyricsAlignment);
+
+        // Invalid enum values normalize safely back to defaults
+        var invalidEnum = (new AppearanceSettings
+        {
+            LyricsFontSize = (LyricsFontSize)999,
+            LyricsAlignment = (LyricsAlignment)999
+        }).Normalize();
+        Assert.Equal(LyricsFontSize.Medium, invalidEnum.LyricsFontSize);
+        Assert.Equal(LyricsAlignment.Leading, invalidEnum.LyricsAlignment);
+    }
 }

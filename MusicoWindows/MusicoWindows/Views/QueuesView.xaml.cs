@@ -358,11 +358,41 @@ public partial class QueuesView : UserControl
         if (_ctx is null) return;
         var viewed = _ctx.Services.Queues.Viewed;
         Guid targetId = viewed.Id;
+        string queueName = viewed.Name;
+        var savedIds = viewed.TrackIds.ToList();
+        int savedIndex = viewed.CurrentIndex ?? 0;
+        double savedPos = targetId == _ctx.Services.Queues.ActiveId
+            ? _ctx.Services.Player.CurrentTimeSeconds
+            : viewed.PositionSeconds;
+        var savedSort = viewed.SortMode;
+
         _ctx.OpenConfirm(
-            L.Format("Queues_ClearConfirmTitle", viewed.Name),
-            L.Format("Queues_ClearConfirmMessage", viewed.Name),
+            L.Format("Queues_ClearConfirmTitle", queueName),
+            L.Format("Queues_ClearConfirmMessage", queueName),
             L.Get("Queues_ClearConfirmAction"),
-            () => _ctx.Services.Player.ClearQueue(targetId),
+            () =>
+            {
+                _ctx.Services.Player.ClearQueue(targetId);
+                if (savedIds.Count > 0)
+                {
+                    _ctx.ShowToast?.Invoke(
+                        L.Format("Toast_ClearedQueue", queueName),
+                        L.Get("Common_Undo"),
+                        () =>
+                        {
+                            _ctx.Services.Queues.Update(targetId, q =>
+                            {
+                                q.Replace(savedIds, savedIndex);
+                                q.PositionSeconds = savedPos;
+                                q.SortMode = savedSort;
+                            });
+                            if (targetId == _ctx.Services.Queues.ActiveId)
+                            {
+                                _ctx.Services.Player.Restore();
+                            }
+                        });
+                }
+            },
             true);
     }
 }

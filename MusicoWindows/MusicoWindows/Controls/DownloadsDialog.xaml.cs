@@ -141,6 +141,7 @@ public partial class DownloadsDialog : UserControl
                 ToolTip = job.Title,
                 Margin = new Thickness(0, 0, 4, 0)
             };
+            System.Windows.Automation.AutomationProperties.SetName(detailsBtn, job.Title);
             Guid capturedId = job.Id;
             detailsBtn.Click += (_, e) =>
             {
@@ -182,6 +183,7 @@ public partial class DownloadsDialog : UserControl
                     ToolTip = L.Get("SaveCloud_OpenFolder"),
                     Margin = new Thickness(0, 0, 4, 0)
                 };
+                System.Windows.Automation.AutomationProperties.SetName(openBtn, L.Get("SaveCloud_OpenFolder"));
                 openBtn.Click += (_, e) =>
                 {
                     e.Handled = true;
@@ -196,6 +198,7 @@ public partial class DownloadsDialog : UserControl
                 Content = "\uE711",
                 ToolTip = L.Get("Downloads_DismissTooltip")
             };
+            System.Windows.Automation.AutomationProperties.SetName(dismissBtn, L.Get("Downloads_DismissTooltip"));
             Guid capturedId = job.Id;
             dismissBtn.Click += (_, e) =>
             {

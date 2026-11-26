@@ -682,7 +682,12 @@
                                 <RepeatButton Command="Slider.DecreaseLarge">
                                     <RepeatButton.Template>
                                         <ControlTemplate TargetType="RepeatButton">
-                                            <Border Height="2" Background="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
+                                            <Border x:Name="ActiveTrack" Height="2" Background="{DynamicResource AccentBrush}" VerticalAlignment="Center" />
+                                            <ControlTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=Slider}}" Value="Scrubbing">
+                                                    <Setter TargetName="ActiveTrack" Property="Height" Value="4" />
+                                                </DataTrigger>
+                                            </ControlTemplate.Triggers>
                                         </ControlTemplate>
                                     </RepeatButton.Template>
                                 </RepeatButton>
@@ -691,7 +696,12 @@
                                 <RepeatButton Command="Slider.IncreaseLarge">
                                     <RepeatButton.Template>
                                         <ControlTemplate TargetType="RepeatButton">
-                                            <Border Height="2" Background="{DynamicResource SliderTrackBrush}" VerticalAlignment="Center" />
+                                            <Border x:Name="InactiveTrack" Height="2" Background="{DynamicResource SliderTrackBrush}" VerticalAlignment="Center" />
+                                            <ControlTemplate.Triggers>
+                                                <DataTrigger Binding="{Binding Tag, RelativeSource={RelativeSource AncestorType=Slider}}" Value="Scrubbing">
+                                                    <Setter TargetName="InactiveTrack" Property="Height" Value="4" />
+                                                </DataTrigger>
+                                            </ControlTemplate.Triggers>
                                         </ControlTemplate>
                                     </RepeatButton.Template>
                                 </RepeatButton>
@@ -713,6 +723,9 @@
                                                     <Setter TargetName="ThumbCircle" Property="Fill" Value="{DynamicResource AccentBrush}" />
                                                 </Trigger>
                                                 <Trigger Property="IsDragging" Value="True">
+                                                    <Setter TargetName="ThumbCircle" Property="Width" Value="16" />
+                                                    <Setter TargetName="ThumbCircle" Property="Height" Value="16" />
+                                                    <Setter TargetName="ThumbCircle" Property="StrokeThickness" Value="3" />
                                                     <Setter TargetName="ThumbCircle" Property="Fill" Value="{DynamicResource AccentPressedBrush}" />
                                                 </Trigger>
                                             </ControlTemplate.Triggers>

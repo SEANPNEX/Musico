@@ -1,9 +1,14 @@
 package com.musico.ui.player
 
 import android.net.Uri
+import android.os.Build
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.Crossfade
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
@@ -11,8 +16,13 @@ import androidx.compose.animation.scaleIn
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.Orientation
+import androidx.compose.foundation.gestures.draggable
+import androidx.compose.foundation.gestures.rememberDraggableState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -63,6 +73,7 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
+import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
@@ -70,13 +81,25 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.blur
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -95,14 +118,21 @@ import com.musico.store.LibraryUiState
 import com.musico.store.PlayHistoryUiState
 import com.musico.store.QueueStore
 import com.musico.store.QueueUiState
+import com.musico.ui.LocalSnackbarHost
 import com.musico.ui.components.ArtworkImage
 import com.musico.ui.components.EmptyState
+import com.musico.ui.components.LocalThumbnailCache
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.screens.QueueSheet
 import com.musico.ui.screens.QueuesContent
 import com.musico.ui.theme.AppearanceSettings
+import com.musico.ui.theme.LocalReduceMotion
 import com.musico.ui.theme.MusicoMotion
 import com.musico.ui.theme.ThemeBackgroundLayer
+import com.musico.ui.theme.fastBlurBitmap
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 
 enum class PlayerModalSheet {
@@ -141,20 +171,114 @@ fun FullPlayerScreen(
     extensionStore: ExtensionStore? = null,
     backgroundImageFile: File? = null,
     backgroundImageOpacity: Float = AppearanceSettings.DEFAULT_BACKGROUND_IMAGE_OPACITY,
+    backgroundImageBlurDp: Float = AppearanceSettings.DEFAULT_BACKGROUND_IMAGE_BLUR_DP,
 ) {
     val strings = LocalStrings.current
+    val reduceMotion = LocalReduceMotion.current
+    val snackbarHostState = LocalSnackbarHost.current
+    val density = LocalDensity.current
+    val dragScope = rememberCoroutineScope()
+    val offsetY = remember { Animatable(0f) }
+    val dismissThresholdPx = with(density) { 140.dp.toPx() }
+    val flingVelocityPx = with(density) { 800.dp.toPx() }
+
     var activeSheet by remember { mutableStateOf<PlayerModalSheet?>(null) }
     var sidePane by rememberSaveable { mutableStateOf(PlayerSidePane.LYRICS) }
 
+    val track = playerState.currentTrack
+    val thumbnailCache = LocalThumbnailCache.current
+    val ambientArtwork by produceState<ImageBitmap?>(
+        initialValue = null,
+        track?.id,
+        track?.artworkKey,
+        track?.remoteArtworkUrl,
+    ) {
+        value = if (track == null) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                val bmp = libraryStore.artwork.bitmap(track.artworkKey)
+                    ?: track.remoteArtworkUrl?.let { url -> thumbnailCache?.load(url) }
+                if (bmp == null) {
+                    null
+                } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                    fastBlurBitmap(bmp, 14).asImageBitmap()
+                } else {
+                    bmp.asImageBitmap()
+                }
+            }
+        }
+    }
+
     Surface(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()
+            .graphicsLayer { translationY = offsetY.value }
+            .draggable(
+                orientation = Orientation.Vertical,
+                state = rememberDraggableState { delta ->
+                    val next = (offsetY.value + delta).coerceAtLeast(0f)
+                    dragScope.launch { offsetY.snapTo(next) }
+                },
+                onDragStopped = { velocity ->
+                    if (offsetY.value > dismissThresholdPx || (velocity > flingVelocityPx && offsetY.value > 0f)) {
+                        onClose()
+                    } else {
+                        dragScope.launch {
+                            offsetY.animateTo(
+                                0f,
+                                MusicoMotion.motionSpec(
+                                    reduceMotion,
+                                    spring(dampingRatio = 0.86f, stiffness = Spring.StiffnessMediumLow),
+                                ),
+                            )
+                        }
+                    }
+                },
+            ),
         color = MaterialTheme.colorScheme.background
     ) {
         Box(modifier = Modifier.fillMaxSize()) {
             ThemeBackgroundLayer(
                 imageFile = backgroundImageFile,
                 imageOpacity = backgroundImageOpacity,
+                imageBlurDp = backgroundImageBlurDp,
             )
+            Crossfade(
+                targetState = ambientArtwork,
+                animationSpec = MusicoMotion.finiteMotionSpec(
+                    reduceMotion,
+                    tween(durationMillis = 380, easing = MusicoMotion.EmphasizedEasing),
+                ),
+                label = "ambient_artwork_backdrop",
+            ) { art ->
+                if (art != null) {
+                    val artMod = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        Modifier.fillMaxSize().blur(48.dp).alpha(0.28f)
+                    } else {
+                        Modifier.fillMaxSize().alpha(0.26f)
+                    }
+                    Box(modifier = Modifier.fillMaxSize()) {
+                        Image(
+                            bitmap = art,
+                            contentDescription = null,
+                            contentScale = ContentScale.Crop,
+                            modifier = artMod,
+                        )
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .background(
+                                    Brush.verticalGradient(
+                                        0f to MaterialTheme.colorScheme.background.copy(alpha = 0.30f),
+                                        0.55f to MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
+                                        1f to MaterialTheme.colorScheme.background.copy(alpha = 0.88f),
+                                    )
+                                )
+                        )
+                    }
+                }
+            }
             BoxWithConstraints(
                 modifier = Modifier
                     .fillMaxSize()
@@ -214,7 +338,8 @@ fun FullPlayerScreen(
                             targetState = sidePane,
                             transitionSpec = {
                                 MusicoMotion.sharedAxisXTransform(
-                                    forward = targetState.ordinal >= initialState.ordinal
+                                    forward = targetState.ordinal >= initialState.ordinal,
+                                    reduceMotion = reduceMotion,
                                 )
                             },
                             label = "player_side_pane"
@@ -261,6 +386,15 @@ fun FullPlayerScreen(
                 )
             }
         }
+            if (snackbarHostState != null) {
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier
+                        .align(Alignment.BottomCenter)
+                        .navigationBarsPadding()
+                        .padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+            }
         }
     }
 
@@ -322,6 +456,10 @@ private fun PlayerControlsPane(
     modifier: Modifier = Modifier
 ) {
     val strings = LocalStrings.current
+    val haptic = LocalHapticFeedback.current
+    val reduceMotion = LocalReduceMotion.current
+    val density = LocalDensity.current
+    val swipeScope = rememberCoroutineScope()
     val track = playerState.currentTrack
     val activeQueue = queueState.active
 
@@ -399,36 +537,47 @@ private fun PlayerControlsPane(
         if (track != null) {
             val artworkScale by animateFloatAsState(
                 targetValue = if (playerState.isPlaying) 1.0f else 0.92f,
-                animationSpec = MusicoMotion.ArtworkScaleSpring,
+                animationSpec = MusicoMotion.motionSpec(reduceMotion, MusicoMotion.ArtworkScaleSpring),
                 label = "artwork_scale"
             )
             val artworkElevation by animateDpAsState(
                 targetValue = if (playerState.isPlaying) 12.dp else 4.dp,
-                animationSpec = tween(durationMillis = 260, easing = MusicoMotion.EmphasizedEasing),
+                animationSpec = MusicoMotion.motionSpec(
+                    reduceMotion,
+                    tween(durationMillis = 260, easing = MusicoMotion.EmphasizedEasing),
+                ),
                 label = "artwork_elevation"
             )
+            val swipeX = remember(track.id) { Animatable(0f) }
+            val swipeThresholdPx = with(density) { 72.dp.toPx() }
+            val swipeFlingPx = with(density) { 500.dp.toPx() }
 
             AnimatedContent(
                 targetState = track,
                 contentKey = { it.id },
                 transitionSpec = {
-                    (fadeIn(
-                        animationSpec = tween(
-                            durationMillis = MusicoMotion.ENTER_DURATION_MS,
-                            easing = MusicoMotion.EmphasizedDecelerateEasing,
+                    if (reduceMotion) {
+                        androidx.compose.animation.EnterTransition.None togetherWith
+                            androidx.compose.animation.ExitTransition.None
+                    } else {
+                        (fadeIn(
+                            animationSpec = tween(
+                                durationMillis = MusicoMotion.ENTER_DURATION_MS,
+                                easing = MusicoMotion.EmphasizedDecelerateEasing,
+                            )
+                        ) + scaleIn(
+                            initialScale = 0.96f,
+                            animationSpec = tween(
+                                durationMillis = MusicoMotion.ENTER_DURATION_MS,
+                                easing = MusicoMotion.EmphasizedDecelerateEasing,
+                            )
+                        )) togetherWith fadeOut(
+                            animationSpec = tween(
+                                durationMillis = 120,
+                                easing = MusicoMotion.EmphasizedAccelerateEasing,
+                            )
                         )
-                    ) + scaleIn(
-                        initialScale = 0.96f,
-                        animationSpec = tween(
-                            durationMillis = MusicoMotion.ENTER_DURATION_MS,
-                            easing = MusicoMotion.EmphasizedDecelerateEasing,
-                        )
-                    )) togetherWith fadeOut(
-                        animationSpec = tween(
-                            durationMillis = 120,
-                            easing = MusicoMotion.EmphasizedAccelerateEasing,
-                        )
-                    )
+                    }
                 },
                 label = "full_player_artwork",
                 modifier = Modifier
@@ -436,6 +585,28 @@ private fun PlayerControlsPane(
                     .padding(vertical = 8.dp)
                     .widthIn(max = 360.dp)
                     .aspectRatio(1f)
+                    .graphicsLayer { translationX = swipeX.value * 0.35f }
+                    .draggable(
+                        orientation = Orientation.Horizontal,
+                        state = rememberDraggableState { delta ->
+                            swipeScope.launch { swipeX.snapTo(swipeX.value + delta) }
+                        },
+                        onDragStopped = { velocity ->
+                            if (swipeX.value < -swipeThresholdPx || velocity < -swipeFlingPx) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                playerController.next()
+                            } else if (swipeX.value > swipeThresholdPx || velocity > swipeFlingPx) {
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                                playerController.previous()
+                            }
+                            swipeScope.launch {
+                                swipeX.animateTo(
+                                    0f,
+                                    MusicoMotion.motionSpec(reduceMotion, spring()),
+                                )
+                            }
+                        },
+                    )
             ) { currentTrack ->
                 Surface(
                     shape = RoundedCornerShape(20.dp),
@@ -472,23 +643,28 @@ private fun PlayerControlsPane(
                         targetState = track,
                         contentKey = { it.id },
                         transitionSpec = {
-                            (slideInVertically(
-                                animationSpec = tween(
-                                    durationMillis = 220,
-                                    easing = MusicoMotion.EmphasizedDecelerateEasing,
-                                ),
-                                initialOffsetY = { it / 4 }
-                            ) + fadeIn(
-                                animationSpec = tween(durationMillis = 200)
-                            )) togetherWith (slideOutVertically(
-                                animationSpec = tween(
-                                    durationMillis = 120,
-                                    easing = MusicoMotion.EmphasizedAccelerateEasing,
-                                ),
-                                targetOffsetY = { -it / 4 }
-                            ) + fadeOut(
-                                animationSpec = tween(durationMillis = 100)
-                            ))
+                            if (reduceMotion) {
+                                androidx.compose.animation.EnterTransition.None togetherWith
+                                    androidx.compose.animation.ExitTransition.None
+                            } else {
+                                (slideInVertically(
+                                    animationSpec = tween(
+                                        durationMillis = 220,
+                                        easing = MusicoMotion.EmphasizedDecelerateEasing,
+                                    ),
+                                    initialOffsetY = { it / 4 }
+                                ) + fadeIn(
+                                    animationSpec = tween(durationMillis = 200)
+                                )) togetherWith (slideOutVertically(
+                                    animationSpec = tween(
+                                        durationMillis = 120,
+                                        easing = MusicoMotion.EmphasizedAccelerateEasing,
+                                    ),
+                                    targetOffsetY = { -it / 4 }
+                                ) + fadeOut(
+                                    animationSpec = tween(durationMillis = 100)
+                                ))
+                            }
                         },
                         label = "full_player_title",
                         modifier = Modifier.weight(1f)
@@ -512,7 +688,12 @@ private fun PlayerControlsPane(
                     }
                     if (!track.isEphemeral) {
                         val isFav = track.id in libraryState.favourites
-                        IconButton(onClick = { libraryStore.toggleFavourite(track.id) }) {
+                        IconButton(
+                            onClick = {
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                libraryStore.toggleFavourite(track.id)
+                            }
+                        ) {
                             Icon(
                                 imageVector = if (isFav) Icons.Rounded.Favorite else Icons.Rounded.FavoriteBorder,
                                 contentDescription = if (isFav) strings.removeFromFavourites else strings.addToFavourites,
@@ -553,7 +734,10 @@ private fun PlayerControlsPane(
                         )
                     }
                     FilledIconButton(
-                        onClick = { playerController.togglePlayPause() },
+                        onClick = {
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                            playerController.togglePlayPause()
+                        },
                         modifier = Modifier.size(68.dp)
                     ) {
                         Icon(

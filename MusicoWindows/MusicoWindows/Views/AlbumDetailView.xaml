@@ -78,6 +78,7 @@
                                     Style="{StaticResource Win10IconButtonStyle}"
                                     Content="&#xE712;"
                                     ToolTip="{DynamicResource Str_Common_MoreOptions}"
+                                    AutomationProperties.Name="{DynamicResource Str_Common_MoreOptions}"
                                     Click="More_Click" />
                         </StackPanel>
                     </StackPanel>

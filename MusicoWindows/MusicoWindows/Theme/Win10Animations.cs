@@ -12,6 +12,8 @@ namespace MusicoWindows.Theme;
 /// </summary>
 public static class Win10Animations
 {
+    public static bool IsMotionEnabled => SystemParameters.ClientAreaAnimation;
+
     private sealed class GridLengthAnimation : AnimationTimeline
     {
         public static readonly DependencyProperty FromProperty =
@@ -66,6 +68,15 @@ public static class Win10Animations
 
         var transform = EnsureTranslateTransform(target);
         transform.BeginAnimation(TranslateTransform.YProperty, null);
+        target.BeginAnimation(UIElement.OpacityProperty, null);
+
+        if (!IsMotionEnabled)
+        {
+            transform.Y = 0;
+            target.Opacity = 1;
+            return;
+        }
+
         transform.Y = 16;
         target.Opacity = 0;
 
@@ -93,6 +104,15 @@ public static class Win10Animations
 
         var transform = EnsureTranslateTransform(target);
         transform.BeginAnimation(TranslateTransform.XProperty, null);
+        target.BeginAnimation(UIElement.OpacityProperty, null);
+
+        if (!IsMotionEnabled)
+        {
+            transform.X = 0;
+            target.Opacity = 1;
+            return;
+        }
+
         transform.X = fromOffset;
         target.Opacity = 0.35;
 
@@ -120,6 +140,15 @@ public static class Win10Animations
 
         var transform = EnsureTranslateTransform(target);
         transform.BeginAnimation(TranslateTransform.XProperty, null);
+        target.BeginAnimation(UIElement.OpacityProperty, null);
+
+        if (!IsMotionEnabled)
+        {
+            transform.X = 0;
+            target.Opacity = 1;
+            return;
+        }
+
         transform.X = fromX;
         target.Opacity = 0;
 
@@ -148,6 +177,14 @@ public static class Win10Animations
     {
         if (column is null) return;
 
+        if (!IsMotionEnabled)
+        {
+            column.BeginAnimation(ColumnDefinition.WidthProperty, null);
+            column.Width = new GridLength(toWidth, GridUnitType.Pixel);
+            onCompleted?.Invoke();
+            return;
+        }
+
         var anim = new GridLengthAnimation
         {
             From = new GridLength(fromWidth, GridUnitType.Pixel),
@@ -173,6 +210,14 @@ public static class Win10Animations
     {
         if (element is null) return;
 
+        if (!IsMotionEnabled)
+        {
+            element.BeginAnimation(FrameworkElement.WidthProperty, null);
+            element.Width = toWidth;
+            onCompleted?.Invoke();
+            return;
+        }
+
         var anim = new DoubleAnimation(fromWidth, toWidth, TimeSpan.FromMilliseconds(durationMs))
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
@@ -188,6 +233,26 @@ public static class Win10Animations
 
     public static void AnimateModalOpen(UIElement? backdrop, UIElement? dialogCard)
     {
+        if (!IsMotionEnabled)
+        {
+            if (backdrop is not null)
+            {
+                backdrop.BeginAnimation(UIElement.OpacityProperty, null);
+                backdrop.Opacity = 1;
+            }
+            if (dialogCard is not null)
+            {
+                var scale = EnsureScaleTransform(dialogCard);
+                scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+                scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+                scale.ScaleX = 1.0;
+                scale.ScaleY = 1.0;
+                dialogCard.BeginAnimation(UIElement.OpacityProperty, null);
+                dialogCard.Opacity = 1;
+            }
+            return;
+        }
+
         if (backdrop is not null)
         {
             backdrop.Opacity = 0;
@@ -235,6 +300,15 @@ public static class Win10Animations
         if (target is null) return;
 
         var scale = EnsureScaleTransform(target);
+        if (!IsMotionEnabled)
+        {
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            scale.ScaleX = toScale;
+            scale.ScaleY = toScale;
+            return;
+        }
+
         var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
         var duration = TimeSpan.FromMilliseconds(durationMs);
 
@@ -248,6 +322,13 @@ public static class Win10Animations
     public static void AnimateFadeIn(UIElement? target, double fromOpacity = 0.35, int durationMs = 220)
     {
         if (target is null) return;
+
+        if (!IsMotionEnabled)
+        {
+            target.BeginAnimation(UIElement.OpacityProperty, null);
+            target.Opacity = 1.0;
+            return;
+        }
 
         var anim = new DoubleAnimation(fromOpacity, 1.0, TimeSpan.FromMilliseconds(durationMs))
         {

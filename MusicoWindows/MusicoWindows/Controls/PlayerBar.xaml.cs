@@ -201,6 +201,9 @@ public partial class PlayerBar : UserControl
     private void Scrubber_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {
         _isScrubbing = true;
+        ScrubberSlider.Tag = "Scrubbing";
+        ElapsedText.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
+        ElapsedText.FontWeight = FontWeights.SemiBold;
     }
 
     private void Scrubber_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -217,6 +220,9 @@ public partial class PlayerBar : UserControl
     {
         if (!_isScrubbing) return;
         _isScrubbing = false;
+        ScrubberSlider.Tag = null;
+        ElapsedText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+        ElapsedText.FontWeight = FontWeights.Normal;
         _services?.Player.Seek(ScrubberSlider.Value);
     }
 

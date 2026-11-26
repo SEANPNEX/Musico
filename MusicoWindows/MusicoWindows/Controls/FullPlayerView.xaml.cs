@@ -1,8 +1,12 @@
 using System;
 using System.ComponentModel;
+using System.IO;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media.Imaging;
+using MusicoWindows.Cloud;
 using MusicoWindows.Converters;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
@@ -18,6 +22,8 @@ public partial class FullPlayerView : UserControl
     private bool _isScrubbing;
     private bool? _lastIsPlaying;
     private string? _lastTrackId;
+    private string? _ambientArtworkSignature;
+    private CancellationTokenSource? _ambientCts;
 
     public event Action? CloseRequested;
     public event Action? OpenEqualizerRequested;
@@ -85,6 +91,7 @@ public partial class FullPlayerView : UserControl
         var queue = services.Queues.Active;
 
         CoverArt.SetSource(services.Library.Artwork, track?.ArtworkKey, 600, track?.RemoteArtworkUrl, services.Thumbnails);
+        UpdateAmbientBackdrop(services, track);
         if (!string.Equals(_lastTrackId, track?.Id, StringComparison.Ordinal))
         {
             _lastTrackId = track?.Id;
@@ -252,7 +259,14 @@ public partial class FullPlayerView : UserControl
         EmbeddedQueues.Visibility = showLyrics ? Visibility.Collapsed : Visibility.Visible;
     }
 
-    private void Scrubber_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e) => _isScrubbing = true;
+    private void Scrubber_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        _isScrubbing = true;
+        ScrubberSlider.Tag = "Scrubbing";
+        ElapsedText.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
+        ElapsedText.FontWeight = FontWeights.SemiBold;
+    }
+
     private void Scrubber_PreviewMouseLeftButtonUp(object sender, MouseButtonEventArgs e) => FinishScrub();
     private void Scrubber_LostMouseCapture(object sender, MouseEventArgs e) => FinishScrub();
 
@@ -260,7 +274,98 @@ public partial class FullPlayerView : UserControl
     {
         if (!_isScrubbing) return;
         _isScrubbing = false;
+        ScrubberSlider.Tag = null;
+        ElapsedText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+        ElapsedText.FontWeight = FontWeights.Normal;
         _ctx?.Services.Player.Seek(ScrubberSlider.Value);
+    }
+
+    private void UpdateAmbientBackdrop(AppServices services, Track? track)
+    {
+        string sig = track is null
+            ? string.Empty
+            : $"{track.Id}|{track.ArtworkKey}|{track.RemoteArtworkUrl}";
+        if (string.Equals(_ambientArtworkSignature, sig, StringComparison.Ordinal))
+            return;
+        _ambientArtworkSignature = sig;
+
+        _ambientCts?.Cancel();
+        _ambientCts?.Dispose();
+        _ambientCts = null;
+
+        if (track is null)
+        {
+            AmbientBackdropImage.Source = null;
+            AmbientBackdropHost.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        if (!string.IsNullOrWhiteSpace(track.ArtworkKey))
+        {
+            string? path = services.Library.Artwork.GetImagePath(track.ArtworkKey);
+            if (!string.IsNullOrEmpty(path) && File.Exists(path))
+            {
+                try
+                {
+                    var bmp = new BitmapImage();
+                    bmp.BeginInit();
+                    bmp.UriSource = new Uri(path, UriKind.Absolute);
+                    bmp.CacheOption = BitmapCacheOption.OnLoad;
+                    bmp.DecodePixelWidth = 240;
+                    bmp.EndInit();
+                    bmp.Freeze();
+                    ShowAmbientBitmap(bmp);
+                    return;
+                }
+                catch
+                {
+                    // Fall through to remote or hide.
+                }
+            }
+        }
+
+        if (CloudThumbnailCache.IsAllowedHttpsUrl(track.RemoteArtworkUrl))
+        {
+            string remoteUrl = track.RemoteArtworkUrl!.Trim();
+            if (services.Thumbnails.TryGetBitmap(remoteUrl, 240, out var cached) && cached is not null)
+            {
+                ShowAmbientBitmap(cached);
+                return;
+            }
+
+            var cts = new CancellationTokenSource();
+            _ambientCts = cts;
+            _ = LoadAmbientRemoteAsync(services.Thumbnails, remoteUrl, sig, cts.Token);
+        }
+
+        AmbientBackdropImage.Source = null;
+        AmbientBackdropHost.Visibility = Visibility.Collapsed;
+    }
+
+    private async System.Threading.Tasks.Task LoadAmbientRemoteAsync(
+        CloudThumbnailCache cache,
+        string url,
+        string expectedSig,
+        CancellationToken ct)
+    {
+        try
+        {
+            var bmp = await cache.GetBitmapAsync(url, 240, ct);
+            if (ct.IsCancellationRequested || bmp is null) return;
+            if (!string.Equals(_ambientArtworkSignature, expectedSig, StringComparison.Ordinal)) return;
+            ShowAmbientBitmap(bmp);
+        }
+        catch
+        {
+            // Ignore remote ambient artwork errors.
+        }
+    }
+
+    private void ShowAmbientBitmap(BitmapImage bmp)
+    {
+        AmbientBackdropImage.Source = bmp;
+        AmbientBackdropHost.Visibility = Visibility.Visible;
+        Win10Animations.AnimateFadeIn(AmbientBackdropImage, 0.0, 280);
     }
 
     private void Scrubber_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)

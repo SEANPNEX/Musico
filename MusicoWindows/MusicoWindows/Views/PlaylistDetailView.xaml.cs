@@ -167,7 +167,7 @@ public partial class PlaylistDetailView : UserControl
                 {
                     menu.Items.Add(new Separator());
                     menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("PlaylistDetail_RemoveFromPlaylist"), "\uE74D",
-                        () => lib.RemoveFromPlaylist(userPlaylistId, idx, history)));
+                        () => RemoveFromPlaylistWithUndo(userPlaylistId, idx, track.Title, history)));
                 } : null,
                 _ctx.OpenSaveCloudTrack,
                 _ctx.OpenSongInfo);
@@ -178,7 +178,7 @@ public partial class PlaylistDetailView : UserControl
                     (from, to) => lib.MovePlaylistTrack(userPlaylistId, from, to, history));
                 row.AddRowActionButton("\uE74A", L.Get("Common_MoveUp"), () => lib.MovePlaylistTrack(userPlaylistId, idx, idx - 1, history), idx > 0);
                 row.AddRowActionButton("\uE74B", L.Get("Common_MoveDown"), () => lib.MovePlaylistTrack(userPlaylistId, idx, idx + 1, history), idx < _tracks.Count - 1);
-                row.AddRowActionButton("\uE711", L.Get("PlaylistDetail_RemoveFromPlaylist"), () => lib.RemoveFromPlaylist(userPlaylistId, idx, history));
+                row.AddRowActionButton("\uE711", L.Get("PlaylistDetail_RemoveFromPlaylist"), () => RemoveFromPlaylistWithUndo(userPlaylistId, idx, track.Title, history));
             }
             else
             {
@@ -207,6 +207,23 @@ public partial class PlaylistDetailView : UserControl
         {
             lib.SetPlaylistSortMode(pid, mode, history);
         }
+    }
+
+    private void RemoveFromPlaylistWithUndo(Guid playlistId, int index, string trackTitle, PlayHistoryStore history)
+    {
+        if (_ctx is null) return;
+        var lib = _ctx.Services.Library;
+        var pl = lib.Playlists.FirstOrDefault(p => p.Id == playlistId);
+        if (pl is null) return;
+
+        var savedIds = pl.TrackIds.ToList();
+        var savedSort = pl.SortMode;
+
+        lib.RemoveFromPlaylist(playlistId, index, history);
+        _ctx.ShowToast?.Invoke(
+            L.Format("Toast_RemovedFromPlaylist", trackTitle),
+            L.Get("Common_Undo"),
+            () => lib.RestorePlaylistTracks(playlistId, savedIds, savedSort));
     }
 
     private void Back_Click(object sender, RoutedEventArgs e) => BackRequested?.Invoke();

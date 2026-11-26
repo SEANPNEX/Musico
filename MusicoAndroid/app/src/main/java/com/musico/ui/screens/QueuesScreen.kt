@@ -56,6 +56,7 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -85,6 +86,8 @@ import com.musico.store.LibraryUiState
 import com.musico.store.PlayHistoryUiState
 import com.musico.store.QueueStore
 import com.musico.store.QueueUiState
+import com.musico.ui.LocalShowMessage
+import com.musico.ui.LocalSnackbarHost
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.SortOrderMenuButton
@@ -113,6 +116,7 @@ fun QueuesScreen(
     modifier: Modifier = Modifier
 ) {
     val strings = LocalStrings.current
+    val showMessage = LocalShowMessage.current
     val viewed = queueState.viewed
     var editing by remember { mutableStateOf(false) }
     var confirmClear by remember { mutableStateOf(false) }
@@ -160,7 +164,15 @@ fun QueuesScreen(
             message = strings.clearQueueConfirmMessage,
             confirmLabel = strings.clearQueue,
             onDismiss = { confirmClear = false },
-            onConfirm = { playerController.clearQueue(queueId = viewed.id) }
+            onConfirm = {
+                val snapshot = viewed
+                playerController.clearQueue(queueId = viewed.id)
+                showMessage(
+                    message = strings.clearedQueueNotice,
+                    actionLabel = strings.undo,
+                    onAction = { playerController.restoreQueueSnapshot(snapshot) },
+                )
+            }
         )
     }
 }
@@ -179,6 +191,8 @@ fun QueueSheet(
     onDismiss: () -> Unit
 ) {
     val strings = LocalStrings.current
+    val showMessage = LocalShowMessage.current
+    val snackbarHostState = LocalSnackbarHost.current
     val viewed = queueState.viewed
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     var editing by remember { mutableStateOf(false) }
@@ -188,51 +202,61 @@ fun QueueSheet(
         onDismissRequest = onDismiss,
         sheetState = sheetState
     ) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .navigationBarsPadding()
+                .navigationBarsPadding(),
         ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 20.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
+            Column(
+                modifier = Modifier.fillMaxWidth()
             ) {
-                Text(
-                    text = strings.queuesTitle,
-                    style = MaterialTheme.typography.titleLarge
-                )
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    if (viewed.trackIds.isNotEmpty()) {
-                        TextButton(onClick = { editing = !editing }) {
-                            Text(if (editing) strings.done else strings.edit)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 20.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text(
+                        text = strings.queuesTitle,
+                        style = MaterialTheme.typography.titleLarge
+                    )
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        if (viewed.trackIds.isNotEmpty()) {
+                            TextButton(onClick = { editing = !editing }) {
+                                Text(if (editing) strings.done else strings.edit)
+                            }
+                            IconButton(onClick = { confirmClear = true }) {
+                                Icon(Icons.Rounded.DeleteSweep, contentDescription = strings.clearQueue)
+                            }
                         }
-                        IconButton(onClick = { confirmClear = true }) {
-                            Icon(Icons.Rounded.DeleteSweep, contentDescription = strings.clearQueue)
+                        TextButton(onClick = onDismiss) {
+                            Text(strings.done)
                         }
-                    }
-                    TextButton(onClick = onDismiss) {
-                        Text(strings.done)
                     }
                 }
+                HorizontalDivider()
+                QueuesContent(
+                    libraryStore = libraryStore,
+                    libraryState = libraryState,
+                    historyState = historyState,
+                    queueStore = queueStore,
+                    queueState = queueState,
+                    playerController = playerController,
+                    playerState = playerState,
+                    trackActions = trackActions,
+                    editing = editing,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .weight(1f, fill = false)
+                )
             }
-            HorizontalDivider()
-            QueuesContent(
-                libraryStore = libraryStore,
-                libraryState = libraryState,
-                historyState = historyState,
-                queueStore = queueStore,
-                queueState = queueState,
-                playerController = playerController,
-                playerState = playerState,
-                trackActions = trackActions,
-                editing = editing,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .weight(1f, fill = false)
-            )
+            if (snackbarHostState != null) {
+                SnackbarHost(
+                    hostState = snackbarHostState,
+                    modifier = Modifier.align(Alignment.BottomCenter),
+                )
+            }
         }
     }
 
@@ -242,7 +266,15 @@ fun QueueSheet(
             message = strings.clearQueueConfirmMessage,
             confirmLabel = strings.clearQueue,
             onDismiss = { confirmClear = false },
-            onConfirm = { playerController.clearQueue(queueId = viewed.id) }
+            onConfirm = {
+                val snapshot = viewed
+                playerController.clearQueue(queueId = viewed.id)
+                showMessage(
+                    message = strings.clearedQueueNotice,
+                    actionLabel = strings.undo,
+                    onAction = { playerController.restoreQueueSnapshot(snapshot) },
+                )
+            }
         )
     }
 }
@@ -261,6 +293,7 @@ fun QueuesContent(
     modifier: Modifier = Modifier
 ) {
     val strings = LocalStrings.current
+    val showMessage = LocalShowMessage.current
     var renamingQueue by remember { mutableStateOf<PlayQueue?>(null) }
     var deletingQueue by remember { mutableStateOf<PlayQueue?>(null) }
     var queueActionsExpanded by remember { mutableStateOf(false) }
@@ -465,7 +498,13 @@ fun QueuesContent(
                                     leadingIcon = { Icon(Icons.Rounded.DeleteSweep, contentDescription = null) },
                                     onClick = {
                                         queueActionsExpanded = false
+                                        val snapshot = viewed
                                         playerController.clearQueue(queueId = viewed.id)
+                                        showMessage(
+                                            message = strings.clearedQueueNotice,
+                                            actionLabel = strings.undo,
+                                            onAction = { playerController.restoreQueueSnapshot(snapshot) },
+                                        )
                                     }
                                 )
                             }

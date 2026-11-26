@@ -38,6 +38,7 @@
                             Content="&#xE711;"
                             HorizontalAlignment="Right"
                             ToolTip="{DynamicResource Str_Common_Close}"
+                            AutomationProperties.Name="{DynamicResource Str_Common_Close}"
                             Click="CloseIcon_Click" />
                 </Grid>
 

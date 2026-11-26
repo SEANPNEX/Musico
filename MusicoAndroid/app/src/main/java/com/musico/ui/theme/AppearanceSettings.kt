@@ -3,6 +3,7 @@ package com.musico.ui.theme
 import androidx.compose.ui.graphics.Color
 import kotlinx.serialization.Serializable
 import java.util.Locale
+import kotlin.math.pow
 import kotlin.math.roundToInt
 
 @Serializable
@@ -10,6 +11,19 @@ enum class AppThemeMode {
     SYSTEM,
     LIGHT,
     DARK,
+}
+
+@Serializable
+enum class LyricsFontSize(val scaleFactor: Float) {
+    SMALL(0.85f),
+    MEDIUM(1.0f),
+    LARGE(1.22f),
+}
+
+@Serializable
+enum class LyricsAlignment {
+    START,
+    CENTER,
 }
 
 @Serializable
@@ -101,6 +115,23 @@ fun relativeLuminance(rgb: RgbColor): Float {
     return (0.2126f * r + 0.7152f * g + 0.0722f * b).coerceIn(0f, 1f)
 }
 
+fun srgbRelativeLuminance(rgb: RgbColor): Float {
+    fun linearize(channel: Int): Double {
+        val c = channel.coerceIn(0, 255) / 255.0
+        return if (c <= 0.04045) c / 12.92 else ((c + 0.055) / 1.055).pow(2.4)
+    }
+    val lum = 0.2126 * linearize(rgb.r) + 0.7152 * linearize(rgb.g) + 0.0722 * linearize(rgb.b)
+    return lum.toFloat().coerceIn(0f, 1f)
+}
+
+fun contrastRatio(a: RgbColor, b: RgbColor): Float {
+    val lumA = srgbRelativeLuminance(a)
+    val lumB = srgbRelativeLuminance(b)
+    val lighter = maxOf(lumA, lumB)
+    val darker = minOf(lumA, lumB)
+    return ((lighter + 0.05f) / (darker + 0.05f)).coerceAtLeast(1f)
+}
+
 fun isLightColor(rgb: RgbColor): Boolean = relativeLuminance(rgb) > 0.5f
 
 fun adaptiveForegroundHex(background: RgbColor): String =
@@ -124,6 +155,14 @@ fun clampBackgroundImageOpacity(opacity: Float): Float {
     )
 }
 
+fun clampBackgroundImageBlurDp(blurDp: Float): Float {
+    if (!blurDp.isFinite()) return AppearanceSettings.DEFAULT_BACKGROUND_IMAGE_BLUR_DP
+    return blurDp.coerceIn(
+        AppearanceSettings.MIN_BACKGROUND_IMAGE_BLUR_DP,
+        AppearanceSettings.MAX_BACKGROUND_IMAGE_BLUR_DP,
+    )
+}
+
 @Serializable
 data class AppearanceSettings(
     val themeMode: AppThemeMode = AppThemeMode.SYSTEM,
@@ -134,6 +173,9 @@ data class AppearanceSettings(
     val customForegroundHex: String? = null,
     val backgroundImageFileName: String? = null,
     val backgroundImageOpacity: Float = DEFAULT_BACKGROUND_IMAGE_OPACITY,
+    val backgroundImageBlurDp: Float = DEFAULT_BACKGROUND_IMAGE_BLUR_DP,
+    val lyricsFontSize: LyricsFontSize = LyricsFontSize.MEDIUM,
+    val lyricsAlignment: LyricsAlignment = LyricsAlignment.START,
 ) {
     fun sanitized(): AppearanceSettings = copy(
         customBackgroundHex = normalizeHexOrNull(customBackgroundHex),
@@ -141,6 +183,7 @@ data class AppearanceSettings(
         customForegroundHex = normalizeHexOrNull(customForegroundHex),
         backgroundImageFileName = backgroundImageFileName?.trim()?.takeIf { it.isNotEmpty() },
         backgroundImageOpacity = clampBackgroundImageOpacity(backgroundImageOpacity),
+        backgroundImageBlurDp = clampBackgroundImageBlurDp(backgroundImageBlurDp),
     )
 
     val hasBackgroundImage: Boolean
@@ -175,9 +218,97 @@ data class AppearanceSettings(
         }
     }
 
+    fun effectiveBackgroundRgb(systemDark: Boolean = false): RgbColor {
+        resolvedBackgroundHex()?.let(::parseHexRgb)?.let { return it }
+        return if (resolveDarkTheme(systemDark)) {
+            md_theme_dark_background.toRgbColor()
+        } else {
+            md_theme_light_background.toRgbColor()
+        }
+    }
+
+    fun effectiveForegroundRgb(systemDark: Boolean = false): RgbColor {
+        resolvedForegroundHex()?.let(::parseHexRgb)?.let { return it }
+        return if (resolveDarkTheme(systemDark)) {
+            md_theme_dark_onBackground.toRgbColor()
+        } else {
+            md_theme_light_onBackground.toRgbColor()
+        }
+    }
+
+    fun effectiveAccentRgb(systemDark: Boolean = false): RgbColor {
+        if (isDefaultPalette) {
+            return if (resolveDarkTheme(systemDark)) {
+                md_theme_dark_primary.toRgbColor()
+            } else {
+                md_theme_light_primary.toRgbColor()
+            }
+        }
+        val raw = parseHexRgb(resolvedAccentHex()) ?: RgbColor(232, 84, 64)
+        val dark = resolveDarkTheme(systemDark)
+        return if (dark && relativeLuminance(raw) < 0.16f) {
+            blendRgb(raw, RgbColor(255, 255, 255), 0.30f)
+        } else {
+            raw
+        }
+    }
+
+    fun autoFixContrast(systemDark: Boolean = false): AppearanceSettings {
+        val bgRgb = effectiveBackgroundRgb(systemDark)
+        val fgRgb = effectiveForegroundRgb(systemDark)
+        val accentRgb = effectiveAccentRgb(systemDark)
+
+        val fixedForegroundHex = if (contrastRatio(bgRgb, fgRgb) < MIN_TEXT_CONTRAST) {
+            val adaptiveHex = adaptiveForegroundHex(bgRgb)
+            val adaptiveRgb = parseHexRgb(adaptiveHex)!!
+            if (contrastRatio(bgRgb, adaptiveRgb) >= MIN_TEXT_CONTRAST) {
+                if (resolvedBackgroundHex() != null) null else adaptiveHex
+            } else {
+                val white = RgbColor(255, 255, 255)
+                val black = RgbColor(0, 0, 0)
+                if (contrastRatio(bgRgb, white) >= contrastRatio(bgRgb, black)) {
+                    white.toHex()
+                } else {
+                    black.toHex()
+                }
+            }
+        } else {
+            customForegroundHex
+        }
+
+        var fixedForegroundPreset = foregroundPreset
+        var fixedCustomAccentHex = customAccentHex
+        if (contrastRatio(bgRgb, accentRgb) < MIN_ACCENT_CONTRAST) {
+            val white = RgbColor(255, 255, 255)
+            val black = RgbColor(0, 0, 0)
+            val target = if (contrastRatio(bgRgb, white) >= contrastRatio(bgRgb, black)) white else black
+            var best = target
+            for (step in 1..20) {
+                val candidate = blendRgb(accentRgb, target, step / 20f)
+                if (contrastRatio(bgRgb, candidate) >= MIN_ACCENT_CONTRAST) {
+                    best = candidate
+                    break
+                }
+            }
+            fixedForegroundPreset = ForegroundColorPreset.CUSTOM
+            fixedCustomAccentHex = best.toHex()
+        }
+
+        return copy(
+            customForegroundHex = fixedForegroundHex,
+            foregroundPreset = fixedForegroundPreset,
+            customAccentHex = fixedCustomAccentHex,
+        ).sanitized()
+    }
+
     companion object {
         const val MIN_BACKGROUND_IMAGE_OPACITY = 0.10f
         const val MAX_BACKGROUND_IMAGE_OPACITY = 1.0f
         const val DEFAULT_BACKGROUND_IMAGE_OPACITY = 0.35f
+        const val MIN_BACKGROUND_IMAGE_BLUR_DP = 0f
+        const val MAX_BACKGROUND_IMAGE_BLUR_DP = 24f
+        const val DEFAULT_BACKGROUND_IMAGE_BLUR_DP = 0f
+        const val MIN_TEXT_CONTRAST = 4.5f
+        const val MIN_ACCENT_CONTRAST = 3.0f
     }
 }

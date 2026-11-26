@@ -1,12 +1,14 @@
 package com.musico.ui.screens
 
 import android.net.Uri
+import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -37,10 +39,13 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Language
+import androidx.compose.material.icons.rounded.MusicNote
 import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.PlayArrow
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.RestartAlt
 import androidx.compose.material.icons.rounded.SystemUpdate
+import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
@@ -72,6 +77,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
@@ -99,6 +105,9 @@ import com.musico.ui.theme.ForegroundColorPreset
 import com.musico.ui.theme.LocalHasBackgroundImage
 import com.musico.ui.theme.RgbColor
 import com.musico.ui.theme.ThemeStore
+import com.musico.ui.theme.clampBackgroundImageBlurDp
+import com.musico.ui.theme.clampBackgroundImageOpacity
+import com.musico.ui.theme.contrastRatio
 import com.musico.ui.theme.isLightColor
 import com.musico.ui.theme.musicoScaffoldContainerColor
 import com.musico.ui.theme.musicoTopAppBarColors
@@ -106,6 +115,7 @@ import com.musico.ui.theme.normalizeHexOrNull
 import com.musico.ui.theme.parseHexRgb
 import com.musico.ui.theme.rememberSampledBitmap
 import com.musico.ui.theme.toComposeColorOrNull
+import com.musico.ui.theme.toRgbColor
 import com.musico.update.UpdateManager
 import com.musico.update.UpdateUiState
 import com.musico.update.hasAvailableUpdate
@@ -145,7 +155,12 @@ fun SettingsScreen(
     val backgroundImageFile = remember(appearance.backgroundImageFileName) {
         themeStore.resolveBackgroundImageFile()
     }
-    val previewBitmap = rememberSampledBitmap(file = backgroundImageFile, maxDimension = 720)
+    val previewBitmap = rememberSampledBitmap(
+        file = backgroundImageFile,
+        maxDimension = 720,
+        blurRadiusDp = appearance.backgroundImageBlurDp,
+    )
+    val systemDark = isSystemInDarkTheme()
 
     var activeColorDialog by remember { mutableStateOf<ActiveColorDialog?>(null) }
     var showLanguageDialog by remember { mutableStateOf(false) }
@@ -214,6 +229,159 @@ fun SettingsScreen(
                             .padding(16.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
                     ) {
+                        // Live Appearance Preview Card
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = strings.appearancePreviewLabel,
+                                style = MaterialTheme.typography.titleSmall,
+                                fontWeight = FontWeight.Medium,
+                            )
+                            val clampedBlur = clampBackgroundImageBlurDp(appearance.backgroundImageBlurDp)
+                            val clampedOpacity = clampBackgroundImageOpacity(appearance.backgroundImageOpacity)
+                            Surface(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .height(104.dp),
+                                shape = MaterialTheme.shapes.medium,
+                                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+                                color = MaterialTheme.colorScheme.background,
+                            ) {
+                                Box(modifier = Modifier.fillMaxSize()) {
+                                    if (previewBitmap != null) {
+                                        val imgMod = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && clampedBlur > 0f) {
+                                            Modifier.fillMaxSize().blur(clampedBlur.dp)
+                                        } else {
+                                            Modifier.fillMaxSize()
+                                        }
+                                        Image(
+                                            bitmap = previewBitmap,
+                                            contentDescription = null,
+                                            contentScale = ContentScale.Crop,
+                                            modifier = imgMod,
+                                        )
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxSize()
+                                                .background(
+                                                    MaterialTheme.colorScheme.background.copy(
+                                                        alpha = (1f - clampedOpacity).coerceIn(0f, 1f),
+                                                    )
+                                                )
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier
+                                            .fillMaxSize()
+                                            .padding(horizontal = 14.dp, vertical = 12.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                    ) {
+                                        Surface(
+                                            modifier = Modifier.size(52.dp),
+                                            shape = RoundedCornerShape(10.dp),
+                                            color = MaterialTheme.colorScheme.primaryContainer,
+                                        ) {
+                                            Box(contentAlignment = Alignment.Center) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.MusicNote,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.onPrimaryContainer,
+                                                )
+                                            }
+                                        }
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = strings.previewTrackTitle,
+                                                style = MaterialTheme.typography.titleSmall,
+                                                fontWeight = FontWeight.SemiBold,
+                                                color = MaterialTheme.colorScheme.onBackground,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Text(
+                                                text = strings.previewTrackArtist,
+                                                style = MaterialTheme.typography.bodySmall,
+                                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                                maxLines = 1,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
+                                        Surface(
+                                            color = MaterialTheme.colorScheme.primary,
+                                            shape = RoundedCornerShape(50),
+                                        ) {
+                                            Row(
+                                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                            ) {
+                                                Icon(
+                                                    imageVector = Icons.Rounded.PlayArrow,
+                                                    contentDescription = null,
+                                                    tint = MaterialTheme.colorScheme.onPrimary,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                                Text(
+                                                    text = strings.previewSampleButton,
+                                                    style = MaterialTheme.typography.labelMedium,
+                                                    color = MaterialTheme.colorScheme.onPrimary,
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Contrast Warning + Auto-fix Contrast
+                        val bgRgb = MaterialTheme.colorScheme.background.toRgbColor()
+                        val fgRgb = MaterialTheme.colorScheme.onBackground.toRgbColor()
+                        val accentRgb = MaterialTheme.colorScheme.primary.toRgbColor()
+                        val lowTextContrast = contrastRatio(bgRgb, fgRgb) < AppearanceSettings.MIN_TEXT_CONTRAST
+                        val lowAccentContrast = contrastRatio(bgRgb, accentRgb) < AppearanceSettings.MIN_ACCENT_CONTRAST
+                        if (lowTextContrast || lowAccentContrast) {
+                            Surface(
+                                shape = MaterialTheme.shapes.medium,
+                                color = MaterialTheme.colorScheme.errorContainer,
+                                modifier = Modifier.fillMaxWidth(),
+                            ) {
+                                Row(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                ) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.WarningAmber,
+                                        contentDescription = null,
+                                        tint = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.size(20.dp),
+                                    )
+                                    Text(
+                                        text = when {
+                                            lowTextContrast && lowAccentContrast -> strings.lowContrastWarningBoth
+                                            lowTextContrast -> strings.lowContrastWarningText
+                                            else -> strings.lowContrastWarningAccent
+                                        },
+                                        style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onErrorContainer,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    FilledTonalButton(
+                                        onClick = { themeStore.autoFixContrast(systemDark) },
+                                    ) {
+                                        Text(
+                                            text = strings.autoFixContrastAction,
+                                            maxLines = 1,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+
                         // Theme Mode
                         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                             Text(
@@ -483,6 +651,32 @@ fun SettingsScreen(
                                         onValueChange = { themeStore.setBackgroundImageOpacity(it) },
                                         valueRange = AppearanceSettings.MIN_BACKGROUND_IMAGE_OPACITY..
                                             AppearanceSettings.MAX_BACKGROUND_IMAGE_OPACITY,
+                                    )
+                                }
+
+                                Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically,
+                                    ) {
+                                        Text(
+                                            text = strings.imageBlurLabel,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                        )
+                                        Text(
+                                            text = "${appearance.backgroundImageBlurDp.roundToInt()} dp",
+                                            style = MaterialTheme.typography.labelLarge.copy(
+                                                fontFeatureSettings = "tnum",
+                                            ),
+                                            color = MaterialTheme.colorScheme.primary,
+                                        )
+                                    }
+                                    Slider(
+                                        value = appearance.backgroundImageBlurDp,
+                                        onValueChange = { themeStore.setBackgroundImageBlurDp(it) },
+                                        valueRange = AppearanceSettings.MIN_BACKGROUND_IMAGE_BLUR_DP..
+                                            AppearanceSettings.MAX_BACKGROUND_IMAGE_BLUR_DP,
                                     )
                                 }
                             } else {

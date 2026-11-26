@@ -312,4 +312,17 @@
     <sys:String x:Key="Str_Settings_Version">Version</sys:String>
     <sys:String x:Key="Str_Settings_UpdateAvailableBadge">Update Available</sys:String>
 
+    <!-- Wave A: Song Info, Search, Appearance, Lyrics -->
+    <sys:String x:Key="Str_SongInfo_FileName">File Name</sys:String>
+    <sys:String x:Key="Str_SongInfo_Location">Location</sys:String>
+    <sys:String x:Key="Str_Songs_ClearSearch">Clear search</sys:String>
+    <sys:String x:Key="Str_Settings_LivePreview">LIVE PREVIEW</sys:String>
+    <sys:String x:Key="Str_Settings_LivePreviewTitle">Now Playing Preview</sys:String>
+    <sys:String x:Key="Str_Settings_LivePreviewSubtitle">Artist — Album</sys:String>
+    <sys:String x:Key="Str_Settings_LowContrastTitle">Low Contrast Detected</sys:String>
+    <sys:String x:Key="Str_Settings_AutoFixContrast">Auto-fix Contrast</sys:String>
+    <sys:String x:Key="Str_Settings_ImageBlur">Background Blur</sys:String>
+    <sys:String x:Key="Str_Lyrics_OptionsTooltip">Lyrics display options</sys:String>
+    <sys:String x:Key="Str_Lyrics_SyncToCurrent">Sync to current line</sys:String>
+
 </ResourceDictionary>

@@ -4,7 +4,24 @@
              xmlns:controls="clr-namespace:MusicoWindows.Controls"
              xmlns:views="clr-namespace:MusicoWindows.Views"
              Visibility="Collapsed">
-    <Grid x:Name="BackdropGrid" Background="{DynamicResource ContentBackgroundBrush}">
+    <Grid x:Name="BackdropGrid" Background="{DynamicResource ContentBackgroundBrush}" ClipToBounds="True">
+        <!-- Blurred Ambient Artwork Backdrop -->
+        <Grid x:Name="AmbientBackdropHost"
+              Opacity="0.22"
+              IsHitTestVisible="False"
+              Visibility="Collapsed">
+            <Image x:Name="AmbientBackdropImage"
+                   Stretch="UniformToFill"
+                   RenderTransformOrigin="0.5,0.5">
+                <Image.RenderTransform>
+                    <ScaleTransform ScaleX="1.14" ScaleY="1.14" />
+                </Image.RenderTransform>
+                <Image.Effect>
+                    <BlurEffect Radius="64" KernelType="Gaussian" />
+                </Image.Effect>
+            </Image>
+        </Grid>
+
         <Grid x:Name="PlayerCard">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
@@ -121,6 +138,7 @@
                             FontSize="17"
                             Content="&#xE946;"
                             ToolTip="{DynamicResource Str_SongInfo_Title}"
+                            AutomationProperties.Name="{DynamicResource Str_SongInfo_Title}"
                             Margin="4,0,2,0"
                             Click="SongInfo_Click" />
                     <Button x:Name="FavouriteButton"
@@ -131,6 +149,7 @@
                             FontSize="18"
                             Content="&#xEB51;"
                             ToolTip="{DynamicResource Str_FullPlayer_ToggleFavTooltip}"
+                            AutomationProperties.Name="{DynamicResource Str_FullPlayer_ToggleFavTooltip}"
                             Click="Favourite_Click" />
                 </Grid>
 
@@ -177,6 +196,8 @@
                             Height="44"
                             FontSize="17"
                             Content="&#xE8B1;"
+                            ToolTip="{DynamicResource Str_Common_Shuffle}"
+                            AutomationProperties.Name="{DynamicResource Str_Common_Shuffle}"
                             HorizontalAlignment="Center"
                             Click="Shuffle_Click" />
                     <Button x:Name="PrevButton"
@@ -186,6 +207,8 @@
                             Height="48"
                             FontSize="20"
                             Content="&#xE892;"
+                            ToolTip="{DynamicResource Str_PlayerBar_PrevTooltip}"
+                            AutomationProperties.Name="{DynamicResource Str_PlayerBar_PrevTooltip}"
                             HorizontalAlignment="Center"
                             Click="Prev_Click" />
                     <Button x:Name="PlayPauseButton"
@@ -197,6 +220,8 @@
                             FontFamily="{StaticResource Win10GlyphFont}"
                             FontSize="22"
                             Content="&#xE768;"
+                            ToolTip="{DynamicResource Str_PlayerBar_PlayPauseTooltip}"
+                            AutomationProperties.Name="{DynamicResource Str_PlayerBar_PlayPauseTooltip}"
                             HorizontalAlignment="Center"
                             Click="PlayPause_Click" />
                     <Button x:Name="NextButton"
@@ -206,6 +231,8 @@
                             Height="48"
                             FontSize="20"
                             Content="&#xE893;"
+                            ToolTip="{DynamicResource Str_PlayerBar_NextTooltip}"
+                            AutomationProperties.Name="{DynamicResource Str_PlayerBar_NextTooltip}"
                             HorizontalAlignment="Center"
                             Click="Next_Click" />
                     <Button x:Name="RepeatButton"
@@ -215,6 +242,8 @@
                             Height="44"
                             FontSize="17"
                             Content="&#xE8EE;"
+                            ToolTip="{DynamicResource Str_PlayerBar_RepeatTooltip}"
+                            AutomationProperties.Name="{DynamicResource Str_PlayerBar_RepeatTooltip}"
                             HorizontalAlignment="Center"
                             Click="Repeat_Click" />
                 </Grid>

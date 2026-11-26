@@ -832,7 +832,9 @@ public partial class FoldersView : UserControl
                 _ctx.OpenTextPrompt,
                 null,
                 _ctx.OpenSaveCloudTrack,
-                _ctx.OpenSongInfo);
+                _ctx.OpenSongInfo,
+                openDeleteChoice: _ctx.OpenDeleteChoice,
+                showToast: _ctx.ShowToast);
 
             row.EnableDragReorder($"folder:{rootId:D}:{_currentPath}", idx, directTracks.Count,
                 (from, to) => lib.MoveFolderTrack(rootId, _currentPath, from, to, history));
@@ -939,38 +941,141 @@ public partial class FoldersView : UserControl
     private void ConfirmRemoveRoot(LibraryRoot root)
     {
         if (_ctx is null) return;
-        _ctx.OpenConfirm(
-            L.Format("Folders_RemoveConfirmTitle", L.DisplayRootName(root)),
-            root.IsCloud
-                ? L.Get("Folders_RemoveConfirmCloudMessage")
-                : L.Get("Folders_RemoveConfirmLocalMessage"),
-            L.Get("Folders_RemoveConfirmAction"),
-            () => _ctx.Services.Library.RemoveRoot(root.Id),
-            true);
+        var lib = _ctx.Services.Library;
+        string displayName = L.DisplayRootName(root);
+        var affectedTracks = lib.GetTracksUnder(root.Id, string.Empty);
+        string? exactPath = root.IsCloud
+            ? (root.SourceUrl ?? root.Path)
+            : (lib.GetRootPath(root.Id) ?? root.Path);
+        bool canRecycle = root.Kind == RootKind.Picked && lib.IsAvailable(root) && !string.IsNullOrWhiteSpace(exactPath);
+
+        void OnRemoveFromLibrary()
+        {
+            lib.RemoveRoot(root.Id);
+            _ctx.ShowToast?.Invoke(L.Format("Toast_RemovedFromLibrary", displayName), null, null);
+        }
+
+        void OnMoveToRecycleBin()
+        {
+            var ids = affectedTracks.Select(t => t.Id).ToList();
+            try
+            {
+                lib.DeleteFolderFiles(root.Id, string.Empty);
+                foreach (string id in ids)
+                {
+                    _ctx.Services.Lyrics.RemoveImported(id);
+                }
+                _ctx.ShowToast?.Invoke(L.Format("Toast_MovedToRecycleBin", displayName), null, null);
+            }
+            catch (Exception ex)
+            {
+                _ctx.OpenConfirm(L.Get("Delete_FailedTitle"), ex.Message, L.Get("Common_OK"), null, false);
+            }
+        }
+
+        if (_ctx.OpenDeleteChoice is not null)
+        {
+            _ctx.OpenDeleteChoice(new DeleteChoiceRequest(
+                Title: L.Format("Folders_RemoveConfirmTitle", displayName),
+                Message: root.IsCloud
+                    ? L.Get("Folders_RemoveConfirmCloudMessage")
+                    : L.Get("Folders_RemoveConfirmLocalMessage"),
+                ItemName: displayName,
+                ExactPath: exactPath,
+                SongCountText: L.SongsCount(affectedTracks.Count),
+                RemoveFromLibraryLabel: L.Get("Delete_RemoveFromLibrary"),
+                OnRemoveFromLibrary: OnRemoveFromLibrary,
+                MoveToRecycleBinLabel: canRecycle ? L.Get("Delete_MoveToRecycleBin") : null,
+                OnMoveToRecycleBin: canRecycle ? OnMoveToRecycleBin : null));
+        }
+        else
+        {
+            _ctx.OpenConfirm(
+                L.Format("Folders_RemoveConfirmTitle", displayName),
+                root.IsCloud
+                    ? L.Get("Folders_RemoveConfirmCloudMessage")
+                    : L.Get("Folders_RemoveConfirmLocalMessage"),
+                L.Get("Folders_RemoveConfirmAction"),
+                OnRemoveFromLibrary,
+                true);
+        }
     }
 
     private void ConfirmRemoveSubfolder(LibraryRoot root, string path, bool navigateUpOnConfirm)
     {
         if (_ctx is null) return;
+        var lib = _ctx.Services.Library;
         string leaf = path.Split('/').LastOrDefault() ?? path;
-        _ctx.OpenConfirm(
-            L.Format("Folders_RemoveConfirmTitle", leaf),
-            root.IsCloud
-                ? L.Get("Folders_RemoveConfirmCloudMessage")
-                : L.Get("Folders_RemoveConfirmLocalMessage"),
-            L.Get("Folders_RemoveConfirmAction"),
-            () =>
+        var affectedTracks = lib.GetTracksUnder(root.Id, path);
+        string? rootDiskPath = lib.GetRootPath(root.Id) ?? root.Path;
+        string? exactPath = root.IsCloud
+            ? (root.SourceUrl ?? root.Path)
+            : (!string.IsNullOrWhiteSpace(rootDiskPath) ? FolderScanner.CombinePath(rootDiskPath, path) : path);
+        bool canRecycle = root.IsLocal && lib.IsAvailable(root) && !string.IsNullOrWhiteSpace(exactPath);
+
+        void NavigateUpIfNeeded()
+        {
+            if (navigateUpOnConfirm)
             {
-                _ctx.Services.Library.RemoveSubfolder(root.Id, path);
-                if (navigateUpOnConfirm)
+                int slash = _currentPath.LastIndexOf('/');
+                _currentPath = slash >= 0 ? _currentPath[..slash] : string.Empty;
+                Refresh();
+                Win10Animations.AnimateSlideX(ContentStack, -24);
+            }
+        }
+
+        void OnRemoveFromLibrary()
+        {
+            lib.RemoveSubfolder(root.Id, path);
+            NavigateUpIfNeeded();
+            _ctx.ShowToast?.Invoke(L.Format("Toast_RemovedFromLibrary", leaf), null, null);
+        }
+
+        void OnMoveToRecycleBin()
+        {
+            var ids = affectedTracks.Select(t => t.Id).ToList();
+            try
+            {
+                lib.DeleteFolderFiles(root.Id, path);
+                foreach (string id in ids)
                 {
-                    int slash = _currentPath.LastIndexOf('/');
-                    _currentPath = slash >= 0 ? _currentPath[..slash] : string.Empty;
-                    Refresh();
-                    Win10Animations.AnimateSlideX(ContentStack, -24);
+                    _ctx.Services.Lyrics.RemoveImported(id);
                 }
-            },
-            true);
+                NavigateUpIfNeeded();
+                _ctx.ShowToast?.Invoke(L.Format("Toast_MovedToRecycleBin", leaf), null, null);
+            }
+            catch (Exception ex)
+            {
+                _ctx.OpenConfirm(L.Get("Delete_FailedTitle"), ex.Message, L.Get("Common_OK"), null, false);
+            }
+        }
+
+        if (_ctx.OpenDeleteChoice is not null)
+        {
+            _ctx.OpenDeleteChoice(new DeleteChoiceRequest(
+                Title: L.Format("Folders_RemoveConfirmTitle", leaf),
+                Message: root.IsCloud
+                    ? L.Get("Folders_RemoveConfirmCloudMessage")
+                    : L.Get("Folders_RemoveConfirmLocalMessage"),
+                ItemName: leaf,
+                ExactPath: exactPath,
+                SongCountText: L.SongsCount(affectedTracks.Count),
+                RemoveFromLibraryLabel: L.Get("Delete_RemoveFromLibrary"),
+                OnRemoveFromLibrary: OnRemoveFromLibrary,
+                MoveToRecycleBinLabel: canRecycle ? L.Get("Delete_MoveToRecycleBin") : null,
+                OnMoveToRecycleBin: canRecycle ? OnMoveToRecycleBin : null));
+        }
+        else
+        {
+            _ctx.OpenConfirm(
+                L.Format("Folders_RemoveConfirmTitle", leaf),
+                root.IsCloud
+                    ? L.Get("Folders_RemoveConfirmCloudMessage")
+                    : L.Get("Folders_RemoveConfirmLocalMessage"),
+                L.Get("Folders_RemoveConfirmAction"),
+                OnRemoveFromLibrary,
+                true);
+        }
     }
 
     private void AddCloudFolder_Click(object sender, RoutedEventArgs e)
