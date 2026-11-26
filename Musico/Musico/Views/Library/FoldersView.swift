@@ -12,10 +12,12 @@ struct FoldersView: View {
     @Environment(\.downloadManager) private var downloadManager
     @Environment(\.extensionStore) private var extensionStore
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
     @State private var showImporter = false
     @State private var showCloudSheet = false
     @State private var showDownloadsSheet = false
     @State private var showExtensionsSheet = false
+    @State private var showSettingsSheet = false
     /// When set, the next picked folder replaces this unavailable root instead of adding a new one.
     @State private var relocating: UUID?
     @State private var importError: String?
@@ -112,6 +114,7 @@ struct FoldersView: View {
                 }
             }
         }
+        .hiddenScrollBackgroundIfThemed(themeManager)
         .navigationTitle(L10n.tr("Folders"))
         #if targetEnvironment(macCatalyst)
         .navigationBarTitleDisplayMode(.inline)
@@ -127,21 +130,10 @@ struct FoldersView: View {
             }
             ToolbarItemGroup(placement: .topBarTrailing) {
                 #if !targetEnvironment(macCatalyst)
-                Menu {
-                    ForEach(AppLanguage.allCases) { lang in
-                        Button {
-                            languageManager.setLanguage(lang)
-                        } label: {
-                            if languageManager.selection == lang {
-                                Label(lang.displayName, systemImage: "checkmark")
-                            } else {
-                                Text(lang.displayName)
-                            }
-                        }
-                    }
-                } label: {
-                    Label(L10n.tr("Language"), systemImage: "globe")
+                Button(L10n.tr("Settings"), systemImage: "gearshape") {
+                    showSettingsSheet = true
                 }
+                .help(L10n.tr("Settings"))
                 #endif
                 Button(L10n.tr("Add Cloud Folder"), systemImage: "icloud.and.arrow.down") {
                     showCloudSheet = true
@@ -165,6 +157,15 @@ struct FoldersView: View {
                 }
             }
         }
+        #if !targetEnvironment(macCatalyst)
+        .sheet(isPresented: $showSettingsSheet) {
+            SettingsView(isSheet: true)
+                .environment(library)
+                .environment(\.languageManager, languageManager)
+                .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
+        }
+        #endif
         .sheet(isPresented: $showExtensionsSheet) {
             NavigationStack {
                 ExtensionsView(extensionStore: extensionStore, showDoneButton: true)
@@ -172,12 +173,14 @@ struct FoldersView: View {
             .environment(\.extensionStore, extensionStore)
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
         .sheet(isPresented: $showDownloadsSheet) {
             DownloadsListView(downloadManager: downloadManager)
                 .environment(\.downloadManager, downloadManager)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
         }
         .sheet(isPresented: $showCloudSheet) {
             AddCloudFolderSheet(library: library, extensionStore: extensionStore)
@@ -185,18 +188,21 @@ struct FoldersView: View {
                 .environment(\.extensionStore, extensionStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
         }
         .sheet(item: $exportingRoot) { root in
             SaveCloudPlaylistSheet(root: root, library: library, downloadManager: downloadManager)
                 .environment(library)
                 .environment(\.downloadManager, downloadManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
         }
         .sheet(item: $updatingTrackedRoot) { root in
             UpdateTrackedFolderSheet(root: root, library: library, downloadManager: downloadManager)
                 .environment(library)
                 .environment(\.downloadManager, downloadManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
         }
         .sheet(item: $editingSourceTarget) { target in
             EditCloudTrackingSheet(
@@ -209,6 +215,7 @@ struct FoldersView: View {
             .environment(\.extensionStore, extensionStore)
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
         .fileImporter(isPresented: $showImporter, allowedContentTypes: [.folder]) { result in
             guard case .success(let url) = result else { return }
@@ -276,12 +283,16 @@ struct FoldersView: View {
         }
     }
 
-    private static func iconColor(for root: LibraryRoot, availability: CloudExtensionAvailability = .available) -> Color {
+    private static func iconColor(
+        for root: LibraryRoot,
+        availability: CloudExtensionAvailability = .available,
+        accentColor: Color
+    ) -> Color {
         switch root.kind {
         case .cloudYouTube, .cloudBilibili: .red
         case .cloudGoogleDrive: .blue
         case .cloudExtension: availability == .available ? .indigo : .orange
-        case .picked, .appFolder: .accentColor
+        case .picked, .appFolder: accentColor
         }
     }
 
@@ -304,12 +315,12 @@ struct FoldersView: View {
         }
     }
 
-    static func localTrackingColor(for kind: LibraryRoot.Kind?) -> Color {
+    static func localTrackingColor(for kind: LibraryRoot.Kind?, accentColor: Color) -> Color {
         switch kind {
         case .cloudYouTube, .cloudBilibili: .red
         case .cloudGoogleDrive: .blue
         case .cloudExtension: .indigo
-        default: .accentColor
+        default: accentColor
         }
     }
 
@@ -373,7 +384,7 @@ struct FoldersView: View {
         NavigationLink(value: FolderRef(root: root.id, path: "")) {
             HStack(spacing: 12) {
                 Image(systemName: Self.iconName(for: root))
-                    .foregroundStyle(Self.iconColor(for: root, availability: extAvailability))
+                    .foregroundStyle(Self.iconColor(for: root, availability: extAvailability, accentColor: themeManager.accentColor))
                     .frame(width: 28)
                 VStack(alignment: .leading, spacing: 2) {
                     HStack(spacing: 6) {
@@ -384,8 +395,8 @@ struct FoldersView: View {
                                 .font(.caption2.weight(.semibold))
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(Color.accentColor.opacity(0.14), in: Capsule())
-                                .foregroundStyle(Color.accentColor)
+                                .background(themeManager.accentColor.opacity(0.14), in: Capsule())
+                                .foregroundStyle(themeManager.accentColor)
                         }
                     }
                     if let syncProgress {
@@ -501,6 +512,7 @@ struct AddCloudFolderSheet: View {
     private let explicitExtensionStore: ExtensionStore?
     @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
     @Environment(\.extensionStore) private var envExtensionStore
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var urlText = ""
@@ -591,6 +603,8 @@ struct AddCloudFolderSheet: View {
                     }
                 }
             }
+            .hiddenScrollBackgroundIfThemed(themeManager)
+            .background { ThemeBackdropView() }
             .navigationTitle(L10n.tr("Add Cloud Folder"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -650,6 +664,7 @@ struct FolderDetailView: View {
     @Environment(\.downloadManager) private var downloadManager
     @Environment(\.extensionStore) private var extensionStore
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
     @State private var confirmRemove = false
     @State private var removingSubfolder: FolderRef?
@@ -743,10 +758,10 @@ struct FolderDetailView: View {
                     HStack(spacing: 10) {
                         if let childTracking {
                             Image(systemName: "folder.fill")
-                                .foregroundStyle(FoldersView.localTrackingColor(for: childTracking.cloudKind))
+                                .foregroundStyle(FoldersView.localTrackingColor(for: childTracking.cloudKind, accentColor: themeManager.accentColor))
                         } else {
                             Image(systemName: "folder")
-                                .foregroundStyle(Color.accentColor)
+                                .foregroundStyle(themeManager.accentColor)
                         }
                         Text(name)
                             .lineLimit(1)
@@ -759,8 +774,8 @@ struct FolderDetailView: View {
                                 .font(.caption2.weight(.semibold))
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(Color.accentColor.opacity(0.14), in: Capsule())
-                                .foregroundStyle(Color.accentColor)
+                                .background(themeManager.accentColor.opacity(0.14), in: Capsule())
+                                .foregroundStyle(themeManager.accentColor)
                                 .lineLimit(1)
                         }
                         Spacer()
@@ -835,6 +850,7 @@ struct FolderDetailView: View {
             }
         }
         .listStyle(.plain)
+        .hiddenScrollBackgroundIfThemed(themeManager)
         .navigationTitle(currentName)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: ref) {
@@ -889,6 +905,7 @@ struct FolderDetailView: View {
             .environment(\.extensionStore, extensionStore)
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
         .sheet(isPresented: $showExportSheet) {
             if let root {
@@ -896,6 +913,7 @@ struct FolderDetailView: View {
                     .environment(library)
                     .environment(\.downloadManager, downloadManager)
                     .environment(\.locale, languageManager.effectiveLocale)
+                    .applyTheme(themeManager)
             }
         }
         .sheet(item: $updatingTarget) { target in
@@ -909,6 +927,7 @@ struct FolderDetailView: View {
             .environment(library)
             .environment(\.downloadManager, downloadManager)
             .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
         .sheet(item: $editingTarget) { target in
             EditCloudTrackingSheet(
@@ -922,6 +941,7 @@ struct FolderDetailView: View {
             .environment(\.extensionStore, extensionStore)
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
         .confirmationDialog(L10n.tr("Remove “%@” from your library?", currentName),
                             isPresented: $confirmRemove,
@@ -978,6 +998,7 @@ struct SaveCloudPlaylistSheet: View {
     private let explicitDownloadManager: DownloadManager?
     @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
     @Environment(\.downloadManager) private var envDownloadManager
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var folderName: String
@@ -1094,6 +1115,8 @@ struct SaveCloudPlaylistSheet: View {
                     }
                 }
             }
+            .hiddenScrollBackgroundIfThemed(themeManager)
+            .background { ThemeBackdropView() }
             .navigationTitle(L10n.tr("Save Cloud Playlist"))
             .navigationBarTitleDisplayMode(.inline)
             .fileImporter(isPresented: $showLocationPicker, allowedContentTypes: [.folder]) { result in
@@ -1161,6 +1184,7 @@ struct UpdateTrackedFolderSheet: View {
     @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
     @Environment(\.downloadManager) private var envDownloadManager
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var activeJobID: UUID?
@@ -1312,6 +1336,8 @@ struct UpdateTrackedFolderSheet: View {
                     }
                 }
             }
+            .hiddenScrollBackgroundIfThemed(themeManager)
+            .background { ThemeBackdropView() }
             .navigationTitle(L10n.tr("Update “%@”", displayFolderName))
             .navigationBarTitleDisplayMode(.inline)
             .task {
@@ -1330,6 +1356,7 @@ struct UpdateTrackedFolderSheet: View {
                 .environment(\.extensionStore, ExtensionStore.shared)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
                 if let library {
                     sheet.environment(library)
                 } else {
@@ -1392,6 +1419,7 @@ struct EditCloudTrackingSheet: View {
     private let explicitLibrary: LibraryStore?
     @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
     @Environment(\.extensionStore) private var extensionStore
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var urlText: String
@@ -1603,6 +1631,8 @@ struct EditCloudTrackingSheet: View {
                     }
                 }
             }
+            .hiddenScrollBackgroundIfThemed(themeManager)
+            .background { ThemeBackdropView() }
             .navigationTitle(L10n.tr("Edit Cloud Source"))
             .navigationBarTitleDisplayMode(.inline)
             .onAppear {

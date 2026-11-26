@@ -430,7 +430,13 @@ final class CloudProviderRegistry: @unchecked Sendable {
     ) {
         let yt = YouTubeClient(transport: transport)
         let bili = BilibiliClient(transport: transport)
-        let drive = GoogleDriveClient(transport: transport, retryDelaysNanoseconds: driveRetryDelaysNanoseconds)
+        let drive = GoogleDriveClient(
+            transport: transport,
+            retryDelaysNanoseconds: driveRetryDelaysNanoseconds,
+            oauthTokenProvider: { forceRefresh in
+                try await GoogleDriveOAuthManager.shared.validAccessToken(forceRefresh: forceRefresh)
+            }
+        )
         self.youtubeClient = yt
         self.bilibiliClient = bili
         self.googleDriveClient = drive

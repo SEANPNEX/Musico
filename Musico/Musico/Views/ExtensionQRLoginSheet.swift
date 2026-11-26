@@ -8,6 +8,7 @@ struct ExtensionQRLoginSheet: View {
     private let explicitStore: ExtensionStore?
 
     @Environment(\.extensionStore) private var envExtensionStore
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var session: ExtensionQRLoginSession?
@@ -97,14 +98,14 @@ struct ExtensionQRLoginSheet: View {
                             VStack(spacing: 6) {
                                 Label(L10n.tr("Scanned — Confirm on Your Phone"), systemImage: "iphone.radiowaves.left.and.right")
                                     .font(.headline)
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(themeManager.accentColor)
                                 if let account = pollResult?.accountName, !account.isEmpty {
                                     Text(account)
                                         .font(.subheadline.weight(.medium))
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 3)
-                                        .background(Color.accentColor.opacity(0.14), in: Capsule())
-                                        .foregroundStyle(Color.accentColor)
+                                        .background(themeManager.accentColor.opacity(0.14), in: Capsule())
+                                        .foregroundStyle(themeManager.accentColor)
                                 }
                             }
                         } else {

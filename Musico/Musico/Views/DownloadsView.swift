@@ -3,6 +3,7 @@ import SwiftUI
 struct DownloadsListView: View {
     private let explicitManager: DownloadManager?
     @Environment(\.downloadManager) private var envManager
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     init(downloadManager: DownloadManager? = nil) {
@@ -39,8 +40,10 @@ struct DownloadsListView: View {
                             }
                         }
                     }
+                    .hiddenScrollBackgroundIfThemed(themeManager)
                 }
             }
+            .background { ThemeBackdropView() }
             .navigationTitle(L10n.tr("Downloads"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -142,7 +145,7 @@ struct DownloadsListView: View {
 
     private func iconColor(for job: DownloadJob) -> Color {
         switch job.state {
-        case .running: .accentColor
+        case .running: themeManager.accentColor
         case .completed: job.errors.isEmpty ? .green : .orange
         case .cancelled: .secondary
         case .failed: .red
@@ -163,6 +166,7 @@ struct SidebarDownloadsWidget: View {
     private let explicitManager: DownloadManager?
     let onOpenDownloads: () -> Void
     @Environment(\.downloadManager) private var envManager
+    @Environment(\.themeManager) private var themeManager
 
     init(downloadManager: DownloadManager? = nil, onOpenDownloads: @escaping () -> Void) {
         self.explicitManager = downloadManager
@@ -180,7 +184,7 @@ struct SidebarDownloadsWidget: View {
                     Button(action: onOpenDownloads) {
                         HStack(spacing: 6) {
                             Image(systemName: featured.state == .running ? "arrow.down.circle.fill" : "checkmark.circle.fill")
-                                .foregroundStyle(featured.state == .running ? Color.accentColor : Color.green)
+                                .foregroundStyle(featured.state == .running ? themeManager.accentColor : Color.green)
                                 .font(.caption)
                             Text(headerTitle(for: featured))
                                 .font(.caption.weight(.semibold))

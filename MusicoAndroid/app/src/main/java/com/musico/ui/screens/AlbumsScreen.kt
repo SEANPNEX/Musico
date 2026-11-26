@@ -54,6 +54,8 @@ import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
 import com.musico.ui.components.formatTime
+import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoTopAppBarColors
 import kotlin.random.Random
 
 @Composable
@@ -185,9 +187,11 @@ fun AlbumDetailScreen(
 
     Scaffold(
         modifier = modifier,
+        containerColor = musicoScaffoldContainerColor(),
         contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(
+                colors = musicoTopAppBarColors(),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = strings.back)

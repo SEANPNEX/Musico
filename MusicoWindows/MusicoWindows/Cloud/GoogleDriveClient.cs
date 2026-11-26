@@ -191,11 +191,15 @@ public sealed class GoogleDriveClient
         RegexOptions.Singleline | RegexOptions.Compiled);
 
     private readonly HttpMessageHandler? _handler;
+    private readonly Func<bool, CancellationToken, Task<string?>>? _oauthTokenProvider;
     private volatile string? _cachedWorkingApiKey;
 
-    public GoogleDriveClient(HttpMessageHandler? handler = null)
+    public GoogleDriveClient(
+        HttpMessageHandler? handler = null,
+        Func<bool, CancellationToken, Task<string?>>? oauthTokenProvider = null)
     {
         _handler = handler;
+        _oauthTokenProvider = oauthTokenProvider;
     }
 
     public static GoogleDriveTarget ParseInput(string input)
@@ -452,6 +456,14 @@ public sealed class GoogleDriveClient
         string? cookie,
         CancellationToken ct)
     {
+        var meta = await FetchAuthorizedFileMetadataAsync(http, openTarget.Id, openTarget.ResourceKey, ct).ConfigureAwait(false);
+        if (meta is not null)
+        {
+            return meta.IsFolder
+                ? new GoogleDriveTarget(GoogleDriveTargetKind.Folder, meta.Id, meta.ResourceKey ?? openTarget.ResourceKey)
+                : new GoogleDriveTarget(GoogleDriveTargetKind.File, meta.Id, meta.ResourceKey ?? openTarget.ResourceKey);
+        }
+
         string openUrl = BuildOpenUrl(openTarget.Id, openTarget.ResourceKey);
         using var resp = await SendWithRetryAsync(http, () => CreateRequest(HttpMethod.Get, openUrl, cookie), ct)
             .ConfigureAwait(false);
@@ -984,6 +996,12 @@ public sealed class GoogleDriveClient
         bool isRoot,
         CancellationToken ct)
     {
+        var authorized = await FetchAuthorizedFolderEntriesAsync(http, folderId, resourceKey, ct).ConfigureAwait(false);
+        if (authorized.Success)
+        {
+            return (authorized.Title, authorized.Entries);
+        }
+
         string primaryUrl = BuildFolderUrl(folderId, resourceKey);
         string? title = null;
         bool primaryHadSignInOrDenied = false;
@@ -1358,6 +1376,12 @@ public sealed class GoogleDriveClient
         string? cookie,
         CancellationToken ct)
     {
+        var meta = await FetchAuthorizedFileMetadataAsync(http, target.Id, target.ResourceKey, ct).ConfigureAwait(false);
+        if (meta is not null)
+        {
+            return BuildSingleFileResult(meta.Id, meta.ResourceKey ?? target.ResourceKey, meta.Name, meta.MimeType);
+        }
+
         string canonicalUrl = BuildFileViewUrl(target.Id, target.ResourceKey);
         string? rawFileName = null;
         string? contentType = null;
@@ -1463,6 +1487,16 @@ public sealed class GoogleDriveClient
         }
 
         string effectiveName = string.IsNullOrWhiteSpace(rawFileName) ? target.Id : rawFileName.Trim();
+        return BuildSingleFileResult(target.Id, target.ResourceKey, effectiveName, contentType);
+    }
+
+    private static CloudPlaylistResult BuildSingleFileResult(
+        string fileId,
+        string? resourceKey,
+        string effectiveName,
+        string? contentType)
+    {
+        string canonicalUrl = BuildFileViewUrl(fileId, resourceKey);
         string? ext = ExtractAudioExtension(effectiveName, contentType);
         if (ext is null)
         {
@@ -1480,7 +1514,7 @@ public sealed class GoogleDriveClient
         }
 
         string title = StripAudioExtension(effectiveName);
-        string remoteTrackId = EncodeRemoteTrackId(target.Id, target.ResourceKey);
+        string remoteTrackId = EncodeRemoteTrackId(fileId, resourceKey);
 
         var item = new CloudPlaylistItem(
             RemoteTrackId: remoteTrackId,
@@ -1494,7 +1528,7 @@ public sealed class GoogleDriveClient
 
         return new CloudPlaylistResult(
             Kind: RootKind.CloudGoogleDrive,
-            RemoteId: target.Id,
+            RemoteId: fileId,
             Title: title,
             SourceUrl: canonicalUrl,
             Items: [item]);
@@ -1508,6 +1542,12 @@ public sealed class GoogleDriveClient
     {
         var (fileId, resourceKey) = DecodeRemoteTrackId(remoteTrackId);
         using var http = CloudHttpHelper.CreateClient(proxyUrl, _handler);
+
+        var oauthStream = await ResolveAuthorizedAudioStreamAsync(http, fileId, resourceKey, ct).ConfigureAwait(false);
+        if (oauthStream is not null)
+        {
+            return oauthStream;
+        }
 
         string[] candidates =
         [
@@ -2438,6 +2478,161 @@ public sealed class GoogleDriveClient
             headers["Cookie"] = cookie;
         }
         return headers;
+    }
+
+    private async Task<(HttpResponseMessage? Response, string Token)> SendAuthorizedDriveGetAsync(
+        HttpClient http,
+        string url,
+        string? resourceKey,
+        string? targetIdForRk,
+        bool rangeProbe,
+        CancellationToken ct)
+    {
+        if (_oauthTokenProvider is null) return (null, string.Empty);
+        string? firstToken = await _oauthTokenProvider(false, ct).ConfigureAwait(false);
+        if (string.IsNullOrWhiteSpace(firstToken)) return (null, string.Empty);
+
+        HttpRequestMessage BuildReq(string tok)
+        {
+            var req = new HttpRequestMessage(HttpMethod.Get, url);
+            req.Headers.TryAddWithoutValidation("User-Agent", DefaultUserAgent);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", tok);
+            if (rangeProbe)
+            {
+                req.Headers.Range = new RangeHeaderValue(0, 0);
+            }
+            if (!string.IsNullOrWhiteSpace(resourceKey) && !string.IsNullOrWhiteSpace(targetIdForRk))
+            {
+                req.Headers.TryAddWithoutValidation("X-Goog-Drive-Resource-Keys", $"{targetIdForRk}/{resourceKey}");
+            }
+            return req;
+        }
+
+        string activeToken = firstToken;
+        var resp = await SendWithRetryAsync(http, () => BuildReq(activeToken), ct).ConfigureAwait(false);
+        if (resp.StatusCode == HttpStatusCode.Unauthorized)
+        {
+            string? refreshed = await _oauthTokenProvider(true, ct).ConfigureAwait(false);
+            if (!string.IsNullOrWhiteSpace(refreshed))
+            {
+                resp.Dispose();
+                activeToken = refreshed;
+                resp = await SendWithRetryAsync(http, () => BuildReq(activeToken), ct).ConfigureAwait(false);
+            }
+        }
+        return (resp, activeToken);
+    }
+
+    private async Task<GoogleDriveEntry?> FetchAuthorizedFileMetadataAsync(
+        HttpClient http,
+        string fileId,
+        string? resourceKey,
+        CancellationToken ct)
+    {
+        string url = $"https://www.googleapis.com/drive/v3/files/{Uri.EscapeDataString(fileId)}?fields={Uri.EscapeDataString("id,name,mimeType,resourceKey,size")}&supportsAllDrives=true";
+        var (resp, _) = await SendAuthorizedDriveGetAsync(http, url, resourceKey, fileId, rangeProbe: false, ct).ConfigureAwait(false);
+        if (resp is null) return null;
+        using (resp)
+        {
+            if (resp.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound) return null;
+            if (!resp.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException($"Google Drive metadata request failed (HTTP {(int)resp.StatusCode}).");
+            }
+            string json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            using var doc = JsonDocument.Parse(json);
+            var root = doc.RootElement;
+            string? id = ReadStringProp(root, "id");
+            string? name = ReadStringProp(root, "name");
+            string? mime = ReadStringProp(root, "mimeType");
+            if (string.IsNullOrWhiteSpace(id) || string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(mime))
+            {
+                return null;
+            }
+            string? rk = ReadStringProp(root, "resourceKey") ?? resourceKey;
+            bool isFolder = string.Equals(mime, FolderMimeType, StringComparison.OrdinalIgnoreCase);
+            return new GoogleDriveEntry(id, name, mime, isFolder, rk);
+        }
+    }
+
+    private async Task<(bool Success, string? Title, List<GoogleDriveEntry> Entries)> FetchAuthorizedFolderEntriesAsync(
+        HttpClient http,
+        string folderId,
+        string? resourceKey,
+        CancellationToken ct)
+    {
+        if (_oauthTokenProvider is null) return (false, null, new List<GoogleDriveEntry>());
+        var folderMeta = await FetchAuthorizedFileMetadataAsync(http, folderId, resourceKey, ct).ConfigureAwait(false);
+        if (folderMeta is null) return (false, null, new List<GoogleDriveEntry>());
+
+        var entries = new List<GoogleDriveEntry>();
+        var seenIds = new HashSet<string>(StringComparer.Ordinal);
+        var seenTokens = new HashSet<string>(StringComparer.Ordinal);
+        string? pageToken = null;
+
+        do
+        {
+            string query = Uri.EscapeDataString($"'{folderId.Replace("'", "\\'")}' in parents and trashed = false");
+            string pageParam = string.IsNullOrWhiteSpace(pageToken) ? string.Empty : $"&pageToken={Uri.EscapeDataString(pageToken)}";
+            string url = $"https://www.googleapis.com/drive/v3/files?q={query}&pageSize=1000&supportsAllDrives=true&includeItemsFromAllDrives=true&fields={Uri.EscapeDataString("nextPageToken,files(id,name,mimeType,resourceKey,size)")}{pageParam}";
+
+            var (resp, _) = await SendAuthorizedDriveGetAsync(http, url, resourceKey, folderId, rangeProbe: false, ct).ConfigureAwait(false);
+            if (resp is null) return (false, null, entries);
+            using (resp)
+            {
+                if (resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden or HttpStatusCode.NotFound)
+                {
+                    throw BuildAccessDeniedException(resp.StatusCode);
+                }
+                if (!resp.IsSuccessStatusCode)
+                {
+                    throw new InvalidOperationException($"Google Drive API request failed (HTTP {(int)resp.StatusCode}).");
+                }
+                string json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+                if (root.TryGetProperty("files", out var filesEl) && filesEl.ValueKind == JsonValueKind.Array)
+                {
+                    var pageEntries = new List<GoogleDriveEntry>();
+                    WalkDriveIvdElement(filesEl, pageEntries);
+                    foreach (var entry in pageEntries)
+                    {
+                        if (seenIds.Add(entry.Id)) entries.Add(entry);
+                    }
+                }
+                string? next = ReadStringProp(root, "nextPageToken")?.Trim();
+                pageToken = !string.IsNullOrWhiteSpace(next) && seenTokens.Add(next) ? next : null;
+            }
+        } while (!string.IsNullOrWhiteSpace(pageToken));
+
+        return (true, folderMeta.Name, entries);
+    }
+
+    private async Task<CloudAudioStream?> ResolveAuthorizedAudioStreamAsync(
+        HttpClient http,
+        string fileId,
+        string? resourceKey,
+        CancellationToken ct)
+    {
+        string mediaUrl = $"https://www.googleapis.com/drive/v3/files/{Uri.EscapeDataString(fileId)}?alt=media&supportsAllDrives=true";
+        var (resp, token) = await SendAuthorizedDriveGetAsync(http, mediaUrl, resourceKey, fileId, rangeProbe: true, ct).ConfigureAwait(false);
+        if (resp is null) return null;
+        using (resp)
+        {
+            if (resp.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.NotFound) return null;
+            if (!resp.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException($"Google Drive OAuth download failed (HTTP {(int)resp.StatusCode}).");
+            }
+            string resolvedUrl = resp.RequestMessage?.RequestUri?.AbsoluteUri ?? mediaUrl;
+            string ext = ResolveStreamExtension(resp, null, null);
+            var headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["User-Agent"] = DefaultUserAgent,
+                ["Authorization"] = $"Bearer {token}"
+            };
+            return new CloudAudioStream(resolvedUrl, ext, headers);
+        }
     }
 
     private static string BuildFolderUrl(string folderId, string? resourceKey)

@@ -266,4 +266,50 @@
     <sys:String x:Key="Str_EditCloud_ProviderHint">Keep Auto (Match URL) or choose a specific installed provider or extension for this URL.</sys:String>
     <sys:String x:Key="Str_EditCloud_Saving">Updating cloud source...</sys:String>
 
+    <!-- Settings & Appearance -->
+    <sys:String x:Key="Str_Nav_Settings">Settings</sys:String>
+    <sys:String x:Key="Str_Settings_Title">Settings</sys:String>
+    <sys:String x:Key="Str_Settings_Subtitle">Customize appearance, language, library, and updates</sys:String>
+    <sys:String x:Key="Str_Settings_SectionAppearance">Appearance</sys:String>
+    <sys:String x:Key="Str_Settings_ThemeMode">Theme Mode</sys:String>
+    <sys:String x:Key="Str_Settings_ThemeModeDesc">Choose Light, Dark, or follow Windows system theme</sys:String>
+    <sys:String x:Key="Str_Settings_ThemeSystem">System</sys:String>
+    <sys:String x:Key="Str_Settings_ThemeLight">Light</sys:String>
+    <sys:String x:Key="Str_Settings_ThemeDark">Dark</sys:String>
+    <sys:String x:Key="Str_Settings_BackgroundColor">Background Color</sys:String>
+    <sys:String x:Key="Str_Settings_BackgroundColorDesc">Preset window tint or custom hex/RGB color with adaptive text contrast</sys:String>
+    <sys:String x:Key="Str_Settings_CustomColorHex">Hex Color</sys:String>
+    <sys:String x:Key="Str_Settings_ColorRed">R</sys:String>
+    <sys:String x:Key="Str_Settings_ColorGreen">G</sys:String>
+    <sys:String x:Key="Str_Settings_ColorBlue">B</sys:String>
+    <sys:String x:Key="Str_Settings_ForegroundAccent">Foreground &amp; Accent Color</sys:String>
+    <sys:String x:Key="Str_Settings_ForegroundAccentDesc">Accent color for active highlights, sliders, and optional text color override</sys:String>
+    <sys:String x:Key="Str_Settings_CustomAccentColor">Custom Accent</sys:String>
+    <sys:String x:Key="Str_Settings_CustomTextOverride">Custom Text Color (Optional)</sys:String>
+    <sys:String x:Key="Str_Settings_WindowOpacity">Window Background Opacity</sys:String>
+    <sys:String x:Key="Str_Settings_WindowOpacityDesc">Adjust desktop Acrylic transparency (25%–100%)</sys:String>
+    <sys:String x:Key="Str_Settings_BackgroundImage">Background Image</sys:String>
+    <sys:String x:Key="Str_Settings_BackgroundImageDesc">Use a custom wallpaper behind the player interface</sys:String>
+    <sys:String x:Key="Str_Settings_ChooseImage">Choose Image...</sys:String>
+    <sys:String x:Key="Str_Settings_RemoveImage">Remove</sys:String>
+    <sys:String x:Key="Str_Settings_NoBackgroundImage">No background image selected</sys:String>
+    <sys:String x:Key="Str_Settings_ImageVisibility">Image Visibility</sys:String>
+    <sys:String x:Key="Str_Settings_ResetAppearance">Reset to Default</sys:String>
+    <sys:String x:Key="Str_Settings_SectionGeneral">General</sys:String>
+    <sys:String x:Key="Str_Settings_Language">Language</sys:String>
+    <sys:String x:Key="Str_Settings_LanguageDesc">Display language for menus, labels, and dialogs</sys:String>
+    <sys:String x:Key="Str_Settings_SectionGoogleDrive">Google Drive Account</sys:String>
+    <sys:String x:Key="Str_Settings_GDriveStatusLabel">Account Status</sys:String>
+    <sys:String x:Key="Str_Settings_GDriveClientId">OAuth Client ID</sys:String>
+    <sys:String x:Key="Str_Settings_GDriveClientSecret">OAuth Client Secret (Optional)</sys:String>
+    <sys:String x:Key="Str_Settings_GDriveSignIn">Sign In with Google</sys:String>
+    <sys:String x:Key="Str_Settings_GDriveSignOut">Sign Out</sys:String>
+    <sys:String x:Key="Str_Settings_GDriveHint">Sign in with OAuth 2.0 to access your private Google Drive folders and bypass public download confirmation pages. Public links still work without signing in.</sys:String>
+    <sys:String x:Key="Str_Settings_SectionLibrary">Library</sys:String>
+    <sys:String x:Key="Str_Settings_RescanLibrary">Rescan Music Library</sys:String>
+    <sys:String x:Key="Str_Settings_RescanLibraryDesc">Scan local folders for new, edited, or removed audio files</sys:String>
+    <sys:String x:Key="Str_Settings_SectionAbout">About &amp; Updates</sys:String>
+    <sys:String x:Key="Str_Settings_Version">Version</sys:String>
+    <sys:String x:Key="Str_Settings_UpdateAvailableBadge">Update Available</sys:String>
+
 </ResourceDictionary>

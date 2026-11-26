@@ -23,6 +23,7 @@ struct SongsView: View {
     @Environment(\.extensionStore) private var extensionStore
     @Environment(\.downloadManager) private var downloadManager
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
     @AppStorage("songSort") private var sort: SongSort = .title
 
     @State private var previewTarget: PreviewTarget?
@@ -95,6 +96,7 @@ struct SongsView: View {
                 }
             }
             .listStyle(.plain)
+            .hiddenScrollBackgroundIfThemed(themeManager)
             .refreshable {
                 if let selectedExt {
                     if !trimmedQuery.isEmpty {
@@ -149,6 +151,7 @@ struct SongsView: View {
             .environment(\.downloadManager, downloadManager)
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
         .sheet(isPresented: $showExtensionManager) {
             NavigationStack {
@@ -166,6 +169,7 @@ struct SongsView: View {
             .environment(\.extensionStore, extensionStore)
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
         .alert(
             L10n.tr("Couldn’t Add Cloud Folder"),
@@ -264,10 +268,10 @@ struct SongsView: View {
                                         .padding(.horizontal, 10)
                                         .padding(.vertical, 4)
                                         .background(
-                                            isSelected ? Color.accentColor.opacity(0.18) : Color(.secondarySystemFill),
+                                            isSelected ? themeManager.accentColor.opacity(0.18) : Color(.secondarySystemFill),
                                             in: Capsule()
                                         )
-                                        .foregroundStyle(isSelected ? Color.accentColor : Color.primary)
+                                        .foregroundStyle(isSelected ? themeManager.accentColor : Color.primary)
                                 }
                                 .buttonStyle(.plain)
                             }
@@ -288,7 +292,7 @@ struct SongsView: View {
                 .padding(.horizontal, 12)
                 .padding(.vertical, 6)
                 .background(
-                    isSelected ? Color.accentColor : Color(.secondarySystemFill),
+                    isSelected ? themeManager.accentColor : Color(.secondarySystemFill),
                     in: Capsule()
                 )
                 .foregroundStyle(isSelected ? Color.white : Color.primary)
@@ -304,7 +308,7 @@ struct SongsView: View {
         if isSearchingLocal && navigation.searchField != .keyword {
             HStack(spacing: 8) {
                 Image(systemName: "line.3.horizontal.decrease.circle.fill")
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(themeManager.accentColor)
                 Text("\(navigation.searchField.localizedTitle): \(trimmedQuery)")
                     .font(.subheadline.weight(.medium))
                 Spacer()
@@ -486,7 +490,7 @@ struct SongsView: View {
                 CloudThumbnailView(urlString: item.artworkUrl, placeholderSymbol: "music.note", size: 44)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(item.title)
-                        .foregroundStyle(isCurrent ? Color.accentColor : .primary)
+                        .foregroundStyle(isCurrent ? themeManager.accentColor : .primary)
                         .lineLimit(1)
                     Text(subtitle)
                         .font(.subheadline)
@@ -496,7 +500,7 @@ struct SongsView: View {
                 Spacer(minLength: 8)
                 if isCurrent {
                     Image(systemName: player.isPlaying ? "waveform" : "pause.fill")
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(themeManager.accentColor)
                         .symbolEffect(.variableColor.iterative, isActive: player.isPlaying)
                 }
                 if let duration = item.durationSec, duration > 0 {
@@ -567,8 +571,8 @@ struct SongsView: View {
                             .font(.caption2.weight(.semibold))
                             .padding(.horizontal, 6)
                             .padding(.vertical, 1)
-                            .background(Color.accentColor.opacity(0.14), in: Capsule())
-                            .foregroundStyle(Color.accentColor)
+                            .background(themeManager.accentColor.opacity(0.14), in: Capsule())
+                            .foregroundStyle(themeManager.accentColor)
                         if let artist = item.artist, !artist.isEmpty {
                             Text(artist)
                                 .font(.subheadline)

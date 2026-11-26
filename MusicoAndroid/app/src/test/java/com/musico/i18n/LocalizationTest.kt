@@ -3,6 +3,9 @@ package com.musico.i18n
 import com.musico.model.LyricsSource
 import com.musico.model.SearchField
 import com.musico.model.TrackSortOrder
+import com.musico.ui.theme.AppThemeMode
+import com.musico.ui.theme.BackgroundColorPreset
+import com.musico.ui.theme.ForegroundColorPreset
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
@@ -152,6 +155,21 @@ class LocalizationTest {
             assertTrue(EnStrings.lyricsSourceBadge(source).isNotBlank())
             assertTrue(ZhHansStrings.lyricsSourceBadge(source).isNotBlank())
             assertNotEquals(EnStrings.lyricsSourceBadge(source), ZhHansStrings.lyricsSourceBadge(source))
+        }
+        AppThemeMode.entries.forEach { mode ->
+            assertTrue(EnStrings.themeModeLabel(mode).isNotBlank())
+            assertTrue(ZhHansStrings.themeModeLabel(mode).isNotBlank())
+            assertNotEquals(EnStrings.themeModeLabel(mode), ZhHansStrings.themeModeLabel(mode))
+        }
+        BackgroundColorPreset.entries.forEach { preset ->
+            assertTrue(EnStrings.backgroundPresetLabel(preset).isNotBlank())
+            assertTrue(ZhHansStrings.backgroundPresetLabel(preset).isNotBlank())
+            assertNotEquals(EnStrings.backgroundPresetLabel(preset), ZhHansStrings.backgroundPresetLabel(preset))
+        }
+        ForegroundColorPreset.entries.forEach { preset ->
+            assertTrue(EnStrings.foregroundPresetLabel(preset).isNotBlank())
+            assertTrue(ZhHansStrings.foregroundPresetLabel(preset).isNotBlank())
+            assertNotEquals(EnStrings.foregroundPresetLabel(preset), ZhHansStrings.foregroundPresetLabel(preset))
         }
 
         assertTrue(EnStrings.cloudSyncProgress(2, 5, 14).contains("2/5"))

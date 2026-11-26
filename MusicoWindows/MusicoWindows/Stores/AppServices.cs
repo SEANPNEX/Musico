@@ -25,7 +25,8 @@ public sealed class AppServices : IDisposable
         CloudCache = new CloudAudioCache(Path.Combine(StateDirectory, "CloudCache"));
         YouTube = new YouTubeClient();
         Bilibili = new BilibiliClient();
-        GoogleDrive = new GoogleDriveClient();
+        GoogleDriveOAuth = new GoogleDriveOAuthManager(StateDirectory);
+        GoogleDrive = new GoogleDriveClient(oauthTokenProvider: (force, ct) => GoogleDriveOAuth.GetValidAccessTokenAsync(force, ct));
         CloudProviders = new CloudProviderRegistry(YouTube, Bilibili, GoogleDrive);
         Extensions = new ExtensionStore(
             stateDirectory: StateDirectory,
@@ -79,6 +80,7 @@ public sealed class AppServices : IDisposable
     public CloudThumbnailCache Thumbnails { get; }
     public YouTubeClient YouTube { get; }
     public BilibiliClient Bilibili { get; }
+    public GoogleDriveOAuthManager GoogleDriveOAuth { get; }
     public GoogleDriveClient GoogleDrive { get; }
     public CloudProviderRegistry CloudProviders { get; }
     public ExtensionStore Extensions { get; }

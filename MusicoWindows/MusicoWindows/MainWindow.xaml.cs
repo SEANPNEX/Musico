@@ -1,12 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using MusicoWindows.Controls;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
@@ -27,6 +29,8 @@ public partial class MainWindow : Window
     private SidePanelKind? _sidePanel;
     private string _activeRoute = "queues";
     private Guid? _activePlaylistId;
+    private string? _cachedBgImagePath;
+    private DateTime _cachedBgImageWriteUtc;
 
     public MainWindow(AppServices services)
     {
@@ -55,16 +59,22 @@ public partial class MainWindow : Window
             {
                 NavExtensions.IsChecked = true;
                 NavigateTo("extensions");
-            }
+            },
+            OpenUpdateDialog = () => UpdateDialog.Show(_services, () => Application.Current.Shutdown())
         };
 
         BottomPlayerBar.Initialize(_ctx);
-        BottomPlayerBar.OpenFullPlayerRequested += () => FullPlayer.Show();
+        BottomPlayerBar.OpenFullPlayerRequested += () =>
+        {
+            ShellBodyGrid.Visibility = Visibility.Hidden;
+            FullPlayer.Show();
+        };
         BottomPlayerBar.OpenEqualizerRequested += () => EqDialog.Show(_services);
         BottomPlayerBar.OpenSleepTimerRequested += () => SleepDialog.Show(_services);
         BottomPlayerBar.ToggleSidePanelRequested += ToggleSidePanel;
 
         FullPlayer.Initialize(_ctx);
+        FullPlayer.CloseRequested += () => ShellBodyGrid.Visibility = Visibility.Visible;
         FullPlayer.OpenEqualizerRequested += () => EqDialog.Show(_services);
         FullPlayer.OpenSleepTimerRequested += () => SleepDialog.Show(_services);
         FullPlayer.SearchOnlineLyricsRequested += track => CloudLyricsOverlay.Show(_services, track);
@@ -83,14 +93,14 @@ public partial class MainWindow : Window
         _services.Update.UpdateStateChanged += OnUpdateStateChanged;
         _services.Downloads.Changed += OnDownloadsChanged;
 
-        ThemeManager.ThemeChanged += OnThemeChanged;
+        ThemeManager.AppearanceChanged += OnAppearanceChanged;
         LocalizationManager.LanguageChanged += OnLanguageChanged;
-        SourceInitialized += (_, _) => AcrylicBackdrop.Apply(this, ThemeManager.IsDark);
+        SourceInitialized += (_, _) => ThemeManager.ApplyBackdrop(this);
         Loaded += OnMainWindowLoaded;
         StateChanged += (_, _) => UpdateMaximizedState();
         Closed += (_, _) =>
         {
-            ThemeManager.ThemeChanged -= OnThemeChanged;
+            ThemeManager.AppearanceChanged -= OnAppearanceChanged;
             LocalizationManager.LanguageChanged -= OnLanguageChanged;
             _services.Library.PropertyChanged -= OnLibraryChanged;
             _services.Player.PropertyChanged -= OnPlayerChanged;
@@ -98,38 +108,79 @@ public partial class MainWindow : Window
             _services.Downloads.Changed -= OnDownloadsChanged;
         };
 
-        UpdateThemeButton();
+        RefreshBackgroundImageLayer();
         RebuildDynamicPlaylists();
         RefreshDownloadsFooter();
         NavQueues.IsChecked = true;
         NavigateTo("queues");
     }
 
-    private void OnThemeChanged(bool isDark)
+    private void OnAppearanceChanged(AppearanceSettings _)
     {
-        AcrylicBackdrop.Apply(this, isDark);
-        UpdateThemeButton();
+        ThemeManager.ApplyBackdrop(this);
+        RefreshBackgroundImageLayer();
     }
 
     private void OnLanguageChanged(ResolvedLanguage _)
     {
-        UpdateThemeButton();
         UpdateMaximizedState();
         RebuildDynamicPlaylists();
         RefreshDownloadsFooter();
     }
 
-    private void UpdateThemeButton()
+    private void RefreshBackgroundImageLayer()
     {
-        if (ThemeManager.IsDark)
+        string? imagePath = ThemeManager.ResolveBackgroundImagePath();
+        if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
         {
-            ThemeGlyph.Text = "\uE706";
-            LblTheme.Text = L.Get("Nav_LightTheme");
+            _cachedBgImagePath = null;
+            WindowBackgroundImage.Source = null;
+            WindowBackgroundImage.Visibility = Visibility.Collapsed;
+            WindowBackgroundScrim.Visibility = Visibility.Collapsed;
+            return;
         }
-        else
+
+        try
         {
-            ThemeGlyph.Text = "\uE708";
-            LblTheme.Text = L.Get("Nav_DarkTheme");
+            DateTime writeUtc = File.GetLastWriteTimeUtc(imagePath);
+            if (!string.Equals(_cachedBgImagePath, imagePath, StringComparison.OrdinalIgnoreCase) ||
+                _cachedBgImageWriteUtc != writeUtc ||
+                WindowBackgroundImage.Source is null)
+            {
+                byte[] bytes = File.ReadAllBytes(imagePath);
+                using var ms = new MemoryStream(bytes);
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.StreamSource = ms;
+                bmp.EndInit();
+                bmp.Freeze();
+
+                WindowBackgroundImage.Source = bmp;
+                _cachedBgImagePath = imagePath;
+                _cachedBgImageWriteUtc = writeUtc;
+            }
+
+            AppearanceSettings settings = ThemeManager.CurrentSettings;
+            WindowBackgroundImage.Opacity = settings.BackgroundImageOpacity;
+            WindowBackgroundImage.Visibility = Visibility.Visible;
+
+            ThemePalette? palette = ThemeManager.CurrentPalette;
+            RgbColor scrimBase = palette is not null
+                ? new RgbColor(palette.ContentBackground.R, palette.ContentBackground.G, palette.ContentBackground.B)
+                : (ThemeManager.IsDark ? new RgbColor(0x14, 0x14, 0x14) : new RgbColor(0xF2, 0xF2, 0xF2));
+            byte scrimAlpha = ColorMath.ComputeBackgroundScrimAlpha(settings);
+
+            var scrimBrush = new SolidColorBrush(Color.FromArgb(scrimAlpha, scrimBase.R, scrimBase.G, scrimBase.B));
+            scrimBrush.Freeze();
+            WindowBackgroundScrim.Background = scrimBrush;
+            WindowBackgroundScrim.Visibility = Visibility.Visible;
+        }
+        catch
+        {
+            WindowBackgroundImage.Source = null;
+            WindowBackgroundImage.Visibility = Visibility.Collapsed;
+            WindowBackgroundScrim.Visibility = Visibility.Collapsed;
         }
     }
 
@@ -154,10 +205,6 @@ public partial class MainWindow : Window
                 NavPlaylists.IsChecked = true;
                 NavigateTo("playlists");
             }
-        }
-        else if (e.PropertyName == nameof(LibraryStore.IsScanning))
-        {
-            FooterRescanButton.IsEnabled = !_services.Library.IsScanning;
         }
     }
 
@@ -397,6 +444,11 @@ public partial class MainWindow : Window
                 ev.Bind(_ctx);
                 ContentHost.Content = ev;
                 break;
+            case "settings":
+                var setv = new SettingsView();
+                setv.Bind(_ctx);
+                ContentHost.Content = setv;
+                break;
         }
 
         if (slideFromX is double offset)
@@ -567,10 +619,7 @@ public partial class MainWindow : Window
         LblQueues.Visibility = labelVis;
         LblStats.Visibility = labelVis;
         LblExtensions.Visibility = labelVis;
-        LblTheme.Visibility = labelVis;
-        LblLanguage.Visibility = labelVis;
-        LblRescan.Visibility = labelVis;
-        LblCheckUpdates.Visibility = labelVis;
+        LblSettings.Visibility = labelVis;
         DownloadsFooterDetails.Visibility = labelVis;
         RefreshDownloadsFooter();
 
@@ -591,47 +640,6 @@ public partial class MainWindow : Window
             string.Empty,
             L.Get("Common_Create"),
             name => _services.Library.CreatePlaylist(name));
-    }
-
-    private void ToggleTheme_Click(object sender, RoutedEventArgs e)
-    {
-        ThemeManager.ToggleTheme(Application.Current);
-    }
-
-    private void LanguageFooter_Click(object sender, RoutedEventArgs e)
-    {
-        var menu = new ContextMenu();
-        menu.Items.Add(CreateLanguageMenuItem(L.Get("Lang_FollowSystem"), AppLanguage.System));
-        menu.Items.Add(CreateLanguageMenuItem(L.Get("Lang_English"), AppLanguage.English));
-        menu.Items.Add(CreateLanguageMenuItem(L.Get("Lang_SimplifiedChinese"), AppLanguage.SimplifiedChinese));
-        menu.PlacementTarget = LanguageButton;
-        menu.Placement = PlacementMode.Right;
-        menu.IsOpen = true;
-    }
-
-    private MenuItem CreateLanguageMenuItem(string header, AppLanguage mode)
-    {
-        bool isSelected = LocalizationManager.CurrentMode == mode;
-        var item = new MenuItem
-        {
-            Header = header,
-            IsCheckable = true,
-            IsChecked = isSelected
-        };
-        if (isSelected)
-        {
-            item.Icon = new TextBlock
-            {
-                Text = "\uE73E",
-                FontFamily = (FontFamily)FindResource("Win10GlyphFont"),
-                FontSize = 12,
-                Foreground = (Brush)FindResource("AccentBrush"),
-                VerticalAlignment = VerticalAlignment.Center,
-                HorizontalAlignment = HorizontalAlignment.Center
-            };
-        }
-        item.Click += (_, _) => LocalizationManager.SetMode(Application.Current, mode);
-        return item;
     }
 
     private async void OnMainWindowLoaded(object sender, RoutedEventArgs e)
@@ -662,16 +670,6 @@ public partial class MainWindow : Window
         {
             UpdateBadgeDot.Visibility = result.IsUpdateAvailable ? Visibility.Visible : Visibility.Collapsed;
         });
-    }
-
-    private async void RescanFooter_Click(object sender, RoutedEventArgs e)
-    {
-        await _services.Library.RescanAsync();
-    }
-
-    private void CheckUpdatesFooter_Click(object sender, RoutedEventArgs e)
-    {
-        UpdateDialog.Show(_services, () => Application.Current.Shutdown());
     }
 
     private void DownloadsFooter_Click(object sender, RoutedEventArgs e)
@@ -730,6 +728,17 @@ public partial class MainWindow : Window
                 if (ContentHost.Content is SongsView sv)
                 {
                     Dispatcher.BeginInvoke(sv.FocusSearch);
+                }
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.OemComma)
+            {
+                if (FullPlayer.IsOpen) FullPlayer.Close();
+                NavSettings.IsChecked = true;
+                if (ContentHost.Content is not SettingsView)
+                {
+                    NavigateTo("settings");
                 }
                 e.Handled = true;
                 return;

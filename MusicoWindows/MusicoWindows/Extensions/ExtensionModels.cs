@@ -17,7 +17,8 @@ public enum ExtensionCapability
     Proxy,
     Lyrics,
     Search,
-    QrLogin
+    QrLogin,
+    WebLogin
 }
 
 [JsonConverter(typeof(ExtensionSearchKindJsonConverter))]
@@ -52,6 +53,7 @@ public sealed class ExtensionCapabilityJsonConverter : JsonConverter<ExtensionCa
             "lyrics" => ExtensionCapability.Lyrics,
             "search" => ExtensionCapability.Search,
             "qr_login" => ExtensionCapability.QrLogin,
+            "web_login" => ExtensionCapability.WebLogin,
             _ => throw new JsonException($"Unsupported extension capability: '{raw}'.")
         };
     }
@@ -68,6 +70,7 @@ public sealed class ExtensionCapabilityJsonConverter : JsonConverter<ExtensionCa
             ExtensionCapability.Lyrics => "lyrics",
             ExtensionCapability.Search => "search",
             ExtensionCapability.QrLogin => "qr_login",
+            ExtensionCapability.WebLogin => "web_login",
             _ => value.ToString().ToLowerInvariant()
         });
     }
@@ -252,6 +255,14 @@ public sealed record ExtensionQualityOption(
         !string.IsNullOrWhiteSpace(Badge) ? Badge.Trim() : Label;
 }
 
+public sealed class ExtensionWebLoginConfig
+{
+    public string LoginUrl { get; set; } = string.Empty;
+    public List<string> CookieDomains { get; set; } = new();
+    public List<string>? RequiredCookies { get; set; }
+    public string? UserAgent { get; set; }
+}
+
 public sealed class ExtensionPermissions
 {
     public List<string> Hosts { get; set; } = new();
@@ -280,6 +291,7 @@ public sealed class ExtensionManifest
     public List<ExtensionQualityOption>? Qualities { get; set; }
     public string? DefaultStreamQuality { get; set; }
     public string? DefaultDownloadQuality { get; set; }
+    public ExtensionWebLoginConfig? WebLogin { get; set; }
 
     [JsonIgnore]
     public IReadOnlyList<ExtensionQualityOption> EffectiveQualities =>
@@ -345,11 +357,17 @@ public sealed class ExtensionManifest
 
     [JsonIgnore]
     public bool SupportsCookieAuth =>
-        HasCapability(ExtensionCapability.Cookie) || HasCapability(ExtensionCapability.QrLogin);
+        HasCapability(ExtensionCapability.Cookie) ||
+        HasCapability(ExtensionCapability.QrLogin) ||
+        HasCapability(ExtensionCapability.WebLogin);
 
     [JsonIgnore]
     public bool SupportsQrLogin =>
         HasCapability(ExtensionCapability.QrLogin);
+
+    [JsonIgnore]
+    public bool SupportsWebLogin =>
+        HasCapability(ExtensionCapability.WebLogin) && WebLogin is not null;
 
     [JsonIgnore]
     public bool HasServerUrlSetting =>
@@ -703,6 +721,181 @@ public static class ExtensionManifestValidator
             throw new InvalidDataException(
                 $"Extension manifest.defaultDownloadQuality '{manifest.DefaultDownloadQuality}' must match an id in manifest.qualities.");
         }
+
+        if (manifest.HasCapability(ExtensionCapability.WebLogin) && manifest.WebLogin is null)
+        {
+            throw new InvalidDataException("web_login extension must declare manifest.webLogin.");
+        }
+
+        if (manifest.WebLogin is not null)
+        {
+            var wl = manifest.WebLogin;
+            if (string.IsNullOrWhiteSpace(wl.LoginUrl) ||
+                !Uri.TryCreate(wl.LoginUrl.Trim(), UriKind.Absolute, out var loginUri) ||
+                !string.Equals(loginUri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase) ||
+                string.IsNullOrWhiteSpace(loginUri.Host))
+            {
+                throw new InvalidDataException($"manifest.webLogin.loginUrl must be a valid https:// URL: '{wl.LoginUrl}'.");
+            }
+            if (wl.CookieDomains is null || wl.CookieDomains.Count == 0 || wl.CookieDomains.Count > 16)
+            {
+                throw new InvalidDataException("manifest.webLogin.cookieDomains must contain 1 to 16 entries.");
+            }
+            foreach (string rawDomain in wl.CookieDomains)
+            {
+                string dom = (rawDomain ?? string.Empty).Trim();
+                if (dom.Length == 0 ||
+                    dom.Any(char.IsWhiteSpace) ||
+                    dom.Contains("://", StringComparison.Ordinal) ||
+                    dom.Contains('/', StringComparison.Ordinal))
+                {
+                    throw new InvalidDataException($"Invalid manifest.webLogin.cookieDomains entry: '{rawDomain}'.");
+                }
+            }
+            if (wl.RequiredCookies is not null)
+            {
+                if (wl.RequiredCookies.Count > 16)
+                {
+                    throw new InvalidDataException("manifest.webLogin.requiredCookies cannot exceed 16 entries.");
+                }
+                foreach (string rc in wl.RequiredCookies)
+                {
+                    if (string.IsNullOrWhiteSpace(rc))
+                    {
+                        throw new InvalidDataException("manifest.webLogin.requiredCookies entries must not be blank.");
+                    }
+                }
+            }
+            if (wl.UserAgent is not null)
+            {
+                string ua = wl.UserAgent.Trim();
+                if (ua.Length == 0 || ua.Length > 512)
+                {
+                    throw new InvalidDataException("manifest.webLogin.userAgent must be a non-empty string (<= 512 chars).");
+                }
+            }
+        }
+    }
+}
+
+public static class NetscapeCookieFileParser
+{
+    public static string NormalizeDomain(string raw)
+    {
+        string s = (raw ?? string.Empty).Trim().ToLowerInvariant();
+        if (s.StartsWith("*.", StringComparison.Ordinal))
+        {
+            s = s[2..];
+        }
+        return s.TrimStart('.').TrimEnd('.');
+    }
+
+    public static bool DomainMatches(string cookieDomain, IReadOnlyList<string>? allowedDomains)
+    {
+        if (allowedDomains is null || allowedDomains.Count == 0) return true;
+        string cleanCookie = NormalizeDomain(cookieDomain);
+        if (!cleanCookie.Contains('.', StringComparison.Ordinal)) return false;
+        foreach (string rawAllowed in allowedDomains)
+        {
+            string cleanAllowed = NormalizeDomain(rawAllowed);
+            if (!cleanAllowed.Contains('.', StringComparison.Ordinal)) continue;
+            if (string.Equals(cleanCookie, cleanAllowed, StringComparison.Ordinal) ||
+                cleanCookie.EndsWith("." + cleanAllowed, StringComparison.Ordinal) ||
+                cleanAllowed.EndsWith("." + cleanCookie, StringComparison.Ordinal))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public static string? FormatCookiePairs(IEnumerable<(string Name, string Value)> pairs)
+    {
+        var order = new List<string>();
+        var values = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (rawName, rawValue) in pairs)
+        {
+            string name = (rawName ?? string.Empty).Trim();
+            string value = (rawValue ?? string.Empty).Trim();
+            if (name.Length == 0 || value.Length == 0) continue;
+            if (!values.ContainsKey(name))
+            {
+                order.Add(name);
+            }
+            values[name] = value;
+        }
+        if (order.Count == 0) return null;
+        return string.Join("; ", order.Select(k => $"{k}={values[k]}"));
+    }
+
+    public static string? ParseCookieHeader(
+        string text,
+        IReadOnlyList<string>? allowedDomains = null,
+        long? nowEpochSec = null)
+    {
+        if (string.IsNullOrWhiteSpace(text)) return null;
+        long nowSec = nowEpochSec ?? DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        bool sawNetscapeRow = false;
+        var netscapePairs = new List<(string, string)>();
+
+        using var reader = new StringReader(text);
+        string? rawLine;
+        while ((rawLine = reader.ReadLine()) is not null)
+        {
+            string line = rawLine.Trim();
+            if (line.Length == 0) continue;
+
+            if (line.StartsWith("#HttpOnly_", StringComparison.Ordinal))
+            {
+                line = line["#HttpOnly_".Length..];
+            }
+            else if (line.StartsWith('#'))
+            {
+                continue;
+            }
+
+            string[] cols = line.Split('\t');
+            if (cols.Length < 7) continue;
+            sawNetscapeRow = true;
+
+            string domain = cols[0].Trim();
+            if (double.TryParse(cols[4].Trim(), System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out double expires) &&
+                expires > 0 && expires < nowSec)
+            {
+                continue;
+            }
+            if (!DomainMatches(domain, allowedDomains))
+            {
+                continue;
+            }
+            string name = cols[5].Trim();
+            string value = string.Join("\t", cols.Skip(6)).Trim();
+            if (name.Length == 0 || value.Length == 0) continue;
+            netscapePairs.Add((name, value));
+        }
+
+        if (sawNetscapeRow)
+        {
+            return FormatCookiePairs(netscapePairs);
+        }
+
+        string rawHeader = text.Trim();
+        if (rawHeader.StartsWith("cookie:", StringComparison.OrdinalIgnoreCase))
+        {
+            rawHeader = rawHeader["cookie:".Length..].Trim();
+        }
+        var headerPairs = new List<(string, string)>();
+        foreach (string seg in rawHeader.Split(';'))
+        {
+            string trimmed = seg.Trim();
+            int eq = trimmed.IndexOf('=');
+            if (eq <= 0) continue;
+            string name = trimmed[..eq].Trim();
+            string value = trimmed[(eq + 1)..].Trim();
+            if (name.Length == 0 || value.Length == 0) continue;
+            headerPairs.Add((name, value));
+        }
+        return FormatCookiePairs(headerPairs);
     }
 }
 

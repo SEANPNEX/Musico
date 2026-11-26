@@ -392,7 +392,8 @@ module.exports = {
 | `badgeLabel` | `string` | 否 | 在 **Folders**、搜索切换标签及歌词来源胶囊上展示的短标签（默认取 `name`，最多 16 个字符）。 |
 | `entry` | `string` | 否 | `.musicoext` 包内的入口 JS 路径（默认为 `"index.js"`）。 |
 | `updateUrl` | `string` | 否 | 可选的 HTTPS `.musicoext` 更新包地址，用于自动与手动检查更新（省略时回退至链接导入时记录的原 URL）。 |
-| `capabilities` | `string[]` | 是 | 非空数组，支持声明 `"playlist"`、`"tree"`、`"stream"`、`"cookie"`、`"proxy"`、`"lyrics"`、`"search"`、`"qr_login"`。 |
+| `capabilities` | `string[]` | 是 | 非空数组，支持声明 `"playlist"`、`"tree"`、`"stream"`、`"cookie"`、`"proxy"`、`"lyrics"`、`"search"`、`"qr_login"`、`"web_login"`。 |
+| `webLogin` | `object` | 条件必填 | 声明 `"web_login"` 时**必填**：`{ loginUrl, cookieDomains, requiredCookies?, userAgent? }`。`loginUrl` 须为 `https://`，`cookieDomains` 列出要捕获的 1–16 个 Cookie 域名，`requiredCookies` 可选指定用于识别登录成功的 Cookie 名称。 |
 | `urlPatterns` | `string[]` | 条件必填 | 原生端先做预筛选的正则表达式列表。声明 `"playlist"` 或 `"tree"` 时**必填**；其余扩展（如纯 `"lyrics"`、纯 `"search"` 或 `"search" + "stream"`）可省略或留空。 |
 | `searchKinds` | `string[]` | 否 | 支持 `"track"`、`"playlist"`、`"album"` 的子集，控制搜歌页面的分类筛选选项（省略或为空时默认开启全部三种）。 |
 | `permissions.hosts` | `string[]` | 条件必填 | 严格的 HTTP/HTTPS 域名白名单：支持精确域名（`example.com`）或二级以上通配子域（`*.sub.domain`，禁止裸 `*` 或 `*.com`）。当 `settings` 包含 `"server_url"` 配置项时可留空。 |

@@ -1,0 +1,748 @@
+<UserControl x:Class="MusicoWindows.Views.SettingsView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!-- Page Header -->
+        <Border Grid.Row="0"
+                Padding="24,20,24,14"
+                BorderBrush="{DynamicResource DividerBrush}"
+                BorderThickness="0,0,0,1">
+            <StackPanel>
+                <TextBlock Text="{DynamicResource Str_Settings_Title}"
+                           Style="{StaticResource Win10PageTitleStyle}" />
+                <TextBlock Text="{DynamicResource Str_Settings_Subtitle}"
+                           FontFamily="{StaticResource Win10Font}"
+                           FontSize="12"
+                           Foreground="{DynamicResource TextSecondaryBrush}"
+                           Margin="0,3,0,0" />
+            </StackPanel>
+        </Border>
+
+        <!-- Scrollable Settings Content -->
+        <ScrollViewer Grid.Row="1"
+                      VerticalScrollBarVisibility="Auto"
+                      HorizontalScrollBarVisibility="Disabled"
+                      Padding="24,18">
+            <StackPanel MaxWidth="860"
+                        HorizontalAlignment="Stretch"
+                        Margin="0,0,0,32">
+
+                <!-- 1. APPEARANCE CARD -->
+                <TextBlock Text="{DynamicResource Str_Settings_SectionAppearance}"
+                           Style="{StaticResource Win10SectionTitleStyle}"
+                           Margin="0,0,0,10" />
+                <Border Background="{DynamicResource CardBackgroundBrush}"
+                        BorderBrush="{DynamicResource ControlBorderBrush}"
+                        BorderThickness="1"
+                        Padding="20,18"
+                        Margin="0,0,0,22">
+                    <StackPanel>
+
+                        <!-- Theme Mode -->
+                        <Grid Margin="0,0,0,16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                <TextBlock Text="{DynamicResource Str_Settings_ThemeMode}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="14"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <TextBlock Text="{DynamicResource Str_Settings_ThemeModeDesc}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,2,0,0" />
+                                <TextBlock x:Name="ThemeModeOverrideHint"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="11"
+                                           Foreground="{DynamicResource TextTertiaryBrush}"
+                                           Margin="0,3,0,0"
+                                           Visibility="Collapsed" />
+                            </StackPanel>
+                            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                                <Button x:Name="ThemeSystemButton"
+                                        Style="{StaticResource Win10ButtonStyle}"
+                                        Content="{DynamicResource Str_Settings_ThemeSystem}"
+                                        MinWidth="82"
+                                        Margin="0,0,6,0"
+                                        Click="ThemeSystem_Click" />
+                                <Button x:Name="ThemeLightButton"
+                                        Style="{StaticResource Win10ButtonStyle}"
+                                        Content="{DynamicResource Str_Settings_ThemeLight}"
+                                        MinWidth="74"
+                                        Margin="0,0,6,0"
+                                        Click="ThemeLight_Click" />
+                                <Button x:Name="ThemeDarkButton"
+                                        Style="{StaticResource Win10ButtonStyle}"
+                                        Content="{DynamicResource Str_Settings_ThemeDark}"
+                                        MinWidth="74"
+                                        Click="ThemeDark_Click" />
+                            </StackPanel>
+                        </Grid>
+
+                        <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,0,0,16" />
+
+                        <!-- Background Color Presets + Custom Picker -->
+                        <StackPanel Margin="0,0,0,16">
+                            <TextBlock Text="{DynamicResource Str_Settings_BackgroundColor}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                            <TextBlock Text="{DynamicResource Str_Settings_BackgroundColorDesc}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,0,10" />
+
+                            <WrapPanel x:Name="BackgroundPresetsPanel" />
+
+                            <!-- Inline Custom Background Color Picker -->
+                            <Border x:Name="CustomBackgroundPanel"
+                                    Background="{DynamicResource ContentBackgroundBrush}"
+                                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                                    BorderThickness="1"
+                                    Padding="14,12"
+                                    Margin="0,6,0,0"
+                                    Visibility="Collapsed">
+                                <StackPanel>
+                                    <Grid Margin="0,0,0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="130" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border x:Name="CustomBgPreviewSwatch"
+                                                Grid.Column="0"
+                                                Width="28"
+                                                Height="28"
+                                                BorderBrush="{DynamicResource ControlBorderBrush}"
+                                                BorderThickness="1"
+                                                VerticalAlignment="Center"
+                                                Margin="0,0,12,0" />
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{DynamicResource Str_Settings_CustomColorHex}"
+                                                   FontFamily="{StaticResource Win10Font}"
+                                                   FontSize="12"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,10,0" />
+                                        <TextBox x:Name="CustomBgHexBox"
+                                                 Grid.Column="2"
+                                                 Style="{StaticResource Win10TextBoxStyle}"
+                                                 Height="30"
+                                                 MaxLength="7"
+                                                 TextChanged="CustomBgHexBox_TextChanged"
+                                                 LostFocus="CustomBgHexBox_LostFocus" />
+                                    </Grid>
+
+                                    <Grid>
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="24" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="38" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="{DynamicResource Str_Settings_ColorRed}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                        <Slider x:Name="CustomBgRSlider" Grid.Row="0" Grid.Column="1" Style="{StaticResource Win10SliderStyle}" Minimum="0" Maximum="255" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="CustomBgRgbSlider_ValueChanged" />
+                                        <TextBlock x:Name="CustomBgRText" Grid.Row="0" Grid.Column="2" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="{DynamicResource Str_Settings_ColorGreen}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                        <Slider x:Name="CustomBgGSlider" Grid.Row="1" Grid.Column="1" Style="{StaticResource Win10SliderStyle}" Minimum="0" Maximum="255" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="CustomBgRgbSlider_ValueChanged" />
+                                        <TextBlock x:Name="CustomBgGText" Grid.Row="1" Grid.Column="2" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="{DynamicResource Str_Settings_ColorBlue}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                        <Slider x:Name="CustomBgBSlider" Grid.Row="2" Grid.Column="1" Style="{StaticResource Win10SliderStyle}" Minimum="0" Maximum="255" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="CustomBgRgbSlider_ValueChanged" />
+                                        <TextBlock x:Name="CustomBgBText" Grid.Row="2" Grid.Column="2" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,0,0,16" />
+
+                        <!-- Foreground & Accent Presets + Custom Accent & Optional Text Picker -->
+                        <StackPanel Margin="0,0,0,16">
+                            <TextBlock Text="{DynamicResource Str_Settings_ForegroundAccent}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                            <TextBlock Text="{DynamicResource Str_Settings_ForegroundAccentDesc}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,0,10" />
+
+                            <WrapPanel x:Name="ForegroundPresetsPanel" />
+
+                            <!-- Inline Custom Accent & Optional Custom Text Color Picker -->
+                            <Border x:Name="CustomForegroundPanel"
+                                    Background="{DynamicResource ContentBackgroundBrush}"
+                                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                                    BorderThickness="1"
+                                    Padding="14,12"
+                                    Margin="0,6,0,0"
+                                    Visibility="Collapsed">
+                                <StackPanel>
+                                    <!-- Custom Accent -->
+                                    <TextBlock Text="{DynamicResource Str_Settings_CustomAccentColor}"
+                                               FontFamily="{StaticResource Win10Font}"
+                                               FontSize="12"
+                                               FontWeight="SemiBold"
+                                               Foreground="{DynamicResource TextPrimaryBrush}"
+                                               Margin="0,0,0,8" />
+                                    <Grid Margin="0,0,0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="Auto" />
+                                            <ColumnDefinition Width="130" />
+                                            <ColumnDefinition Width="*" />
+                                        </Grid.ColumnDefinitions>
+                                        <Border x:Name="CustomAccentPreviewSwatch"
+                                                Grid.Column="0"
+                                                Width="28"
+                                                Height="28"
+                                                BorderBrush="{DynamicResource ControlBorderBrush}"
+                                                BorderThickness="1"
+                                                VerticalAlignment="Center"
+                                                Margin="0,0,12,0" />
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{DynamicResource Str_Settings_CustomColorHex}"
+                                                   FontFamily="{StaticResource Win10Font}"
+                                                   FontSize="12"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                                   VerticalAlignment="Center"
+                                                   Margin="0,0,10,0" />
+                                        <TextBox x:Name="CustomAccentHexBox"
+                                                 Grid.Column="2"
+                                                 Style="{StaticResource Win10TextBoxStyle}"
+                                                 Height="30"
+                                                 MaxLength="7"
+                                                 TextChanged="CustomAccentHexBox_TextChanged"
+                                                 LostFocus="CustomAccentHexBox_LostFocus" />
+                                    </Grid>
+                                    <Grid Margin="0,0,0,14">
+                                        <Grid.RowDefinitions>
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                            <RowDefinition Height="Auto" />
+                                        </Grid.RowDefinitions>
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="24" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="38" />
+                                        </Grid.ColumnDefinitions>
+
+                                        <TextBlock Grid.Row="0" Grid.Column="0" Text="{DynamicResource Str_Settings_ColorRed}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                        <Slider x:Name="CustomAccentRSlider" Grid.Row="0" Grid.Column="1" Style="{StaticResource Win10SliderStyle}" Minimum="0" Maximum="255" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="CustomAccentRgbSlider_ValueChanged" />
+                                        <TextBlock x:Name="CustomAccentRText" Grid.Row="0" Grid.Column="2" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+
+                                        <TextBlock Grid.Row="1" Grid.Column="0" Text="{DynamicResource Str_Settings_ColorGreen}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                        <Slider x:Name="CustomAccentGSlider" Grid.Row="1" Grid.Column="1" Style="{StaticResource Win10SliderStyle}" Minimum="0" Maximum="255" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="CustomAccentRgbSlider_ValueChanged" />
+                                        <TextBlock x:Name="CustomAccentGText" Grid.Row="1" Grid.Column="2" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+
+                                        <TextBlock Grid.Row="2" Grid.Column="0" Text="{DynamicResource Str_Settings_ColorBlue}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                        <Slider x:Name="CustomAccentBSlider" Grid.Row="2" Grid.Column="1" Style="{StaticResource Win10SliderStyle}" Minimum="0" Maximum="255" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="CustomAccentRgbSlider_ValueChanged" />
+                                        <TextBlock x:Name="CustomAccentBText" Grid.Row="2" Grid.Column="2" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                    </Grid>
+
+                                    <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,0,0,12" />
+
+                                    <!-- Optional Custom Text Color -->
+                                    <Grid Margin="0,0,0,8">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="Auto" />
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{DynamicResource Str_Settings_CustomTextOverride}"
+                                                   FontFamily="{StaticResource Win10Font}"
+                                                   FontSize="12"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                                   VerticalAlignment="Center" />
+                                        <CheckBox x:Name="CustomTextToggle"
+                                                  Grid.Column="1"
+                                                  Style="{StaticResource Win10ToggleSwitchStyle}"
+                                                  Checked="CustomTextToggle_Changed"
+                                                  Unchecked="CustomTextToggle_Changed" />
+                                    </Grid>
+
+                                    <StackPanel x:Name="CustomTextPickerSection" Visibility="Collapsed">
+                                        <Grid Margin="0,4,0,10">
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="130" />
+                                                <ColumnDefinition Width="*" />
+                                            </Grid.ColumnDefinitions>
+                                            <Border x:Name="CustomFgPreviewSwatch"
+                                                    Grid.Column="0"
+                                                    Width="28"
+                                                    Height="28"
+                                                    BorderBrush="{DynamicResource ControlBorderBrush}"
+                                                    BorderThickness="1"
+                                                    VerticalAlignment="Center"
+                                                    Margin="0,0,12,0" />
+                                            <TextBlock Grid.Column="1"
+                                                       Text="{DynamicResource Str_Settings_CustomColorHex}"
+                                                       FontFamily="{StaticResource Win10Font}"
+                                                       FontSize="12"
+                                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                                       VerticalAlignment="Center"
+                                                       Margin="0,0,10,0" />
+                                            <TextBox x:Name="CustomFgHexBox"
+                                                     Grid.Column="2"
+                                                     Style="{StaticResource Win10TextBoxStyle}"
+                                                     Height="30"
+                                                     MaxLength="7"
+                                                     TextChanged="CustomFgHexBox_TextChanged"
+                                                     LostFocus="CustomFgHexBox_LostFocus" />
+                                        </Grid>
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                                <RowDefinition Height="Auto" />
+                                            </Grid.RowDefinitions>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="24" />
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="38" />
+                                            </Grid.ColumnDefinitions>
+
+                                            <TextBlock Grid.Row="0" Grid.Column="0" Text="{DynamicResource Str_Settings_ColorRed}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                            <Slider x:Name="CustomFgRSlider" Grid.Row="0" Grid.Column="1" Style="{StaticResource Win10SliderStyle}" Minimum="0" Maximum="255" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="CustomFgRgbSlider_ValueChanged" />
+                                            <TextBlock x:Name="CustomFgRText" Grid.Row="0" Grid.Column="2" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+
+                                            <TextBlock Grid.Row="1" Grid.Column="0" Text="{DynamicResource Str_Settings_ColorGreen}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                            <Slider x:Name="CustomFgGSlider" Grid.Row="1" Grid.Column="1" Style="{StaticResource Win10SliderStyle}" Minimum="0" Maximum="255" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="CustomFgRgbSlider_ValueChanged" />
+                                            <TextBlock x:Name="CustomFgGText" Grid.Row="1" Grid.Column="2" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+
+                                            <TextBlock Grid.Row="2" Grid.Column="0" Text="{DynamicResource Str_Settings_ColorBlue}" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" VerticalAlignment="Center" />
+                                            <Slider x:Name="CustomFgBSlider" Grid.Row="2" Grid.Column="1" Style="{StaticResource Win10SliderStyle}" Minimum="0" Maximum="255" TickFrequency="1" IsSnapToTickEnabled="True" ValueChanged="CustomFgRgbSlider_ValueChanged" />
+                                            <TextBlock x:Name="CustomFgBText" Grid.Row="2" Grid.Column="2" FontSize="12" Foreground="{DynamicResource TextSecondaryBrush}" HorizontalAlignment="Right" VerticalAlignment="Center" />
+                                        </Grid>
+                                    </StackPanel>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+
+                        <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,0,0,16" />
+
+                        <!-- Window Background Opacity -->
+                        <Grid Margin="0,0,0,16">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="220" />
+                                <ColumnDefinition Width="48" />
+                            </Grid.ColumnDefinitions>
+                            <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                <TextBlock Text="{DynamicResource Str_Settings_WindowOpacity}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="14"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}" />
+                                <TextBlock Text="{DynamicResource Str_Settings_WindowOpacityDesc}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           TextWrapping="Wrap"
+                                           Margin="0,2,0,0" />
+                            </StackPanel>
+                            <Slider x:Name="WindowOpacitySlider"
+                                    Grid.Column="1"
+                                    Style="{StaticResource Win10SliderStyle}"
+                                    Minimum="25"
+                                    Maximum="100"
+                                    TickFrequency="1"
+                                    IsSnapToTickEnabled="True"
+                                    VerticalAlignment="Center"
+                                    ValueChanged="WindowOpacitySlider_ValueChanged" />
+                            <TextBlock x:Name="WindowOpacityValueText"
+                                       Grid.Column="2"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="13"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       HorizontalAlignment="Right"
+                                       VerticalAlignment="Center" />
+                        </Grid>
+
+                        <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,0,0,16" />
+
+                        <!-- Background Image -->
+                        <StackPanel Margin="0,0,0,16">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
+                                <!-- Image Preview Box -->
+                                <Border Grid.Column="0"
+                                        Width="88"
+                                        Height="52"
+                                        Background="{DynamicResource ContentBackgroundBrush}"
+                                        BorderBrush="{DynamicResource ControlBorderBrush}"
+                                        BorderThickness="1"
+                                        Margin="0,0,14,0"
+                                        VerticalAlignment="Center">
+                                    <Grid>
+                                        <TextBlock x:Name="BgImagePlaceholderGlyph"
+                                                   Text="&#xEB9F;"
+                                                   FontFamily="{StaticResource Win10GlyphFont}"
+                                                   FontSize="20"
+                                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center" />
+                                        <Image x:Name="BgImagePreview"
+                                               Stretch="UniformToFill"
+                                               Visibility="Collapsed" />
+                                    </Grid>
+                                </Border>
+
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,16,0">
+                                    <TextBlock Text="{DynamicResource Str_Settings_BackgroundImage}"
+                                               FontFamily="{StaticResource Win10Font}"
+                                               FontSize="14"
+                                               FontWeight="SemiBold"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                    <TextBlock x:Name="BgImageStatusText"
+                                               Text="{DynamicResource Str_Settings_NoBackgroundImage}"
+                                               FontFamily="{StaticResource Win10Font}"
+                                               FontSize="12"
+                                               Foreground="{DynamicResource TextSecondaryBrush}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,2,0,0" />
+                                </StackPanel>
+
+                                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <Button x:Name="ChooseBgImageButton"
+                                            Style="{StaticResource Win10ButtonStyle}"
+                                            Content="{DynamicResource Str_Settings_ChooseImage}"
+                                            Click="ChooseBgImage_Click" />
+                                    <Button x:Name="RemoveBgImageButton"
+                                            Style="{StaticResource Win10ButtonStyle}"
+                                            Content="{DynamicResource Str_Settings_RemoveImage}"
+                                            Margin="8,0,0,0"
+                                            Visibility="Collapsed"
+                                            Click="RemoveBgImage_Click" />
+                                </StackPanel>
+                            </Grid>
+
+                            <!-- Image Visibility Slider (when image active) -->
+                            <Grid x:Name="ImageVisibilityRow" Margin="0,14,0,0" Visibility="Collapsed">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="220" />
+                                    <ColumnDefinition Width="48" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="{DynamicResource Str_Settings_ImageVisibility}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="13"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           VerticalAlignment="Center" />
+                                <Slider x:Name="ImageOpacitySlider"
+                                        Grid.Column="1"
+                                        Style="{StaticResource Win10SliderStyle}"
+                                        Minimum="10"
+                                        Maximum="100"
+                                        TickFrequency="1"
+                                        IsSnapToTickEnabled="True"
+                                        VerticalAlignment="Center"
+                                        ValueChanged="ImageOpacitySlider_ValueChanged" />
+                                <TextBlock x:Name="ImageOpacityValueText"
+                                           Grid.Column="2"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="13"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           HorizontalAlignment="Right"
+                                           VerticalAlignment="Center" />
+                            </Grid>
+                        </StackPanel>
+
+                        <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,0,0,14" />
+
+                        <!-- Reset to Default -->
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="ResetAppearanceButton"
+                                    Style="{StaticResource Win10ButtonStyle}"
+                                    Click="ResetAppearance_Click">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="&#xE777;"
+                                               FontFamily="{StaticResource Win10GlyphFont}"
+                                               FontSize="13"
+                                               VerticalAlignment="Center"
+                                               Margin="0,0,8,0" />
+                                    <TextBlock Text="{DynamicResource Str_Settings_ResetAppearance}"
+                                               VerticalAlignment="Center" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                    </StackPanel>
+                </Border>
+
+                <!-- 2. GENERAL CARD -->
+                <TextBlock Text="{DynamicResource Str_Settings_SectionGeneral}"
+                           Style="{StaticResource Win10SectionTitleStyle}"
+                           Margin="0,0,0,10" />
+                <Border Background="{DynamicResource CardBackgroundBrush}"
+                        BorderBrush="{DynamicResource ControlBorderBrush}"
+                        BorderThickness="1"
+                        Padding="20,16"
+                        Margin="0,0,0,22">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="{DynamicResource Str_Settings_Language}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                            <TextBlock Text="{DynamicResource Str_Settings_LanguageDesc}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,0,0" />
+                        </StackPanel>
+                        <ComboBox x:Name="LanguageCombo"
+                                  Grid.Column="1"
+                                  Style="{StaticResource Win10ComboBoxStyle}"
+                                  Width="200"
+                                  VerticalAlignment="Center"
+                                  SelectionChanged="LanguageCombo_SelectionChanged" />
+                    </Grid>
+                </Border>
+
+                <!-- 2b. GOOGLE DRIVE OAUTH CARD -->
+                <TextBlock Text="{DynamicResource Str_Settings_SectionGoogleDrive}"
+                           Style="{StaticResource Win10SectionTitleStyle}"
+                           Margin="0,0,0,10" />
+                <Border Background="{DynamicResource CardBackgroundBrush}"
+                        BorderBrush="{DynamicResource ControlBorderBrush}"
+                        BorderThickness="1"
+                        Padding="20,16"
+                        Margin="0,0,0,22">
+                    <StackPanel>
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="{DynamicResource Str_Settings_GDriveStatusLabel}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}"
+                                       VerticalAlignment="Center" />
+                            <TextBlock x:Name="GDriveStatusText"
+                                       Grid.Column="1"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="13"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       VerticalAlignment="Center" />
+                        </Grid>
+
+                        <Grid Margin="0,0,0,10">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="180" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="{DynamicResource Str_Settings_GDriveClientId}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       VerticalAlignment="Center" />
+                            <TextBox x:Name="GDriveClientIdBox"
+                                     Grid.Column="1"
+                                     Style="{StaticResource Win10TextBoxStyle}"
+                                     Height="32"
+                                     LostFocus="GDriveCredentials_LostFocus" />
+                        </Grid>
+
+                        <Grid Margin="0,0,0,12">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="180" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock Grid.Column="0"
+                                       Text="{DynamicResource Str_Settings_GDriveClientSecret}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       VerticalAlignment="Center" />
+                            <PasswordBox x:Name="GDriveClientSecretBox"
+                                         Grid.Column="1"
+                                         Style="{StaticResource Win10PasswordBoxStyle}"
+                                         Height="32"
+                                         LostFocus="GDriveCredentials_LostFocus" />
+                        </Grid>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                            <Button x:Name="GDriveSignInButton"
+                                    Style="{StaticResource Win10PrimaryButtonStyle}"
+                                    Click="GDriveSignIn_Click"
+                                    Margin="0,0,8,0">
+                                <TextBlock x:Name="GDriveSignInLabel"
+                                           Text="{DynamicResource Str_Settings_GDriveSignIn}" />
+                            </Button>
+                            <Button x:Name="GDriveSignOutButton"
+                                    Style="{StaticResource Win10ButtonStyle}"
+                                    Click="GDriveSignOut_Click"
+                                    Visibility="Collapsed">
+                                <TextBlock Text="{DynamicResource Str_Settings_GDriveSignOut}" />
+                            </Button>
+                        </StackPanel>
+
+                        <TextBlock x:Name="GDriveErrorText"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource ErrorTextBrush}"
+                                   TextWrapping="Wrap"
+                                   Visibility="Collapsed"
+                                   Margin="0,0,0,6" />
+
+                        <TextBlock Text="{DynamicResource Str_Settings_GDriveHint}"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="11"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   TextWrapping="Wrap" />
+                    </StackPanel>
+                </Border>
+
+                <!-- 3. LIBRARY CARD -->
+                <TextBlock Text="{DynamicResource Str_Settings_SectionLibrary}"
+                           Style="{StaticResource Win10SectionTitleStyle}"
+                           Margin="0,0,0,10" />
+                <Border Background="{DynamicResource CardBackgroundBrush}"
+                        BorderBrush="{DynamicResource ControlBorderBrush}"
+                        BorderThickness="1"
+                        Padding="20,16"
+                        Margin="0,0,0,22">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                            <TextBlock Text="{DynamicResource Str_Settings_RescanLibrary}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="14"
+                                       FontWeight="SemiBold"
+                                       Foreground="{DynamicResource TextPrimaryBrush}" />
+                            <TextBlock Text="{DynamicResource Str_Settings_RescanLibraryDesc}"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       TextWrapping="Wrap"
+                                       Margin="0,2,0,0" />
+                        </StackPanel>
+                        <Button x:Name="RescanLibraryButton"
+                                Grid.Column="1"
+                                Style="{StaticResource Win10ButtonStyle}"
+                                VerticalAlignment="Center"
+                                Click="RescanLibrary_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE72C;"
+                                           FontFamily="{StaticResource Win10GlyphFont}"
+                                           FontSize="13"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,8,0" />
+                                <TextBlock x:Name="RescanButtonLabel"
+                                           Text="{DynamicResource Str_Nav_Rescan}"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                </Border>
+
+                <!-- 4. ABOUT & UPDATES CARD -->
+                <TextBlock Text="{DynamicResource Str_Settings_SectionAbout}"
+                           Style="{StaticResource Win10SectionTitleStyle}"
+                           Margin="0,0,0,10" />
+                <Border Background="{DynamicResource CardBackgroundBrush}"
+                        BorderBrush="{DynamicResource ControlBorderBrush}"
+                        BorderThickness="1"
+                        Padding="20,16">
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="{DynamicResource Str_Settings_Version}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="14"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           VerticalAlignment="Center" />
+                                <Border x:Name="UpdateAvailablePill"
+                                        Background="{DynamicResource AccentSubtleBrush}"
+                                        BorderBrush="{DynamicResource AccentBrush}"
+                                        BorderThickness="1"
+                                        Padding="6,2"
+                                        Margin="10,0,0,0"
+                                        Visibility="Collapsed">
+                                    <TextBlock Text="{DynamicResource Str_Settings_UpdateAvailableBadge}"
+                                               FontFamily="{StaticResource Win10Font}"
+                                               FontSize="11"
+                                               FontWeight="SemiBold"
+                                               Foreground="{DynamicResource AccentBrush}" />
+                                </Border>
+                            </StackPanel>
+                            <TextBlock x:Name="VersionSummaryText"
+                                       FontFamily="{StaticResource Win10Font}"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextSecondaryBrush}"
+                                       Margin="0,3,0,0" />
+                        </StackPanel>
+                        <Button x:Name="CheckUpdatesButton"
+                                Grid.Column="1"
+                                Style="{StaticResource Win10PrimaryButtonStyle}"
+                                VerticalAlignment="Center"
+                                Click="CheckUpdates_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE895;"
+                                           FontFamily="{StaticResource Win10GlyphFont}"
+                                           FontSize="13"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,8,0" />
+                                <TextBlock Text="{DynamicResource Str_Nav_CheckUpdates}"
+                                           VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                    </Grid>
+                </Border>
+            </StackPanel>
+        </ScrollViewer>
+    </Grid>
+</UserControl>

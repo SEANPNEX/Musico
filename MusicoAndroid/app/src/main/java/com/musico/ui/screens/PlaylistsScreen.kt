@@ -38,6 +38,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
+import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
@@ -76,6 +77,9 @@ import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
 import com.musico.ui.components.dragHandle
 import com.musico.ui.components.rememberDragReorderState
+import com.musico.ui.theme.musicoListItemColors
+import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoTopAppBarColors
 import kotlin.random.Random
 
 sealed interface PlaylistRef {
@@ -100,6 +104,7 @@ fun PlaylistsScreen(
 
     Scaffold(
         modifier = modifier,
+        containerColor = musicoScaffoldContainerColor(),
         contentWindowInsets = WindowInsets(0),
         floatingActionButton = {
             FloatingActionButton(onClick = { showCreateDialog = true }) {
@@ -124,6 +129,7 @@ fun PlaylistsScreen(
                 ) {
                     ListItem(
                         modifier = Modifier.clickable { onPlaylistClick(PlaylistRef.Favourites) },
+                        colors = ListItemDefaults.colors(containerColor = Color.Transparent),
                         leadingContent = {
                             Icon(
                                 imageVector = Icons.Rounded.Favorite,
@@ -143,6 +149,7 @@ fun PlaylistsScreen(
                 Column(modifier = Modifier.animateItem()) {
                     ListItem(
                         modifier = Modifier.clickable { onPlaylistClick(PlaylistRef.User(playlist.id)) },
+                        colors = musicoListItemColors(),
                         leadingContent = {
                             Icon(
                                 imageVector = Icons.AutoMirrored.Rounded.QueueMusic,
@@ -329,9 +336,11 @@ fun PlaylistDetailScreen(
 
     Scaffold(
         modifier = modifier,
+        containerColor = musicoScaffoldContainerColor(),
         contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(
+                colors = musicoTopAppBarColors(),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = strings.back)

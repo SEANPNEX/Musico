@@ -41,6 +41,7 @@ import com.musico.i18n.LocalStrings
 import com.musico.model.PlayQueue
 import com.musico.model.RepeatMode
 import com.musico.ui.components.ArtworkImage
+import com.musico.ui.theme.LocalHasBackgroundImage
 
 enum class SidePanel {
     QUEUE,
@@ -64,8 +65,12 @@ fun PlayerBar(
 
     Surface(
         modifier = modifier.fillMaxWidth(),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        tonalElevation = 3.dp
+        color = if (LocalHasBackgroundImage.current) {
+            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.84f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        tonalElevation = if (LocalHasBackgroundImage.current) 0.dp else 3.dp
     ) {
         Column {
             HorizontalDivider()

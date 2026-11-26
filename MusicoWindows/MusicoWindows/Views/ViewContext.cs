@@ -35,5 +35,6 @@ public sealed class ViewContext
     public Action<Track>? OpenSongInfo { get; init; }
     public Action<string, SearchField>? OpenSearch { get; init; }
     public Action? OpenExtensions { get; init; }
+    public Action? OpenUpdateDialog { get; init; }
     public Action<string, string, ExtSearchResultItem, bool>? OpenCollectionPreview { get; init; }
 }

@@ -48,6 +48,9 @@ import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
+import com.musico.ui.theme.musicoListItemColors
+import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoTopAppBarColors
 import kotlin.random.Random
 
 @Composable
@@ -85,6 +88,7 @@ fun ArtistsScreen(
             Column(modifier = Modifier.animateItem()) {
                 ListItem(
                     modifier = Modifier.clickable { onArtistClick(artist) },
+                    colors = musicoListItemColors(),
                     leadingContent = {
                         Icon(
                             imageVector = Icons.Rounded.Person,
@@ -154,9 +158,11 @@ fun ArtistDetailScreen(
 
     Scaffold(
         modifier = modifier,
+        containerColor = musicoScaffoldContainerColor(),
         contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(
+                colors = musicoTopAppBarColors(),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = strings.back)

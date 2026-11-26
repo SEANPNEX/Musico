@@ -4,6 +4,9 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import com.musico.model.LyricsSource
 import com.musico.model.SearchField
 import com.musico.model.TrackSortOrder
+import com.musico.ui.theme.AppThemeMode
+import com.musico.ui.theme.BackgroundColorPreset
+import com.musico.ui.theme.ForegroundColorPreset
 import java.text.DateFormat
 import java.util.Date
 import java.util.Locale
@@ -204,6 +207,7 @@ interface AppStrings {
     val capabilityLyrics: String
     val capabilitySearch: String
     val capabilityQrLogin: String
+    val capabilityWebLogin: String
     val capabilityPlaylistDesc: String
     val capabilityTreeDesc: String
     val capabilityStreamDesc: String
@@ -212,6 +216,7 @@ interface AppStrings {
     val capabilityLyricsDesc: String
     val capabilitySearchDesc: String
     val capabilityQrLoginDesc: String
+    val capabilityWebLoginDesc: String
     val extensionCookieLabel: String
     val extensionCookiePlaceholder: String
     val extensionCookieSupportingText: String
@@ -222,6 +227,27 @@ interface AppStrings {
     val clearCookie: String
     val qrLoginAction: String
     val signInWithQrCode: String
+    val webLoginAction: String
+    val signInInBrowser: String
+    fun webLoginDialogTitle(source: String): String
+    val saveCookiesAction: String
+    val webLoginPrompt: String
+    fun webLoginHostStatus(host: String, count: Int): String
+    fun webLoginCookiesDetected(count: Int): String
+    val importCookiesFile: String
+    val cookieImportFailedTitle: String
+    val cookieFileReadError: String
+    val cookieFileEmptyError: String
+    val googleDriveAccountSection: String
+    val accountStatusLabel: String
+    val googleDriveConnected: String
+    val googleDriveNotSignedIn: String
+    val googleDriveClientIdLabel: String
+    val googleDriveClientSecretLabel: String
+    val signInWithGoogleAction: String
+    val reconnectGoogleDriveAction: String
+    val signOutGoogleDriveAction: String
+    val googleDriveOAuthHint: String
     val qrLoginGenerating: String
     val qrLoginFailed: String
     val qrLoginExpired: String
@@ -584,6 +610,83 @@ interface AppStrings {
         LyricsSource.EMBEDDED -> lyricsSourceEmbeddedDesc
     }
 
+    // Settings & Appearance
+    val appearanceSection: String
+    val generalSection: String
+    val librarySection: String
+    val aboutAndUpdatesSection: String
+    val themeModeLabel: String
+    val themeModeSystem: String
+    val themeModeLight: String
+    val themeModeDark: String
+    val backgroundColorSetLabel: String
+    val bgPresetDefault: String
+    val bgPresetObsidian: String
+    val bgPresetMidnight: String
+    val bgPresetWarmCharcoal: String
+    val bgPresetForestNight: String
+    val bgPresetPaper: String
+    val bgPresetMist: String
+    val bgPresetBlossom: String
+    val presetCustom: String
+    val foregroundAndAccentLabel: String
+    val fgPresetCoral: String
+    val fgPresetOcean: String
+    val fgPresetEmerald: String
+    val fgPresetAmethyst: String
+    val fgPresetAmber: String
+    val fgPresetRose: String
+    val fgPresetMonochrome: String
+    val customBackgroundColorTitle: String
+    val customAccentColorTitle: String
+    val customTextColorLabel: String
+    val customTextColorAuto: String
+    val customTextColorTitle: String
+    val useAutoTextColor: String
+    val hexColorLabel: String
+    val invalidHexColorError: String
+    val colorRedLabel: String
+    val colorGreenLabel: String
+    val colorBlueLabel: String
+    val colorPreviewSample: String
+    val backgroundImageLabel: String
+    val chooseImageAction: String
+    val changeImageAction: String
+    val imageVisibilityLabel: String
+    val resetAppearanceToDefault: String
+    val rescanLibraryAction: String
+    val rescanningLibrary: String
+    val appVersionLabel: String
+
+    fun themeModeLabel(mode: AppThemeMode): String = when (mode) {
+        AppThemeMode.SYSTEM -> themeModeSystem
+        AppThemeMode.LIGHT -> themeModeLight
+        AppThemeMode.DARK -> themeModeDark
+    }
+
+    fun backgroundPresetLabel(preset: BackgroundColorPreset): String = when (preset) {
+        BackgroundColorPreset.DEFAULT -> bgPresetDefault
+        BackgroundColorPreset.OBSIDIAN -> bgPresetObsidian
+        BackgroundColorPreset.MIDNIGHT -> bgPresetMidnight
+        BackgroundColorPreset.WARM_CHARCOAL -> bgPresetWarmCharcoal
+        BackgroundColorPreset.FOREST_NIGHT -> bgPresetForestNight
+        BackgroundColorPreset.PAPER -> bgPresetPaper
+        BackgroundColorPreset.MIST -> bgPresetMist
+        BackgroundColorPreset.BLOSSOM -> bgPresetBlossom
+        BackgroundColorPreset.CUSTOM -> presetCustom
+    }
+
+    fun foregroundPresetLabel(preset: ForegroundColorPreset): String = when (preset) {
+        ForegroundColorPreset.CORAL -> fgPresetCoral
+        ForegroundColorPreset.OCEAN -> fgPresetOcean
+        ForegroundColorPreset.EMERALD -> fgPresetEmerald
+        ForegroundColorPreset.AMETHYST -> fgPresetAmethyst
+        ForegroundColorPreset.AMBER -> fgPresetAmber
+        ForegroundColorPreset.ROSE -> fgPresetRose
+        ForegroundColorPreset.MONOCHROME -> fgPresetMonochrome
+        ForegroundColorPreset.CUSTOM -> presetCustom
+    }
+
     fun eqPresetLabel(presetName: String?): String = when (presetName) {
         null -> eqCustom
         "Flat" -> eqPresetFlat
@@ -787,6 +890,7 @@ object EnStrings : AppStrings {
     override val capabilityLyrics = "Lyrics Search"
     override val capabilitySearch = "Cloud Search"
     override val capabilityQrLogin = "QR Code Login"
+    override val capabilityWebLogin = "Browser Login"
     override val capabilityPlaylistDesc = "Load playlists or albums from links"
     override val capabilityTreeDesc = "Browse nested cloud folders"
     override val capabilityStreamDesc = "Resolve playable audio streams"
@@ -795,6 +899,7 @@ object EnStrings : AppStrings {
     override val capabilityLyricsDesc = "Search online lyrics"
     override val capabilitySearchDesc = "Search tracks, albums, and playlists from this source"
     override val capabilityQrLoginDesc = "Sign in by scanning a QR code in-app"
+    override val capabilityWebLoginDesc = "Sign in via an in-app browser to capture session cookies"
     override val extensionCookieLabel = "Extension Cookie"
     override val extensionCookiePlaceholder = "Paste cookie header (optional)"
     override val extensionCookieSupportingText = "Stored locally and sent only to this extension for search, preview, and streaming."
@@ -805,6 +910,27 @@ object EnStrings : AppStrings {
     override val clearCookie = "Clear cookie"
     override val qrLoginAction = "QR Login"
     override val signInWithQrCode = "Sign In with QR Code…"
+    override val webLoginAction = "Browser Login"
+    override val signInInBrowser = "Sign In in Browser…"
+    override fun webLoginDialogTitle(source: String) = "Sign In to $source"
+    override val saveCookiesAction = "Save Cookies"
+    override val webLoginPrompt = "Sign in below, then tap Save Cookies."
+    override fun webLoginHostStatus(host: String, count: Int) = "$host · $count cookies captured"
+    override fun webLoginCookiesDetected(count: Int) = "Sign-in cookies detected ($count). Tap Save Cookies to finish."
+    override val importCookiesFile = "Import cookies.txt…"
+    override val cookieImportFailedTitle = "Couldn't Import Cookies"
+    override val cookieFileReadError = "Could not read cookie file as text."
+    override val cookieFileEmptyError = "No valid cookies for this extension were found in the file."
+    override val googleDriveAccountSection = "Google Drive Account"
+    override val accountStatusLabel = "Account Status"
+    override val googleDriveConnected = "Connected"
+    override val googleDriveNotSignedIn = "Not Signed In"
+    override val googleDriveClientIdLabel = "OAuth Client ID"
+    override val googleDriveClientSecretLabel = "OAuth Client Secret (Optional)"
+    override val signInWithGoogleAction = "Sign In with Google"
+    override val reconnectGoogleDriveAction = "Reconnect Google Drive"
+    override val signOutGoogleDriveAction = "Sign Out"
+    override val googleDriveOAuthHint = "Sign in with OAuth 2.0 to access your private Google Drive folders and bypass public download confirmation pages. Public links still work without signing in."
     override val qrLoginGenerating = "Generating QR code…"
     override val qrLoginFailed = "QR Code Login Failed"
     override val qrLoginExpired = "QR Code Expired"
@@ -1154,6 +1280,53 @@ object EnStrings : AppStrings {
     override fun cloudSearchIdleTitle(sourceName: String): String = "Search $sourceName"
     override fun addedFolderNotice(name: String): String = "Added “$name” to Folders."
 
+    override val appearanceSection = "Appearance"
+    override val generalSection = "General"
+    override val librarySection = "Library"
+    override val aboutAndUpdatesSection = "About & Updates"
+    override val themeModeLabel = "Theme Mode"
+    override val themeModeSystem = "System"
+    override val themeModeLight = "Light"
+    override val themeModeDark = "Dark"
+    override val backgroundColorSetLabel = "Background Color"
+    override val bgPresetDefault = "Default"
+    override val bgPresetObsidian = "Obsidian"
+    override val bgPresetMidnight = "Midnight"
+    override val bgPresetWarmCharcoal = "Warm Charcoal"
+    override val bgPresetForestNight = "Forest Night"
+    override val bgPresetPaper = "Paper"
+    override val bgPresetMist = "Mist"
+    override val bgPresetBlossom = "Blossom"
+    override val presetCustom = "Custom"
+    override val foregroundAndAccentLabel = "Foreground & Accent"
+    override val fgPresetCoral = "Coral"
+    override val fgPresetOcean = "Ocean"
+    override val fgPresetEmerald = "Emerald"
+    override val fgPresetAmethyst = "Amethyst"
+    override val fgPresetAmber = "Amber"
+    override val fgPresetRose = "Rose"
+    override val fgPresetMonochrome = "Monochrome"
+    override val customBackgroundColorTitle = "Custom Background Color"
+    override val customAccentColorTitle = "Custom Accent Color"
+    override val customTextColorLabel = "Text Color"
+    override val customTextColorAuto = "Auto (Adaptive Contrast)"
+    override val customTextColorTitle = "Custom Text Color"
+    override val useAutoTextColor = "Use Auto"
+    override val hexColorLabel = "Hex Color (#RRGGBB)"
+    override val invalidHexColorError = "Enter a valid 6-digit hex color like #E85440"
+    override val colorRedLabel = "Red"
+    override val colorGreenLabel = "Green"
+    override val colorBlueLabel = "Blue"
+    override val colorPreviewSample = "Sample Text"
+    override val backgroundImageLabel = "Background Image"
+    override val chooseImageAction = "Choose Image"
+    override val changeImageAction = "Change Image"
+    override val imageVisibilityLabel = "Image Visibility"
+    override val resetAppearanceToDefault = "Reset to Default"
+    override val rescanLibraryAction = "Rescan Library"
+    override val rescanningLibrary = "Scanning library…"
+    override val appVersionLabel = "Version"
+
     override fun formatListeningTime(totalSeconds: Double): String {
         if (!totalSeconds.isFinite() || totalSeconds <= 0.0) return "0 min"
         val minutes = (totalSeconds / 60.0).toLong()
@@ -1366,6 +1539,7 @@ object ZhHansStrings : AppStrings {
     override val capabilityLyrics = "歌词搜索"
     override val capabilitySearch = "云端搜索"
     override val capabilityQrLogin = "扫码登录"
+    override val capabilityWebLogin = "网页登录"
     override val capabilityPlaylistDesc = "从链接加载歌单或专辑"
     override val capabilityTreeDesc = "浏览多层云端文件夹"
     override val capabilityStreamDesc = "解析可播放的音频流"
@@ -1374,6 +1548,7 @@ object ZhHansStrings : AppStrings {
     override val capabilityLyricsDesc = "在线搜索歌词"
     override val capabilitySearchDesc = "在此来源中搜索歌曲、专辑和歌单"
     override val capabilityQrLoginDesc = "在应用内扫码登录账号"
+    override val capabilityWebLoginDesc = "通过应用内浏览器登录并自动保存会话 Cookie"
     override val extensionCookieLabel = "扩展 Cookie"
     override val extensionCookiePlaceholder = "粘贴 Cookie 请求头（可选）"
     override val extensionCookieSupportingText = "仅保存在本地，并仅发送给此扩展用于搜索、预览和播放。"
@@ -1384,6 +1559,27 @@ object ZhHansStrings : AppStrings {
     override val clearCookie = "清除 Cookie"
     override val qrLoginAction = "扫码登录"
     override val signInWithQrCode = "扫码登录…"
+    override val webLoginAction = "网页登录"
+    override val signInInBrowser = "网页登录…"
+    override fun webLoginDialogTitle(source: String) = "登录 $source"
+    override val saveCookiesAction = "保存 Cookie"
+    override val webLoginPrompt = "请在下方完成登录，然后点击保存 Cookie。"
+    override fun webLoginHostStatus(host: String, count: Int) = "$host · 已捕获 $count 项 Cookie"
+    override fun webLoginCookiesDetected(count: Int) = "已检测到登录 Cookie（$count 项），点击保存 Cookie 即可完成。"
+    override val importCookiesFile = "导入 cookies.txt…"
+    override val cookieImportFailedTitle = "无法导入 Cookie"
+    override val cookieFileReadError = "无法将该 Cookie 文件读取为文本。"
+    override val cookieFileEmptyError = "文件中未找到适用于此扩展的有效 Cookie。"
+    override val googleDriveAccountSection = "Google Drive 账号"
+    override val accountStatusLabel = "登录状态"
+    override val googleDriveConnected = "已连接"
+    override val googleDriveNotSignedIn = "未登录"
+    override val googleDriveClientIdLabel = "OAuth 客户端 ID"
+    override val googleDriveClientSecretLabel = "OAuth 客户端密钥（可选）"
+    override val signInWithGoogleAction = "使用 Google 账号登录"
+    override val reconnectGoogleDriveAction = "重新连接 Google Drive"
+    override val signOutGoogleDriveAction = "退出登录"
+    override val googleDriveOAuthHint = "通过 OAuth 2.0 登录后可访问私人 Google Drive 文件夹并跳过下载确认页。公开分享链接无需登录仍可直接使用。"
     override val qrLoginGenerating = "正在生成二维码…"
     override val qrLoginFailed = "扫码登录失败"
     override val qrLoginExpired = "二维码已过期"
@@ -1728,6 +1924,53 @@ object ZhHansStrings : AppStrings {
     override fun cloudSearchPlaceholder(sourceName: String): String = "搜索 $sourceName"
     override fun cloudSearchIdleTitle(sourceName: String): String = "搜索 $sourceName"
     override fun addedFolderNotice(name: String): String = "已将“$name”添加到文件夹。"
+
+    override val appearanceSection = "外观"
+    override val generalSection = "通用"
+    override val librarySection = "音乐库"
+    override val aboutAndUpdatesSection = "关于与更新"
+    override val themeModeLabel = "主题模式"
+    override val themeModeSystem = "跟随系统"
+    override val themeModeLight = "浅色"
+    override val themeModeDark = "深色"
+    override val backgroundColorSetLabel = "背景颜色"
+    override val bgPresetDefault = "默认"
+    override val bgPresetObsidian = "曜石黑"
+    override val bgPresetMidnight = "午夜蓝"
+    override val bgPresetWarmCharcoal = "暖炭灰"
+    override val bgPresetForestNight = "森夜绿"
+    override val bgPresetPaper = "纸白"
+    override val bgPresetMist = "薄雾蓝"
+    override val bgPresetBlossom = "樱粉"
+    override val presetCustom = "自定义"
+    override val foregroundAndAccentLabel = "前景与强调色"
+    override val fgPresetCoral = "珊瑚红"
+    override val fgPresetOcean = "海洋蓝"
+    override val fgPresetEmerald = "翡翠绿"
+    override val fgPresetAmethyst = "紫水晶"
+    override val fgPresetAmber = "琥珀黄"
+    override val fgPresetRose = "玫瑰粉"
+    override val fgPresetMonochrome = "单色灰"
+    override val customBackgroundColorTitle = "自定义背景颜色"
+    override val customAccentColorTitle = "自定义强调色"
+    override val customTextColorLabel = "文字颜色"
+    override val customTextColorAuto = "自动（自适应对比度）"
+    override val customTextColorTitle = "自定义文字颜色"
+    override val useAutoTextColor = "恢复自动"
+    override val hexColorLabel = "十六进制颜色 (#RRGGBB)"
+    override val invalidHexColorError = "请输入有效的 6 位十六进制颜色，例如 #E85440"
+    override val colorRedLabel = "红色"
+    override val colorGreenLabel = "绿色"
+    override val colorBlueLabel = "蓝色"
+    override val colorPreviewSample = "示例文本"
+    override val backgroundImageLabel = "背景图片"
+    override val chooseImageAction = "选择图片"
+    override val changeImageAction = "更换图片"
+    override val imageVisibilityLabel = "图片可见度"
+    override val resetAppearanceToDefault = "恢复默认外观"
+    override val rescanLibraryAction = "重新扫描音乐库"
+    override val rescanningLibrary = "正在扫描音乐库…"
+    override val appVersionLabel = "版本"
 
     private val defaultQueueRegex = Regex("^Queue (\\d+)$")
 

@@ -43,6 +43,8 @@ import com.musico.store.PlayHistoryUiState
 import com.musico.ui.components.LanguageDialog
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.theme.MusicoMotion
+import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoTopAppBarColors
 
 enum class LibrarySection {
     SONGS,
@@ -156,10 +158,12 @@ fun LibraryScreen(
         } else {
             Scaffold(
                 modifier = Modifier.fillMaxSize(),
+                containerColor = musicoScaffoldContainerColor(),
                 contentWindowInsets = WindowInsets(0),
                 topBar = {
                     TopAppBar(
                         title = { Text(strings.libraryTitle) },
+                        colors = musicoTopAppBarColors(),
                         actions = {
                             if (languageStore != null) {
                                 IconButton(onClick = { showLanguageDialog = true }) {

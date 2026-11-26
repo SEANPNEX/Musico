@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -26,14 +27,19 @@ import androidx.compose.material.icons.rounded.BarChart
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.LibraryMusic
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Badge
+import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.NavigationBar
+import androidx.compose.material3.NavigationBarDefaults
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
+import androidx.compose.material3.NavigationRailDefaults
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
@@ -76,8 +82,13 @@ import com.musico.ui.screens.LibraryScreen
 import com.musico.ui.screens.QueuesContent
 import com.musico.ui.screens.QueuesScreen
 import com.musico.ui.screens.SearchRequest
+import com.musico.ui.screens.SettingsScreen
 import com.musico.ui.screens.StatsScreen
+import com.musico.ui.theme.LocalHasBackgroundImage
 import com.musico.ui.theme.MusicoMotion
+import com.musico.ui.theme.ThemeBackgroundLayer
+import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.update.hasAvailableUpdate
 
 enum class TopDestination(
     val icon: ImageVector
@@ -113,13 +124,20 @@ fun MusicoApp(
         resolveLanguage(selectedLanguage, systemLocale)
     }
     val strings = stringsFor(resolvedLanguage)
+    val appearance by appContainer.themeStore.settings.collectAsStateWithLifecycle()
+    val backgroundImageFile = remember(appearance.backgroundImageFileName) {
+        appContainer.themeStore.resolveBackgroundImageFile()
+    }
 
     CompositionLocalProvider(
         LocalStrings provides strings,
         LocalThumbnailCache provides appContainer.cloudThumbnailCache,
+        LocalHasBackgroundImage provides (backgroundImageFile != null),
     ) {
         MusicoAppContent(
             appContainer = appContainer,
+            backgroundImageFile = backgroundImageFile,
+            backgroundImageOpacity = appearance.backgroundImageOpacity,
             onPickFolder = onPickFolder,
             onPickLyricsFile = onPickLyricsFile,
             onPickImage = onPickImage,
@@ -131,6 +149,8 @@ fun MusicoApp(
 @Composable
 private fun MusicoAppContent(
     appContainer: AppContainer,
+    backgroundImageFile: java.io.File?,
+    backgroundImageOpacity: Float,
     onPickFolder: ((Uri) -> Unit) -> Unit,
     onPickLyricsFile: ((Uri) -> Unit) -> Unit,
     onPickImage: ((Uri) -> Unit) -> Unit,
@@ -159,8 +179,11 @@ private fun MusicoAppContent(
     val historyState by historyStore.state.collectAsStateWithLifecycle()
     val playerState by playerController.state.collectAsStateWithLifecycle()
     val pendingExtensionUpdates by extensionStore.pendingUpdates.collectAsStateWithLifecycle()
+    val updateState by updateManager.state.collectAsStateWithLifecycle()
+    val hasBackgroundImage = LocalHasBackgroundImage.current
 
     var selectedDestination by rememberSaveable { mutableStateOf(TopDestination.QUEUES) }
+    var showSettingsWide by rememberSaveable { mutableStateOf(false) }
     var dismissedExtensionReviewIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showFullPlayer by rememberSaveable { mutableStateOf(false) }
     var sidePanel by rememberSaveable { mutableStateOf<SidePanel?>(null) }
@@ -175,6 +198,7 @@ private fun MusicoAppContent(
         onPickImage = onPickImage,
         onQuickSearch = { query, field ->
             showFullPlayer = false
+            showSettingsWide = false
             selectedDestination = TopDestination.LIBRARY
             pendingSearchRequest = SearchRequest(query = query, field = field, token = System.nanoTime())
         },
@@ -199,8 +223,18 @@ private fun MusicoAppContent(
         val isCompact = maxWidth < 600.dp
         val isWide = maxWidth >= 840.dp
 
+        BackHandler(enabled = !isCompact && showSettingsWide && !showFullPlayer) {
+            showSettingsWide = false
+        }
+
+        ThemeBackgroundLayer(
+            imageFile = backgroundImageFile,
+            imageOpacity = backgroundImageOpacity,
+        )
+
         if (isCompact) {
             Scaffold(
+                containerColor = musicoScaffoldContainerColor(),
                 contentWindowInsets = WindowInsets(0),
                 bottomBar = {
                     Column(modifier = Modifier.fillMaxWidth()) {
@@ -220,7 +254,13 @@ private fun MusicoAppContent(
                                 HorizontalDivider()
                             }
                         }
-                        NavigationBar {
+                        NavigationBar(
+                            containerColor = if (hasBackgroundImage) {
+                                MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.80f)
+                            } else {
+                                NavigationBarDefaults.containerColor
+                            },
+                        ) {
                             TopDestination.entries.forEach { dest ->
                                 val destLabel = dest.label(strings)
                                 NavigationBarItem(
@@ -236,6 +276,7 @@ private fun MusicoAppContent(
             ) { innerPadding ->
                 DestinationContent(
                     destination = selectedDestination,
+                    showSettings = false,
                     appContainer = appContainer,
                     libraryState = libraryState,
                     queueState = queueState,
@@ -245,6 +286,7 @@ private fun MusicoAppContent(
                     pendingSearchRequest = pendingSearchRequest,
                     onConsumeSearchRequest = { pendingSearchRequest = null },
                     onPickFolder = onPickFolder,
+                    onPickImage = onPickImage,
                     onPickExtensionFiles = onPickExtensionFiles,
                     isCompact = isCompact,
                     modifier = Modifier
@@ -263,6 +305,11 @@ private fun MusicoAppContent(
                         .let { if (!hasBottomPlayer) it.navigationBarsPadding() else it }
                 ) {
                     NavigationRail(
+                        containerColor = if (hasBackgroundImage) {
+                            MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.80f)
+                        } else {
+                            NavigationRailDefaults.ContainerColor
+                        },
                         modifier = Modifier
                             .fillMaxHeight()
                             .statusBarsPadding()
@@ -273,18 +320,39 @@ private fun MusicoAppContent(
                         TopDestination.entries.forEach { dest ->
                             val destLabel = dest.label(strings)
                             NavigationRailItem(
-                                selected = selectedDestination == dest,
-                                onClick = { selectedDestination = dest },
+                                selected = !showSettingsWide && selectedDestination == dest,
+                                onClick = {
+                                    showSettingsWide = false
+                                    selectedDestination = dest
+                                },
                                 icon = { Icon(dest.icon, contentDescription = destLabel) },
                                 label = { Text(destLabel) }
                             )
                         }
+                        Spacer(Modifier.weight(1f))
+                        NavigationRailItem(
+                            selected = showSettingsWide,
+                            onClick = { showSettingsWide = true },
+                            icon = {
+                                BadgedBox(
+                                    badge = {
+                                        if (updateState.hasAvailableUpdate) {
+                                            Badge()
+                                        }
+                                    }
+                                ) {
+                                    Icon(Icons.Rounded.Settings, contentDescription = strings.settingsLabel)
+                                }
+                            },
+                            label = { Text(strings.settingsLabel) },
+                        )
                     }
 
                     VerticalDivider()
 
                     DestinationContent(
                         destination = selectedDestination,
+                        showSettings = showSettingsWide,
                         appContainer = appContainer,
                         libraryState = libraryState,
                         queueState = queueState,
@@ -294,6 +362,7 @@ private fun MusicoAppContent(
                         pendingSearchRequest = pendingSearchRequest,
                         onConsumeSearchRequest = { pendingSearchRequest = null },
                         onPickFolder = onPickFolder,
+                        onPickImage = onPickImage,
                         onPickExtensionFiles = onPickExtensionFiles,
                         isCompact = isCompact,
                         modifier = Modifier
@@ -313,7 +382,11 @@ private fun MusicoAppContent(
                                     .width(340.dp)
                                     .fillMaxHeight()
                                     .statusBarsPadding(),
-                                color = MaterialTheme.colorScheme.surface
+                                color = if (hasBackgroundImage) {
+                                    MaterialTheme.colorScheme.surface.copy(alpha = 0.84f)
+                                } else {
+                                    MaterialTheme.colorScheme.surface
+                                }
                             ) {
                                 val displayedPanel = sidePanel ?: lastSidePanel ?: SidePanel.QUEUE
                                 Column(modifier = Modifier.fillMaxSize()) {
@@ -419,6 +492,8 @@ private fun MusicoAppContent(
                 onPickLyricsFile = onPickLyricsFile,
                 cloudLyricsService = cloudLyricsService,
                 extensionStore = extensionStore,
+                backgroundImageFile = backgroundImageFile,
+                backgroundImageOpacity = backgroundImageOpacity,
                 onClose = { showFullPlayer = false }
             )
         }
@@ -475,6 +550,7 @@ private fun MusicoAppContent(
 @Composable
 private fun DestinationContent(
     destination: TopDestination,
+    showSettings: Boolean,
     appContainer: AppContainer,
     libraryState: com.musico.store.LibraryUiState,
     queueState: com.musico.store.QueueUiState,
@@ -484,17 +560,30 @@ private fun DestinationContent(
     pendingSearchRequest: SearchRequest?,
     onConsumeSearchRequest: () -> Unit,
     onPickFolder: ((Uri) -> Unit) -> Unit,
+    onPickImage: ((Uri) -> Unit) -> Unit,
     onPickExtensionFiles: ((List<Uri>) -> Unit) -> Unit,
     isCompact: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val activeKey: TopDestination? = if (showSettings) null else destination
     Box(modifier = modifier) {
         AnimatedContent(
-            targetState = destination,
+            targetState = activeKey,
             transitionSpec = { MusicoMotion.fadeThroughTransform() },
             label = "top_destination"
         ) { dest ->
             when (dest) {
+                null -> SettingsScreen(
+                    themeStore = appContainer.themeStore,
+                    languageStore = appContainer.languageStore,
+                    libraryStore = appContainer.libraryStore,
+                    libraryState = libraryState,
+                    updateManager = appContainer.updateManager,
+                    googleDriveOAuthManager = appContainer.googleDriveOAuthManager,
+                    onPickImage = onPickImage,
+                    showBackButton = false,
+                    modifier = Modifier.fillMaxSize()
+                )
                 TopDestination.FOLDERS -> FoldersScreen(
                     libraryStore = appContainer.libraryStore,
                     libraryState = libraryState,
@@ -507,10 +596,13 @@ private fun DestinationContent(
                     cloudExporter = appContainer.cloudExporter,
                     cloudDownloadManager = appContainer.cloudDownloadManager,
                     languageStore = appContainer.languageStore,
+                    themeStore = appContainer.themeStore,
                     extensionStore = appContainer.extensionStore,
+                    googleDriveOAuthManager = appContainer.googleDriveOAuthManager,
                     providerRegistry = appContainer.cloudProviderRegistry,
                     isCompact = isCompact,
                     onPickFolder = onPickFolder,
+                    onPickImage = onPickImage,
                     onPickExtensionFiles = onPickExtensionFiles,
                     modifier = Modifier.fillMaxSize()
                 )

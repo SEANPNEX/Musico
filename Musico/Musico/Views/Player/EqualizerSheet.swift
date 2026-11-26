@@ -106,6 +106,7 @@ private struct EqualizerContent: View {
 struct VerticalSlider: View {
     @Binding var value: Float
     let range: ClosedRange<Float>
+    @Environment(\.themeManager) private var themeManager
 
     var body: some View {
         GeometryReader { proxy in
@@ -116,7 +117,7 @@ struct VerticalSlider: View {
                 Capsule().fill(Color(.systemFill)).frame(width: 4)
                 Rectangle().fill(Color(.separator)).frame(width: 12, height: 1).offset(y: height / 2)
                 Circle()
-                    .fill(Color.accentColor)
+                    .fill(themeManager.accentColor)
                     .frame(width: 20, height: 20)
                     .offset(y: y - 10)
             }

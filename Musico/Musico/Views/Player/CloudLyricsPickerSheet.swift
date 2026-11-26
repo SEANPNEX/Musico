@@ -6,6 +6,7 @@ struct CloudLyricsPickerSheet: View {
     let onConfirm: (_ lyricsText: String, _ exportSidecar: Bool) throws -> Void
 
     @Environment(\.extensionStore) private var extensionStore
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var queryTitle: String
@@ -64,6 +65,7 @@ struct CloudLyricsPickerSheet: View {
                     footerBar
                 }
             }
+            .background { ThemeBackdropView() }
             .navigationTitle(L10n.tr("Search Cloud Lyrics"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -124,7 +126,7 @@ struct CloudLyricsPickerSheet: View {
                         .font(.subheadline.weight(isSelected ? .semibold : .regular))
                         .padding(.horizontal, 12)
                         .padding(.vertical, 6)
-                        .background(isSelected ? Color.accentColor : Color.secondary.opacity(0.14), in: Capsule())
+                        .background(isSelected ? themeManager.accentColor : Color.secondary.opacity(0.14), in: Capsule())
                         .foregroundStyle(isSelected ? Color.white : Color.primary)
                 }
                 .buttonStyle(.plain)
@@ -231,7 +233,7 @@ struct CloudLyricsPickerSheet: View {
                                 .lineLimit(1)
                         }
                         HStack(spacing: 6) {
-                            badge(candidate.sourceName, tint: .accentColor)
+                            badge(candidate.sourceName, tint: themeManager.accentColor)
                             badge(formatBadgeText(for: candidate), tint: candidate.isTimed ? .green : .secondary)
                             if candidate.hasTranslation {
                                 badge(L10n.tr("Translated"), tint: .purple)
@@ -250,7 +252,7 @@ struct CloudLyricsPickerSheet: View {
                     .padding(.horizontal, 14)
                     .padding(.vertical, 10)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(isSelected ? Color.accentColor.opacity(0.14) : Color(.systemBackground))
+                    .background(isSelected ? themeManager.accentColor.opacity(0.14) : (themeManager.hasCustomBackdrop ? Color.clear : Color(.systemBackground)))
                     .contentShape(Rectangle())
                     .onTapGesture {
                         selectedID = candidate.id
@@ -262,7 +264,7 @@ struct CloudLyricsPickerSheet: View {
             .contentShape(Rectangle())
         }
         .scrollIndicators(.visible)
-        .background(Color(.systemBackground))
+        .background(themeManager.hasCustomBackdrop ? Color.clear : Color(.systemBackground))
         .contentShape(Rectangle())
     }
 
@@ -313,7 +315,7 @@ struct CloudLyricsPickerSheet: View {
                 .id(candidate.id)
                 .scrollIndicators(.visible)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .background(Color(.systemBackground))
+                .background(themeManager.hasCustomBackdrop ? Color.clear : Color(.systemBackground))
                 .contentShape(Rectangle())
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

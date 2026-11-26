@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -506,19 +507,46 @@ public partial class ExtensionsView : UserControl
         hintTb.SetResourceReference(TextBlock.ForegroundProperty, "TextTertiaryBrush");
         panel.Children.Add(hintTb);
 
-        if (ext.Manifest.SupportsQrLogin)
+        if (ext.Manifest.SupportsQrLogin || ext.Manifest.SupportsWebLogin || ext.Manifest.SupportsCookieAuth)
         {
-            var qrBtn = new Button
+            var actionsPanel = new WrapPanel { Margin = new Thickness(220, 8, 0, 0) };
+
+            if (ext.Manifest.SupportsQrLogin)
+            {
+                var qrBtn = new Button
+                {
+                    Style = (Style)FindResource("Win10ButtonStyle"),
+                    Content = L.Get("Extensions_SignInQr"),
+                    Margin = new Thickness(0, 0, 8, 4),
+                    IsEnabled = ext.IsEnabled,
+                    ToolTip = ext.IsEnabled ? null : L.Get("Extensions_QrLogin_EnableFirst")
+                };
+                qrBtn.Click += (_, _) => OpenQrLoginModal(ext);
+                actionsPanel.Children.Add(qrBtn);
+            }
+
+            if (ext.Manifest.SupportsWebLogin && ext.Manifest.WebLogin is { } webLoginConfig)
+            {
+                var webBtn = new Button
+                {
+                    Style = (Style)FindResource("Win10ButtonStyle"),
+                    Content = L.Get("Extensions_SignInWeb"),
+                    Margin = new Thickness(0, 0, 8, 4)
+                };
+                webBtn.Click += (_, _) => OpenWebLoginWindow(ext, webLoginConfig, store);
+                actionsPanel.Children.Add(webBtn);
+            }
+
+            var importCookieBtn = new Button
             {
                 Style = (Style)FindResource("Win10ButtonStyle"),
-                Content = L.Get("Extensions_SignInQr"),
-                Margin = new Thickness(220, 8, 0, 0),
-                HorizontalAlignment = HorizontalAlignment.Left,
-                IsEnabled = ext.IsEnabled,
-                ToolTip = ext.IsEnabled ? null : L.Get("Extensions_QrLogin_EnableFirst")
+                Content = L.Get("Extensions_ImportCookiesFile"),
+                Margin = new Thickness(0, 0, 8, 4)
             };
-            qrBtn.Click += (_, _) => OpenQrLoginModal(ext);
-            panel.Children.Add(qrBtn);
+            importCookieBtn.Click += (_, _) => ImportCookiesFileForExtension(ext, store, passwordBox);
+            actionsPanel.Children.Add(importCookieBtn);
+
+            panel.Children.Add(actionsPanel);
         }
 
         border.Child = panel;
@@ -1059,8 +1087,57 @@ public partial class ExtensionsView : UserControl
         ExtensionCapability.Lyrics => L.Get("Extensions_Capability_Lyrics"),
         ExtensionCapability.Search => L.Get("Extensions_Capability_Search"),
         ExtensionCapability.QrLogin => L.Get("Extensions_Capability_QrLogin"),
+        ExtensionCapability.WebLogin => L.Get("Extensions_Capability_WebLogin"),
         _ => cap.ToString()
     };
+
+    private void OpenWebLoginWindow(InstalledExtension ext, ExtensionWebLoginConfig config, ExtensionStore store)
+    {
+        var win = new ExtensionWebLoginWindow(ext, config, store)
+        {
+            Owner = Window.GetWindow(this)
+        };
+        win.ShowDialog();
+        RefreshExtensions();
+    }
+
+    private void ImportCookiesFileForExtension(InstalledExtension ext, ExtensionStore store, PasswordBox passwordBox)
+    {
+        var dlg = new OpenFileDialog
+        {
+            Title = L.Get("Extensions_ImportCookiesFile"),
+            Filter = "Cookie Files (*.txt)|*.txt|All Files (*.*)|*.*",
+            Multiselect = false
+        };
+        if (dlg.ShowDialog() != true) return;
+        try
+        {
+            string text = File.ReadAllText(dlg.FileName);
+            IReadOnlyList<string> domains = ext.Manifest.WebLogin?.CookieDomains is { Count: > 0 } wlDomains
+                ? wlDomains
+                : (ext.Manifest.Permissions?.Hosts ?? []);
+            string? parsed = NetscapeCookieFileParser.ParseCookieHeader(text, domains);
+            if (string.IsNullOrWhiteSpace(parsed))
+            {
+                MessageBox.Show(
+                    L.Get("Extensions_CookieFileEmptyError"),
+                    L.Get("Extensions_CookieImportFailedTitle"),
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Warning);
+                return;
+            }
+            store.SetCookie(ext.Id, parsed);
+            passwordBox.Password = parsed;
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                ex.Message,
+                L.Get("Extensions_CookieImportFailedTitle"),
+                MessageBoxButton.OK,
+                MessageBoxImage.Warning);
+        }
+    }
 
     private void ConfirmUninstall(InstalledExtension ext)
     {

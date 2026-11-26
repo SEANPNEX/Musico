@@ -1202,4 +1202,71 @@ public sealed class ExtensionRuntimeTests
                 host: store));
         Assert.Equal(CloudErrorCode.PermissionDenied, ex.Code);
     }
+
+    [Fact]
+    public void WebLoginManifestValidation_AndNetscapeCookieParser_Work()
+    {
+        var valid = new ExtensionManifest
+        {
+            ApiVersion = 1,
+            Id = "com.test.weblogin",
+            Name = "Web Login Probe",
+            Version = "1.0.0",
+            Capabilities = [ExtensionCapability.Search, ExtensionCapability.WebLogin],
+            Permissions = new ExtensionPermissions { Hosts = ["music.youtube.com"] },
+            WebLogin = new ExtensionWebLoginConfig
+            {
+                LoginUrl = "https://accounts.google.com/ServiceLogin",
+                CookieDomains = [".youtube.com", ".google.com"],
+                RequiredCookies = ["SAPISID"]
+            }
+        };
+        ExtensionManifestValidator.Validate(valid);
+        Assert.True(valid.SupportsWebLogin);
+        Assert.True(valid.SupportsCookieAuth);
+
+        var missing = new ExtensionManifest
+        {
+            ApiVersion = 1,
+            Id = "com.test.missingwl",
+            Name = "Missing WebLogin",
+            Version = "1.0.0",
+            Capabilities = [ExtensionCapability.Search, ExtensionCapability.WebLogin],
+            Permissions = new ExtensionPermissions { Hosts = ["music.youtube.com"] }
+        };
+        Assert.Throws<InvalidDataException>(() => ExtensionManifestValidator.Validate(missing));
+
+        var insecureUrl = new ExtensionManifest
+        {
+            ApiVersion = 1,
+            Id = "com.test.httpwl",
+            Name = "Http WebLogin",
+            Version = "1.0.0",
+            Capabilities = [ExtensionCapability.Search, ExtensionCapability.WebLogin],
+            Permissions = new ExtensionPermissions { Hosts = ["music.youtube.com"] },
+            WebLogin = new ExtensionWebLoginConfig
+            {
+                LoginUrl = "http://accounts.google.com/ServiceLogin",
+                CookieDomains = [".youtube.com"]
+            }
+        };
+        Assert.Throws<InvalidDataException>(() => ExtensionManifestValidator.Validate(insecureUrl));
+
+        const string netscape =
+            "# Netscape HTTP Cookie File\n" +
+            "#HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t1900000000\tSAPISID\tsapisid_val\n" +
+            ".google.com\tTRUE\t/\tTRUE\t0\tSID\tsid_val\n" +
+            ".youtube.com\tTRUE\t/\tTRUE\t1000\tEXPIRED\told_val\n" +
+            ".github.com\tTRUE\t/\tTRUE\t0\tGH_SESS\tdo_not_leak\n";
+        string? parsed = NetscapeCookieFileParser.ParseCookieHeader(
+            netscape,
+            [".youtube.com", ".google.com"],
+            nowEpochSec: 1700000000);
+        Assert.Equal("SAPISID=sapisid_val; SID=sid_val", parsed);
+
+        string? plainParsed = NetscapeCookieFileParser.ParseCookieHeader(
+            "Cookie: SESSDATA=abc123; bili_jct=def456; SESSDATA=abc_new",
+            ["www.bilibili.com"]);
+        Assert.Equal("SESSDATA=abc_new; bili_jct=def456", plainParsed);
+    }
 }

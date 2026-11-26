@@ -2,16 +2,19 @@ import SwiftUI
 
 /// The queue page as a sheet over the player.
 struct QueueSheet: View {
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         NavigationStack {
             QueuesView()
+                .background { ThemeBackdropView() }
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) { Button(L10n.tr("Done")) { dismiss() } }
                 }
         }
+        .applyTheme(themeManager)
         .modifier(NewPlaylistAlert())
         .modifier(CloudExportHostModifier())
         .modifier(SongInfoHostModifier())
@@ -27,6 +30,7 @@ struct QueuesView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(QueueStore.self) private var queues
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
     @State private var renaming: PlayQueue?
     @State private var clearingQueue: PlayQueue?
 
@@ -89,6 +93,7 @@ struct QueuesView: View {
                 }
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
             }
     }
 
@@ -164,10 +169,10 @@ struct QueuesView: View {
                         if isViewingPlayingQueue {
                             Label(L10n.tr("Playing"), systemImage: (player.isPlaying || player.isBuffering) ? "speaker.wave.2.fill" : "speaker.fill")
                                 .font(.caption2.weight(.semibold))
-                                .foregroundStyle(Color.accentColor)
+                                .foregroundStyle(themeManager.accentColor)
                                 .padding(.horizontal, 6)
                                 .padding(.vertical, 2)
-                                .background(Color.accentColor.opacity(0.14), in: Capsule())
+                                .background(themeManager.accentColor.opacity(0.14), in: Capsule())
                         }
                         Spacer()
                         if !viewed.trackIDs.isEmpty {
@@ -218,7 +223,7 @@ struct QueuesView: View {
             }
             .padding(16)
         }
-        .background(Color(.systemGroupedBackground))
+        .background(themeManager.hasCustomBackdrop ? Color.clear : Color(.systemGroupedBackground))
     }
     #endif
 
@@ -290,7 +295,7 @@ struct QueuesView: View {
                                     .contentShape(Rectangle())
                             }
                             .buttonStyle(.borderless)
-                            .listRowBackground(isRowActive ? Color.accentColor.opacity(0.12) : nil)
+                            .listRowBackground(isRowActive ? themeManager.accentColor.opacity(0.12) : nil)
                         }
                     }
                     .contextMenu {
@@ -316,16 +321,17 @@ struct QueuesView: View {
                     if isViewingPlayingQueue {
                         Label(L10n.tr("Playing"), systemImage: (player.isPlaying || player.isBuffering) ? "speaker.wave.2.fill" : "speaker.fill")
                             .font(.caption2.weight(.semibold))
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundStyle(themeManager.accentColor)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.14), in: Capsule())
+                            .background(themeManager.accentColor.opacity(0.14), in: Capsule())
                     }
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
             .textCase(nil)
         }
+        .hiddenScrollBackgroundIfThemed(themeManager)
     }
 }
 
@@ -341,6 +347,7 @@ private struct MacQueueRow: View {
     let onClear: () -> Void
     let onDelete: () -> Void
 
+    @Environment(\.themeManager) private var themeManager
     @State private var isHovered = false
     @State private var isRenameHovered = false
     @State private var isClearHovered = false
@@ -354,11 +361,11 @@ private struct MacQueueRow: View {
                         if isPlayingQueue {
                             Image(systemName: isAudioPlaying ? "speaker.wave.2.fill" : "speaker.fill")
                                 .font(.caption.weight(.bold))
-                                .foregroundStyle(Color.accentColor)
+                                .foregroundStyle(themeManager.accentColor)
                         } else {
                             Image(systemName: "eye")
                                 .font(.caption.weight(.semibold))
-                                .foregroundStyle(Color.accentColor)
+                                .foregroundStyle(themeManager.accentColor)
                                 .opacity(isViewed ? 1 : 0)
                         }
                     }
@@ -368,15 +375,15 @@ private struct MacQueueRow: View {
                         HStack(spacing: 6) {
                             Text(L10n.displayQueueName(queue.name))
                                 .font(.subheadline.weight(isViewed || isPlayingQueue ? .semibold : .medium))
-                                .foregroundStyle(isViewed ? Color.accentColor : .primary)
+                                .foregroundStyle(isViewed ? themeManager.accentColor : .primary)
                                 .lineLimit(1)
                             if isPlayingQueue {
                                 Text(L10n.tr("Playing"))
                                     .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(Color.accentColor)
+                                    .foregroundStyle(themeManager.accentColor)
                                     .padding(.horizontal, 5)
                                     .padding(.vertical, 1)
-                                    .background(Color.accentColor.opacity(0.14), in: Capsule())
+                                    .background(themeManager.accentColor.opacity(0.14), in: Capsule())
                             }
                         }
                         QueueSummary(queue: queue, isPlayingQueue: isPlayingQueue)
@@ -444,7 +451,7 @@ private struct MacQueueRow: View {
         .padding(.vertical, 8)
         .background(
             isViewed
-                ? Color.accentColor.opacity(0.10)
+                ? themeManager.accentColor.opacity(0.10)
                 : (isHovered ? Color.primary.opacity(0.04) : .clear)
         )
         .onHover { isHovered = $0 }
@@ -474,6 +481,7 @@ private struct MacQueueTrackRow: View {
     let onMove: (Int, Int) -> Void
     let onRemove: () -> Void
 
+    @Environment(\.themeManager) private var themeManager
     @State private var isHovered = false
     @State private var isRemoveHovered = false
     @State private var isDropTargeted = false
@@ -530,9 +538,9 @@ private struct MacQueueTrackRow: View {
         .padding(.vertical, 7)
         .background(
             isDropTargeted
-                ? Color.accentColor.opacity(0.20)
+                ? themeManager.accentColor.opacity(0.20)
                 : (isActive
-                    ? Color.accentColor.opacity(0.12)
+                    ? themeManager.accentColor.opacity(0.12)
                     : (isHovered ? Color.primary.opacity(0.04) : .clear))
         )
         .onHover { isHovered = $0 }
@@ -569,6 +577,7 @@ private struct QueueRowView: View {
     let onClear: () -> Void
     let onDelete: () -> Void
 
+    @Environment(\.themeManager) private var themeManager
     @State private var isHovered = false
     @State private var isDeleteHovered = false
 
@@ -579,7 +588,7 @@ private struct QueueRowView: View {
                     HStack(spacing: 6) {
                         Text(L10n.displayQueueName(queue.name))
                             .fontWeight(isViewed || isPlayingQueue ? .semibold : .regular)
-                            .foregroundStyle(isViewed ? Color.accentColor : .primary)
+                            .foregroundStyle(isViewed ? themeManager.accentColor : .primary)
                             .lineLimit(2)
                         if isPlayingQueue {
                             Label(
@@ -587,10 +596,10 @@ private struct QueueRowView: View {
                                 systemImage: isAudioPlaying ? "speaker.wave.2.fill" : "speaker.fill"
                             )
                             .font(.caption2.weight(.semibold))
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundStyle(themeManager.accentColor)
                             .padding(.horizontal, 6)
                             .padding(.vertical, 2)
-                            .background(Color.accentColor.opacity(0.14), in: Capsule())
+                            .background(themeManager.accentColor.opacity(0.14), in: Capsule())
                         }
                     }
                     QueueSummary(queue: queue, isPlayingQueue: isPlayingQueue)
@@ -604,7 +613,7 @@ private struct QueueRowView: View {
                 if isViewed {
                     Image(systemName: "checkmark")
                         .font(.footnote.weight(.semibold))
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(themeManager.accentColor)
                 }
 
                 Menu {
@@ -641,7 +650,7 @@ private struct QueueRowView: View {
         .onHover { isHovered = $0 }
         .listRowBackground(
             isViewed
-                ? Color.accentColor.opacity(0.10)
+                ? themeManager.accentColor.opacity(0.10)
                 : (isHovered ? Color.primary.opacity(0.04) : nil)
         )
         .contextMenu { queueMenuItems }

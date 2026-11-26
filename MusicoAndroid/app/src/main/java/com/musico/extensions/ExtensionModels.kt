@@ -49,6 +49,9 @@ enum class ExtensionCapability(val wireName: String) {
 
     @SerialName("qr_login")
     QR_LOGIN("qr_login"),
+
+    @SerialName("web_login")
+    WEB_LOGIN("web_login"),
     ;
 
     companion object {
@@ -193,6 +196,14 @@ data class ExtensionPermissions(
 )
 
 @Serializable
+data class ExtensionWebLoginConfig(
+    val loginUrl: String,
+    val cookieDomains: List<String> = emptyList(),
+    val requiredCookies: List<String>? = null,
+    val userAgent: String? = null,
+)
+
+@Serializable
 data class ExtensionManifest(
     val apiVersion: Int,
     val id: String,
@@ -211,6 +222,7 @@ data class ExtensionManifest(
     val defaultStreamQuality: String? = null,
     val defaultDownloadQuality: String? = null,
     val updateUrl: String? = null,
+    val webLogin: ExtensionWebLoginConfig? = null,
 ) {
     val providerId: String
         get() = "ext.$id"
@@ -228,10 +240,15 @@ data class ExtensionManifest(
         get() = defaultDownloadQuality?.trim()?.takeIf { it.isNotEmpty() } ?: qualities.firstOrNull()?.id
 
     val supportsCookieAuth: Boolean
-        get() = ExtensionCapability.COOKIE in capabilities || ExtensionCapability.QR_LOGIN in capabilities
+        get() = ExtensionCapability.COOKIE in capabilities ||
+            ExtensionCapability.QR_LOGIN in capabilities ||
+            ExtensionCapability.WEB_LOGIN in capabilities
 
     val supportsQrLogin: Boolean
         get() = ExtensionCapability.QR_LOGIN in capabilities
+
+    val supportsWebLogin: Boolean
+        get() = ExtensionCapability.WEB_LOGIN in capabilities && webLogin != null
 
     val hasServerUrlSetting: Boolean
         get() = settings.any { it.type == ExtensionSettingType.SERVER_URL }
@@ -427,6 +444,49 @@ object ExtensionManifestValidator {
                 "defaultDownloadQuality '$cleanDefaultDownload' is not declared in manifest.qualities"
             }
         }
+        if (ExtensionCapability.WEB_LOGIN in manifest.capabilities) {
+            require(manifest.webLogin != null) {
+                "web_login extension must declare manifest.webLogin"
+            }
+        }
+        val cleanedWebLogin = manifest.webLogin?.let { wl ->
+            val cleanLoginUrl = wl.loginUrl.trim()
+            val parsedLogin = runCatching { URL(cleanLoginUrl) }.getOrNull()
+                ?: throw IllegalArgumentException("Invalid manifest.webLogin.loginUrl: ${wl.loginUrl}")
+            require(parsedLogin.protocol.equals("https", ignoreCase = true) && !parsedLogin.host.isNullOrBlank()) {
+                "manifest.webLogin.loginUrl must be a valid https:// URL"
+            }
+            require(wl.cookieDomains.isNotEmpty() && wl.cookieDomains.size <= 16) {
+                "manifest.webLogin.cookieDomains must contain 1..16 entries"
+            }
+            val cleanDomains = wl.cookieDomains.map { rawDomain ->
+                val dom = rawDomain.trim()
+                require(dom.isNotEmpty() && dom.none { it.isWhitespace() } && !dom.contains("://") && !dom.contains('/')) {
+                    "Invalid manifest.webLogin.cookieDomains entry: $rawDomain"
+                }
+                dom
+            }
+            val cleanRequired = wl.requiredCookies?.let { reqList ->
+                require(reqList.size <= 16) { "manifest.webLogin.requiredCookies cannot exceed 16 entries" }
+                reqList.map { rc ->
+                    val clean = rc.trim()
+                    require(clean.isNotEmpty()) { "manifest.webLogin.requiredCookies entries must not be blank" }
+                    clean
+                }
+            }
+            val cleanUa = wl.userAgent?.trim()?.takeIf { it.isNotEmpty() }
+            if (cleanUa != null) {
+                require(cleanUa.length <= 512) { "manifest.webLogin.userAgent must be <= 512 characters" }
+            } else if (wl.userAgent != null) {
+                throw IllegalArgumentException("manifest.webLogin.userAgent must not be blank")
+            }
+            ExtensionWebLoginConfig(
+                loginUrl = cleanLoginUrl,
+                cookieDomains = cleanDomains,
+                requiredCookies = cleanRequired,
+                userAgent = cleanUa,
+            )
+        }
         return manifest.copy(
             name = manifest.name.trim(),
             version = manifest.version.trim(),
@@ -436,6 +496,7 @@ object ExtensionManifestValidator {
             defaultStreamQuality = cleanDefaultStream,
             defaultDownloadQuality = cleanDefaultDownload,
             updateUrl = cleanUpdateUrl,
+            webLogin = cleanedWebLogin,
         )
     }
 
@@ -463,6 +524,105 @@ object ExtensionManifestValidator {
             "Unsafe entry path: $raw"
         }
         return segments.joinToString("/")
+    }
+}
+
+object NetscapeCookieFileParser {
+    fun normalizeDomain(raw: String): String {
+        var s = raw.trim().lowercase()
+        if (s.startsWith("*.")) {
+            s = s.removePrefix("*.")
+        }
+        s = s.trimStart('.').trimEnd('.')
+        return s
+    }
+
+    fun domainMatches(cookieDomain: String, allowedDomains: List<String>): Boolean {
+        if (allowedDomains.isEmpty()) return true
+        val cleanCookie = normalizeDomain(cookieDomain)
+        if (!cleanCookie.contains('.')) return false
+        return allowedDomains.any { rawAllowed ->
+            val cleanAllowed = normalizeDomain(rawAllowed)
+            cleanAllowed.contains('.') && (
+                cleanCookie == cleanAllowed ||
+                    cleanCookie.endsWith(".$cleanAllowed") ||
+                    cleanAllowed.endsWith(".$cleanCookie")
+                )
+        }
+    }
+
+    fun formatCookiePairs(pairs: List<Pair<String, String>>): String? {
+        val order = ArrayList<String>()
+        val values = HashMap<String, String>()
+        for ((rawName, rawValue) in pairs) {
+            val name = rawName.trim()
+            val value = rawValue.trim()
+            if (name.isEmpty() || value.isEmpty()) continue
+            if (!values.containsKey(name)) {
+                order.add(name)
+            }
+            values[name] = value
+        }
+        if (order.isEmpty()) return null
+        return order.mapNotNull { key -> values[key]?.let { "$key=$it" } }.joinToString("; ")
+    }
+
+    fun parseCookieHeader(
+        text: String,
+        allowedDomains: List<String> = emptyList(),
+        nowEpochSec: Long = System.currentTimeMillis() / 1000L,
+    ): String? {
+        var sawNetscapeRow = false
+        val netscapePairs = ArrayList<Pair<String, String>>()
+
+        for (rawLine in text.lineSequence()) {
+            var line = rawLine.trim()
+            if (line.isEmpty()) continue
+
+            if (line.startsWith("#HttpOnly_")) {
+                line = line.removePrefix("#HttpOnly_")
+            } else if (line.startsWith('#')) {
+                continue
+            }
+
+            val cols = line.split('\t')
+            if (cols.size < 7) continue
+            sawNetscapeRow = true
+
+            val domain = cols[0].trim()
+            val expires = cols[4].trim().toDoubleOrNull()
+            if (expires != null && expires > 0 && expires < nowEpochSec.toDouble()) {
+                continue
+            }
+            if (!domainMatches(domain, allowedDomains)) {
+                continue
+            }
+            val name = cols[5].trim()
+            val value = cols.subList(6, cols.size).joinToString("\t").trim()
+            if (name.isEmpty() || value.isEmpty()) continue
+            netscapePairs.add(name to value)
+        }
+
+        if (sawNetscapeRow) {
+            return formatCookiePairs(netscapePairs)
+        }
+
+        var rawHeader = text.trim()
+        if (rawHeader.isEmpty()) return null
+        if (rawHeader.startsWith("cookie:", ignoreCase = true)) {
+            rawHeader = rawHeader.substring(7).trim()
+        }
+        val headerPairs = ArrayList<Pair<String, String>>()
+        for (segment in rawHeader.split(';')) {
+            val trimmed = segment.trim()
+            val eq = trimmed.indexOf('=')
+            if (eq <= 0) continue
+            val name = trimmed.substring(0, eq).trim()
+            val value = trimmed.substring(eq + 1).trim()
+            if (name.isEmpty() || value.isEmpty()) continue
+            headerPairs.add(name to value)
+        }
+        return formatCookiePairs(headerPairs)
     }
 }
 

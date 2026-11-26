@@ -29,7 +29,7 @@ const FIXTURES_DIR = path.resolve(__dirname, '../fixtures');
 const STARTER_DIR = path.resolve(__dirname, '../starter');
 const STARTER_SINGLE = path.resolve(__dirname, '../starter-single-file.musico.js');
 
-export const VALID_CAPABILITIES = new Set(['playlist', 'tree', 'stream', 'cookie', 'proxy', 'lyrics', 'search', 'qr_login']);
+export const VALID_CAPABILITIES = new Set(['playlist', 'tree', 'stream', 'cookie', 'proxy', 'lyrics', 'search', 'qr_login', 'web_login']);
 export const VALID_SEARCH_KINDS = new Set(['track', 'playlist', 'album']);
 export const VALID_SETTING_TYPES = new Set(['boolean', 'string', 'select', 'server_url']);
 export const VALID_QR_LOGIN_STATUSES = new Set(['pending', 'scanned', 'confirmed', 'expired', 'error']);
@@ -133,6 +133,52 @@ export function validateManifest(manifest) {
       assert.ok(spec && typeof spec === 'object', 'setting spec must be an object');
       assert.ok(typeof spec.key === 'string' && spec.key.trim().length > 0, 'setting key required');
       assert.ok(VALID_SETTING_TYPES.has(String(spec.type)), `Unsupported setting type: ${spec.type}`);
+    }
+  }
+  if (manifest.capabilities.includes('web_login')) {
+    assert.ok(
+      manifest.webLogin && typeof manifest.webLogin === 'object' && !Array.isArray(manifest.webLogin),
+      'web_login extension must declare manifest.webLogin'
+    );
+  }
+  if (manifest.webLogin !== undefined && manifest.webLogin !== null) {
+    const wl = manifest.webLogin;
+    assert.ok(wl && typeof wl === 'object' && !Array.isArray(wl), 'webLogin must be an object');
+    assert.ok(typeof wl.loginUrl === 'string' && wl.loginUrl.trim().length > 0, 'webLogin.loginUrl required');
+    let parsedLoginUrl;
+    try {
+      parsedLoginUrl = new URL(wl.loginUrl.trim());
+    } catch {
+      assert.fail(`Invalid manifest.webLogin.loginUrl: ${wl.loginUrl}`);
+    }
+    assert.equal(parsedLoginUrl.protocol, 'https:', 'webLogin.loginUrl must use https://');
+    assert.ok(parsedLoginUrl.hostname && parsedLoginUrl.hostname.length > 0, 'webLogin.loginUrl host required');
+    assert.ok(
+      Array.isArray(wl.cookieDomains) && wl.cookieDomains.length >= 1 && wl.cookieDomains.length <= 16,
+      'webLogin.cookieDomains must contain 1..16 entries'
+    );
+    for (const rawDomain of wl.cookieDomains) {
+      assert.ok(typeof rawDomain === 'string', 'cookieDomains entries must be strings');
+      const dom = rawDomain.trim();
+      assert.ok(
+        dom.length > 0 && !/\s/.test(dom) && !dom.includes('://') && !dom.includes('/'),
+        `Invalid webLogin.cookieDomains entry: ${rawDomain}`
+      );
+    }
+    if (wl.requiredCookies !== undefined && wl.requiredCookies !== null) {
+      assert.ok(
+        Array.isArray(wl.requiredCookies) && wl.requiredCookies.length <= 16,
+        'webLogin.requiredCookies must contain at most 16 entries'
+      );
+      for (const rc of wl.requiredCookies) {
+        assert.ok(typeof rc === 'string' && rc.trim().length > 0, 'requiredCookies entries must be non-empty strings');
+      }
+    }
+    if (wl.userAgent !== undefined && wl.userAgent !== null) {
+      assert.ok(
+        typeof wl.userAgent === 'string' && wl.userAgent.trim().length > 0 && wl.userAgent.length <= 512,
+        'webLogin.userAgent must be a non-empty string (<= 512 chars)'
+      );
     }
   }
   return manifest;
@@ -1011,6 +1057,53 @@ async function runSelfTest() {
   const qDown = await runResolveStream(qualityExt, qualityBridge, { remoteTrackId: 'q1', forceRefresh: false, quality: 'highest', purpose: 'download' });
   assert.equal(qDown.actualQuality, 'highest');
   assert.equal(qDown.fileExtension, 'flac');
+
+  // 9. Test web_login manifest validation
+  validateManifest({
+    apiVersion: 1,
+    id: 'com.example.test.weblogin',
+    name: 'Test Web Login',
+    version: '1.0.0',
+    capabilities: ['search', 'web_login'],
+    permissions: { hosts: ['api.example.com'] },
+    webLogin: {
+      loginUrl: 'https://accounts.example.com/login',
+      cookieDomains: ['.example.com'],
+      requiredCookies: ['SID']
+    }
+  });
+  assert.throws(() => validateManifest({
+    apiVersion: 1,
+    id: 'com.example.test.weblogin.missing',
+    name: 'Missing WebLogin',
+    version: '1.0.0',
+    capabilities: ['search', 'web_login'],
+    permissions: { hosts: ['api.example.com'] }
+  }), /webLogin/);
+  assert.throws(() => validateManifest({
+    apiVersion: 1,
+    id: 'com.example.test.weblogin.badurl',
+    name: 'Bad URL WebLogin',
+    version: '1.0.0',
+    capabilities: ['search', 'web_login'],
+    permissions: { hosts: ['api.example.com'] },
+    webLogin: {
+      loginUrl: 'http://accounts.example.com/login',
+      cookieDomains: ['.example.com']
+    }
+  }), /https:/);
+  assert.throws(() => validateManifest({
+    apiVersion: 1,
+    id: 'com.example.test.weblogin.emptydomains',
+    name: 'Empty Domains WebLogin',
+    version: '1.0.0',
+    capabilities: ['search', 'web_login'],
+    permissions: { hosts: ['api.example.com'] },
+    webLogin: {
+      loginUrl: 'https://accounts.example.com/login',
+      cookieDomains: []
+    }
+  }), /cookieDomains/);
 
   console.log('ALL_SELF_TESTS_PASSED', {
     testedFixtures: ['basic-playlist.musico.js', 'tree-source', 'security-and-errors.musico.js', 'starter', 'starter-single-file.musico.js', 'in-memory-lyrics', 'in-memory-search', 'in-memory-qr-login', 'in-memory-server-url', 'in-memory-quality'],

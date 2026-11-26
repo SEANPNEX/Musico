@@ -13,6 +13,7 @@ struct CloudCollectionPreviewSheet: View {
     @Environment(\.extensionStore) private var envExtensionStore
     @Environment(\.downloadManager) private var envDownloadManager
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
 
     init(
         extensionDescriptor: CloudSearchExtensionDescriptor,
@@ -48,6 +49,7 @@ struct CloudCollectionPreviewSheet: View {
         .environment(\.extensionStore, extensionStore)
         .environment(\.languageManager, languageManager)
         .environment(\.locale, languageManager.effectiveLocale)
+        .applyTheme(themeManager)
     }
 }
 
@@ -59,6 +61,7 @@ private struct CloudCollectionPreviewContent: View {
     let extensionStore: ExtensionStore
 
     @Environment(CloudExportPrompt.self) private var cloudExport
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var collection: CloudPlaylistResult?
@@ -135,8 +138,10 @@ private struct CloudCollectionPreviewContent: View {
                         }
                     }
                     .listStyle(.plain)
+                    .hiddenScrollBackgroundIfThemed(themeManager)
                 }
             }
+            .background { ThemeBackdropView() }
             .navigationTitle(L10n.tr("Collection Preview"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -182,7 +187,7 @@ private struct CloudCollectionPreviewContent: View {
                     }
                     HStack(spacing: 6) {
                         badge(item.kind == .album ? L10n.tr("Album") : L10n.tr("Playlist"), tint: .secondary)
-                        badge(extensionDescriptor.badgeLabel, tint: .accentColor)
+                        badge(extensionDescriptor.badgeLabel, tint: themeManager.accentColor)
                         let count = previewTracks.isEmpty ? (item.trackCount ?? 0) : previewTracks.count
                         if count > 0 {
                             Text(L10n.songCount(count))
@@ -254,7 +259,7 @@ private struct CloudCollectionPreviewContent: View {
                 )
                 VStack(alignment: .leading, spacing: 2) {
                     Text(track.title)
-                        .foregroundStyle(isCurrent ? Color.accentColor : .primary)
+                        .foregroundStyle(isCurrent ? themeManager.accentColor : .primary)
                         .lineLimit(1)
                     Text(L10n.displayArtist(track.artist))
                         .font(.subheadline)
@@ -264,7 +269,7 @@ private struct CloudCollectionPreviewContent: View {
                 Spacer(minLength: 8)
                 if isCurrent, let player {
                     Image(systemName: player.isPlaying ? "waveform" : "pause.fill")
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(themeManager.accentColor)
                         .symbolEffect(.variableColor.iterative, isActive: player.isPlaying)
                 }
                 if track.duration > 0 {

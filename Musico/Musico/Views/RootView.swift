@@ -17,10 +17,10 @@ struct RootView: View {
     @Environment(\.extensionStore) private var extensionStore
     @Environment(\.lyricsStore) private var lyricsStore
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var localShowPlayer: Bool
     @State private var didApplyInitialPlayerState = false
-    @Namespace private var playerTransition
     private let fixedLayout: AppLayout?
     private let initialShowPlayer: Bool
 
@@ -39,6 +39,9 @@ struct RootView: View {
             let layout = fixedLayout ?? AppLayout.resolve(width: proxy.size.width, compactWidth: sizeClass == .compact,
                                                           phone: UIDevice.current.userInterfaceIdiom == .phone)
             ZStack {
+                if layout == .tabs {
+                    ThemeBackdropView()
+                }
                 Group {
                     switch layout {
                     case .tabs:
@@ -52,6 +55,9 @@ struct RootView: View {
                         }
                     }
                 }
+                .opacity(layout == .sidebar && localShowPlayer ? 0 : 1)
+                .allowsHitTesting(!(layout == .sidebar && localShowPlayer))
+                .accessibilityHidden(layout == .sidebar && localShowPlayer)
                 if layout == .sidebar && localShowPlayer {
                     fullPlayerView {
                         withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
@@ -60,7 +66,11 @@ struct RootView: View {
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(.background)
+                    .background {
+                        if !themeManager.hasCustomBackdrop {
+                            Color(.systemBackground)
+                        }
+                    }
                     .transition(.move(edge: .bottom).combined(with: .opacity))
                     .zIndex(1)
                 }
@@ -68,14 +78,17 @@ struct RootView: View {
             .animation(.spring(response: 0.36, dampingFraction: 0.88), value: localShowPlayer && layout == .sidebar)
             // The full player is a sheet over the tabs and an in-window overlay over the sidebar layout.
             .sheet(isPresented: playerShown(when: layout == .tabs)) {
-                if #available(iOS 18.0, macCatalyst 18.0, *) {
-                    fullPlayerView()
-                        .navigationTransition(.zoom(sourceID: "nowPlaying", in: playerTransition))
-                } else {
-                    fullPlayerView()
-                }
+                fullPlayerView()
+                    .presentationDragIndicator(.visible)
             }
         }
+        .background {
+            #if targetEnvironment(macCatalyst)
+            MacWindowTransparencyApplier(isTranslucent: themeManager.isWindowTranslucent)
+                .allowsHitTesting(false)
+            #endif
+        }
+        .applyTheme(themeManager)
         .onAppear {
             if !didApplyInitialPlayerState {
                 didApplyInitialPlayerState = true
@@ -112,16 +125,16 @@ struct RootView: View {
         @Bindable var navigation = navigation
         let baseTabs = TabView(selection: $navigation.selectedTab) {
             Tab(L10n.tr("Folders"), systemImage: "folder", value: AppTab.folders) {
-                NavigationStack { FoldersView() }
+                NavigationStack { FoldersView().background { ThemeBackdropView() } }
             }
             Tab(L10n.tr("Library"), systemImage: "music.note.list", value: AppTab.library) {
-                NavigationStack(path: $navigation.libraryPath) { LibraryView() }
+                NavigationStack(path: $navigation.libraryPath) { LibraryView().background { ThemeBackdropView() } }
             }
             Tab(L10n.tr("Queues"), systemImage: "list.bullet", value: AppTab.queues) {
-                NavigationStack { QueuesView() }
+                NavigationStack { QueuesView().background { ThemeBackdropView() } }
             }
             Tab(L10n.tr("Stats"), systemImage: "chart.bar", value: AppTab.stats) {
-                NavigationStack { StatsView() }
+                NavigationStack { StatsView().background { ThemeBackdropView() } }
             }
         }
         .tabBarMinimizeBehavior(.onScrollDown)
@@ -173,28 +186,23 @@ struct RootView: View {
             .environment(\.lyricsStore, lyricsStore)
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
     }
 
-    @ViewBuilder
     private func miniPlayer(isGlassAccessory: Bool) -> some View {
         let open = {
             localShowPlayer = true
             navigation.showPlayer = true
         }
-        if #available(iOS 18.0, macCatalyst 18.0, *) {
-            MiniPlayerView(isGlassAccessory: isGlassAccessory, onOpen: open)
-                .matchedTransitionSource(id: "nowPlaying", in: playerTransition)
-        } else {
-            MiniPlayerView(isGlassAccessory: isGlassAccessory, onOpen: open)
-        }
+        return MiniPlayerView(isGlassAccessory: isGlassAccessory, onOpen: open)
     }
 
     private func tab(_ title: String, _ icon: String, tag: AppTab, path: Binding<NavigationPath>? = nil, @ViewBuilder content: () -> some View) -> some View {
         Group {
             if let path {
-                NavigationStack(path: path) { content() }
+                NavigationStack(path: path) { content().background { ThemeBackdropView() } }
             } else {
-                NavigationStack { content() }
+                NavigationStack { content().background { ThemeBackdropView() } }
             }
         }
             // The inset below does not reach lists inside the navigation stack, so their last

@@ -7,10 +7,15 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.musico.store.AppContainerProvider
 import com.musico.ui.MusicoApp
 import com.musico.ui.theme.MusicoTheme
@@ -87,7 +92,23 @@ class MainActivity : ComponentActivity() {
         val appContainer = (application as AppContainerProvider).appContainer
 
         setContent {
-            MusicoTheme {
+            val appearance by appContainer.themeStore.settings.collectAsStateWithLifecycle()
+            val systemDark = isSystemInDarkTheme()
+            val resolvedDark = appearance.resolveDarkTheme(systemDark)
+            LaunchedEffect(resolvedDark) {
+                enableEdgeToEdge(
+                    statusBarStyle = SystemBarStyle.auto(
+                        android.graphics.Color.TRANSPARENT,
+                        android.graphics.Color.TRANSPARENT,
+                    ) { resolvedDark },
+                    navigationBarStyle = SystemBarStyle.auto(
+                        android.graphics.Color.argb(0xe6, 0xFF, 0xFF, 0xFF),
+                        android.graphics.Color.argb(0x80, 0x1b, 0x1b, 0x1b),
+                    ) { resolvedDark },
+                )
+            }
+
+            MusicoTheme(appearance = appearance) {
                 MusicoApp(
                     appContainer = appContainer,
                     onPickFolder = { onPicked ->

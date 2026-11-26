@@ -155,6 +155,12 @@ final class SheetEnvironmentTests: XCTestCase {
     func testLyricsSheetOpensOverThePlayer() async throws { try await present(LyricsView(), over: true) }
     func testEqualizerSheetOpensOverThePlayer() async throws { try await present(EqualizerSheet(), over: true) }
     func testSleepTimerSheetOpensOverThePlayer() async throws { try await present(SleepTimerSheet(), over: true) }
+    func testSettingsSheetAndEmbeddedPageRenderCleanly() async throws {
+        try await present(SettingsView(isSheet: true), over: false, attachEmptyHostEnvironment: true)
+        try await present(SettingsView(isSheet: false), over: false, attachEmptyHostEnvironment: true)
+        try await present(SettingsView(isSheet: true), over: false)
+        try await present(NavigationStack { SettingsView(isSheet: false) }, over: false)
+    }
 
     func testSongInfoSheetOpensWithoutParentEnvironmentOverRootAndPlayer() async throws {
         try await present(SongInfoSheet(trackID: "missing"), over: false, attachEmptyHostEnvironment: true)

@@ -64,6 +64,7 @@ private struct AlbumGridCard: View {
 struct AlbumDetailView: View {
     let album: LibraryStore.Album
     @Environment(LibraryStore.self) private var library
+    @Environment(\.themeManager) private var themeManager
 
     var body: some View {
         // Use the live album if it still exists so a rescan updates this screen.
@@ -87,6 +88,7 @@ struct AlbumDetailView: View {
             }
         }
         .listStyle(.plain)
+        .hiddenScrollBackgroundIfThemed(themeManager)
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {
             Menu(L10n.tr("More"), systemImage: "ellipsis.circle") { TrackMenuItems(ids: album.trackIDs) }
@@ -96,6 +98,7 @@ struct AlbumDetailView: View {
 
 struct ArtistsView: View {
     @Environment(LibraryStore.self) private var library
+    @Environment(\.themeManager) private var themeManager
 
     var body: some View {
         List {
@@ -111,6 +114,7 @@ struct ArtistsView: View {
             }
         }
         .listStyle(.plain)
+        .hiddenScrollBackgroundIfThemed(themeManager)
         .navigationTitle(L10n.tr("Artists"))
         #if targetEnvironment(macCatalyst)
         .navigationBarTitleDisplayMode(.inline)
@@ -123,6 +127,7 @@ struct ArtistsView: View {
 struct ArtistDetailView: View {
     let artist: String
     @Environment(LibraryStore.self) private var library
+    @Environment(\.themeManager) private var themeManager
 
     var body: some View {
         let tracks = library.tracks(byArtist: artist)
@@ -140,6 +145,7 @@ struct ArtistDetailView: View {
             }
         }
         .listStyle(.plain)
+        .hiddenScrollBackgroundIfThemed(themeManager)
         .navigationTitle(L10n.displayArtist(artist))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar {

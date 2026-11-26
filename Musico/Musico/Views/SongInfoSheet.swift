@@ -25,6 +25,7 @@ final class SongInfoPrompt {
 
 /// Hosts the Song Info sheet for context/ellipsis menus inside it without reading stores at sheet root.
 struct SongInfoHostModifier: ViewModifier {
+    @Environment(\.themeManager) private var themeManager
     @State private var prompt = SongInfoPrompt()
 
     func body(content: Content) -> some View {
@@ -37,6 +38,7 @@ struct SongInfoHostModifier: ViewModifier {
                     history: target.history,
                     navigation: target.navigation
                 )
+                .applyTheme(themeManager)
             }
     }
 }
@@ -50,6 +52,7 @@ struct SongInfoSheet: View {
     @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
     @Environment(PlayHistoryStore.self) private var envHistory: PlayHistoryStore?
     @Environment(\.appNavigation) private var envNavigation
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     init(
@@ -216,6 +219,8 @@ struct SongInfoSheet: View {
                 infoRow(L10n.tr("Played Times"), value: "\(history?.count(for: track.id) ?? 0)")
             }
         }
+        .hiddenScrollBackgroundIfThemed(themeManager)
+        .background { ThemeBackdropView() }
     }
 
     private func labeledField(_ label: String, text: Binding<String>) -> some View {
@@ -241,12 +246,12 @@ struct SongInfoSheet: View {
                     .foregroundStyle(.primary)
                 Spacer()
                 Text(value.isEmpty ? "—" : value)
-                    .foregroundStyle(value.isEmpty ? Color.secondary : Color.accentColor)
+                    .foregroundStyle(value.isEmpty ? Color.secondary : themeManager.accentColor)
                     .lineLimit(1)
                 if !value.isEmpty {
                     Image(systemName: "magnifyingglass")
                         .font(.footnote)
-                        .foregroundStyle(Color.accentColor)
+                        .foregroundStyle(themeManager.accentColor)
                 }
             }
         }

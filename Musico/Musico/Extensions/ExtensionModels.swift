@@ -10,6 +10,7 @@ enum ExtensionCapability: String, Codable, Hashable, CaseIterable, Sendable {
     case lyrics
     case search
     case qrLogin = "qr_login"
+    case webLogin = "web_login"
 
     @MainActor
     var localizedTitle: String {
@@ -22,6 +23,7 @@ enum ExtensionCapability: String, Codable, Hashable, CaseIterable, Sendable {
         case .lyrics: L10n.tr("Lyrics Search")
         case .search: L10n.tr("Cloud Search")
         case .qrLogin: L10n.tr("QR Code Login")
+        case .webLogin: L10n.tr("In-App Browser Login")
         }
     }
 
@@ -36,8 +38,16 @@ enum ExtensionCapability: String, Codable, Hashable, CaseIterable, Sendable {
         case .lyrics: L10n.tr("Search online lyrics for playing songs.")
         case .search: L10n.tr("Search songs, albums, and playlists online.")
         case .qrLogin: L10n.tr("Sign in by scanning a QR code in-app.")
+        case .webLogin: L10n.tr("Sign in via an in-app browser to capture session cookies.")
         }
     }
+}
+
+struct ExtensionWebLoginConfig: Codable, Hashable, Sendable {
+    var loginUrl: String
+    var cookieDomains: [String]
+    var requiredCookies: [String]? = nil
+    var userAgent: String? = nil
 }
 
 enum ExtensionQRLoginStatus: String, Codable, Hashable, Sendable {
@@ -573,9 +583,10 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
     var qualities: [CloudQualityOption]? = nil
     var defaultStreamQuality: String? = nil
     var defaultDownloadQuality: String? = nil
+    var webLogin: ExtensionWebLoginConfig? = nil
 
     enum CodingKeys: String, CodingKey {
-        case apiVersion, id, name, version, author, description, badgeLabel, entry, updateUrl, capabilities, urlPatterns, permissions, settings, searchKinds, qualities, defaultStreamQuality, defaultDownloadQuality
+        case apiVersion, id, name, version, author, description, badgeLabel, entry, updateUrl, capabilities, urlPatterns, permissions, settings, searchKinds, qualities, defaultStreamQuality, defaultDownloadQuality, webLogin
     }
 
     var providerID: String { "ext.\(id)" }
@@ -597,11 +608,15 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
     }
 
     var supportsCookieAuth: Bool {
-        capabilities.contains(.cookie) || capabilities.contains(.qrLogin)
+        capabilities.contains(.cookie) || capabilities.contains(.qrLogin) || capabilities.contains(.webLogin)
     }
 
     var supportsQRLogin: Bool {
         capabilities.contains(.qrLogin)
+    }
+
+    var supportsWebLogin: Bool {
+        capabilities.contains(.webLogin) && webLogin != nil
     }
 
     var effectiveSearchKinds: [ExtensionSearchKind] {
@@ -786,6 +801,45 @@ struct ExtensionManifest: Codable, Hashable, Identifiable, Sendable {
                 throw ExtensionManifestError.invalidManifest("defaultDownloadQuality requires manifest.qualities to be declared.")
             }
         }
+
+        if capabilities.contains(.webLogin) {
+            guard webLogin != nil else {
+                throw ExtensionManifestError.invalidManifest("web_login extension must declare manifest.webLogin.")
+            }
+        }
+        if let webLogin {
+            guard Self.validateHTTPSURL(webLogin.loginUrl) != nil else {
+                throw ExtensionManifestError.invalidManifest("manifest.webLogin.loginUrl must be a valid HTTPS URL.")
+            }
+            guard !webLogin.cookieDomains.isEmpty, webLogin.cookieDomains.count <= 16 else {
+                throw ExtensionManifestError.invalidManifest("manifest.webLogin.cookieDomains must contain 1 to 16 entries.")
+            }
+            for rawDomain in webLogin.cookieDomains {
+                let dom = rawDomain.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !dom.isEmpty,
+                      dom.rangeOfCharacter(from: .whitespacesAndNewlines) == nil,
+                      !dom.contains("://"),
+                      !dom.contains("/") else {
+                    throw ExtensionManifestError.invalidManifest("Invalid webLogin cookie domain '\(rawDomain)'.")
+                }
+            }
+            if let reqCookies = webLogin.requiredCookies {
+                guard reqCookies.count <= 16 else {
+                    throw ExtensionManifestError.invalidManifest("manifest.webLogin.requiredCookies cannot exceed 16 entries.")
+                }
+                for rc in reqCookies {
+                    guard !rc.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                        throw ExtensionManifestError.invalidManifest("manifest.webLogin.requiredCookies entries must be non-empty.")
+                    }
+                }
+            }
+            if let ua = webLogin.userAgent {
+                let trimmedUA = ua.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !trimmedUA.isEmpty, trimmedUA.count <= 512 else {
+                    throw ExtensionManifestError.invalidManifest("manifest.webLogin.userAgent must be a non-empty string (<= 512 chars).")
+                }
+            }
+        }
     }
 
     private static func matchesRegex(_ value: String, pattern: String) -> Bool {
@@ -815,6 +869,117 @@ extension ExtensionManifest {
         self.qualities = try c.decodeIfPresent([CloudQualityOption].self, forKey: .qualities)
         self.defaultStreamQuality = try c.decodeIfPresent(String.self, forKey: .defaultStreamQuality)
         self.defaultDownloadQuality = try c.decodeIfPresent(String.self, forKey: .defaultDownloadQuality)
+        self.webLogin = try c.decodeIfPresent(ExtensionWebLoginConfig.self, forKey: .webLogin)
+    }
+}
+
+enum NetscapeCookieFileParser {
+    static func normalizeDomain(_ raw: String) -> String {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if s.hasPrefix("*.") {
+            s = String(s.dropFirst(2))
+        }
+        while s.hasPrefix(".") {
+            s = String(s.dropFirst())
+        }
+        while s.hasSuffix(".") {
+            s = String(s.dropLast())
+        }
+        return s
+    }
+
+    static func domainMatches(cookieDomain: String, allowedDomains: [String]) -> Bool {
+        if allowedDomains.isEmpty { return true }
+        let cleanCookie = normalizeDomain(cookieDomain)
+        guard cleanCookie.contains(".") else { return false }
+        for rawAllowed in allowedDomains {
+            let cleanAllowed = normalizeDomain(rawAllowed)
+            guard cleanAllowed.contains(".") else { continue }
+            if cleanCookie == cleanAllowed ||
+                cleanCookie.hasSuffix("." + cleanAllowed) ||
+                cleanAllowed.hasSuffix("." + cleanCookie) {
+                return true
+            }
+        }
+        return false
+    }
+
+    static func formatCookiePairs(_ pairs: [(name: String, value: String)]) -> String? {
+        var order: [String] = []
+        var values: [String: String] = [:]
+        for pair in pairs {
+            let name = pair.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = pair.value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, !value.isEmpty else { continue }
+            if values[name] == nil {
+                order.append(name)
+            }
+            values[name] = value
+        }
+        guard !order.isEmpty else { return nil }
+        return order.compactMap { name in
+            guard let val = values[name] else { return nil }
+            return "\(name)=\(val)"
+        }.joined(separator: "; ")
+    }
+
+    static func parseCookieHeader(
+        from text: String,
+        allowedDomains: [String] = [],
+        nowEpochSec: TimeInterval = Date().timeIntervalSince1970
+    ) -> String? {
+        var sawNetscapeRow = false
+        var netscapePairs: [(String, String)] = []
+
+        let lines = text.components(separatedBy: .newlines)
+        for rawLine in lines {
+            var line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !line.isEmpty else { continue }
+
+            if line.hasPrefix("#HttpOnly_") {
+                line = String(line.dropFirst("#HttpOnly_".count))
+            } else if line.hasPrefix("#") {
+                continue
+            }
+
+            let cols = line.components(separatedBy: "\t")
+            guard cols.count >= 7 else { continue }
+            sawNetscapeRow = true
+
+            let domain = cols[0].trimmingCharacters(in: .whitespacesAndNewlines)
+            let expiresRaw = cols[4].trimmingCharacters(in: .whitespacesAndNewlines)
+            if let expires = Double(expiresRaw), expires > 0, expires < nowEpochSec {
+                continue
+            }
+            guard domainMatches(cookieDomain: domain, allowedDomains: allowedDomains) else {
+                continue
+            }
+            let name = cols[5].trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = cols[6...].joined(separator: "\t").trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, !value.isEmpty else { continue }
+            netscapePairs.append((name, value))
+        }
+
+        if sawNetscapeRow {
+            return formatCookiePairs(netscapePairs)
+        }
+
+        // Plain header fallback (e.g. single-line "Cookie: k=v; ...")
+        var rawHeader = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !rawHeader.isEmpty else { return nil }
+        if rawHeader.lowercased().hasPrefix("cookie:") {
+            rawHeader = String(rawHeader.dropFirst("cookie:".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        var headerPairs: [(String, String)] = []
+        for segment in rawHeader.components(separatedBy: ";") {
+            let trimmed = segment.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let eqIdx = trimmed.firstIndex(of: "=") else { continue }
+            let name = String(trimmed[..<eqIdx]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let value = String(trimmed[trimmed.index(after: eqIdx)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !name.isEmpty, !value.isEmpty else { continue }
+            headerPairs.append((name, value))
+        }
+        return formatCookiePairs(headerPairs)
     }
 }
 

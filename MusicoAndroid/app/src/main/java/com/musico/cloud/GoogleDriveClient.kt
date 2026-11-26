@@ -7,11 +7,14 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import java.io.IOException
 import java.net.URI
 import java.net.URL
@@ -61,6 +64,7 @@ data class DriveCrawlBatch(
 
 class GoogleDriveClient(
     private val httpClient: CloudHttpClient = UrlConnectionCloudHttpClient(),
+    private val oauthTokenProvider: (suspend (forceRefresh: Boolean) -> String?)? = null,
 ) {
     internal data class DriveEntry(
         val id: String,
@@ -156,6 +160,42 @@ class GoogleDriveClient(
         priorityPathProvider: () -> String?,
         onBatch: suspend (DriveCrawlBatch) -> Unit,
     ): CloudPlaylistResult {
+        fetchAuthorizedFileMetadata(itemId, resourceKey)?.let { meta ->
+            if (meta.isFolder) {
+                return crawlFolderProgressively(
+                    rootFolderId = meta.id,
+                    rootResourceKey = meta.resourceKey ?: resourceKey,
+                    cookie = cookie,
+                    prefetchedFolderResponse = null,
+                    priorityPathProvider = priorityPathProvider,
+                    onBatch = onBatch,
+                )
+            } else {
+                val single = buildSingleFileResult(
+                    fileId = meta.id,
+                    resourceKey = meta.resourceKey ?: resourceKey,
+                    fileName = meta.name,
+                    detectedMime = meta.mimeType,
+                )
+                onBatch(
+                    DriveCrawlBatch(
+                        rootRemoteId = single.remoteId,
+                        rootTitle = single.title,
+                        batchTracks = single.tracks,
+                        knownFolderPaths = emptySet(),
+                        progress = DriveCrawlProgress(
+                            rootTitle = single.title,
+                            completedFolders = 1,
+                            totalDiscoveredFolders = 1,
+                            tracksSoFar = single.tracks.size,
+                            isComplete = true,
+                        ),
+                    )
+                )
+                return single
+            }
+        }
+
         val openUrl = buildDriveOpenUrl(itemId, resourceKey)
         val resp = getWithRetry(openUrl, headers = baseHeaders(cookie))
         checkAccessAndStatus(resp, "Google Drive item")
@@ -519,6 +559,10 @@ class GoogleDriveClient(
         fallbackTitle: String?,
         prefetchedResponse: CloudHttpResponse?,
     ): Pair<String, List<DriveEntry>> {
+        if (prefetchedResponse == null) {
+            fetchAuthorizedFolderPage(folderId, resourceKey, fallbackTitle)?.let { return it }
+        }
+
         val headers = baseHeaders(cookie)
         var title: String? = null
         var primaryAuthFailure: IOException? = null
@@ -804,6 +848,17 @@ class GoogleDriveClient(
         cookie: String?,
         prefetchedViewResponse: CloudHttpResponse? = null,
     ): CloudPlaylistResult {
+        if (prefetchedViewResponse == null) {
+            fetchAuthorizedFileMetadata(fileId, resourceKey)?.let { meta ->
+                return buildSingleFileResult(
+                    fileId = meta.id,
+                    resourceKey = meta.resourceKey ?: resourceKey,
+                    fileName = meta.name,
+                    detectedMime = meta.mimeType,
+                )
+            }
+        }
+
         val headers = baseHeaders(cookie)
         val viewUrl = buildFileViewUrl(fileId, resourceKey)
         val viewResp = prefetchedViewResponse ?: httpClient.get(viewUrl, headers = headers, followRedirects = true)
@@ -872,8 +927,44 @@ class GoogleDriveClient(
         )
     }
 
+    private fun buildSingleFileResult(
+        fileId: String,
+        resourceKey: String?,
+        fileName: String?,
+        detectedMime: String?,
+    ): CloudPlaylistResult {
+        val resolvedName = fileName?.takeIf { it.isNotBlank() } ?: "Google Drive ($fileId)"
+        val ext = audioExtensionFromName(resolvedName) ?: extensionForMimeType(detectedMime)
+        if (ext == null && !isAudioMimeType(detectedMime)) {
+            val nonAudioExt = resolvedName.substringAfterLast('.', "").lowercase()
+            if (nonAudioExt.isNotEmpty() && nonAudioExt != resolvedName.lowercase() && nonAudioExt !in AUDIO_EXTENSIONS) {
+                throw IOException("The selected Google Drive file ($resolvedName) is not a supported audio file.")
+            }
+        }
+        val cleanTitle = stripAudioExtension(resolvedName).ifBlank { resolvedName }
+        val remoteTrackId = encodeRemoteTrackId(fileId, ext, resourceKey)
+        val relFileName = disambiguateFileName(HashSet(), resolvedName, ext, fileId)
+        return CloudPlaylistResult(
+            source = CloudSource.GOOGLE_DRIVE,
+            remoteId = fileId,
+            title = cleanTitle,
+            tracks = listOf(
+                CloudTrackMetadata(
+                    remoteTrackId = remoteTrackId,
+                    title = cleanTitle,
+                    artist = DEFAULT_ARTIST,
+                    album = cleanTitle,
+                    durationSec = 0.0,
+                    trackNumber = 1,
+                    relativePath = relFileName,
+                )
+            ),
+        )
+    }
+
     suspend fun resolveStream(remoteTrackId: String, cookie: String? = null): ResolvedStream {
         val decoded = decodeRemoteTrackId(remoteTrackId)
+        resolveAuthorizedStream(decoded)?.let { return it }
         val headers = baseHeaders(cookie)
         val probeHeaders = headers + ("Range" to "bytes=0-0")
 
@@ -1234,6 +1325,144 @@ class GoogleDriveClient(
             headers["Cookie"] = trimmedCookie
         }
         return headers
+    }
+
+    private suspend fun sendAuthorizedDriveGet(
+        url: String,
+        resourceKey: String?,
+        targetIdForRk: String?,
+        extraHeaders: Map<String, String> = emptyMap(),
+    ): Pair<CloudHttpResponse, String>? {
+        val provider = oauthTokenProvider ?: return null
+        val firstToken = provider(false)?.takeIf { it.isNotBlank() } ?: return null
+
+        fun buildAuthHeaders(tok: String): Map<String, String> {
+            val h = linkedMapOf(
+                "User-Agent" to USER_AGENT,
+                "Authorization" to "Bearer $tok",
+            )
+            h.putAll(extraHeaders)
+            if (!resourceKey.isNullOrBlank() && !targetIdForRk.isNullOrBlank()) {
+                h["X-Goog-Drive-Resource-Keys"] = "$targetIdForRk/$resourceKey"
+            }
+            return h
+        }
+
+        var activeToken = firstToken
+        var resp = getWithRetry(url, headers = buildAuthHeaders(activeToken))
+        if (resp.statusCode == 401) {
+            val refreshed = provider(true)?.takeIf { it.isNotBlank() }
+            if (refreshed != null) {
+                activeToken = refreshed
+                resp = getWithRetry(url, headers = buildAuthHeaders(activeToken))
+            }
+        }
+        return resp to activeToken
+    }
+
+    private suspend fun fetchAuthorizedFileMetadata(
+        fileId: String,
+        resourceKey: String?,
+    ): DriveEntry? {
+        val url = "https://www.googleapis.com/drive/v3/files/$fileId" +
+            "?fields=${encodeQuery("id,name,mimeType,resourceKey,size")}&supportsAllDrives=true"
+        val (resp, _) = sendAuthorizedDriveGet(url, resourceKey, fileId) ?: return null
+        if (resp.statusCode == 403 || resp.statusCode == 404) return null
+        if (resp.statusCode !in 200..299) {
+            throw IOException("Google Drive metadata request failed (HTTP ${resp.statusCode}).")
+        }
+        val obj = runCatching { Json.parseToJsonElement(resp.bodyText).jsonObject }.getOrNull() ?: return null
+        val id = obj["id"]?.jsonPrimitive?.contentOrNull ?: return null
+        val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: return null
+        val mimeType = obj["mimeType"]?.jsonPrimitive?.contentOrNull ?: return null
+        val rk = obj["resourceKey"]?.jsonPrimitive?.contentOrNull ?: resourceKey
+        return DriveEntry(
+            id = id,
+            name = name,
+            mimeType = mimeType,
+            resourceKey = rk,
+            isFolder = mimeType.equals(FOLDER_MIME_TYPE, ignoreCase = true),
+        )
+    }
+
+    private suspend fun fetchAuthorizedFolderPage(
+        folderId: String,
+        resourceKey: String?,
+        fallbackTitle: String?,
+    ): Pair<String, List<DriveEntry>>? {
+        if (oauthTokenProvider == null) return null
+        val folderMeta = fetchAuthorizedFileMetadata(folderId, resourceKey) ?: return null
+
+        val merged = LinkedHashMap<String, DriveEntry>()
+        val seenTokens = HashSet<String>()
+        var pageToken: String? = null
+
+        do {
+            val query = "'${folderId.replace("'", "\\'")}' in parents and trashed = false"
+            val url = buildString {
+                append("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&includeItemsFromAllDrives=true")
+                append("&pageSize=1000")
+                append("&fields=").append(encodeQuery("nextPageToken,files(id,name,mimeType,resourceKey,size)"))
+                append("&q=").append(encodeQuery(query))
+                if (!pageToken.isNullOrBlank()) {
+                    append("&pageToken=").append(encodeQuery(pageToken))
+                }
+            }
+            val (resp, _) = sendAuthorizedDriveGet(url, resourceKey, folderId) ?: return null
+            if (resp.statusCode == 401 || resp.statusCode == 403 || resp.statusCode == 404) {
+                throw buildAccessError(resp)
+            }
+            if (resp.statusCode !in 200..299) {
+                throw IOException("Google Drive API request failed (HTTP ${resp.statusCode}).")
+            }
+            val parsed = parseDriveApiPage(resp.bodyText)
+                ?: throw IOException("Invalid Google Drive API response.")
+            for (entry in parsed.entries) {
+                merged.putIfAbsent(entry.id, entry)
+            }
+            val next = parsed.nextPageToken?.takeIf { it.isNotBlank() && seenTokens.add(it) }
+            pageToken = next
+        } while (pageToken != null)
+
+        val resolvedTitle = folderMeta.name.ifBlank { fallbackTitle ?: "Google Drive ($folderId)" }
+        return resolvedTitle to merged.values.toList()
+    }
+
+    private suspend fun resolveAuthorizedStream(decoded: DecodedTrackId): ResolvedStream? {
+        val mediaUrl = "https://www.googleapis.com/drive/v3/files/${decoded.fileId}?alt=media&supportsAllDrives=true"
+        val (resp, token) = sendAuthorizedDriveGet(
+            url = mediaUrl,
+            resourceKey = decoded.resourceKey,
+            targetIdForRk = decoded.fileId,
+            extraHeaders = mapOf("Range" to "bytes=0-0"),
+        ) ?: return null
+
+        if (resp.statusCode == 403 || resp.statusCode == 404) return null
+        if (resp.statusCode !in 200..299) {
+            throw IOException("Google Drive OAuth stream failed (HTTP ${resp.statusCode}).")
+        }
+
+        val contentType = headerValue(resp.headers, "Content-Type")
+        val dispFilename = parseContentDispositionFilename(headerValue(resp.headers, "Content-Disposition"))
+        val resolvedExt = dispFilename?.let { audioExtensionFromName(it) }
+            ?: extensionForMimeType(contentType)
+            ?: decoded.extension
+        val resolvedMime = when {
+            dispFilename != null -> mimeTypeForExtension(audioExtensionFromName(dispFilename))
+                ?: normalizeAudioContentType(contentType)
+            isAudioMimeType(contentType) -> contentType?.substringBefore(';')?.trim()
+            resolvedExt != null -> mimeTypeForExtension(resolvedExt)
+            else -> contentType?.substringBefore(';')?.trim()
+        }
+        return ResolvedStream(
+            url = resp.finalUrl.ifBlank { mediaUrl },
+            headers = mapOf(
+                "User-Agent" to USER_AGENT,
+                "Authorization" to "Bearer $token",
+            ),
+            mimeType = resolvedMime,
+            expiresAtEpochMs = System.currentTimeMillis() + DEFAULT_STREAM_TTL_MS,
+        )
     }
 
     companion object {

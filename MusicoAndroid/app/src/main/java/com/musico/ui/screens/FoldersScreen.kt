@@ -42,15 +42,14 @@ import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Extension
 import androidx.compose.material.icons.rounded.Folder
 import androidx.compose.material.icons.rounded.FolderOff
-import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.LibraryMusic
 import androidx.compose.material.icons.rounded.LiveTv
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.PlayCircle
 import androidx.compose.material.icons.rounded.Refresh
 import androidx.compose.material.icons.rounded.Restore
+import androidx.compose.material.icons.rounded.Settings
 import androidx.compose.material.icons.rounded.SwapHoriz
-import androidx.compose.material.icons.rounded.SystemUpdate
 import androidx.compose.material.icons.rounded.WarningAmber
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Badge
@@ -132,18 +131,19 @@ import com.musico.ui.ExtensionsScreen
 import com.musico.ui.components.CloudTransferProgressSection
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
-import com.musico.ui.components.LanguageDialog
 import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.SortOrderMenuButton
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
-import com.musico.ui.components.UpdateDialog
 import com.musico.ui.components.dragHandle
 import com.musico.ui.components.rememberDragReorderState
 import com.musico.ui.theme.MusicoMotion
+import com.musico.ui.theme.ThemeStore
+import com.musico.ui.theme.musicoListItemColors
+import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoTopAppBarColors
 import com.musico.update.UpdateManager
-import com.musico.update.UpdateUiState
 import com.musico.update.hasAvailableUpdate
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import kotlinx.coroutines.launch
@@ -231,10 +231,13 @@ fun FoldersScreen(
         CloudDownloadManager(libraryStore, cloudExporter)
     },
     languageStore: LanguageStore? = null,
+    themeStore: ThemeStore? = null,
     extensionStore: ExtensionStore? = null,
+    googleDriveOAuthManager: com.musico.cloud.GoogleDriveOAuthManager? = null,
     providerRegistry: CloudProviderRegistry = libraryStore.providerRegistry,
     isCompact: Boolean = false,
     onPickFolder: ((Uri) -> Unit) -> Unit,
+    onPickImage: ((Uri) -> Unit) -> Unit = {},
     onPickExtensionFiles: ((List<Uri>) -> Unit) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
@@ -252,11 +255,27 @@ fun FoldersScreen(
     }
 
     var showExtensionsScreen by remember { mutableStateOf(false) }
+    var showSettingsScreen by remember { mutableStateOf(false) }
     if (showExtensionsScreen && extensionStore != null) {
         ExtensionsScreen(
             extensionStore = extensionStore,
             onPickExtensionFiles = onPickExtensionFiles,
             onBack = { showExtensionsScreen = false },
+            modifier = modifier,
+        )
+        return
+    }
+    if (isCompact && showSettingsScreen && themeStore != null && languageStore != null) {
+        SettingsScreen(
+            themeStore = themeStore,
+            languageStore = languageStore,
+            libraryStore = libraryStore,
+            libraryState = libraryState,
+            updateManager = updateManager,
+            googleDriveOAuthManager = googleDriveOAuthManager,
+            onPickImage = onPickImage,
+            showBackButton = true,
+            onBack = { showSettingsScreen = false },
             modifier = modifier,
         )
         return
@@ -270,8 +289,6 @@ fun FoldersScreen(
     var updatingTarget by remember { mutableStateOf<FolderUpdateTarget?>(null) }
     var editingCloudSource by remember { mutableStateOf<EditCloudSourceTarget?>(null) }
     var showAddCloudDialog by remember { mutableStateOf(false) }
-    var showUpdateDialog by remember { mutableStateOf(false) }
-    var showLanguageDialog by remember { mutableStateOf(false) }
     var showDownloadsSheet by remember { mutableStateOf(false) }
     var detailMenuExpanded by remember { mutableStateOf(false) }
     var rootOverflowExpanded by remember { mutableStateOf(false) }
@@ -315,22 +332,14 @@ fun FoldersScreen(
         }
     }
 
-    fun openUpdateDialog() {
-        showUpdateDialog = true
-        if (updateState is UpdateUiState.Idle ||
-            updateState is UpdateUiState.UpToDate ||
-            updateState is UpdateUiState.Error
-        ) {
-            scope.launch { updateManager.checkForUpdates(silent = false) }
-        }
-    }
-
     Scaffold(
         modifier = modifier,
+        containerColor = musicoScaffoldContainerColor(),
         contentWindowInsets = WindowInsets(0),
         topBar = {
             if (activeRef == null) {
                 TopAppBar(
+                    colors = musicoTopAppBarColors(),
                     title = {
                         Text(
                             text = strings.foldersTitle,
@@ -362,8 +371,8 @@ fun FoldersScreen(
                                     }
                                 }
                             }
-                            Box {
-                                IconButton(onClick = { rootOverflowExpanded = true }) {
+                            if (themeStore != null && languageStore != null) {
+                                IconButton(onClick = { showSettingsScreen = true }) {
                                     BadgedBox(
                                         badge = {
                                             if (updateState.hasAvailableUpdate) {
@@ -371,11 +380,16 @@ fun FoldersScreen(
                                             }
                                         }
                                     ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.MoreVert,
-                                            contentDescription = strings.moreOptions,
-                                        )
+                                        Icon(Icons.Rounded.Settings, contentDescription = strings.settingsLabel)
                                     }
+                                }
+                            }
+                            Box {
+                                IconButton(onClick = { rootOverflowExpanded = true }) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.MoreVert,
+                                        contentDescription = strings.moreOptions,
+                                    )
                                 }
                                 DropdownMenu(
                                     expanded = rootOverflowExpanded,
@@ -401,27 +415,6 @@ fun FoldersScreen(
                                             scope.launch { libraryStore.rescan() }
                                         },
                                     )
-                                    if (languageStore != null) {
-                                        DropdownMenuItem(
-                                            text = { Text(strings.languageTitle) },
-                                            leadingIcon = { Icon(Icons.Rounded.Language, contentDescription = null) },
-                                            onClick = {
-                                                rootOverflowExpanded = false
-                                                showLanguageDialog = true
-                                            },
-                                        )
-                                    }
-                                    DropdownMenuItem(
-                                        text = { Text(strings.checkForUpdates) },
-                                        leadingIcon = { Icon(Icons.Rounded.SystemUpdate, contentDescription = null) },
-                                        trailingIcon = if (updateState.hasAvailableUpdate) {
-                                            { Badge() }
-                                        } else null,
-                                        onClick = {
-                                            rootOverflowExpanded = false
-                                            openUpdateDialog()
-                                        },
-                                    )
                                 }
                             }
                         } else {
@@ -429,28 +422,6 @@ fun FoldersScreen(
                                 activeCount = activeDownloadCount,
                                 onClick = { showDownloadsSheet = true },
                             )
-                            if (languageStore != null) {
-                                IconButton(onClick = { showLanguageDialog = true }) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Language,
-                                        contentDescription = strings.languageTitle,
-                                    )
-                                }
-                            }
-                            IconButton(onClick = { openUpdateDialog() }) {
-                                BadgedBox(
-                                    badge = {
-                                        if (updateState.hasAvailableUpdate) {
-                                            Badge()
-                                        }
-                                    }
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.SystemUpdate,
-                                        contentDescription = strings.checkForUpdates
-                                    )
-                                }
-                            }
                             IconButton(onClick = { showAddCloudDialog = true }) {
                                 Icon(Icons.Rounded.CloudQueue, contentDescription = strings.addCloudFolder)
                             }
@@ -493,6 +464,7 @@ fun FoldersScreen(
                 val showDetailMenu = activeRef.path.isNotEmpty() || isRemovableRootDetail || hasExcluded || isCloudRootDetail || isTrackedLocalDetail
 
                 TopAppBar(
+                    colors = musicoTopAppBarColors(),
                     navigationIcon = {
                         IconButton(
                             onClick = {
@@ -786,22 +758,6 @@ fun FoldersScreen(
             onAdd = { url, cookie, providerIdHint ->
                 libraryStore.addCloudRoot(url, cookie, providerIdHint)
             }
-        )
-    }
-
-    if (showUpdateDialog) {
-        UpdateDialog(
-            updateManager = updateManager,
-            onDismiss = { showUpdateDialog = false }
-        )
-    }
-
-    if (showLanguageDialog && languageStore != null) {
-        val currentLanguage by languageStore.language.collectAsStateWithLifecycle()
-        LanguageDialog(
-            current = currentLanguage,
-            onSelect = { languageStore.setLanguage(it) },
-            onDismiss = { showLanguageDialog = false },
         )
     }
 
@@ -2422,6 +2378,7 @@ private fun RootItemRow(
     ) {
         ListItem(
             modifier = Modifier.clickable(onClick = onOpen),
+            colors = musicoListItemColors(),
             leadingContent = {
                 Icon(
                     imageVector = when {
@@ -2887,6 +2844,7 @@ private fun FolderDetailContent(
                 ) {
                     ListItem(
                         modifier = Modifier.clickable { onNavigate(childRef) },
+                        colors = musicoListItemColors(),
                         leadingContent = {
                             Icon(
                                 imageVector = Icons.Rounded.Folder,

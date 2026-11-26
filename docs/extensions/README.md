@@ -392,7 +392,8 @@ Package the included starter directory into a `.musicoext` bundle:
 | `badgeLabel` | `string` | No | Short pill badge in **Folders**, **Songs** search chips, and lyrics badges (defaults to `name`, max 16 chars). |
 | `entry` | `string` | No | Relative script path inside `.musicoext` (defaults to `"index.js"`). |
 | `updateUrl` | `string` | No | Optional HTTPS URL to a `.musicoext` package used for automatic and manual extension updates (falls back to the link import URL if omitted). |
-| `capabilities` | `string[]` | Yes | Non-empty subset of `"playlist"`, `"tree"`, `"stream"`, `"cookie"`, `"proxy"`, `"lyrics"`, `"search"`, `"qr_login"`. |
+| `capabilities` | `string[]` | Yes | Non-empty subset of `"playlist"`, `"tree"`, `"stream"`, `"cookie"`, `"proxy"`, `"lyrics"`, `"search"`, `"qr_login"`, `"web_login"`. |
+| `webLogin` | `object` | Conditional | **Required** when `"web_login"` is declared: `{ loginUrl, cookieDomains, requiredCookies?, userAgent? }`. `loginUrl` must be `https://`; `cookieDomains` lists 1–16 domains whose cookies are captured; `requiredCookies` highlights/auto-completes login when matched. |
 | `urlPatterns` | `string[]` | Conditional | Native regex strings tested before starting a JS VM. **Required** when `"playlist"` or `"tree"` is declared; optional/empty allowed otherwise. |
 | `searchKinds` | `string[]` | No | Subset of `"track"`, `"playlist"`, `"album"`. Controls available filter pills when `"search"` is declared (defaults to all three when omitted/empty). |
 | `permissions.hosts` | `string[]` | Conditional | Strict HTTP/HTTPS allowlist: exact domain (`example.com`) or `*.sub.domain` (≥ 2 domain labels after `*.`; bare `*` and `*.tld` are rejected). May be empty when `settings` includes a `"server_url"` entry. |

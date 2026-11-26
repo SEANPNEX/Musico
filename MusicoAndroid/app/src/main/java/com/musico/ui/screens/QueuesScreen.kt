@@ -95,6 +95,9 @@ import com.musico.ui.components.TrackRow
 import com.musico.ui.components.dragHandle
 import com.musico.ui.components.formatTime
 import com.musico.ui.components.rememberDragReorderState
+import com.musico.ui.theme.musicoListItemColors
+import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoTopAppBarColors
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -116,10 +119,12 @@ fun QueuesScreen(
 
     Scaffold(
         modifier = modifier,
+        containerColor = musicoScaffoldContainerColor(),
         contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(
                 title = { Text(strings.queuesTitle) },
+                colors = musicoTopAppBarColors(),
                 actions = {
                     if (viewed.trackIds.isNotEmpty()) {
                         TextButton(onClick = { editing = !editing }) {
@@ -620,6 +625,7 @@ fun QueuesContent(
                     } else {
                         ListItem(
                             modifier = rowModifier,
+                            colors = musicoListItemColors(),
                             headlineContent = {
                                 Text(
                                     text = strings.missingSong,

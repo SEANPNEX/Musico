@@ -15,6 +15,7 @@ import androidx.compose.foundation.basicMarquee
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -99,7 +100,10 @@ import com.musico.ui.components.EmptyState
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.screens.QueueSheet
 import com.musico.ui.screens.QueuesContent
+import com.musico.ui.theme.AppearanceSettings
 import com.musico.ui.theme.MusicoMotion
+import com.musico.ui.theme.ThemeBackgroundLayer
+import java.io.File
 
 enum class PlayerModalSheet {
     QUEUE,
@@ -135,6 +139,8 @@ fun FullPlayerScreen(
     modifier: Modifier = Modifier,
     cloudLyricsService: CloudLyricsService? = null,
     extensionStore: ExtensionStore? = null,
+    backgroundImageFile: File? = null,
+    backgroundImageOpacity: Float = AppearanceSettings.DEFAULT_BACKGROUND_IMAGE_OPACITY,
 ) {
     val strings = LocalStrings.current
     var activeSheet by remember { mutableStateOf<PlayerModalSheet?>(null) }
@@ -144,12 +150,17 @@ fun FullPlayerScreen(
         modifier = modifier.fillMaxSize(),
         color = MaterialTheme.colorScheme.background
     ) {
-        BoxWithConstraints(
-            modifier = Modifier
-                .fillMaxSize()
-                .statusBarsPadding()
-                .navigationBarsPadding()
-        ) {
+        Box(modifier = Modifier.fillMaxSize()) {
+            ThemeBackgroundLayer(
+                imageFile = backgroundImageFile,
+                imageOpacity = backgroundImageOpacity,
+            )
+            BoxWithConstraints(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+            ) {
             val isTwoColumn = maxWidth >= 760.dp
 
             if (isTwoColumn) {
@@ -249,6 +260,7 @@ fun FullPlayerScreen(
                     modifier = Modifier.fillMaxSize()
                 )
             }
+        }
         }
     }
 

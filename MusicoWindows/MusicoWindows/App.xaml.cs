@@ -109,9 +109,8 @@ public partial class App : Application
                 _smokeStateDir = stateDir;
                 _smokeMusicDir = musicDir;
 
-                string themePrefPath = Path.Combine(stateDir, "theme.txt");
                 string langPrefPath = Path.Combine(stateDir, "language.txt");
-                ThemeManager.Initialize(this, themePrefPath);
+                ThemeManager.Initialize(this, stateDir);
                 LocalizationManager.Initialize(this, langPrefPath);
 
                 Services = new AppServices(stateDirectory: stateDir, musicDirectory: musicDir);
@@ -190,7 +189,8 @@ public partial class App : Application
                          window.NavPlaylists,
                          window.NavStats,
                          window.NavExtensions,
-                         window.NavQueues
+                         window.NavQueues,
+                         window.NavSettings
                      })
             {
                 navButton.IsChecked = true;

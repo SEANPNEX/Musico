@@ -14,6 +14,7 @@ struct UpdateSheet: View {
             }
             .padding(20)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background { ThemeBackdropView() }
             .navigationTitle(L10n.tr("Software Update"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

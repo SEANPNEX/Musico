@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using System.Windows.Media;
+using MusicoWindows.Models;
 
 namespace MusicoWindows.Theme;
 
@@ -50,7 +51,7 @@ public static class AcrylicBackdrop
     /// <summary>
     /// Applies Windows 10 Acrylic blur (Win10 1803+) or standard BlurBehind fallback to the window.
     /// </summary>
-    public static void Apply(Window window, bool isDark)
+    public static void Apply(Window window, bool isDark, Color? tintBaseColor = null, double backgroundOpacity = 1.0)
     {
         if (!OperatingSystem.IsWindows())
             return;
@@ -67,9 +68,10 @@ public static class AcrylicBackdrop
                 hwndSource.CompositionTarget.BackgroundColor = Colors.Transparent;
             }
 
-            // Windows 10 Acrylic tint in ABGR format (Alpha, Blue, Green, Red)
-            // Dark: ~82% #181818, Light: ~82% #F2F2F2
-            uint tintAbgr = isDark ? 0xD2181818u : 0xD2F2F2F2u;
+            Color resolvedTint = tintBaseColor ?? (isDark ? Color.FromRgb(0x18, 0x18, 0x18) : Color.FromRgb(0xF2, 0xF2, 0xF2));
+            uint tintAbgr = ColorMath.ToAcrylicAbgr(
+                new RgbColor(resolvedTint.R, resolvedTint.G, resolvedTint.B),
+                backgroundOpacity);
 
             // Use Acrylic on Windows 10 1803 (build 17134) and later; fallback to BlurBehind earlier
             bool supportsAcrylic = Environment.OSVersion.Version.Major > 10 ||

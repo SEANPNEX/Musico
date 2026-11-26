@@ -2674,6 +2674,7 @@ actor GoogleDriveClient {
 
     private let transport: any CloudHTTPTransport
     private let retryDelaysNanoseconds: [UInt64]
+    private let oauthTokenProvider: (@Sendable (Bool) async throws -> String?)?
     private var streamCache: [String: CachedStream] = [:]
     private var cachedWorkingApiKey: String?
 
@@ -2717,10 +2718,12 @@ actor GoogleDriveClient {
 
     init(
         transport: any CloudHTTPTransport = URLSessionCloudTransport(),
-        retryDelaysNanoseconds: [UInt64] = [500_000_000, 1_500_000_000]
+        retryDelaysNanoseconds: [UInt64] = [500_000_000, 1_500_000_000],
+        oauthTokenProvider: (@Sendable (Bool) async throws -> String?)? = nil
     ) {
         self.transport = transport
         self.retryDelaysNanoseconds = retryDelaysNanoseconds
+        self.oauthTokenProvider = oauthTokenProvider
     }
 
     // MARK: URL & ID Parsing
@@ -2901,6 +2904,39 @@ actor GoogleDriveClient {
     }
 
     private func resolveOpenTarget(id: String, resourceKey: String?, cookie: String?) async throws -> DriveFolderDiscovery {
+        if let meta = try await fetchAuthorizedFileMetadata(fileID: id, resourceKey: resourceKey) {
+            if meta.isFolder {
+                return try await discoverFolder(
+                    rootID: meta.id,
+                    resourceKey: meta.resourceKey ?? resourceKey,
+                    cookie: cookie,
+                    prefetchedRootHTML: nil
+                )
+            } else {
+                let single = try buildSingleFilePlaylist(
+                    fileID: meta.id,
+                    resourceKey: meta.resourceKey ?? resourceKey,
+                    resolvedName: meta.name,
+                    mimeType: meta.mimeType
+                )
+                return DriveFolderDiscovery(
+                    rootID: meta.id,
+                    resourceKey: meta.resourceKey ?? resourceKey,
+                    rootTitle: single.title,
+                    initialBatch: DriveFolderBatch(
+                        folderID: meta.id,
+                        folderPath: "",
+                        depth: 0,
+                        rootTitle: single.title,
+                        tracks: single.tracks,
+                        discoveredSubfolders: [],
+                        hadError: false
+                    ),
+                    singleFileResult: single
+                )
+            }
+        }
+
         let openURL = Self.driveURL(path: "/open", queryItems: [
             ("id", id),
             ("resourcekey", resourceKey)
@@ -3078,6 +3114,11 @@ actor GoogleDriveClient {
         cookie: String?,
         prefetchedHTML: String?
     ) async throws -> (title: String?, items: [DriveItem]) {
+        if prefetchedHTML == nil,
+           let oauthResult = try await fetchAuthorizedFolderEntries(folderID: folderID, resourceKey: resourceKey) {
+            return oauthResult
+        }
+
         let html: String
         if let prefetchedHTML {
             html = prefetchedHTML
@@ -3333,6 +3374,15 @@ actor GoogleDriveClient {
     }
 
     private func fetchSingleFile(fileID: String, resourceKey: String?, cookie: String?) async throws -> CloudPlaylistResult {
+        if let meta = try await fetchAuthorizedFileMetadata(fileID: fileID, resourceKey: resourceKey) {
+            return try buildSingleFilePlaylist(
+                fileID: meta.id,
+                resourceKey: meta.resourceKey ?? resourceKey,
+                resolvedName: meta.name,
+                mimeType: meta.mimeType
+            )
+        }
+
         var fileName: String?
         var mimeType: String?
 
@@ -3363,6 +3413,20 @@ actor GoogleDriveClient {
         }
 
         let resolvedName = fileName?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return try buildSingleFilePlaylist(
+            fileID: fileID,
+            resourceKey: resourceKey,
+            resolvedName: resolvedName,
+            mimeType: mimeType
+        )
+    }
+
+    private func buildSingleFilePlaylist(
+        fileID: String,
+        resourceKey: String?,
+        resolvedName: String?,
+        mimeType: String?
+    ) throws -> CloudPlaylistResult {
         if let mimeType, !Self.isSupportedAudio(name: resolvedName ?? "", mimeType: mimeType) {
             if !mimeType.lowercased().contains("octet-stream") || (resolvedName != nil && !(resolvedName!).isEmpty && Self.supportedAudioExtension(fromFilename: resolvedName!) == nil) {
                 throw CloudSourceError.apiError(L10n.trNonisolated("This Google Drive file is not a supported audio format."))
@@ -3410,6 +3474,15 @@ actor GoogleDriveClient {
         }
 
         let (fileID, resourceKey) = Self.decodeTrackID(trackID)
+        if let oauthResult = try await resolveAuthorizedStream(
+            fileID: fileID,
+            resourceKey: resourceKey,
+            trackID: trackID,
+            fallbackExtension: fallbackExtension
+        ) {
+            return oauthResult
+        }
+
         var headers: [String: String] = [
             "User-Agent": Self.userAgent,
             "Accept": "*/*"
@@ -3511,6 +3584,185 @@ actor GoogleDriveClient {
             req.setValue(cleanCookie, forHTTPHeaderField: "Cookie")
         }
         return try await sendRequestWithRetry(req)
+    }
+
+    // MARK: OAuth 2.0 Bearer Helpers
+
+    private func sendAuthorizedDriveGET(
+        url: URL,
+        resourceKey: String?,
+        folderIDForRK: String? = nil,
+        range: String? = nil
+    ) async throws -> (response: HTTPResponseData, token: String)? {
+        guard let oauthTokenProvider,
+              let firstToken = try await oauthTokenProvider(false),
+              !firstToken.isEmpty else {
+            return nil
+        }
+
+        func makeReq(token: String) -> URLRequest {
+            var req = URLRequest(url: url)
+            req.httpMethod = "GET"
+            req.setValue(Self.userAgent, forHTTPHeaderField: "User-Agent")
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+            if let range {
+                req.setValue(range, forHTTPHeaderField: "Range")
+                req.setValue("*/*", forHTTPHeaderField: "Accept")
+            } else {
+                req.setValue("application/json", forHTTPHeaderField: "Accept")
+            }
+            if let rk = Self.normalizedCookie(resourceKey) {
+                let targetID = folderIDForRK ?? ""
+                if !targetID.isEmpty {
+                    req.setValue("\(targetID)/\(rk)", forHTTPHeaderField: "X-Goog-Drive-Resource-Keys")
+                }
+            }
+            return req
+        }
+
+        var activeToken = firstToken
+        var response = try await sendRequestWithRetry(makeReq(token: activeToken))
+        if response.statusCode == 401,
+           let refreshedToken = try await oauthTokenProvider(true),
+           !refreshedToken.isEmpty {
+            activeToken = refreshedToken
+            response = try await sendRequestWithRetry(makeReq(token: activeToken))
+        }
+        return (response, activeToken)
+    }
+
+    private func fetchAuthorizedFileMetadata(fileID: String, resourceKey: String?) async throws -> DriveItem? {
+        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files/\(fileID)")!
+        components.queryItems = [
+            URLQueryItem(name: "fields", value: "id,name,mimeType,resourceKey,size"),
+            URLQueryItem(name: "supportsAllDrives", value: "true")
+        ]
+        guard let authorized = try await sendAuthorizedDriveGET(
+            url: components.url!,
+            resourceKey: resourceKey,
+            folderIDForRK: fileID
+        ) else {
+            return nil
+        }
+        if authorized.response.statusCode == 403 || authorized.response.statusCode == 404 {
+            return nil
+        }
+        guard (200..<300).contains(authorized.response.statusCode),
+              let dict = try? JSONSerialization.jsonObject(with: authorized.response.data) as? [String: Any],
+              let id = dict["id"] as? String,
+              let name = dict["name"] as? String,
+              let mime = dict["mimeType"] as? String else {
+            throw CloudSourceError.networkError(L10n.trNonisolated("Invalid server response."))
+        }
+        return DriveItem(
+            id: id,
+            name: name,
+            mimeType: mime,
+            resourceKey: (dict["resourceKey"] as? String) ?? resourceKey
+        )
+    }
+
+    private func fetchAuthorizedFolderEntries(
+        folderID: String,
+        resourceKey: String?
+    ) async throws -> (title: String?, items: [DriveItem])? {
+        guard oauthTokenProvider != nil else { return nil }
+        guard let folderMeta = try await fetchAuthorizedFileMetadata(fileID: folderID, resourceKey: resourceKey) else {
+            return nil
+        }
+
+        var items: [DriveItem] = []
+        var seenIDs = Set<String>()
+        var pageToken: String? = nil
+        var seenTokens = Set<String>()
+
+        repeat {
+            try Task.checkCancellation()
+            var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files")!
+            var queryItems = [
+                URLQueryItem(name: "q", value: "'\(folderID)' in parents and trashed = false"),
+                URLQueryItem(name: "pageSize", value: "1000"),
+                URLQueryItem(name: "fields", value: "nextPageToken,files(id,name,mimeType,resourceKey,size)"),
+                URLQueryItem(name: "supportsAllDrives", value: "true"),
+                URLQueryItem(name: "includeItemsFromAllDrives", value: "true")
+            ]
+            if let pageToken, !pageToken.isEmpty {
+                queryItems.append(URLQueryItem(name: "pageToken", value: pageToken))
+            }
+            components.queryItems = queryItems
+            guard let authorized = try await sendAuthorizedDriveGET(
+                url: components.url!,
+                resourceKey: resourceKey,
+                folderIDForRK: folderID
+            ) else {
+                return nil
+            }
+            try Self.validateAccess(response: authorized.response)
+            guard let parsed = Self.parseDriveAPIListResponse(
+                data: authorized.response.data,
+                itemsKey: "files",
+                preferredNameKey: "name"
+            ) else {
+                throw CloudSourceError.networkError(L10n.trNonisolated("Invalid server response."))
+            }
+            for item in parsed.items where seenIDs.insert(item.id).inserted {
+                items.append(item)
+            }
+            if let next = parsed.nextPageToken, !next.isEmpty, seenTokens.insert(next).inserted {
+                pageToken = next
+            } else {
+                pageToken = nil
+            }
+        } while pageToken != nil
+
+        return (folderMeta.name, items)
+    }
+
+    private func resolveAuthorizedStream(
+        fileID: String,
+        resourceKey: String?,
+        trackID: String,
+        fallbackExtension: String?
+    ) async throws -> CloudStreamResult? {
+        var components = URLComponents(string: "https://www.googleapis.com/drive/v3/files/\(fileID)")!
+        components.queryItems = [
+            URLQueryItem(name: "alt", value: "media"),
+            URLQueryItem(name: "supportsAllDrives", value: "true")
+        ]
+        guard let mediaURL = components.url,
+              let authorized = try await sendAuthorizedDriveGET(
+                  url: mediaURL,
+                  resourceKey: resourceKey,
+                  folderIDForRK: fileID,
+                  range: "bytes=0-0"
+              ) else {
+            return nil
+        }
+
+        if authorized.response.statusCode == 403 || authorized.response.statusCode == 404 {
+            return nil
+        }
+        guard authorized.response.statusCode == 200 || authorized.response.statusCode == 206 else {
+            throw CloudSourceError.networkError(L10n.trNonisolated("Google Drive returned HTTP %@.", String(authorized.response.statusCode)))
+        }
+        let resolvedURL = authorized.response.finalURL ?? mediaURL
+        let ext = Self.detectStreamExtension(
+            response: authorized.response,
+            fallbackExtension: fallbackExtension
+        )
+        let headers: [String: String] = [
+            "User-Agent": Self.userAgent,
+            "Accept": "*/*",
+            "Authorization": "Bearer \(authorized.token)"
+        ]
+        let result = CloudStreamResult(
+            url: resolvedURL,
+            headers: headers,
+            fileExtension: ext,
+            expiresAt: Date().addingTimeInterval(1800)
+        )
+        streamCache[trackID] = CachedStream(result: result)
+        return result
     }
 
     private func sendRequestWithRetry(_ request: URLRequest) async throws -> HTTPResponseData {

@@ -12,6 +12,7 @@ struct LyricsView: View {
     @Environment(\.lyricsStore) private var store
     @Environment(\.extensionStore) private var extensionStore
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var lyrics: Lyrics?
@@ -115,6 +116,7 @@ struct LyricsView: View {
                     .environment(\.extensionStore, extensionStore)
                     .environment(\.languageManager, languageManager)
                     .environment(\.locale, languageManager.effectiveLocale)
+                    .applyTheme(themeManager)
                 }
             }
             .alert(L10n.tr("Lyrics Action Failed"), isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {

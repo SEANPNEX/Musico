@@ -29,6 +29,7 @@ import com.musico.audio.PlayerUiState
 import com.musico.core.ArtworkCache
 import com.musico.i18n.LocalStrings
 import com.musico.ui.components.ArtworkImage
+import com.musico.ui.theme.LocalHasBackgroundImage
 
 @Composable
 fun MiniPlayer(
@@ -49,8 +50,12 @@ fun MiniPlayer(
         modifier = modifier
             .fillMaxWidth()
             .clickable(onClick = onOpenFullPlayer),
-        color = MaterialTheme.colorScheme.surfaceContainerHigh,
-        tonalElevation = 3.dp
+        color = if (LocalHasBackgroundImage.current) {
+            MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.84f)
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHigh
+        },
+        tonalElevation = if (LocalHasBackgroundImage.current) 0.dp else 3.dp
     ) {
         Column(modifier = Modifier.fillMaxWidth()) {
             if (playerState.isLoadingCloud) {

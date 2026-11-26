@@ -1,7 +1,7 @@
 import SwiftUI
 
 enum SidebarItem: Hashable {
-    case folders, extensions, songs, albums, artists, playlists, favourites, playlist(UUID), queues, stats
+    case folders, extensions, songs, albums, artists, playlists, favourites, playlist(UUID), queues, stats, settings
 }
 
 /// The main window on wide screens: sidebar, content, an optional queue or lyrics panel on the
@@ -20,6 +20,7 @@ struct SidebarRootView: View {
     @Environment(\.extensionStore) private var extensionStore
     @Environment(\.lyricsStore) private var lyricsStore
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
     #if targetEnvironment(macCatalyst)
     @Environment(\.updateManager) private var updateManager
     #endif
@@ -42,6 +43,7 @@ struct SidebarRootView: View {
                 onOpen: openPlayer
             )
         }
+        .background { ThemeBackdropView() }
         .onAppear {
             lastValidSelection = navigation.sidebarSelection ?? .queues
         }
@@ -95,9 +97,11 @@ struct SidebarRootView: View {
         @Bindable var navigation = navigation
         return NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
+                .background { ThemeBackdropView() }
         } detail: {
             NavigationStack(path: $navigation.sidebarDetailPath) {
                 detail
+                    .background { ThemeBackdropView() }
             }
         }
         .navigationSplitViewStyle(.balanced)
@@ -109,6 +113,7 @@ struct SidebarRootView: View {
         })) {
             panel
                 .inspectorColumnWidth(min: 300, ideal: 360, max: 460)
+                .background { ThemeBackdropView() }
                 .environment(library)
                 .environment(player)
                 .environment(queues)
@@ -122,6 +127,7 @@ struct SidebarRootView: View {
                 .environment(\.lyricsStore, lyricsStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
         }
     }
 
@@ -205,10 +211,8 @@ struct SidebarRootView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 8)
             }
-            #if targetEnvironment(macCatalyst)
             Divider()
             sidebarFooter
-            #endif
         }
         .navigationTitle("Musico")
         .navigationSplitViewColumnWidth(min: 204, ideal: 232, max: 288)
@@ -225,14 +229,16 @@ struct SidebarRootView: View {
             }
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
-        #if targetEnvironment(macCatalyst)
         .sheet(isPresented: $showDownloadsSheet) {
             DownloadsListView(downloadManager: downloadManager)
                 .environment(\.downloadManager, downloadManager)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
         }
+        #if targetEnvironment(macCatalyst)
         .sheet(isPresented: Binding(
             get: { updateManager.isSheetPresented },
             set: { updateManager.isSheetPresented = $0 }
@@ -241,6 +247,7 @@ struct SidebarRootView: View {
                 .environment(\.updateManager, updateManager)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
         }
         #endif
     }
@@ -265,67 +272,31 @@ struct SidebarRootView: View {
         }
     }
 
-    #if targetEnvironment(macCatalyst)
     private var sidebarFooter: some View {
         VStack(spacing: 4) {
             SidebarDownloadsWidget(downloadManager: downloadManager) {
                 showDownloadsSheet = true
             }
-            Button {
-                updateManager.presentManualCheck()
-            } label: {
-                HStack(spacing: 8) {
-                    Label(L10n.tr("Check for Updates"), systemImage: "arrow.down.circle")
-                        .lineLimit(1)
-                    Spacer()
-                    if updateManager.hasAvailableUpdate {
-                        Circle()
-                            .fill(Color.accentColor)
-                            .frame(width: 8, height: 8)
-                            .accessibilityLabel(L10n.tr("Update available"))
-                    }
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+            SidebarRowButton(
+                title: L10n.tr("Settings"),
+                icon: "gearshape",
+                showsAccentDot: hasAvailableUpdate,
+                isSelected: activeSelection == .settings
+            ) {
+                handleSelection(.settings)
             }
-            .buttonStyle(SidebarFooterButtonStyle())
-
-            Menu {
-                ForEach(AppLanguage.allCases) { lang in
-                    Button {
-                        languageManager.setLanguage(lang)
-                    } label: {
-                        if languageManager.selection == lang {
-                            Label(lang.displayName, systemImage: "checkmark")
-                        } else {
-                            Text(lang.displayName)
-                        }
-                    }
-                }
-            } label: {
-                HStack(spacing: 8) {
-                    Label(L10n.tr("Language"), systemImage: "globe")
-                        .lineLimit(1)
-                    Spacer()
-                    Text(languageManager.selection.displayName)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 6)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-            }
-            .buttonStyle(SidebarFooterButtonStyle())
         }
-        .font(.subheadline)
         .padding(.horizontal, 8)
         .padding(.vertical, 8)
     }
-    #endif
+
+    private var hasAvailableUpdate: Bool {
+        #if targetEnvironment(macCatalyst)
+        updateManager.hasAvailableUpdate
+        #else
+        false
+        #endif
+    }
 
     @ViewBuilder
     private var detail: some View {
@@ -340,6 +311,7 @@ struct SidebarRootView: View {
         case .playlist(let id): PlaylistDetailView(ref: .user(id))
         case .queues: QueuesView()
         case .stats: StatsView()
+        case .settings: SettingsView(isSheet: false)
         }
     }
 
@@ -364,10 +336,12 @@ struct SidebarRootView: View {
 private struct SidebarRowButton: View {
     let title: String
     let icon: String
-    let badgeCount: Int?
+    var badgeCount: Int? = nil
+    var showsAccentDot: Bool = false
     let isSelected: Bool
     let action: () -> Void
 
+    @Environment(\.themeManager) private var themeManager
     @State private var isHovered = false
 
     var body: some View {
@@ -375,14 +349,19 @@ private struct SidebarRowButton: View {
             HStack(spacing: 8) {
                 Image(systemName: icon)
                     .font(.body)
-                    .foregroundStyle(isSelected ? Color.accentColor : .secondary)
+                    .foregroundStyle(isSelected ? themeManager.accentColor : .secondary)
                     .frame(width: 20, alignment: .center)
                 Text(title)
                     .font(.body)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
                 Spacer(minLength: 4)
-                if let badgeCount, badgeCount > 0 {
+                if showsAccentDot {
+                    Circle()
+                        .fill(themeManager.accentColor)
+                        .frame(width: 8, height: 8)
+                        .accessibilityLabel(L10n.tr("Update available"))
+                } else if let badgeCount, badgeCount > 0 {
                     Text("\(badgeCount)")
                         .font(.caption.monospacedDigit())
                         .foregroundStyle(.secondary)
@@ -393,7 +372,7 @@ private struct SidebarRowButton: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
-        .buttonStyle(SidebarPillButtonStyle(isSelected: isSelected, isHovered: isHovered))
+        .buttonStyle(SidebarPillButtonStyle(isSelected: isSelected, isHovered: isHovered, accentColor: themeManager.accentColor))
         .onHover { isHovered = $0 }
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -402,6 +381,7 @@ private struct SidebarRowButton: View {
 private struct SidebarPillButtonStyle: ButtonStyle {
     let isSelected: Bool
     let isHovered: Bool
+    let accentColor: Color
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -415,10 +395,10 @@ private struct SidebarPillButtonStyle: ButtonStyle {
 
     private func backgroundColor(isPressed: Bool) -> Color {
         if isPressed {
-            return isSelected ? Color.accentColor.opacity(0.22) : Color.primary.opacity(0.10)
+            return isSelected ? accentColor.opacity(0.22) : Color.primary.opacity(0.10)
         }
         if isSelected {
-            return Color.accentColor.opacity(0.15)
+            return accentColor.opacity(0.15)
         }
         if isHovered {
             return Color.primary.opacity(0.06)

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct SleepTimerSheet: View {
     @Environment(PlayerController.self) private var player: PlayerController?
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
     @State private var customMinutes = 20
 
@@ -16,7 +17,8 @@ struct SleepTimerSheet: View {
                     ProgressView()
                 }
             }
-            .tint(.primary)
+            .background { ThemeBackdropView() }
+            .tint(themeManager.accentColor)
             .navigationTitle(L10n.tr("Sleep Timer"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -30,7 +32,7 @@ struct SleepTimerSheet: View {
             if player.sleepMode != .off {
                 Section {
                     HStack {
-                        Image(systemName: "moon.zzz.fill").foregroundStyle(Color.accentColor)
+                        Image(systemName: "moon.zzz.fill").foregroundStyle(themeManager.accentColor)
                         status(for: player)
                         Spacer()
                         Button(L10n.tr("Cancel Timer"), role: .destructive) { player.setSleep(.off) }
@@ -53,6 +55,7 @@ struct SleepTimerSheet: View {
                 }
             }
         }
+        .hiddenScrollBackgroundIfThemed(themeManager)
     }
 
     @ViewBuilder

@@ -10,6 +10,7 @@ import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudHttpClient
 import com.musico.cloud.CloudStreamResolver
 import com.musico.cloud.GoogleDriveClient
+import com.musico.cloud.GoogleDriveOAuthManager
 import com.musico.cloud.UrlConnectionCloudHttpClient
 import com.musico.cloud.YouTubeClient
 import com.musico.core.AndroidMetadataReader
@@ -20,6 +21,7 @@ import com.musico.core.MetadataReading
 import com.musico.extensions.CloudProviderRegistry
 import com.musico.extensions.ExtensionStore
 import com.musico.i18n.LanguageStore
+import com.musico.ui.theme.ThemeStore
 import com.musico.update.UpdateManager
 import java.io.File
 
@@ -42,7 +44,11 @@ class AppContainer(context: Context) {
     val cloudThumbnailCache: CloudThumbnailCache = CloudThumbnailCache(cloudHttpClient)
     val youTubeClient: YouTubeClient = YouTubeClient(cloudHttpClient)
     val bilibiliClient: BilibiliClient = BilibiliClient(cloudHttpClient)
-    val googleDriveClient: GoogleDriveClient = GoogleDriveClient(cloudHttpClient)
+    val googleDriveOAuthManager: GoogleDriveOAuthManager = GoogleDriveOAuthManager(appContext, cloudHttpClient)
+    val googleDriveClient: GoogleDriveClient = GoogleDriveClient(
+        httpClient = cloudHttpClient,
+        oauthTokenProvider = { forceRefresh -> googleDriveOAuthManager.validAccessToken(forceRefresh) },
+    )
     val cloudProviderRegistry: CloudProviderRegistry = CloudProviderRegistry(
         youTubeClient = youTubeClient,
         bilibiliClient = bilibiliClient,
@@ -91,6 +97,7 @@ class AppContainer(context: Context) {
         extensionSearch = { extId, query -> extensionStore.searchLyrics(extId, query) },
     )
     val languageStore: LanguageStore = LanguageStore(appContext)
+    val themeStore: ThemeStore = ThemeStore(appContext, stateDir)
     val updateManager: UpdateManager = UpdateManager(appContext)
     val audioEngine: AudioEngine = AudioEngine(appContext)
     val playerController: PlayerController = PlayerController(

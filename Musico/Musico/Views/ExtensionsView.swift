@@ -12,6 +12,7 @@ struct ExtensionsView: View {
     private let showDoneButton: Bool
     @Environment(\.extensionStore) private var envExtensionStore
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var showFileImporter = false
@@ -113,6 +114,8 @@ struct ExtensionsView: View {
                 }
             }
         }
+        .hiddenScrollBackgroundIfThemed(themeManager)
+        .background { ThemeBackdropView() }
         .navigationTitle(L10n.tr("Extensions"))
         #if targetEnvironment(macCatalyst)
         .navigationBarTitleDisplayMode(.inline)
@@ -163,24 +166,28 @@ struct ExtensionsView: View {
             .environment(\.extensionStore, extensionStore)
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
         .sheet(item: $reviewTarget) { target in
             ExtensionPermissionReviewSheet(extensionItem: target, extensionStore: extensionStore)
                 .environment(\.extensionStore, extensionStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
         }
         .sheet(item: $batchReviewSelection) { selection in
             ExtensionBatchPermissionReviewSheet(extensions: selection.extensions, extensionStore: extensionStore)
                 .environment(\.extensionStore, extensionStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
         }
         .sheet(item: $updateReviewTarget) { pending in
             ExtensionUpdateReviewSheet(pendingUpdate: pending, extensionStore: extensionStore)
                 .environment(\.extensionStore, extensionStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
         }
         .alert(
             L10n.tr("Couldn’t Import Extension"),
@@ -213,8 +220,8 @@ struct ExtensionsView: View {
                         .font(.caption2.weight(.semibold))
                         .padding(.horizontal, 6)
                         .padding(.vertical, 2)
-                        .background(Color.accentColor.opacity(0.14), in: Capsule())
-                        .foregroundStyle(Color.accentColor)
+                        .background(themeManager.accentColor.opacity(0.14), in: Capsule())
+                        .foregroundStyle(themeManager.accentColor)
                 }
                 Text("v\(ext.manifest.version) · \(statusText(for: ext))")
                     .font(.caption)
@@ -301,6 +308,7 @@ struct ExtensionPermissionReviewSheet: View {
     let extensionItem: InstalledExtension
     private let explicitStore: ExtensionStore?
     @Environment(\.extensionStore) private var envExtensionStore
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     init(extensionItem: InstalledExtension, extensionStore: ExtensionStore? = nil) {
@@ -374,6 +382,8 @@ struct ExtensionPermissionReviewSheet: View {
                     }
                 }
             }
+            .hiddenScrollBackgroundIfThemed(themeManager)
+            .background { ThemeBackdropView() }
             .navigationTitle(L10n.tr("Permission Review"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -397,6 +407,7 @@ struct ExtensionBatchPermissionReviewSheet: View {
     let extensions: [InstalledExtension]
     private let explicitStore: ExtensionStore?
     @Environment(\.extensionStore) private var envExtensionStore
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
     @State private var selectedIDs: Set<String>
 
@@ -430,7 +441,7 @@ struct ExtensionBatchPermissionReviewSheet: View {
                         } label: {
                             HStack(spacing: 12) {
                                 Image(systemName: selectedIDs.contains(ext.id) ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(selectedIDs.contains(ext.id) ? Color.accentColor : .secondary)
+                                    .foregroundStyle(selectedIDs.contains(ext.id) ? themeManager.accentColor : .secondary)
                                     .font(.title3)
                                 ExtensionIconView(iconData: ext.iconData, size: 36)
                                 VStack(alignment: .leading, spacing: 2) {
@@ -459,6 +470,8 @@ struct ExtensionBatchPermissionReviewSheet: View {
                     }
                 }
             }
+            .hiddenScrollBackgroundIfThemed(themeManager)
+            .background { ThemeBackdropView() }
             .navigationTitle(L10n.tr("Review %@ Extensions", String(extensions.count)))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -485,12 +498,16 @@ struct ExtensionDetailView: View {
     private let explicitStore: ExtensionStore?
     @Environment(\.extensionStore) private var envExtensionStore
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var showReviewSheet = false
     @State private var showUpdateReviewSheet = false
     @State private var confirmUninstall = false
     @State private var showQRLoginSheet = false
+    @State private var showWebLoginSheet = false
+    @State private var showCookiesFileImporter = false
+    @State private var cookieImportError: String? = nil
 
     init(extensionID: String, extensionStore: ExtensionStore? = nil) {
         self.extensionID = extensionID
@@ -568,6 +585,18 @@ struct ExtensionDetailView: View {
                             Label(L10n.tr("Sign In with QR Code…"), systemImage: "qrcode")
                         }
                         .disabled(!ext.isActive)
+                    }
+                    if ext.manifest.supportsWebLogin {
+                        Button {
+                            showWebLoginSheet = true
+                        } label: {
+                            Label(L10n.tr("Sign In in Browser…"), systemImage: "safari")
+                        }
+                    }
+                    Button {
+                        showCookiesFileImporter = true
+                    } label: {
+                        Label(L10n.tr("Import cookies.txt…"), systemImage: "doc.text")
                     }
                     LabeledContent(L10n.tr("Cookie (optional)")) {
                         SecureField(
@@ -805,11 +834,14 @@ struct ExtensionDetailView: View {
                 }
             }
         }
+        .hiddenScrollBackgroundIfThemed(themeManager)
+        .background { ThemeBackdropView() }
         .sheet(isPresented: $showReviewSheet) {
             ExtensionPermissionReviewSheet(extensionItem: ext, extensionStore: extensionStore)
                 .environment(\.extensionStore, extensionStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
         }
         .sheet(isPresented: $showUpdateReviewSheet) {
             if let pending = extensionStore.pendingUpdates[ext.id] {
@@ -817,6 +849,7 @@ struct ExtensionDetailView: View {
                     .environment(\.extensionStore, extensionStore)
                     .environment(\.languageManager, languageManager)
                     .environment(\.locale, languageManager.effectiveLocale)
+                    .applyTheme(themeManager)
             }
         }
         .sheet(isPresented: $showQRLoginSheet) {
@@ -824,6 +857,50 @@ struct ExtensionDetailView: View {
                 .environment(\.extensionStore, extensionStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
+        }
+        .sheet(isPresented: $showWebLoginSheet) {
+            if let webConfig = ext.manifest.webLogin {
+                ExtensionWebLoginSheet(extensionItem: ext, config: webConfig, extensionStore: extensionStore)
+                    .environment(\.extensionStore, extensionStore)
+                    .environment(\.languageManager, languageManager)
+                    .environment(\.locale, languageManager.effectiveLocale)
+                    .applyTheme(themeManager)
+            }
+        }
+        .fileImporter(isPresented: $showCookiesFileImporter, allowedContentTypes: [.plainText, .data]) { result in
+            switch result {
+            case .success(let url):
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer {
+                    if scoped { url.stopAccessingSecurityScopedResource() }
+                }
+                do {
+                    let data = try Data(contentsOf: url)
+                    guard let text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .ascii) else {
+                        cookieImportError = L10n.tr("Could not read cookie file as text.")
+                        return
+                    }
+                    let domains = ext.manifest.webLogin?.cookieDomains ?? ext.manifest.permissions.hosts
+                    guard let parsed = NetscapeCookieFileParser.parseCookieHeader(from: text, allowedDomains: domains) else {
+                        cookieImportError = L10n.tr("No valid cookies for this extension were found in the file.")
+                        return
+                    }
+                    extensionStore.updateCookie(extensionID: ext.id, cookie: parsed)
+                } catch {
+                    cookieImportError = error.localizedDescription
+                }
+            case .failure(let error):
+                cookieImportError = error.localizedDescription
+            }
+        }
+        .alert(
+            L10n.tr("Couldn’t Import Cookies"),
+            isPresented: Binding(get: { cookieImportError != nil }, set: { if !$0 { cookieImportError = nil } })
+        ) {
+            Button(L10n.tr("OK"), role: .cancel) {}
+        } message: {
+            Text(cookieImportError ?? "")
         }
         .confirmationDialog(
             L10n.tr("Uninstall “%@”?", ext.manifest.name),
@@ -940,6 +1017,7 @@ struct ExtensionUpdateReviewSheet: View {
     let pendingUpdate: PendingExtensionUpdate
     private let explicitStore: ExtensionStore?
     @Environment(\.extensionStore) private var envExtensionStore
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     init(pendingUpdate: PendingExtensionUpdate, extensionStore: ExtensionStore? = nil) {
@@ -962,7 +1040,7 @@ struct ExtensionUpdateReviewSheet: View {
                                 .font(.headline)
                             Text("v\(pendingUpdate.installedVersion) \u{2192} v\(pendingUpdate.manifest.version)")
                                 .font(.subheadline.weight(.medium))
-                                .foregroundStyle(Color.accentColor)
+                                .foregroundStyle(themeManager.accentColor)
                             Text(pendingUpdate.manifest.id)
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
@@ -1028,6 +1106,8 @@ struct ExtensionUpdateReviewSheet: View {
                     }
                 }
             }
+            .hiddenScrollBackgroundIfThemed(themeManager)
+            .background { ThemeBackdropView() }
             .navigationTitle(L10n.tr("Review Update"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1050,6 +1130,7 @@ struct ExtensionUpdateReviewSheet: View {
 private struct ImportExtensionURLSheet: View {
     let extensionStore: ExtensionStore
     let onImported: ([InstalledExtension]) -> Void
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var urlText = ""
@@ -1077,6 +1158,8 @@ private struct ImportExtensionURLSheet: View {
                     }
                 }
             }
+            .hiddenScrollBackgroundIfThemed(themeManager)
+            .background { ThemeBackdropView() }
             .navigationTitle(L10n.tr("Import from URL"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {

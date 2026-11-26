@@ -1522,6 +1522,76 @@ final class ExtensionRuntimeTests: XCTestCase {
         XCTAssertEqual(multi.count, 2)
         XCTAssertTrue(multi.allSatisfy { $0.state.sourceURL == nil })
     }
+
+    func testWebLoginManifestValidationAndNetscapeCookieParser() throws {
+        let validJSON = """
+        {
+          "apiVersion": 1,
+          "id": "com.test.weblogin",
+          "name": "Web Login Ext",
+          "version": "1.0.0",
+          "capabilities": ["search", "web_login"],
+          "permissions": { "hosts": ["music.youtube.com"] },
+          "webLogin": {
+            "loginUrl": "https://accounts.google.com/ServiceLogin",
+            "cookieDomains": [".youtube.com", ".google.com"],
+            "requiredCookies": ["SAPISID"]
+          }
+        }
+        """
+        let valid = try JSONDecoder().decode(ExtensionManifest.self, from: Data(validJSON.utf8))
+        try valid.validate()
+        XCTAssertTrue(valid.supportsWebLogin)
+        XCTAssertTrue(valid.supportsCookieAuth)
+
+        let missingWebLogin = try JSONDecoder().decode(ExtensionManifest.self, from: Data("""
+        {
+          "apiVersion": 1,
+          "id": "com.test.missingwl",
+          "name": "Missing",
+          "version": "1.0.0",
+          "capabilities": ["search", "web_login"],
+          "permissions": { "hosts": ["music.youtube.com"] }
+        }
+        """.utf8))
+        XCTAssertThrowsError(try missingWebLogin.validate())
+
+        let httpWebLogin = try JSONDecoder().decode(ExtensionManifest.self, from: Data("""
+        {
+          "apiVersion": 1,
+          "id": "com.test.httpwl",
+          "name": "Insecure",
+          "version": "1.0.0",
+          "capabilities": ["search", "web_login"],
+          "permissions": { "hosts": ["music.youtube.com"] },
+          "webLogin": {
+            "loginUrl": "http://accounts.google.com/ServiceLogin",
+            "cookieDomains": [".youtube.com"]
+          }
+        }
+        """.utf8))
+        XCTAssertThrowsError(try httpWebLogin.validate())
+
+        let netscape = """
+        # Netscape HTTP Cookie File
+        #HttpOnly_.youtube.com\tTRUE\t/\tTRUE\t1900000000\tSAPISID\tsapisid_val
+        .google.com\tTRUE\t/\tTRUE\t0\tSID\tsid_val
+        .youtube.com\tTRUE\t/\tTRUE\t1000\tEXPIRED\told_val
+        .github.com\tTRUE\t/\tTRUE\t0\tGH_SESS\tdo_not_leak
+        """
+        let parsed = NetscapeCookieFileParser.parseCookieHeader(
+            from: netscape,
+            allowedDomains: [".youtube.com", ".google.com"],
+            nowEpochSec: 1700000000
+        )
+        XCTAssertEqual(parsed, "SAPISID=sapisid_val; SID=sid_val")
+
+        let plainParsed = NetscapeCookieFileParser.parseCookieHeader(
+            from: "Cookie: SESSDATA=abc123; bili_jct=def456; SESSDATA=abc_new",
+            allowedDomains: ["www.bilibili.com"]
+        )
+        XCTAssertEqual(plainParsed, "SESSDATA=abc_new; bili_jct=def456")
+    }
 }
 
 private final class NSLockBox<Value>: @unchecked Sendable {

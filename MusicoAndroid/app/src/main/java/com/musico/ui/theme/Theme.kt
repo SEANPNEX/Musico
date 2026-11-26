@@ -2,12 +2,14 @@ package com.musico.ui.theme
 
 import android.os.Build
 import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 private val LightColorScheme = lightColorScheme(
@@ -80,19 +82,147 @@ private val DarkColorScheme = darkColorScheme(
     surfaceContainerHighest = md_theme_dark_surfaceContainerHighest
 )
 
+fun buildCustomColorScheme(
+    appearance: AppearanceSettings,
+    resolvedDark: Boolean,
+    baseScheme: ColorScheme = if (resolvedDark) DarkColorScheme else LightColorScheme,
+): ColorScheme {
+    if (appearance.isDefaultPalette) return baseScheme
+
+    val bgRgb = appearance.resolvedBackgroundHex()?.let(::parseHexRgb)
+    val effectiveBgRgb = bgRgb ?: baseScheme.background.toRgbColor()
+    val effectiveBgColor = bgRgb?.toComposeColor() ?: baseScheme.background
+
+    val fgHex = appearance.resolvedForegroundHex()
+    val fgRgb = fgHex?.let(::parseHexRgb)
+    val effectiveFgRgb = fgRgb ?: baseScheme.onBackground.toRgbColor()
+    val effectiveFgColor = fgRgb?.toComposeColor() ?: baseScheme.onBackground
+    val onSurfaceVariantColor = if (fgRgb != null) {
+        effectiveFgColor.copy(alpha = 0.70f)
+    } else {
+        baseScheme.onSurfaceVariant
+    }
+
+    val rawAccentRgb = parseHexRgb(appearance.resolvedAccentHex()) ?: baseScheme.primary.toRgbColor()
+    val primaryRgb = if (resolvedDark && relativeLuminance(rawAccentRgb) < 0.16f) {
+        blendRgb(rawAccentRgb, RgbColor(255, 255, 255), 0.30f)
+    } else {
+        rawAccentRgb
+    }
+    val primaryColor = primaryRgb.toComposeColor()
+    val onPrimaryColor = if (isLightColor(primaryRgb)) Color(0xFF141416) else Color.White
+
+    val containerMixRatio = if (resolvedDark) 0.24f else 0.16f
+    val primaryContainerRgb = blendRgb(effectiveBgRgb, primaryRgb, containerMixRatio)
+    val primaryContainerColor = primaryContainerRgb.toComposeColor()
+    val onPrimaryContainerColor = if (isLightColor(primaryContainerRgb)) {
+        Color(0xFF141416)
+    } else {
+        Color(0xFFF5F5F7)
+    }
+
+    val white = RgbColor(255, 255, 255)
+    val black = RgbColor(0, 0, 0)
+
+    return if (bgRgb != null) {
+        val surfaceLowest = if (resolvedDark) {
+            blendRgb(bgRgb, black, 0.22f).toComposeColor()
+        } else {
+            blendRgb(bgRgb, white, 0.65f).toComposeColor()
+        }
+        val surfaceLow = if (resolvedDark) {
+            blendRgb(bgRgb, white, 0.04f).toComposeColor()
+        } else {
+            blendRgb(bgRgb, black, 0.03f).toComposeColor()
+        }
+        val surfaceContainer = if (resolvedDark) {
+            blendRgb(bgRgb, white, 0.07f).toComposeColor()
+        } else {
+            blendRgb(bgRgb, black, 0.05f).toComposeColor()
+        }
+        val surfaceHigh = if (resolvedDark) {
+            blendRgb(bgRgb, white, 0.10f).toComposeColor()
+        } else {
+            blendRgb(bgRgb, black, 0.08f).toComposeColor()
+        }
+        val surfaceHighest = if (resolvedDark) {
+            blendRgb(bgRgb, white, 0.14f).toComposeColor()
+        } else {
+            blendRgb(bgRgb, black, 0.11f).toComposeColor()
+        }
+        val surfaceVariant = if (resolvedDark) {
+            blendRgb(bgRgb, white, 0.12f).toComposeColor()
+        } else {
+            blendRgb(bgRgb, black, 0.09f).toComposeColor()
+        }
+
+        baseScheme.copy(
+            primary = primaryColor,
+            onPrimary = onPrimaryColor,
+            primaryContainer = primaryContainerColor,
+            onPrimaryContainer = onPrimaryContainerColor,
+            secondary = primaryColor,
+            onSecondary = onPrimaryColor,
+            secondaryContainer = primaryContainerColor,
+            onSecondaryContainer = onPrimaryContainerColor,
+            inversePrimary = primaryColor,
+            background = effectiveBgColor,
+            onBackground = effectiveFgColor,
+            surface = effectiveBgColor,
+            onSurface = effectiveFgColor,
+            surfaceVariant = surfaceVariant,
+            onSurfaceVariant = onSurfaceVariantColor,
+            outline = blendRgb(bgRgb, effectiveFgRgb, 0.35f).toComposeColor(),
+            outlineVariant = blendRgb(bgRgb, effectiveFgRgb, 0.16f).toComposeColor(),
+            inverseSurface = effectiveFgColor,
+            inverseOnSurface = effectiveBgColor,
+            surfaceContainerLowest = surfaceLowest,
+            surfaceContainerLow = surfaceLow,
+            surfaceContainer = surfaceContainer,
+            surfaceContainerHigh = surfaceHigh,
+            surfaceContainerHighest = surfaceHighest,
+        )
+    } else {
+        baseScheme.copy(
+            primary = primaryColor,
+            onPrimary = onPrimaryColor,
+            primaryContainer = primaryContainerColor,
+            onPrimaryContainer = onPrimaryContainerColor,
+            secondary = primaryColor,
+            onSecondary = onPrimaryColor,
+            secondaryContainer = primaryContainerColor,
+            onSecondaryContainer = onPrimaryContainerColor,
+            inversePrimary = primaryColor,
+            onBackground = effectiveFgColor,
+            onSurface = effectiveFgColor,
+            onSurfaceVariant = onSurfaceVariantColor,
+        )
+    }
+}
+
 @Composable
 fun MusicoTheme(
+    appearance: AppearanceSettings = AppearanceSettings(),
     darkTheme: Boolean = isSystemInDarkTheme(),
     dynamicColor: Boolean = true,
     content: @Composable () -> Unit
 ) {
-    val colorScheme = when {
-        dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
-            val context = LocalContext.current
-            if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    val resolvedDark = appearance.resolveDarkTheme(darkTheme)
+    val colorScheme = if (appearance.isDefaultPalette) {
+        when {
+            dynamicColor && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> {
+                val context = LocalContext.current
+                if (resolvedDark) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+            }
+            resolvedDark -> DarkColorScheme
+            else -> LightColorScheme
         }
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
+    } else {
+        buildCustomColorScheme(
+            appearance = appearance,
+            resolvedDark = resolvedDark,
+            baseScheme = if (resolvedDark) DarkColorScheme else LightColorScheme,
+        )
     }
 
     MaterialTheme(

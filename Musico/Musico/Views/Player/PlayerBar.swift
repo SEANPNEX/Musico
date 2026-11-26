@@ -7,6 +7,7 @@ struct PlayerBar: View {
     let onOpen: () -> Void
     @Environment(PlayerController.self) private var player
     @Environment(QueueStore.self) private var queues
+    @Environment(\.themeManager) private var themeManager
     @State private var isTrackHovered = false
     @State private var isMoreHovered = false
 
@@ -133,7 +134,7 @@ struct PlayerBar: View {
             DockIconButton(
                 title: L10n.tr("Shuffle"),
                 systemImage: "shuffle",
-                foreground: queue.shuffle ? Color.accentColor : .secondary,
+                foreground: queue.shuffle ? themeManager.accentColor : .secondary,
                 width: 32,
                 height: 30
             ) {
@@ -181,7 +182,7 @@ struct PlayerBar: View {
             DockIconButton(
                 title: L10n.tr("Repeat"),
                 systemImage: queue.repeatMode == .one ? "repeat.1" : "repeat",
-                foreground: queue.repeatMode == .off ? .secondary : Color.accentColor,
+                foreground: queue.repeatMode == .off ? .secondary : themeManager.accentColor,
                 width: 32,
                 height: 30
             ) {
@@ -197,7 +198,7 @@ struct PlayerBar: View {
         return DockIconButton(
             title: title,
             systemImage: icon,
-            foreground: isOn ? Color.accentColor : .primary,
+            foreground: isOn ? themeManager.accentColor : .primary,
             isSelected: isOn,
             width: 36,
             height: 32
@@ -226,6 +227,7 @@ private struct DockIconButton: View {
     let height: CGFloat
     let action: () -> Void
 
+    @Environment(\.themeManager) private var themeManager
     @State private var isHovered = false
 
     var body: some View {
@@ -236,7 +238,7 @@ private struct DockIconButton: View {
                 .frame(width: width, height: height)
                 .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
-        .buttonStyle(DockIconButtonStyle(isSelected: isSelected, isHovered: isHovered))
+        .buttonStyle(DockIconButtonStyle(isSelected: isSelected, isHovered: isHovered, accentColor: themeManager.accentColor))
         .onHover { isHovered = $0 }
         .animation(.easeOut(duration: 0.14), value: isHovered)
         .accessibilityLabel(title)
@@ -247,6 +249,7 @@ private struct DockIconButton: View {
 private struct DockIconButtonStyle: ButtonStyle {
     let isSelected: Bool
     let isHovered: Bool
+    let accentColor: Color
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -260,10 +263,10 @@ private struct DockIconButtonStyle: ButtonStyle {
 
     private func backgroundColor(isPressed: Bool) -> Color {
         if isPressed {
-            return isSelected ? Color.accentColor.opacity(0.24) : Color.primary.opacity(0.14)
+            return isSelected ? accentColor.opacity(0.24) : Color.primary.opacity(0.14)
         }
         if isSelected {
-            return Color.accentColor.opacity(0.15)
+            return accentColor.opacity(0.15)
         }
         if isHovered {
             return Color.primary.opacity(0.08)

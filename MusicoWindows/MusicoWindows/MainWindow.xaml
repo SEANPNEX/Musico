@@ -31,6 +31,17 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
+        <!-- Full-Window Custom Background Image + Contrast Scrim -->
+        <Image x:Name="WindowBackgroundImage"
+               Grid.RowSpan="2"
+               Stretch="UniformToFill"
+               IsHitTestVisible="False"
+               Visibility="Collapsed" />
+        <Border x:Name="WindowBackgroundScrim"
+                Grid.RowSpan="2"
+                IsHitTestVisible="False"
+                Visibility="Collapsed" />
+
         <!-- Custom Title Bar -->
         <Grid Grid.Row="0" Background="{DynamicResource TitleBarBrush}">
             <Grid.ColumnDefinitions>
@@ -77,7 +88,7 @@
 
         <!-- Shell Body + PlayerBar + Overlays -->
         <Grid Grid.Row="1">
-            <Grid>
+            <Grid x:Name="ShellBodyGrid">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="*" />
                     <RowDefinition Height="84" />
@@ -265,7 +276,7 @@
                                 </StackPanel>
                             </ScrollViewer>
 
-                            <!-- Sidebar Footer: Downloads, Theme Toggle, Language, Rescan & Updates -->
+                            <!-- Sidebar Footer: Downloads & Settings -->
                             <StackPanel Grid.Row="2"
                                         Margin="0,4,0,6">
                                 <!-- Compact Downloads Footer Widget -->
@@ -344,74 +355,14 @@
                                 </Button>
 
                                 <Border Height="1" Background="{DynamicResource DividerBrush}" Margin="0,0,0,4" />
-                                <Button x:Name="ThemeToggleButton"
-                                        Style="{StaticResource Win10FlatButtonStyle}"
-                                        Height="38"
-                                        Padding="0"
-                                        HorizontalContentAlignment="Left"
-                                        ToolTip="{DynamicResource Str_Nav_ThemeTooltip}"
-                                        Click="ToggleTheme_Click">
-                                    <StackPanel Orientation="Horizontal" Margin="14,0">
-                                        <TextBlock x:Name="ThemeGlyph"
-                                                   Text="&#xE706;"
-                                                   FontFamily="{StaticResource Win10GlyphFont}"
-                                                   FontSize="15"
-                                                   Width="22"
-                                                   VerticalAlignment="Center" />
-                                        <TextBlock x:Name="LblTheme"
-                                                   Text="{DynamicResource Str_Nav_LightTheme}"
-                                                   Margin="12,0,0,0"
-                                                   VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                                <Button x:Name="LanguageButton"
-                                        Style="{StaticResource Win10FlatButtonStyle}"
-                                        Height="38"
-                                        Padding="0"
-                                        HorizontalContentAlignment="Left"
-                                        ToolTip="{DynamicResource Str_Nav_LanguageTooltip}"
-                                        Click="LanguageFooter_Click">
-                                    <StackPanel Orientation="Horizontal" Margin="14,0">
-                                        <TextBlock Text="&#xE774;"
-                                                   FontFamily="{StaticResource Win10GlyphFont}"
-                                                   FontSize="15"
-                                                   Width="22"
-                                                   VerticalAlignment="Center" />
-                                        <TextBlock x:Name="LblLanguage"
-                                                   Text="{DynamicResource Str_Nav_Language}"
-                                                   Margin="12,0,0,0"
-                                                   VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                                <Button x:Name="FooterRescanButton"
-                                        Style="{StaticResource Win10FlatButtonStyle}"
-                                        Height="38"
-                                        Padding="0"
-                                        HorizontalContentAlignment="Left"
-                                        ToolTip="{DynamicResource Str_Nav_RescanTooltip}"
-                                        Click="RescanFooter_Click">
-                                    <StackPanel Orientation="Horizontal" Margin="14,0">
-                                        <TextBlock Text="&#xE72C;"
-                                                   FontFamily="{StaticResource Win10GlyphFont}"
-                                                   FontSize="15"
-                                                   Width="22"
-                                                   VerticalAlignment="Center" />
-                                        <TextBlock x:Name="LblRescan"
-                                                   Text="{DynamicResource Str_Nav_Rescan}"
-                                                   Margin="12,0,0,0"
-                                                   VerticalAlignment="Center" />
-                                    </StackPanel>
-                                </Button>
-                                <Button x:Name="CheckUpdatesButton"
-                                        Style="{StaticResource Win10FlatButtonStyle}"
-                                        Height="38"
-                                        Padding="0"
-                                        HorizontalContentAlignment="Left"
-                                        ToolTip="{DynamicResource Str_Nav_CheckUpdates}"
-                                        Click="CheckUpdatesFooter_Click">
+                                <RadioButton x:Name="NavSettings"
+                                             Style="{StaticResource Win10NavItemStyle}"
+                                             GroupName="MainNav"
+                                             Tag="settings"
+                                             Checked="NavItem_Checked">
                                     <StackPanel Orientation="Horizontal" Margin="14,0">
                                         <Grid Width="22" Height="22" VerticalAlignment="Center">
-                                            <TextBlock Text="&#xE895;"
+                                            <TextBlock Text="&#xE713;"
                                                        FontFamily="{StaticResource Win10GlyphFont}"
                                                        FontSize="15"
                                                        HorizontalAlignment="Center"
@@ -425,12 +376,12 @@
                                                      Margin="0,1,0,0"
                                                      Visibility="Collapsed" />
                                         </Grid>
-                                        <TextBlock x:Name="LblCheckUpdates"
-                                                   Text="{DynamicResource Str_Nav_CheckUpdates}"
+                                        <TextBlock x:Name="LblSettings"
+                                                   Text="{DynamicResource Str_Nav_Settings}"
                                                    Margin="12,0,0,0"
                                                    VerticalAlignment="Center" />
                                     </StackPanel>
-                                </Button>
+                                </RadioButton>
                             </StackPanel>
                         </Grid>
                     </Border>

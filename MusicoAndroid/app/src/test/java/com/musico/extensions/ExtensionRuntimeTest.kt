@@ -1050,4 +1050,63 @@ class ExtensionRuntimeTest {
             assertEquals(CloudErrorCode.PERMISSION_DENIED, err.code)
         }
     }
+
+    @Test
+    fun `web_login manifest validation and Netscape cookie parser work`() {
+        val valid = ExtensionManifest(
+            apiVersion = 1,
+            id = "com.test.weblogin",
+            name = "Web Login Probe",
+            version = "1.0.0",
+            capabilities = listOf(ExtensionCapability.SEARCH, ExtensionCapability.WEB_LOGIN),
+            permissions = ExtensionPermissions(hosts = listOf("music.youtube.com")),
+            webLogin = ExtensionWebLoginConfig(
+                loginUrl = "https://accounts.google.com/ServiceLogin",
+                cookieDomains = listOf(".youtube.com", ".google.com"),
+                requiredCookies = listOf("SAPISID"),
+            ),
+        )
+        val validated = ExtensionManifestValidator.validate(valid)
+        assertTrue(validated.supportsWebLogin)
+        assertTrue(validated.supportsCookieAuth)
+
+        try {
+            ExtensionManifestValidator.validate(valid.copy(webLogin = null))
+            fail("Expected missing webLogin to fail")
+        } catch (_: IllegalArgumentException) {
+        }
+
+        try {
+            ExtensionManifestValidator.validate(
+                valid.copy(
+                    webLogin = ExtensionWebLoginConfig(
+                        loginUrl = "http://accounts.google.com/ServiceLogin",
+                        cookieDomains = listOf(".youtube.com"),
+                    ),
+                ),
+            )
+            fail("Expected http loginUrl to fail")
+        } catch (_: IllegalArgumentException) {
+        }
+
+        val netscape = """
+            # Netscape HTTP Cookie File
+            #HttpOnly_.youtube.com	TRUE	/	TRUE	1900000000	SAPISID	sapisid_val
+            .google.com	TRUE	/	TRUE	0	SID	sid_val
+            .youtube.com	TRUE	/	TRUE	1000	EXPIRED	old_val
+            .github.com	TRUE	/	TRUE	0	GH_SESS	do_not_leak
+        """.trimIndent()
+        val parsed = NetscapeCookieFileParser.parseCookieHeader(
+            text = netscape,
+            allowedDomains = listOf(".youtube.com", ".google.com"),
+            nowEpochSec = 1700000000L,
+        )
+        assertEquals("SAPISID=sapisid_val; SID=sid_val", parsed)
+
+        val plainParsed = NetscapeCookieFileParser.parseCookieHeader(
+            text = "Cookie: SESSDATA=abc123; bili_jct=def456; SESSDATA=abc_new",
+            allowedDomains = listOf("www.bilibili.com"),
+        )
+        assertEquals("SESSDATA=abc_new; bili_jct=def456", plainParsed)
+    }
 }

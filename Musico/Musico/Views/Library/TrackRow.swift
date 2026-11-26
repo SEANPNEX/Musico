@@ -58,6 +58,7 @@ struct TrackRow: View {
 
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
+    @Environment(\.themeManager) private var themeManager
 
     var body: some View {
         let isCurrent = player.currentTrack?.id == track.id
@@ -65,7 +66,7 @@ struct TrackRow: View {
             ArtworkView(artworkKey: track.artworkKey, remoteArtworkURL: track.remoteArtworkURL, size: 44)
             VStack(alignment: .leading, spacing: 2) {
                 Text(track.title)
-                    .foregroundStyle(isCurrent ? Color.accentColor : .primary)
+                    .foregroundStyle(isCurrent ? themeManager.accentColor : .primary)
                     .lineLimit(1)
                 Text(subtitle ?? L10n.displayArtist(track.artist))
                     .font(.subheadline)
@@ -75,7 +76,7 @@ struct TrackRow: View {
             Spacer(minLength: 8)
             if isCurrent {
                 Image(systemName: player.isPlaying ? "waveform" : "pause.fill")
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(themeManager.accentColor)
                     .symbolEffect(.variableColor.iterative, isActive: player.isPlaying)
             }
             Text(formatTime(track.duration))
@@ -134,6 +135,7 @@ struct ReorderableTrackRow: View {
     var onRemove: (() -> Void)? = nil
     var removeHelp: String? = nil
 
+    @Environment(\.themeManager) private var themeManager
     @State private var isDropTargeted = false
     @State private var isRowHovered = false
     @State private var isRemoveHovered = false
@@ -145,7 +147,7 @@ struct ReorderableTrackRow: View {
                     if let trackNumber {
                         Text("\(trackNumber)")
                             .font(.subheadline.monospacedDigit())
-                            .foregroundStyle(isActive ? Color.accentColor : .secondary)
+                            .foregroundStyle(isActive ? themeManager.accentColor : .secondary)
                             .frame(minWidth: 26, alignment: .trailing)
                     }
                     TrackRow(track: track, subtitle: subtitle)
@@ -198,9 +200,9 @@ struct ReorderableTrackRow: View {
         .onHover { isRowHovered = $0 }
         .listRowBackground(
             isDropTargeted
-                ? Color.accentColor.opacity(0.20)
+                ? themeManager.accentColor.opacity(0.20)
                 : (isActive
-                    ? Color.accentColor.opacity(0.12)
+                    ? themeManager.accentColor.opacity(0.12)
                     : (isRowHovered ? Color.primary.opacity(0.04) : nil))
         )
         .dropDestination(for: String.self) { items, _ in
@@ -261,6 +263,7 @@ final class NewPlaylistPrompt {
 /// root of a sheet over another sheet is first evaluated with an empty environment, and reading
 /// a store there stops the app.
 struct NewPlaylistAlert: ViewModifier {
+    @Environment(\.themeManager) private var themeManager
     @State private var prompt = NewPlaylistPrompt()
 
     func body(content: Content) -> some View {
@@ -291,6 +294,7 @@ struct NewPlaylistAlert: ViewModifier {
                     create?(trimmed)
                 }
                 .environment(\.locale, LanguageManager.shared.effectiveLocale)
+                .applyTheme(themeManager)
             }
     }
 }
@@ -308,6 +312,7 @@ struct NamePromptSheet: View {
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
     @State private var text: String
     @FocusState private var isFocused: Bool
 
@@ -341,7 +346,7 @@ struct NamePromptSheet: View {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(
                         LinearGradient(
-                            colors: [Color.accentColor.opacity(0.22), Color.accentColor.opacity(0.08)],
+                            colors: [themeManager.accentColor.opacity(0.22), themeManager.accentColor.opacity(0.08)],
                             startPoint: .topLeading,
                             endPoint: .bottomTrailing
                         )
@@ -349,12 +354,12 @@ struct NamePromptSheet: View {
                     .frame(width: 48, height: 48)
                     .overlay {
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(Color.accentColor.opacity(0.20), lineWidth: 0.75)
+                            .strokeBorder(themeManager.accentColor.opacity(0.20), lineWidth: 0.75)
                     }
                     .overlay {
                         Image(systemName: systemImage)
                             .font(.title3.weight(.semibold))
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundStyle(themeManager.accentColor)
                     }
 
                 VStack(alignment: .leading, spacing: 4) {
@@ -366,10 +371,10 @@ struct NamePromptSheet: View {
                     if let badgeText, !badgeText.isEmpty {
                         Text(badgeText)
                             .font(.caption.weight(.medium))
-                            .foregroundStyle(Color.accentColor)
+                            .foregroundStyle(themeManager.accentColor)
                             .padding(.horizontal, 8)
                             .padding(.vertical, 3)
-                            .background(Color.accentColor.opacity(0.12), in: Capsule())
+                            .background(themeManager.accentColor.opacity(0.12), in: Capsule())
                             .padding(.top, 2)
                     }
                 }
@@ -401,7 +406,7 @@ struct NamePromptSheet: View {
             .overlay {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(
-                        isFocused ? Color.accentColor : Color.primary.opacity(0.12),
+                        isFocused ? themeManager.accentColor : Color.primary.opacity(0.12),
                         lineWidth: isFocused ? 1.5 : 0.75
                     )
             }

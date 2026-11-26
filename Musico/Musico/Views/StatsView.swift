@@ -40,6 +40,7 @@ struct StatsView: View {
 
     @Environment(PlayHistoryStore.self) private var history
     @Environment(LibraryStore.self) private var library
+    @Environment(\.themeManager) private var themeManager
     @AppStorage("statsSection") private var section: Section = .recent
     @AppStorage("statsCountOrder") private var order: CountOrder = .most
 
@@ -77,6 +78,7 @@ struct StatsView: View {
             }
         }
         .listStyle(.plain)
+        .hiddenScrollBackgroundIfThemed(themeManager)
         .navigationTitle(L10n.tr("Stats"))
         .navigationBarTitleDisplayMode(.inline)
         .animation(.easeInOut(duration: 0.18), value: section)

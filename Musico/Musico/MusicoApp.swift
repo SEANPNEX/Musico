@@ -14,6 +14,7 @@ final class AppModel {
     let history: PlayHistoryStore
     let navigation = AppNavigation()
     let language = LanguageManager.shared
+    let theme = ThemeManager.shared
     let downloadManager = DownloadManager()
     #if targetEnvironment(macCatalyst)
     let updateManager: UpdateManager
@@ -67,6 +68,7 @@ struct MusicoApp: App {
                 .environment(\.extensionStore, model.extensions)
                 .environment(\.languageManager, model.language)
                 .environment(\.locale, model.language.effectiveLocale)
+                .applyTheme(model.theme)
                 #if targetEnvironment(macCatalyst)
                 .environment(\.updateManager, model.updateManager)
                 .task {
@@ -88,6 +90,14 @@ struct MusicoApp: App {
         }
         #if targetEnvironment(macCatalyst)
         .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button(L10n.tr("Settings…")) {
+                    model.navigation.selectSidebar(.settings)
+                    model.navigation.showPlayer = false
+                }
+                .keyboardShortcut(",", modifiers: .command)
+            }
+
             CommandGroup(after: .appInfo) {
                 Button(L10n.tr("Check for Updates…")) {
                     model.updateManager.presentManualCheck()

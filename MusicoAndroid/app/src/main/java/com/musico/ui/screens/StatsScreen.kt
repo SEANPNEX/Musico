@@ -62,6 +62,8 @@ import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
+import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoTopAppBarColors
 import kotlin.random.Random
 
 enum class StatsSection {
@@ -142,10 +144,12 @@ fun StatsScreen(
 
     Scaffold(
         modifier = modifier,
+        containerColor = musicoScaffoldContainerColor(),
         contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(
                 title = { Text(strings.statsTitle) },
+                colors = musicoTopAppBarColors(),
                 actions = {
                     if (languageStore != null) {
                         IconButton(onClick = { showLanguageDialog = true }) {

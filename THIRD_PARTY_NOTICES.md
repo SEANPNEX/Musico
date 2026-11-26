@@ -17,6 +17,9 @@ While Musico's own source code is released under the [MIT License](LICENSE), pre
 - **Jint** (`4.18.0`) — Licensed under the **BSD 2-Clause License (BSD-2-Clause)**  
   Project: https://github.com/sebastienros/jint
 
+- **Microsoft WebView2 SDK** (`1.0.2903.40`) — Licensed under the **BSD 3-Clause License (Microsoft WebView2 SDK License)**  
+  Project: https://developer.microsoft.com/en-us/microsoft-edge/webview2/
+
 ## Android (`MusicoAndroid/`)
 
 - **AndroidX Libraries** (`core-ktx`, `activity-compose`, `lifecycle`, `documentfile`, Jetpack Compose) — Licensed under the **Apache License 2.0**

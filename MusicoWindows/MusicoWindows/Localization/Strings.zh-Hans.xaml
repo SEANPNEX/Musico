@@ -266,4 +266,50 @@
     <sys:String x:Key="Str_EditCloud_ProviderHint">保持“自动（匹配链接）”或为此链接指定已安装的提供方或扩展。</sys:String>
     <sys:String x:Key="Str_EditCloud_Saving">正在更新云端来源...</sys:String>
 
+    <!-- Settings & Appearance -->
+    <sys:String x:Key="Str_Nav_Settings">设置</sys:String>
+    <sys:String x:Key="Str_Settings_Title">设置</sys:String>
+    <sys:String x:Key="Str_Settings_Subtitle">自定义外观、语言、音乐库与更新设置</sys:String>
+    <sys:String x:Key="Str_Settings_SectionAppearance">外观</sys:String>
+    <sys:String x:Key="Str_Settings_ThemeMode">主题模式</sys:String>
+    <sys:String x:Key="Str_Settings_ThemeModeDesc">选择浅色、深色或跟随 Windows 系统主题</sys:String>
+    <sys:String x:Key="Str_Settings_ThemeSystem">跟随系统</sys:String>
+    <sys:String x:Key="Str_Settings_ThemeLight">浅色</sys:String>
+    <sys:String x:Key="Str_Settings_ThemeDark">深色</sys:String>
+    <sys:String x:Key="Str_Settings_BackgroundColor">背景配色</sys:String>
+    <sys:String x:Key="Str_Settings_BackgroundColorDesc">选择预设窗口色调或自定义十六进制/RGB 颜色，文本对比度将自动适配</sys:String>
+    <sys:String x:Key="Str_Settings_CustomColorHex">十六进制颜色</sys:String>
+    <sys:String x:Key="Str_Settings_ColorRed">红</sys:String>
+    <sys:String x:Key="Str_Settings_ColorGreen">绿</sys:String>
+    <sys:String x:Key="Str_Settings_ColorBlue">蓝</sys:String>
+    <sys:String x:Key="Str_Settings_ForegroundAccent">前景与强调色</sys:String>
+    <sys:String x:Key="Str_Settings_ForegroundAccentDesc">设置高亮控件与进度条的强调色，并可选覆盖文本颜色</sys:String>
+    <sys:String x:Key="Str_Settings_CustomAccentColor">自定义强调色</sys:String>
+    <sys:String x:Key="Str_Settings_CustomTextOverride">自定义文本颜色（可选）</sys:String>
+    <sys:String x:Key="Str_Settings_WindowOpacity">窗口背景不透明度</sys:String>
+    <sys:String x:Key="Str_Settings_WindowOpacityDesc">调节桌面亚克力背景不透明度（25%–100%）</sys:String>
+    <sys:String x:Key="Str_Settings_BackgroundImage">背景图片</sys:String>
+    <sys:String x:Key="Str_Settings_BackgroundImageDesc">在播放器界面后方显示自定义背景图片</sys:String>
+    <sys:String x:Key="Str_Settings_ChooseImage">选择图片...</sys:String>
+    <sys:String x:Key="Str_Settings_RemoveImage">移除</sys:String>
+    <sys:String x:Key="Str_Settings_NoBackgroundImage">未选择背景图片</sys:String>
+    <sys:String x:Key="Str_Settings_ImageVisibility">图片可见度</sys:String>
+    <sys:String x:Key="Str_Settings_ResetAppearance">恢复默认外观</sys:String>
+    <sys:String x:Key="Str_Settings_SectionGeneral">通用</sys:String>
+    <sys:String x:Key="Str_Settings_Language">语言</sys:String>
+    <sys:String x:Key="Str_Settings_LanguageDesc">设置菜单、标签与对话框的显示语言</sys:String>
+    <sys:String x:Key="Str_Settings_SectionGoogleDrive">Google Drive 账号</sys:String>
+    <sys:String x:Key="Str_Settings_GDriveStatusLabel">登录状态</sys:String>
+    <sys:String x:Key="Str_Settings_GDriveClientId">OAuth 客户端 ID</sys:String>
+    <sys:String x:Key="Str_Settings_GDriveClientSecret">OAuth 客户端密钥（可选）</sys:String>
+    <sys:String x:Key="Str_Settings_GDriveSignIn">使用 Google 账号登录</sys:String>
+    <sys:String x:Key="Str_Settings_GDriveSignOut">退出登录</sys:String>
+    <sys:String x:Key="Str_Settings_GDriveHint">通过 OAuth 2.0 登录后可访问私人 Google Drive 文件夹并跳过下载确认页。公开分享链接无需登录仍可直接使用。</sys:String>
+    <sys:String x:Key="Str_Settings_SectionLibrary">音乐库</sys:String>
+    <sys:String x:Key="Str_Settings_RescanLibrary">重新扫描音乐库</sys:String>
+    <sys:String x:Key="Str_Settings_RescanLibraryDesc">扫描本地文件夹以检测新增、修改或移除的音频文件</sys:String>
+    <sys:String x:Key="Str_Settings_SectionAbout">关于与更新</sys:String>
+    <sys:String x:Key="Str_Settings_Version">版本</sys:String>
+    <sys:String x:Key="Str_Settings_UpdateAvailableBadge">发现新版本</sys:String>
+
 </ResourceDictionary>

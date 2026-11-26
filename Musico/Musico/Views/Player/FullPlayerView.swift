@@ -32,6 +32,7 @@ struct FullPlayerView: View {
     @Environment(\.lyricsStore) private var lyricsStore
     @Environment(\.extensionStore) private var extensionStore
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
 
     var body: some View {
         GeometryReader { proxy in
@@ -59,7 +60,12 @@ struct FullPlayerView: View {
                     )
                 }
             }
-            .background { AmbientPlayerBackdrop() }
+            .background {
+                ZStack {
+                    ThemeBackdropView()
+                    AmbientPlayerBackdrop()
+                }
+            }
         }
         .presentationDragIndicator(.visible)
         .modifier(NewPlaylistAlert())
@@ -72,6 +78,7 @@ struct FullPlayerView: View {
                 .environment(\.extensionStore, extensionStore)
                 .environment(\.languageManager, languageManager)
                 .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
         }
     }
 
@@ -145,6 +152,7 @@ private struct PlayerPage: View {
     @Environment(PlayerController.self) private var player
     @Environment(LibraryStore.self) private var library
     @Environment(QueueStore.self) private var queues
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
     @State private var isCloseHovered = false
 
@@ -355,8 +363,8 @@ private struct PlayerPage: View {
             .font(.caption2.weight(.semibold))
             .padding(.horizontal, 7)
             .padding(.vertical, 2)
-            .background(Color.accentColor.opacity(0.14), in: Capsule())
-            .foregroundStyle(Color.accentColor)
+            .background(themeManager.accentColor.opacity(0.14), in: Capsule())
+            .foregroundStyle(themeManager.accentColor)
             .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.plain)
@@ -372,7 +380,7 @@ private struct PlayerPage: View {
             } label: {
                 Image(systemName: "shuffle")
                     .font(.title3)
-                    .foregroundStyle(queue.shuffle ? Color.accentColor : .secondary)
+                    .foregroundStyle(queue.shuffle ? themeManager.accentColor : .secondary)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
@@ -436,7 +444,7 @@ private struct PlayerPage: View {
             } label: {
                 Image(systemName: queue.repeatMode == .one ? "repeat.1" : "repeat")
                     .font(.title3)
-                    .foregroundStyle(queue.repeatMode == .off ? .secondary : Color.accentColor)
+                    .foregroundStyle(queue.repeatMode == .off ? .secondary : themeManager.accentColor)
                     .frame(width: 44, height: 44)
                     .contentShape(Rectangle())
             }
@@ -471,6 +479,7 @@ private struct PlayerPanelButton: View {
     let active: Bool
     let action: () -> Void
 
+    @Environment(\.themeManager) private var themeManager
     @State private var isHovered = false
 
     var body: some View {
@@ -490,13 +499,13 @@ private struct PlayerPanelButton: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.plain)
-        .foregroundStyle(active ? Color.accentColor : Color.primary)
+        .foregroundStyle(active ? themeManager.accentColor : Color.primary)
         .background {
             ZStack {
                 Capsule().fill(.regularMaterial)
                 Capsule().fill(
                     active
-                        ? Color.accentColor.opacity(0.15)
+                        ? themeManager.accentColor.opacity(0.15)
                         : (isHovered ? Color.primary.opacity(0.09) : Color.primary.opacity(0.04))
                 )
             }
@@ -505,7 +514,7 @@ private struct PlayerPanelButton: View {
         .overlay {
             Capsule()
                 .strokeBorder(
-                    active ? Color.accentColor.opacity(0.38) : Color.primary.opacity(0.14),
+                    active ? themeManager.accentColor.opacity(0.38) : Color.primary.opacity(0.14),
                     lineWidth: 0.75
                 )
                 .allowsHitTesting(false)

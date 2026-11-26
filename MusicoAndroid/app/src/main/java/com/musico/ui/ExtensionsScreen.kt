@@ -2,6 +2,8 @@ package com.musico.ui
 
 import android.net.Uri
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -30,6 +32,7 @@ import androidx.compose.material.icons.rounded.Clear
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Description
 import androidx.compose.material.icons.rounded.Extension
+import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material.icons.rounded.Link
 import androidx.compose.material.icons.rounded.QrCode2
 import androidx.compose.material.icons.rounded.Refresh
@@ -93,6 +96,7 @@ import com.musico.extensions.ExtensionSettingType
 import com.musico.extensions.ExtensionStore
 import com.musico.extensions.ExtensionUpdateCheckOutcome
 import com.musico.extensions.InstalledExtension
+import com.musico.extensions.NetscapeCookieFileParser
 import com.musico.extensions.PendingExtensionUpdate
 import com.musico.extensions.StagedExtensionPackage
 import com.musico.i18n.AppStrings
@@ -101,6 +105,8 @@ import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.QrCodeCanvas
 import com.musico.ui.components.QrCodeEncoder
+import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoTopAppBarColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -136,7 +142,29 @@ fun ExtensionsScreen(
     var importError by remember { mutableStateOf<String?>(null) }
     var settingsTargetId by remember { mutableStateOf<String?>(null) }
     var qrLoginTargetId by remember { mutableStateOf<String?>(null) }
+    var webLoginTargetId by remember { mutableStateOf<String?>(null) }
+    var cookieFileTargetId by remember { mutableStateOf<String?>(null) }
+    var cookieImportError by remember { mutableStateOf<String?>(null) }
     var logsTargetId by remember { mutableStateOf<String?>(null) }
+
+    val cookieFileLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        val targetId = cookieFileTargetId
+        cookieFileTargetId = null
+        if (uri == null || targetId == null) return@rememberLauncherForActivityResult
+        val targetExt = extensions.firstOrNull { it.id == targetId } ?: return@rememberLauncherForActivityResult
+        runCatching {
+            val text = context.contentResolver.openInputStream(uri)?.bufferedReader(Charsets.UTF_8)?.use { it.readText() }
+                ?: throw IllegalStateException(strings.cookieFileReadError)
+            val allowedDomains = targetExt.manifest.webLogin?.cookieDomains ?: targetExt.manifest.permissions.hosts
+            val parsed = NetscapeCookieFileParser.parseCookieHeader(text = text, allowedDomains = allowedDomains)
+                ?: throw IllegalStateException(strings.cookieFileEmptyError)
+            extensionStore.updateCookie(targetExt.id, parsed)
+        }.onFailure { err ->
+            cookieImportError = err.message ?: strings.cookieFileReadError
+        }
+    }
     var permissionsTarget by remember { mutableStateOf<ExtensionManifest?>(null) }
     var uninstallTarget by remember { mutableStateOf<InstalledExtension?>(null) }
 
@@ -167,9 +195,11 @@ fun ExtensionsScreen(
 
     Scaffold(
         modifier = modifier,
+        containerColor = musicoScaffoldContainerColor(),
         contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(
+                colors = musicoTopAppBarColors(),
                 navigationIcon = {
                     IconButton(onClick = onBack) {
                         Icon(Icons.AutoMirrored.Rounded.ArrowBack, contentDescription = strings.back)
@@ -344,6 +374,7 @@ fun ExtensionsScreen(
                             onOpenPermissions = { permissionsTarget = ext.manifest },
                             onOpenSettings = { settingsTargetId = ext.id },
                             onOpenQrLogin = { qrLoginTargetId = ext.id },
+                            onOpenWebLogin = { webLoginTargetId = ext.id },
                             onOpenLogs = { logsTargetId = ext.id },
                             onRequestUninstall = { uninstallTarget = ext },
                         )
@@ -437,6 +468,14 @@ fun ExtensionsScreen(
                 settingsTargetId = null
                 qrLoginTargetId = activeSettingsExt.id
             },
+            onOpenWebLogin = {
+                settingsTargetId = null
+                webLoginTargetId = activeSettingsExt.id
+            },
+            onImportCookiesFile = {
+                cookieFileTargetId = activeSettingsExt.id
+                cookieFileLauncher.launch(arrayOf("text/plain", "*/*"))
+            },
             onResetDefaults = {
                 extensionStore.resetSettings(activeSettingsExt.id)
             },
@@ -451,6 +490,18 @@ fun ExtensionsScreen(
             extensionStore = extensionStore,
             strings = strings,
             onDismiss = { qrLoginTargetId = null },
+        )
+    }
+
+    val activeWebLoginExt = webLoginTargetId?.let { id -> extensions.firstOrNull { it.id == id } }
+    val activeWebLoginConfig = activeWebLoginExt?.manifest?.webLogin
+    if (activeWebLoginExt != null && activeWebLoginConfig != null) {
+        ExtensionWebLoginDialog(
+            extension = activeWebLoginExt,
+            config = activeWebLoginConfig,
+            extensionStore = extensionStore,
+            strings = strings,
+            onDismiss = { webLoginTargetId = null },
         )
     }
 
@@ -493,6 +544,20 @@ fun ExtensionsScreen(
             },
         )
     }
+
+    val cookieErr = cookieImportError
+    if (cookieErr != null) {
+        AlertDialog(
+            onDismissRequest = { cookieImportError = null },
+            title = { Text(strings.cookieImportFailedTitle) },
+            text = { Text(cookieErr) },
+            confirmButton = {
+                TextButton(onClick = { cookieImportError = null }) {
+                    Text(strings.ok)
+                }
+            },
+        )
+    }
 }
 
 @OptIn(ExperimentalLayoutApi::class)
@@ -510,6 +575,7 @@ private fun ExtensionItemCard(
     onOpenPermissions: () -> Unit,
     onOpenSettings: () -> Unit,
     onOpenQrLogin: () -> Unit,
+    onOpenWebLogin: () -> Unit,
     onOpenLogs: () -> Unit,
     onRequestUninstall: () -> Unit,
 ) {
@@ -710,6 +776,13 @@ private fun ExtensionItemCard(
                             Icon(Icons.Rounded.QrCode2, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
                             Text(strings.qrLoginAction)
+                        }
+                    }
+                    if (manifest.supportsWebLogin) {
+                        TextButton(onClick = onOpenWebLogin) {
+                            Icon(Icons.Rounded.Language, contentDescription = null, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text(strings.webLoginAction)
                         }
                     }
                     TextButton(onClick = onOpenLogs) {
@@ -1245,6 +1318,8 @@ private fun ExtensionSettingsDialog(
     onUpdateCookie: (String?) -> Unit,
     onUpdateQualities: (streamQualityId: String?, downloadQualityId: String?) -> Unit,
     onOpenQrLogin: () -> Unit,
+    onOpenWebLogin: () -> Unit,
+    onImportCookiesFile: () -> Unit,
     onResetDefaults: () -> Unit,
     onDismiss: () -> Unit,
 ) {
@@ -1253,6 +1328,7 @@ private fun ExtensionSettingsDialog(
     val hasQualities = qualities.isNotEmpty()
     val hasCookie = extension.manifest.supportsCookieAuth
     val hasQrLogin = extension.manifest.supportsQrLogin
+    val hasWebLogin = extension.manifest.supportsWebLogin
     val cookieValue = extension.state.cookie.orEmpty()
     var showCookie by remember(extension.id) { mutableStateOf(false) }
 
@@ -1318,6 +1394,24 @@ private fun ExtensionSettingsDialog(
                             Spacer(Modifier.width(8.dp))
                             Text(strings.signInWithQrCode)
                         }
+                    }
+                    if (hasWebLogin) {
+                        OutlinedButton(
+                            onClick = onOpenWebLogin,
+                            modifier = Modifier.fillMaxWidth(),
+                        ) {
+                            Icon(Icons.Rounded.Language, contentDescription = null, modifier = Modifier.size(18.dp))
+                            Spacer(Modifier.width(8.dp))
+                            Text(strings.signInInBrowser)
+                        }
+                    }
+                    OutlinedButton(
+                        onClick = onImportCookiesFile,
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Icon(Icons.Rounded.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
+                        Spacer(Modifier.width(8.dp))
+                        Text(strings.importCookiesFile)
                     }
                     OutlinedTextField(
                         value = cookieValue,
@@ -1613,6 +1707,7 @@ private fun capabilityLabel(cap: ExtensionCapability, strings: AppStrings): Stri
     ExtensionCapability.LYRICS -> strings.capabilityLyrics
     ExtensionCapability.SEARCH -> strings.capabilitySearch
     ExtensionCapability.QR_LOGIN -> strings.capabilityQrLogin
+    ExtensionCapability.WEB_LOGIN -> strings.capabilityWebLogin
 }
 
 private fun capabilityDescription(cap: ExtensionCapability, strings: AppStrings): String = when (cap) {
@@ -1624,6 +1719,7 @@ private fun capabilityDescription(cap: ExtensionCapability, strings: AppStrings)
     ExtensionCapability.LYRICS -> strings.capabilityLyricsDesc
     ExtensionCapability.SEARCH -> strings.capabilitySearchDesc
     ExtensionCapability.QR_LOGIN -> strings.capabilityQrLoginDesc
+    ExtensionCapability.WEB_LOGIN -> strings.capabilityWebLoginDesc
 }
 
 @Composable

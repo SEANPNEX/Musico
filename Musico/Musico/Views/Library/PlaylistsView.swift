@@ -18,6 +18,7 @@ struct PlaylistArtworkView: View {
     var isFavourites: Bool = false
     var size: CGFloat? = nil
     var cornerRadius: CGFloat = 12
+    @Environment(\.themeManager) private var themeManager
 
     private var artworkKeys: [String] {
         var seen = Set<String>()
@@ -90,14 +91,14 @@ struct PlaylistArtworkView: View {
             }
         } else {
             LinearGradient(
-                colors: [Color.accentColor.opacity(0.22), Color.accentColor.opacity(0.07)],
+                colors: [themeManager.accentColor.opacity(0.22), themeManager.accentColor.opacity(0.07)],
                 startPoint: .topLeading,
                 endPoint: .bottomTrailing
             )
             .overlay {
                 Image(systemName: "music.note.list")
                     .font(.system(size: (size ?? 160) * 0.32, weight: .medium))
-                    .foregroundStyle(Color.accentColor)
+                    .foregroundStyle(themeManager.accentColor)
             }
         }
     }
@@ -108,6 +109,7 @@ struct PlaylistsView: View {
     @Environment(PlayerController.self) private var player
     @Environment(PlayHistoryStore.self) private var history
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
     @State private var showNew = false
     @State private var renaming: Playlist?
 
@@ -198,6 +200,7 @@ struct PlaylistsView: View {
             }
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
         .sheet(item: $renaming) { playlist in
             NamePromptSheet(
@@ -212,6 +215,7 @@ struct PlaylistsView: View {
             }
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
     }
 }
@@ -226,6 +230,7 @@ private struct PlaylistGridCard: View {
     var onRename: (() -> Void)? = nil
     var onDelete: (() -> Void)? = nil
 
+    @Environment(\.themeManager) private var themeManager
     @State private var isHovered = false
     @State private var isPlayHovered = false
 
@@ -252,7 +257,7 @@ private struct PlaylistGridCard: View {
                             .font(.subheadline.weight(.semibold))
                             .foregroundStyle(.white)
                             .frame(width: 36, height: 36)
-                            .background(Color.accentColor, in: Circle())
+                            .background(themeManager.accentColor, in: Circle())
                             .shadow(color: .black.opacity(0.24), radius: 6, y: 2)
                             .scaleEffect(isPlayHovered ? 1.08 : 1.0)
                     }
@@ -332,25 +337,26 @@ private struct PlaylistGridCard: View {
 
 private struct NewPlaylistGridCard: View {
     let action: () -> Void
+    @Environment(\.themeManager) private var themeManager
     @State private var isHovered = false
 
     var body: some View {
         Button(action: action) {
             VStack(alignment: .leading, spacing: 8) {
                 RoundedRectangle(cornerRadius: 12, style: .continuous)
-                    .fill(isHovered ? Color.accentColor.opacity(0.10) : Color.primary.opacity(0.04))
+                    .fill(isHovered ? themeManager.accentColor.opacity(0.10) : Color.primary.opacity(0.04))
                     .aspectRatio(1, contentMode: .fit)
                     .overlay {
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .strokeBorder(
-                                isHovered ? Color.accentColor.opacity(0.55) : Color.primary.opacity(0.16),
+                                isHovered ? themeManager.accentColor.opacity(0.55) : Color.primary.opacity(0.16),
                                 style: StrokeStyle(lineWidth: 1.5, dash: [6, 5])
                             )
                     }
                     .overlay {
                         Image(systemName: "plus")
                             .font(.system(size: 32, weight: .medium))
-                            .foregroundStyle(isHovered ? Color.accentColor : .secondary)
+                            .foregroundStyle(isHovered ? themeManager.accentColor : .secondary)
                     }
 
                 VStack(alignment: .leading, spacing: 2) {
@@ -381,6 +387,7 @@ struct PlaylistDetailView: View {
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.dismiss) private var dismiss
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.themeManager) private var themeManager
 
     @State private var showAddSongs = false
     @State private var showRenameSheet = false
@@ -490,6 +497,7 @@ struct PlaylistDetailView: View {
             }
         }
         .listStyle(.plain)
+        .hiddenScrollBackgroundIfThemed(themeManager)
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
         .task(id: ref) {
@@ -551,6 +559,7 @@ struct PlaylistDetailView: View {
             }
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
         .confirmationDialog(
             L10n.tr("Delete “%@”?", title),
@@ -573,6 +582,7 @@ struct PlaylistDetailView: View {
                     .environment(library)
                     .environment(\.languageManager, languageManager)
                     .environment(\.locale, languageManager.effectiveLocale)
+                    .applyTheme(themeManager)
             }
         }
     }
@@ -587,7 +597,7 @@ struct PlaylistDetailView: View {
                 VStack(alignment: .leading, spacing: 10) {
                     Text(isFavourites ? L10n.tr("Favourites") : L10n.tr("Playlist"))
                         .font(.caption.weight(.semibold))
-                        .foregroundStyle(isFavourites ? Color.pink : Color.accentColor)
+                        .foregroundStyle(isFavourites ? Color.pink : themeManager.accentColor)
                         .textCase(.uppercase)
 
                     Text(title)
@@ -717,6 +727,7 @@ struct AddSongsToPlaylistSheet: View {
     let playlistID: UUID
     private let explicitLibrary: LibraryStore?
     @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
+    @Environment(\.themeManager) private var themeManager
     @Environment(\.dismiss) private var dismiss
 
     @State private var query = ""
@@ -781,7 +792,7 @@ struct AddSongsToPlaylistSheet: View {
                                 HStack(spacing: 12) {
                                     Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
                                         .font(.title3)
-                                        .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                                        .foregroundStyle(isSelected ? themeManager.accentColor : Color.secondary)
 
                                     ArtworkView(artworkKey: track.artworkKey, size: 40)
 
@@ -816,11 +827,13 @@ struct AddSongsToPlaylistSheet: View {
                             .buttonStyle(.borderless)
                         }
                         .listStyle(.plain)
+                        .hiddenScrollBackgroundIfThemed(themeManager)
                     }
                 } else {
                     ProgressView()
                 }
             }
+            .background { ThemeBackdropView() }
             .navigationTitle(L10n.tr("Add Songs"))
             .navigationBarTitleDisplayMode(.inline)
             .searchable(text: $query, prompt: L10n.tr("Search songs to add"))
