@@ -1,5 +1,6 @@
 package com.musico.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,6 +18,7 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Album
@@ -27,6 +29,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
@@ -48,6 +51,7 @@ import com.musico.model.PlayQueue
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
 import com.musico.ui.components.ArtworkImage
+import com.musico.ui.components.DetailHeroHeader
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.TrackActionState
@@ -183,6 +187,7 @@ fun AlbumDetailScreen(
         libraryStore.tracks(album.trackIds)
     }
     val totalDuration = remember(tracks) { tracks.sumOf { it.durationSec } }
+    val heroRemoteUrl = remember(tracks) { tracks.firstNotNullOfOrNull { it.remoteArtworkUrl } }
     var menuExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -227,36 +232,32 @@ fun AlbumDetailScreen(
             contentPadding = PaddingValues(bottom = 16.dp)
         ) {
             item(key = "header") {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 24.dp, vertical = 12.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                DetailHeroHeader(
+                    artworkKey = album.artworkKey,
+                    artworkCache = libraryStore.artwork,
+                    title = strings.displayAlbum(album.title),
+                    subtitle = strings.displayArtist(album.artist),
+                    metadata = "${strings.songCount(tracks.size)} · ${formatTime(totalDuration)}",
+                    remoteArtworkUrl = heroRemoteUrl,
                 ) {
-                    ArtworkImage(
-                        artworkKey = album.artworkKey,
-                        artworkCache = libraryStore.artwork,
-                        size = 210.dp,
-                        cornerRadius = 16.dp
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = strings.displayAlbum(album.title),
-                        style = MaterialTheme.typography.titleLarge.copy(fontWeight = FontWeight.SemiBold),
-                        textAlign = TextAlign.Center
-                    )
-                    Text(
-                        text = strings.displayArtist(album.artist),
-                        style = MaterialTheme.typography.bodyLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center
-                    )
-                    Text(
-                        text = "${strings.songCount(tracks.size)} · ${formatTime(totalDuration)}",
-                        style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant
-                    )
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        shadowElevation = 10.dp,
+                        tonalElevation = 2.dp,
+                        border = BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f),
+                        ),
+                    ) {
+                        ArtworkImage(
+                            artworkKey = album.artworkKey,
+                            artworkCache = libraryStore.artwork,
+                            size = 204.dp,
+                            cornerRadius = 18.dp,
+                            remoteArtworkUrl = heroRemoteUrl,
+                            fallbackIcon = Icons.Rounded.Album,
+                        )
+                    }
                 }
             }
 

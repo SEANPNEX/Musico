@@ -32,16 +32,12 @@ import kotlinx.coroutines.withContext
 val LocalThumbnailCache = staticCompositionLocalOf<CloudThumbnailCache?> { null }
 
 @Composable
-fun ArtworkImage(
+fun rememberArtworkBitmap(
     artworkKey: String?,
     artworkCache: ArtworkCache,
-    modifier: Modifier = Modifier,
-    size: Dp? = null,
-    cornerRadius: Dp = 8.dp,
     remoteArtworkUrl: String? = null,
     thumbnailCache: CloudThumbnailCache? = LocalThumbnailCache.current,
-    fallbackIcon: ImageVector = Icons.Rounded.MusicNote,
-) {
+): Bitmap? {
     val bitmap by produceState<Bitmap?>(
         initialValue = null,
         key1 = artworkKey,
@@ -58,6 +54,26 @@ fun ArtworkImage(
             else -> null
         }
     }
+    return bitmap
+}
+
+@Composable
+fun ArtworkImage(
+    artworkKey: String?,
+    artworkCache: ArtworkCache,
+    modifier: Modifier = Modifier,
+    size: Dp? = null,
+    cornerRadius: Dp = 8.dp,
+    remoteArtworkUrl: String? = null,
+    thumbnailCache: CloudThumbnailCache? = LocalThumbnailCache.current,
+    fallbackIcon: ImageVector = Icons.Rounded.MusicNote,
+) {
+    val bitmap = rememberArtworkBitmap(
+        artworkKey = artworkKey,
+        artworkCache = artworkCache,
+        remoteArtworkUrl = remoteArtworkUrl,
+        thumbnailCache = thumbnailCache,
+    )
 
     val sizedModifier = if (size != null) {
         modifier.size(size)

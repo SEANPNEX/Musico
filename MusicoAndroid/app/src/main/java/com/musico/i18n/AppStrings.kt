@@ -373,6 +373,10 @@ interface AppStrings {
     val statsEmptyEverythingPlayedDesc: String
     val countOrderMost: String
     val countOrderLeast: String
+    val statsInsightsTitle: String
+    val statsLibraryExplored: String
+    val statsTopArtists: String
+    val statsTopAlbums: String
 
     // Player & Sheets
     val closePlayer: String
@@ -523,6 +527,8 @@ interface AppStrings {
 
     // Formatted helpers
     fun songCount(count: Int): String
+    fun albumCount(count: Int): String
+    fun libraryExploredSummary(percentText: String, played: Int, total: Int): String
     fun restoreRemovedSubfolders(count: Int): String
     fun removeFolderConfirmTitle(name: String): String
     fun savingProgressWithTitle(done: Int, total: Int, title: String): String
@@ -1111,6 +1117,10 @@ object EnStrings : AppStrings {
     override val statsEmptyEverythingPlayedDesc = "Every song in your library has been played at least once."
     override val countOrderMost = "Most Played First"
     override val countOrderLeast = "Least Played First"
+    override val statsInsightsTitle = "Insights"
+    override val statsLibraryExplored = "Library Explored"
+    override val statsTopArtists = "Top Artists"
+    override val statsTopAlbums = "Top Albums"
 
     override val closePlayer = "Close player"
     override val songInfo = "Song Info"
@@ -1252,6 +1262,9 @@ object EnStrings : AppStrings {
     override val noReleaseNotes = "No release notes provided."
 
     override fun songCount(count: Int) = if (count == 1) "1 song" else "$count songs"
+    override fun albumCount(count: Int) = if (count == 1) "1 album" else "$count albums"
+    override fun libraryExploredSummary(percentText: String, played: Int, total: Int) =
+        "$percentText · $played / $total songs"
     override fun restoreRemovedSubfolders(count: Int) = "Restore Removed Subfolders ($count)"
     override fun removeFolderConfirmTitle(name: String) = "Remove “$name” from your library?"
     override fun savingProgressWithTitle(done: Int, total: Int, title: String) =
@@ -1797,6 +1810,10 @@ object ZhHansStrings : AppStrings {
     override val statsEmptyEverythingPlayedDesc = "音乐库中的每首歌曲都至少播放过一次。"
     override val countOrderMost = "播放次数从高到低"
     override val countOrderLeast = "播放次数从低到高"
+    override val statsInsightsTitle = "听歌洞察"
+    override val statsLibraryExplored = "音乐库探索"
+    override val statsTopArtists = "常听艺术家"
+    override val statsTopAlbums = "常听专辑"
 
     override val closePlayer = "关闭播放器"
     override val songInfo = "歌曲信息"
@@ -1938,6 +1955,9 @@ object ZhHansStrings : AppStrings {
     override val noReleaseNotes = "未提供更新说明。"
 
     override fun songCount(count: Int) = "$count 首歌曲"
+    override fun albumCount(count: Int) = "$count 张专辑"
+    override fun libraryExploredSummary(percentText: String, played: Int, total: Int) =
+        "$percentText · $played / $total 首歌曲"
     override fun restoreRemovedSubfolders(count: Int) = "恢复已移除的子文件夹 ($count)"
     override fun removeFolderConfirmTitle(name: String) = "确定从音乐库中移除“$name”吗？"
     override fun savingProgressWithTitle(done: Int, total: Int, title: String) =

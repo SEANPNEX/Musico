@@ -195,6 +195,9 @@ class LocalizationTest {
             EnStrings.cloudSearchPlaceholder("NetEase") to ZhHansStrings.cloudSearchPlaceholder("NetEase"),
             EnStrings.cloudSearchIdleTitle("NetEase") to ZhHansStrings.cloudSearchIdleTitle("NetEase"),
             EnStrings.addedFolderNotice("Mix") to ZhHansStrings.addedFolderNotice("Mix"),
+            EnStrings.albumCount(1) to ZhHansStrings.albumCount(1),
+            EnStrings.albumCount(3) to ZhHansStrings.albumCount(3),
+            EnStrings.libraryExploredSummary("42%", 5, 12) to ZhHansStrings.libraryExploredSummary("42%", 5, 12),
         )
         formattedPairs.forEach { (en, zh) ->
             assertTrue("EN formatted string blank: $en", en.isNotBlank())

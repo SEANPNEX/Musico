@@ -1,5 +1,6 @@
 package com.musico.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -13,11 +14,12 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.MoreVert
-import androidx.compose.material.icons.rounded.Person
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -26,9 +28,11 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -43,11 +47,14 @@ import com.musico.model.Album
 import com.musico.model.PlayQueue
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
+import com.musico.ui.components.ArtistAvatar
+import com.musico.ui.components.DetailHeroHeader
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
+import com.musico.ui.components.formatTime
 import com.musico.ui.theme.musicoListItemColors
 import com.musico.ui.theme.musicoScaffoldContainerColor
 import com.musico.ui.theme.musicoTopAppBarColors
@@ -80,9 +87,21 @@ fun ArtistsScreen(
         contentPadding = PaddingValues(bottom = 16.dp)
     ) {
         items(libraryState.artists, key = { it }) { artist ->
-            val artistTrackIds = remember(libraryState.tracks, artist) {
-                libraryStore.tracksByArtist(artist).map { it.id }
+            val artistTracks = remember(libraryState.tracks, artist) {
+                libraryStore.tracksByArtist(artist)
             }
+            val artistTrackIds = remember(artistTracks) { artistTracks.map { it.id } }
+            val artistAlbums = remember(libraryState.albums, artist) {
+                libraryStore.albumsByArtist(artist)
+            }
+            val artworkKey = remember(artistAlbums, artistTracks) {
+                artistAlbums.firstNotNullOfOrNull { it.artworkKey }
+                    ?: artistTracks.firstNotNullOfOrNull { it.artworkKey }
+            }
+            val remoteArtworkUrl = remember(artistTracks) {
+                artistTracks.firstNotNullOfOrNull { it.remoteArtworkUrl }
+            }
+            val displayArtist = strings.displayArtist(artist)
             var menuExpanded by remember { mutableStateOf(false) }
 
             Column(modifier = Modifier.animateItem()) {
@@ -90,21 +109,23 @@ fun ArtistsScreen(
                     modifier = Modifier.clickable { onArtistClick(artist) },
                     colors = musicoListItemColors(),
                     leadingContent = {
-                        Icon(
-                            imageVector = Icons.Rounded.Person,
-                            contentDescription = null,
-                            tint = MaterialTheme.colorScheme.primary
+                        ArtistAvatar(
+                            artist = displayArtist,
+                            artworkKey = artworkKey,
+                            artworkCache = libraryStore.artwork,
+                            size = 44.dp,
+                            remoteArtworkUrl = remoteArtworkUrl,
                         )
                     },
                     headlineContent = {
                         Text(
-                            text = strings.displayArtist(artist),
+                            text = displayArtist,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
                         )
                     },
                     supportingContent = {
-                        Text(strings.songCount(artistTrackIds.size))
+                        Text("${strings.albumCount(artistAlbums.size)} · ${strings.songCount(artistTrackIds.size)}")
                     },
                     trailingContent = {
                         Box {
@@ -154,6 +175,21 @@ fun ArtistDetailScreen(
     val albums = remember(libraryState.albums, artist) {
         libraryStore.albumsByArtist(artist)
     }
+    val totalDuration = remember(tracks) { tracks.sumOf { it.durationSec } }
+    val heroArtworkKey = remember(albums, tracks) {
+        albums.firstNotNullOfOrNull { it.artworkKey }
+            ?: tracks.firstNotNullOfOrNull { it.artworkKey }
+    }
+    val heroRemoteUrl = remember(tracks) {
+        tracks.firstNotNullOfOrNull { it.remoteArtworkUrl }
+    }
+    val displayArtist = strings.displayArtist(artist)
+    val listState = rememberLazyListState()
+    val showTopBarTitle by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 120
+        }
+    }
     var menuExpanded by remember { mutableStateOf(false) }
 
     Scaffold(
@@ -169,11 +205,13 @@ fun ArtistDetailScreen(
                     }
                 },
                 title = {
-                    Text(
-                        text = strings.displayArtist(artist),
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (showTopBarTitle) {
+                        Text(
+                            text = displayArtist,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 },
                 actions = {
                     Box {
@@ -198,11 +236,40 @@ fun ArtistDetailScreen(
         }
     ) { innerPadding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding),
             contentPadding = PaddingValues(bottom = 16.dp)
         ) {
+            item(key = "header") {
+                DetailHeroHeader(
+                    artworkKey = heroArtworkKey,
+                    artworkCache = libraryStore.artwork,
+                    title = displayArtist,
+                    metadata = "${strings.albumCount(albums.size)} · ${strings.songCount(tracks.size)} · ${formatTime(totalDuration)}",
+                    remoteArtworkUrl = heroRemoteUrl,
+                ) {
+                    Surface(
+                        shape = CircleShape,
+                        shadowElevation = 10.dp,
+                        tonalElevation = 2.dp,
+                        border = BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f),
+                        ),
+                    ) {
+                        ArtistAvatar(
+                            artist = displayArtist,
+                            artworkKey = heroArtworkKey,
+                            artworkCache = libraryStore.artwork,
+                            size = 120.dp,
+                            remoteArtworkUrl = heroRemoteUrl,
+                        )
+                    }
+                }
+            }
+
             val artistQueueName = "Artist: $artist"
             item(key = "play_shuffle") {
                 PlayShuffleButtons(

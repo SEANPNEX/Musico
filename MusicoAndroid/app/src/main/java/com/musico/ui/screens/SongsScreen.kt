@@ -91,6 +91,7 @@ import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
+import com.musico.ui.components.skeletonTrackRows
 import kotlinx.coroutines.launch
 import kotlin.random.Random
 
@@ -448,16 +449,7 @@ fun SongsScreen(
                         }
 
                         if (cloudUiState.isSearching && cloudUiState.items.isEmpty()) {
-                            item(key = "cloud_loading") {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .padding(vertical = 48.dp),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    CircularProgressIndicator()
-                                }
-                            }
+                            skeletonTrackRows(count = 7, keyPrefix = "cloud_search_skeleton")
                         } else if (!cloudUiState.hasSubmitted && cloudUiState.items.isEmpty() && cloudError == null) {
                             item(key = "cloud_idle") {
                                 EmptyState(

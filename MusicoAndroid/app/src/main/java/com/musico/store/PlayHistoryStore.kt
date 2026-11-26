@@ -15,6 +15,22 @@ data class PlayHistoryUiState(
     val totalSeconds: Double = 0.0,
 )
 
+data class ArtistPlayStat(
+    val artist: String,
+    val playCount: Int,
+    val artworkKey: String? = null,
+    val remoteArtworkUrl: String? = null,
+)
+
+data class AlbumPlayStat(
+    val albumId: String,
+    val title: String,
+    val artist: String,
+    val playCount: Int,
+    val artworkKey: String? = null,
+    val remoteArtworkUrl: String? = null,
+)
+
 class PlayHistoryStore(
     directory: File,
 ) {
@@ -167,6 +183,92 @@ class PlayHistoryStore(
             .filter { it.second.lastPlayedEpochMs < cutoff }
             .sortedBy { it.second.lastPlayedEpochMs }
             .map { it.first }
+    }
+
+    fun topArtists(tracks: List<Track>, limit: Int = 5): List<ArtistPlayStat> {
+        if (limit <= 0) return emptyList()
+        val entries = _state.value.entries
+        val eligible = tracks.filter { !it.isEphemeral && !Track.isEphemeralId(it.id) }
+        val byArtist = eligible.groupBy { it.artist }
+
+        return byArtist.mapNotNull { (artist, artistTracks) ->
+            var total = 0
+            var latestMs = 0L
+            for (track in artistTracks) {
+                val entry = entries[track.id] ?: continue
+                if (entry.count > 0) {
+                    total += entry.count
+                    if (entry.lastPlayedEpochMs > latestMs) {
+                        latestMs = entry.lastPlayedEpochMs
+                    }
+                }
+            }
+            if (total <= 0) return@mapNotNull null
+
+            val sortedForArtwork = artistTracks.sortedByDescending { entries[it.id]?.count ?: 0 }
+            val stat = ArtistPlayStat(
+                artist = artist,
+                playCount = total,
+                artworkKey = sortedForArtwork.firstNotNullOfOrNull { it.artworkKey },
+                remoteArtworkUrl = sortedForArtwork.firstNotNullOfOrNull { it.remoteArtworkUrl },
+            )
+            stat to latestMs
+        }
+            .sortedWith(
+                compareByDescending<Pair<ArtistPlayStat, Long>> { it.first.playCount }
+                    .thenByDescending { it.second }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.first.artist }
+            )
+            .take(limit)
+            .map { it.first }
+    }
+
+    fun topAlbums(tracks: List<Track>, limit: Int = 5): List<AlbumPlayStat> {
+        if (limit <= 0) return emptyList()
+        val entries = _state.value.entries
+        val eligible = tracks.filter { !it.isEphemeral && !Track.isEphemeralId(it.id) }
+        val byAlbum = eligible.groupBy { "${it.albumArtist}\u001F${it.album}" }
+
+        return byAlbum.mapNotNull { (albumId, albumTracks) ->
+            var total = 0
+            var latestMs = 0L
+            for (track in albumTracks) {
+                val entry = entries[track.id] ?: continue
+                if (entry.count > 0) {
+                    total += entry.count
+                    if (entry.lastPlayedEpochMs > latestMs) {
+                        latestMs = entry.lastPlayedEpochMs
+                    }
+                }
+            }
+            if (total <= 0) return@mapNotNull null
+
+            val first = albumTracks.first()
+            val sortedForArtwork = albumTracks.sortedByDescending { entries[it.id]?.count ?: 0 }
+            val stat = AlbumPlayStat(
+                albumId = albumId,
+                title = first.album,
+                artist = first.albumArtist,
+                playCount = total,
+                artworkKey = sortedForArtwork.firstNotNullOfOrNull { it.artworkKey },
+                remoteArtworkUrl = sortedForArtwork.firstNotNullOfOrNull { it.remoteArtworkUrl },
+            )
+            stat to latestMs
+        }
+            .sortedWith(
+                compareByDescending<Pair<AlbumPlayStat, Long>> { it.first.playCount }
+                    .thenByDescending { it.second }
+                    .thenBy(String.CASE_INSENSITIVE_ORDER) { it.first.title }
+            )
+            .take(limit)
+            .map { it.first }
+    }
+
+    fun playedLibraryFraction(tracks: List<Track>): Float {
+        val eligible = tracks.filter { !it.isEphemeral && !Track.isEphemeralId(it.id) }
+        if (eligible.isEmpty()) return 0f
+        val playedCount = eligible.count { count(it.id) > 0 }
+        return (playedCount.toFloat() / eligible.size.toFloat()).coerceIn(0f, 1f)
     }
 
     companion object {

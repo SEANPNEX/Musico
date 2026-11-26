@@ -1,5 +1,6 @@
 package com.musico.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,8 +14,10 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.BarChart
@@ -23,7 +26,9 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
@@ -41,22 +46,31 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.musico.audio.PlayerUiState
+import com.musico.core.ArtworkCache
 import com.musico.i18n.AppStrings
 import com.musico.i18n.LocalStrings
 import com.musico.model.PlayQueue
+import com.musico.model.Track
+import com.musico.store.AlbumPlayStat
+import com.musico.store.ArtistPlayStat
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
 import com.musico.store.PlayHistoryStore
 import com.musico.store.PlayHistoryUiState
+import com.musico.ui.components.ArtistAvatar
+import com.musico.ui.components.ArtworkImage
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
+import com.musico.ui.components.formatPercentage
 import com.musico.ui.theme.musicoScaffoldContainerColor
 import com.musico.ui.theme.musicoTopAppBarColors
 import kotlin.random.Random
@@ -119,6 +133,19 @@ fun StatsScreen(
 
     val neverPlayedCount = remember(libraryState.tracks, historyState.entries) {
         historyStore.neverPlayed(libraryState.tracks).size
+    }
+    val eligibleTrackCount = remember(libraryState.tracks) {
+        libraryState.tracks.count { !it.isEphemeral && !Track.isEphemeralId(it.id) }
+    }
+    val playedTrackCount = (eligibleTrackCount - neverPlayedCount).coerceAtLeast(0)
+    val exploredFraction = remember(libraryState.tracks, historyState.entries) {
+        historyStore.playedLibraryFraction(libraryState.tracks)
+    }
+    val topArtists = remember(libraryState.tracks, historyState.entries) {
+        historyStore.topArtists(libraryState.tracks, limit = 5)
+    }
+    val topAlbums = remember(libraryState.tracks, historyState.entries) {
+        historyStore.topAlbums(libraryState.tracks, limit = 5)
     }
 
     val tracks = remember(libraryState.tracks, historyState.entries, section, countOrder) {
@@ -183,6 +210,22 @@ fun StatsScreen(
                             modifier = Modifier.weight(1f)
                         )
                     }
+                }
+            }
+
+            if (historyState.totalPlays > 0 &&
+                (eligibleTrackCount > 0 || topArtists.isNotEmpty() || topAlbums.isNotEmpty())
+            ) {
+                item(key = "insights_card") {
+                    StatsInsightsCard(
+                        exploredFraction = exploredFraction,
+                        playedTrackCount = playedTrackCount,
+                        eligibleTrackCount = eligibleTrackCount,
+                        topArtists = topArtists,
+                        topAlbums = topAlbums,
+                        artworkCache = libraryStore.artwork,
+                        strings = strings,
+                    )
                 }
             }
 
@@ -354,5 +397,183 @@ private fun StatTotalCell(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
             maxLines = 1
         )
+    }
+}
+
+@Composable
+private fun StatsInsightsCard(
+    exploredFraction: Float,
+    playedTrackCount: Int,
+    eligibleTrackCount: Int,
+    topArtists: List<ArtistPlayStat>,
+    topAlbums: List<AlbumPlayStat>,
+    artworkCache: ArtworkCache,
+    strings: AppStrings,
+) {
+    ElevatedCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
+        ) {
+            Text(
+                text = strings.statsInsightsTitle,
+                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.SemiBold),
+            )
+
+            if (eligibleTrackCount > 0) {
+                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = strings.statsLibraryExplored,
+                            style = MaterialTheme.typography.labelLarge,
+                        )
+                        Text(
+                            text = strings.libraryExploredSummary(
+                                percentText = formatPercentage(exploredFraction),
+                                played = playedTrackCount,
+                                total = eligibleTrackCount,
+                            ),
+                            style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    LinearProgressIndicator(
+                        progress = { exploredFraction.coerceIn(0f, 1f) },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(8.dp)
+                            .clip(RoundedCornerShape(4.dp)),
+                    )
+                }
+            }
+
+            if (topArtists.isNotEmpty()) {
+                HorizontalDivider()
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = strings.statsTopArtists,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    val maxPlays = topArtists.maxOf { it.playCount }.coerceAtLeast(1)
+                    topArtists.forEach { stat ->
+                        InsightBarRow(
+                            title = strings.displayArtist(stat.artist),
+                            playCount = stat.playCount,
+                            maxPlayCount = maxPlays,
+                            barColor = MaterialTheme.colorScheme.primary,
+                            strings = strings,
+                            leading = {
+                                ArtistAvatar(
+                                    artist = strings.displayArtist(stat.artist),
+                                    artworkKey = stat.artworkKey,
+                                    artworkCache = artworkCache,
+                                    size = 36.dp,
+                                    remoteArtworkUrl = stat.remoteArtworkUrl,
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+
+            if (topAlbums.isNotEmpty()) {
+                HorizontalDivider()
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text(
+                        text = strings.statsTopAlbums,
+                        style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    val maxPlays = topAlbums.maxOf { it.playCount }.coerceAtLeast(1)
+                    topAlbums.forEach { stat ->
+                        InsightBarRow(
+                            title = strings.displayAlbum(stat.title),
+                            playCount = stat.playCount,
+                            maxPlayCount = maxPlays,
+                            barColor = MaterialTheme.colorScheme.secondary,
+                            strings = strings,
+                            leading = {
+                                ArtworkImage(
+                                    artworkKey = stat.artworkKey,
+                                    artworkCache = artworkCache,
+                                    size = 36.dp,
+                                    cornerRadius = 6.dp,
+                                    remoteArtworkUrl = stat.remoteArtworkUrl,
+                                )
+                            },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InsightBarRow(
+    title: String,
+    playCount: Int,
+    maxPlayCount: Int,
+    barColor: Color,
+    strings: AppStrings,
+    leading: @Composable () -> Unit,
+) {
+    val fraction = (playCount.toFloat() / maxPlayCount.coerceAtLeast(1).toFloat()).coerceIn(0.06f, 1f)
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        leading()
+        Spacer(Modifier.width(12.dp))
+        Column(
+            modifier = Modifier.weight(1f),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Medium),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                Spacer(Modifier.width(8.dp))
+                Text(
+                    text = strings.songPlaysCount(playCount),
+                    style = MaterialTheme.typography.labelMedium.copy(fontFeatureSettings = "tnum"),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(6.dp)
+                    .clip(RoundedCornerShape(3.dp))
+                    .background(barColor.copy(alpha = 0.14f)),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth(fraction)
+                        .fillMaxHeight()
+                        .clip(RoundedCornerShape(3.dp))
+                        .background(barColor),
+                )
+            }
+        }
     }
 }
