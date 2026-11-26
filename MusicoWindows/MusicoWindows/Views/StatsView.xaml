@@ -228,7 +228,7 @@
                 </Border>
 
                 <!-- Track List / Empty State -->
-                <Grid Padding="20,12">
+                <Grid Margin="20,12">
                     <StackPanel x:Name="TracksStack" />
 
                     <StackPanel x:Name="EmptyState"
