@@ -60,9 +60,12 @@ namespace MusicoWindows.Models
 
     public sealed record AppearanceSettings
     {
-        public const double MinBackgroundOpacity = 0.25;
+        public const double MinBackgroundOpacity = 0.15;
         public const double MaxBackgroundOpacity = 1.0;
         public const double DefaultBackgroundOpacity = 1.0;
+
+        public const double MinSidebarOpacity = 0.15;
+        public const double MaxSidebarOpacity = 1.0;
 
         public const double MinBackgroundImageOpacity = 0.10;
         public const double MaxBackgroundImageOpacity = 1.0;
@@ -75,10 +78,13 @@ namespace MusicoWindows.Models
         public AppThemeMode ThemeMode { get; init; } = AppThemeMode.System;
         public BackgroundColorPreset BackgroundPreset { get; init; } = BackgroundColorPreset.Default;
         public string? CustomBackgroundHex { get; init; }
+        public BackgroundColorPreset SidebarBackgroundPreset { get; init; } = BackgroundColorPreset.Default;
+        public string? CustomSidebarBackgroundHex { get; init; }
         public ForegroundColorPreset ForegroundPreset { get; init; } = ForegroundColorPreset.Coral;
         public string? CustomAccentHex { get; init; }
         public string? CustomForegroundHex { get; init; }
         public double BackgroundOpacity { get; init; } = DefaultBackgroundOpacity;
+        public double? SidebarOpacity { get; init; }
         public string? BackgroundImageFileName { get; init; }
         public double BackgroundImageOpacity { get; init; } = DefaultBackgroundImageOpacity;
         public double BackgroundImageBlur { get; init; } = DefaultBackgroundImageBlur;
@@ -89,6 +95,16 @@ namespace MusicoWindows.Models
             double.IsNaN(value) || double.IsInfinity(value)
                 ? DefaultBackgroundOpacity
                 : Math.Clamp(value, MinBackgroundOpacity, MaxBackgroundOpacity);
+
+        public static double ClampSidebarOpacity(double value) =>
+            double.IsNaN(value) || double.IsInfinity(value)
+                ? DefaultBackgroundOpacity
+                : Math.Clamp(value, MinSidebarOpacity, MaxSidebarOpacity);
+
+        public double ResolveEffectiveSidebarOpacity() =>
+            SidebarOpacity.HasValue
+                ? ClampSidebarOpacity(SidebarOpacity.Value)
+                : ClampBackgroundOpacity(BackgroundOpacity);
 
         public static double ClampBackgroundImageOpacity(double value) =>
             double.IsNaN(value) || double.IsInfinity(value)
@@ -102,10 +118,15 @@ namespace MusicoWindows.Models
 
         public AppearanceSettings Normalize() => this with
         {
+            BackgroundPreset = Enum.IsDefined(BackgroundPreset) ? BackgroundPreset : BackgroundColorPreset.Default,
             CustomBackgroundHex = ColorMath.NormalizeHexOrNull(CustomBackgroundHex),
+            SidebarBackgroundPreset = Enum.IsDefined(SidebarBackgroundPreset) ? SidebarBackgroundPreset : BackgroundColorPreset.Default,
+            CustomSidebarBackgroundHex = ColorMath.NormalizeHexOrNull(CustomSidebarBackgroundHex),
+            ForegroundPreset = Enum.IsDefined(ForegroundPreset) ? ForegroundPreset : ForegroundColorPreset.Coral,
             CustomAccentHex = ColorMath.NormalizeHexOrNull(CustomAccentHex),
             CustomForegroundHex = ColorMath.NormalizeHexOrNull(CustomForegroundHex),
             BackgroundOpacity = ClampBackgroundOpacity(BackgroundOpacity),
+            SidebarOpacity = SidebarOpacity.HasValue ? ClampSidebarOpacity(SidebarOpacity.Value) : null,
             BackgroundImageFileName = string.IsNullOrWhiteSpace(BackgroundImageFileName)
                 ? null
                 : Path.GetFileName(BackgroundImageFileName.Trim()),
@@ -118,6 +139,7 @@ namespace MusicoWindows.Models
 
     public sealed record ThemePalette(
         bool IsDark,
+        bool SidebarIsDark,
         RgbColor Accent,
         RgbColor AccentHover,
         RgbColor AccentPressed,
@@ -125,6 +147,7 @@ namespace MusicoWindows.Models
         RgbColor TextOnAccent,
         ArgbColor WindowBackground,
         RgbColor AcrylicTintBase,
+        ArgbColor TitleBar,
         ArgbColor NavPane,
         ArgbColor ContentBackground,
         ArgbColor PlayerBar,
@@ -141,6 +164,9 @@ namespace MusicoWindows.Models
         ArgbColor TextPrimary,
         ArgbColor TextSecondary,
         ArgbColor TextTertiary,
+        ArgbColor SidebarTextPrimary,
+        ArgbColor SidebarTextSecondary,
+        ArgbColor SidebarTextTertiary,
         ArgbColor SliderTrack,
         ArgbColor SliderThumbFill,
         ArgbColor SubtleHover,
@@ -214,6 +240,47 @@ namespace MusicoWindows.Models
             return presetHex is not null && ColorMath.TryParseHex(presetHex, out var presetRgb)
                 ? presetRgb
                 : null;
+        }
+
+        public static RgbColor? ResolveSidebarBackgroundColor(AppearanceSettings settings)
+        {
+            if (settings.SidebarBackgroundPreset == BackgroundColorPreset.Default)
+                return null;
+
+            if (settings.SidebarBackgroundPreset == BackgroundColorPreset.Custom)
+            {
+                return ColorMath.TryParseHex(settings.CustomSidebarBackgroundHex, out var custom)
+                    ? custom
+                    : null;
+            }
+
+            string? presetHex = GetBackgroundHex(settings.SidebarBackgroundPreset);
+            return presetHex is not null && ColorMath.TryParseHex(presetHex, out var presetRgb)
+                ? presetRgb
+                : null;
+        }
+
+        public static bool ResolveSidebarIsDark(AppearanceSettings settings, bool mainIsDark)
+        {
+            if (ResolveSidebarBackgroundColor(settings) is RgbColor sidebarBg)
+            {
+                return !ColorMath.IsLight(sidebarBg);
+            }
+
+            return mainIsDark;
+        }
+
+        public static RgbColor ResolveSidebarForegroundColor(
+            AppearanceSettings settings,
+            bool mainIsDark,
+            RgbColor mainForeground)
+        {
+            if (ResolveSidebarBackgroundColor(settings) is RgbColor sidebarBg)
+            {
+                return ColorMath.ContrastingForeground(sidebarBg);
+            }
+
+            return mainForeground;
         }
 
         public static RgbColor ResolveAccentColor(AppearanceSettings settings)
@@ -415,19 +482,30 @@ namespace MusicoWindows.Models
         public static uint ToAcrylicAbgr(RgbColor tintBase, double backgroundOpacity)
         {
             double opacity = AppearanceSettings.ClampBackgroundOpacity(backgroundOpacity);
-            byte alpha = (byte)Math.Clamp((int)Math.Round(0xD2 * opacity), 0x14, 0xFF);
+            if (opacity < 0.999)
+            {
+                return (0x01u << 24) |
+                       ((uint)tintBase.B << 16) |
+                       ((uint)tintBase.G << 8) |
+                       tintBase.R;
+            }
+
+            const byte alpha = 0xD2;
             return ((uint)alpha << 24) |
                    ((uint)tintBase.B << 16) |
                    ((uint)tintBase.G << 8) |
                    tintBase.R;
         }
 
+        public static double ComputeEffectiveBackgroundImageOpacity(AppearanceSettings settings) =>
+            AppearanceSettings.ClampBackgroundImageOpacity(settings.BackgroundImageOpacity) *
+            AppearanceSettings.ClampBackgroundOpacity(settings.BackgroundOpacity);
+
         public static byte ComputeBackgroundScrimAlpha(AppearanceSettings settings)
         {
             double imgOpacity = AppearanceSettings.ClampBackgroundImageOpacity(settings.BackgroundImageOpacity);
-            double bgOpacity = AppearanceSettings.ClampBackgroundOpacity(settings.BackgroundOpacity);
-            double scrimFraction = Math.Clamp(0.66 - 0.46 * imgOpacity, 0.16, 0.66) * bgOpacity;
-            return (byte)Math.Clamp((int)Math.Round(255.0 * scrimFraction), 0x10, 0xDD);
+            double scrimFraction = Math.Clamp(0.45 - 0.35 * imgOpacity, 0.08, 0.45);
+            return (byte)Math.Clamp((int)Math.Round(255.0 * scrimFraction), 0x10, 0xFF);
         }
 
         public static ThemePalette BuildPalette(
@@ -438,6 +516,8 @@ namespace MusicoWindows.Models
             AppearanceSettings normalized = settings.Normalize();
             bool isDark = AppearancePresets.ResolveIsDark(normalized, systemAppsUseLightTheme);
             double op = normalized.BackgroundOpacity;
+            double sidebarOp = normalized.ResolveEffectiveSidebarOpacity();
+            bool anyTranslucent = op < 0.999 || sidebarOp < 0.999;
 
             RgbColor accent = AppearancePresets.ResolveAccentColor(normalized);
             RgbColor accentHover = AccentHover(accent, isDark);
@@ -446,6 +526,9 @@ namespace MusicoWindows.Models
             RgbColor textOnAccent = AppearancePresets.ResolveTextOnAccentColor(accent);
 
             RgbColor? customBg = AppearancePresets.ResolveBackgroundColor(normalized);
+            RgbColor? customSidebarBg = AppearancePresets.ResolveSidebarBackgroundColor(normalized);
+            bool sidebarIsDark = AppearancePresets.ResolveSidebarIsDark(normalized, isDark);
+
             RgbColor windowRgb;
             RgbColor navPaneRgb;
             RgbColor contentRgb;
@@ -543,26 +626,34 @@ namespace MusicoWindows.Models
                 sliderThumbFillRgb = new RgbColor(0xFF, 0xFF, 0xFF);
             }
 
-            byte ScaleAlpha(byte baseAlpha, byte minAlpha = 0x14) =>
-                (byte)Math.Clamp((int)Math.Round(baseAlpha * op), minAlpha, 0xFF);
+            if (customSidebarBg is RgbColor sb)
+            {
+                navPaneRgb = sb;
+                sidePanelRgb = sidebarIsDark ? Blend(sb, White, 0.03) : Blend(sb, Black, 0.03);
+            }
 
-            byte windowAlpha = ScaleAlpha(hasBackgroundImage ? (byte)0x99 : (byte)0xCC);
-            byte navAlpha = ScaleAlpha(hasBackgroundImage ? (byte)0x7A : (isDark ? (byte)0xA8 : (byte)0xB8));
-            byte contentAlpha = hasBackgroundImage
-                ? ScaleAlpha(0x28, 0x10)
-                : ScaleAlpha(isDark ? (byte)0xF2 : (byte)0xF7, 0x20);
-            byte playerBarAlpha = ScaleAlpha(hasBackgroundImage ? (byte)0xB8 : (byte)0xEB);
-            byte sidePanelAlpha = ScaleAlpha(hasBackgroundImage ? (byte)0xB8 : (isDark ? (byte)0xED : (byte)0xF2));
-            bool translucentSurfaces = hasBackgroundImage || op < 0.999;
-            byte cardAlpha = translucentSurfaces
-                ? (byte)Math.Clamp((int)Math.Round((hasBackgroundImage ? 0xB0 : 0xE6) * Math.Max(0.55, op)), 0x60, 0xFF)
+            byte windowAlpha = (anyTranslucent || hasBackgroundImage || customSidebarBg is not null)
+                ? (byte)0x00
                 : (byte)0xFF;
-            byte controlAlpha = translucentSurfaces ? (byte)0xCC : (byte)0xFF;
+            byte titleBarAlpha = (byte)Math.Clamp((int)Math.Round(255.0 * op), 0x18, 0xFF);
+            byte navAlpha = (byte)Math.Clamp((int)Math.Round(255.0 * sidebarOp), 0x18, 0xFF);
+            byte sidePanelAlpha = (byte)Math.Clamp((int)Math.Round(255.0 * sidebarOp), 0x18, 0xFF);
+            byte playerBarAlpha = (byte)Math.Clamp((int)Math.Round(255.0 * op), 0x18, 0xFF);
+
+            bool translucentSurfaces = anyTranslucent || hasBackgroundImage;
+            byte cardAlpha = translucentSurfaces
+                ? (byte)Math.Clamp((int)Math.Round(255.0 * op * 0.55), 0x24, 0xEB)
+                : (byte)0xFF;
+            byte controlAlpha = translucentSurfaces
+                ? (byte)Math.Clamp((int)Math.Round(255.0 * op * 0.65), 0x38, 0xEB)
+                : (byte)0xFF;
 
             RgbColor fgPrimary = AppearancePresets.ResolveForegroundColor(normalized, isDark);
+            RgbColor sidebarFgPrimary = AppearancePresets.ResolveSidebarForegroundColor(normalized, isDark, fgPrimary);
 
             return new ThemePalette(
                 IsDark: isDark,
+                SidebarIsDark: sidebarIsDark,
                 Accent: accent,
                 AccentHover: accentHover,
                 AccentPressed: accentPressed,
@@ -570,8 +661,9 @@ namespace MusicoWindows.Models
                 TextOnAccent: textOnAccent,
                 WindowBackground: WithAlpha(windowAlpha, windowRgb),
                 AcrylicTintBase: navPaneRgb,
+                TitleBar: WithAlpha(titleBarAlpha, windowRgb),
                 NavPane: WithAlpha(navAlpha, navPaneRgb),
-                ContentBackground: WithAlpha(contentAlpha, contentRgb),
+                ContentBackground: WithAlpha(0xFF, contentRgb),
                 PlayerBar: WithAlpha(playerBarAlpha, playerBarRgb),
                 SidePanel: WithAlpha(sidePanelAlpha, sidePanelRgb),
                 CardBackground: WithAlpha(cardAlpha, cardRgb),
@@ -586,6 +678,9 @@ namespace MusicoWindows.Models
                 TextPrimary: WithAlpha(0xFF, fgPrimary),
                 TextSecondary: WithAlpha(0xAD, fgPrimary),
                 TextTertiary: WithAlpha(0x75, fgPrimary),
+                SidebarTextPrimary: WithAlpha(0xFF, sidebarFgPrimary),
+                SidebarTextSecondary: WithAlpha(0xAD, sidebarFgPrimary),
+                SidebarTextTertiary: WithAlpha(0x75, sidebarFgPrimary),
                 SliderTrack: WithAlpha(0xFF, sliderTrackRgb),
                 SliderThumbFill: WithAlpha(0xFF, sliderThumbFillRgb),
                 SubtleHover: isDark ? new ArgbColor(0x14, 0xFF, 0xFF, 0xFF) : new ArgbColor(0x12, 0x00, 0x00, 0x00),

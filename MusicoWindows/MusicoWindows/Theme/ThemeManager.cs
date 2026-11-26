@@ -151,6 +151,40 @@ public static class ThemeManager
             save: true);
     }
 
+    public static void SetSidebarBackgroundPreset(Application app, BackgroundColorPreset preset)
+    {
+        AppearanceSettings next = CurrentSettings with { SidebarBackgroundPreset = preset };
+        if (preset == BackgroundColorPreset.Custom && string.IsNullOrWhiteSpace(next.CustomSidebarBackgroundHex))
+        {
+            next = next with { CustomSidebarBackgroundHex = IsDark ? "#181818" : "#EFEFEF" };
+        }
+        ApplyAppearance(app, next, save: true);
+    }
+
+    public static void SetCustomSidebarBackgroundHex(Application app, string? hex)
+    {
+        string? normalized = ColorMath.NormalizeHexOrNull(hex);
+        AppearanceSettings next = normalized is not null
+            ? CurrentSettings with
+            {
+                SidebarBackgroundPreset = BackgroundColorPreset.Custom,
+                CustomSidebarBackgroundHex = normalized
+            }
+            : CurrentSettings with
+            {
+                CustomSidebarBackgroundHex = null
+            };
+        ApplyAppearance(app, next, save: true);
+    }
+
+    public static void SetSidebarOpacity(Application app, double opacity)
+    {
+        ApplyAppearance(
+            app,
+            CurrentSettings with { SidebarOpacity = AppearanceSettings.ClampSidebarOpacity(opacity) },
+            save: true);
+    }
+
     public static void SetBackgroundImageOpacity(Application app, double opacity)
     {
         ApplyAppearance(
@@ -224,14 +258,18 @@ public static class ThemeManager
         ThemePalette palette = CurrentPalette ?? ColorMath.BuildPalette(CurrentSettings, ReadWindowsAppsUseLightTheme(), false);
         Color tintColor = Color.FromRgb(palette.AcrylicTintBase.R, palette.AcrylicTintBase.G, palette.AcrylicTintBase.B);
         bool hasCustomBg = AppearancePresets.ResolveBackgroundColor(CurrentSettings) is not null;
+        bool hasCustomSidebarBg = AppearancePresets.ResolveSidebarBackgroundColor(CurrentSettings) is not null;
         bool hasBgImage = !string.IsNullOrEmpty(ResolveBackgroundImagePath());
+        double effectiveSidebarOpacity = CurrentSettings.ResolveEffectiveSidebarOpacity();
         AcrylicBackdrop.Apply(
             window,
             palette.IsDark,
             tintColor,
             CurrentSettings.BackgroundOpacity,
             hasCustomBg,
-            hasBgImage);
+            hasBgImage,
+            effectiveSidebarOpacity,
+            hasCustomSidebarBg);
     }
 
     public static bool ReadWindowsAppsUseLightTheme()
@@ -352,6 +390,7 @@ public static class ThemeManager
         dict["SliderThumbFillBrush"] = CreateFrozenBrush(p.SliderThumbFill);
 
         dict["WindowBackgroundBrush"] = CreateFrozenBrush(p.WindowBackground);
+        dict["TitleBarBrush"] = CreateFrozenBrush(p.TitleBar);
         dict["NavPaneBrush"] = CreateFrozenBrush(p.NavPane);
         dict["ContentBackgroundBrush"] = CreateFrozenBrush(p.ContentBackground);
         dict["PlayerBarBrush"] = CreateFrozenBrush(p.PlayerBar);
@@ -371,6 +410,9 @@ public static class ThemeManager
         dict["TextPrimaryBrush"] = CreateFrozenBrush(p.TextPrimary);
         dict["TextSecondaryBrush"] = CreateFrozenBrush(p.TextSecondary);
         dict["TextTertiaryBrush"] = CreateFrozenBrush(p.TextTertiary);
+        dict["SidebarTextPrimaryBrush"] = CreateFrozenBrush(p.SidebarTextPrimary);
+        dict["SidebarTextSecondaryBrush"] = CreateFrozenBrush(p.SidebarTextSecondary);
+        dict["SidebarTextTertiaryBrush"] = CreateFrozenBrush(p.SidebarTextTertiary);
 
         dict["SubtleHoverBrush"] = CreateFrozenBrush(p.SubtleHover);
         dict["SubtlePressedBrush"] = CreateFrozenBrush(p.SubtlePressed);

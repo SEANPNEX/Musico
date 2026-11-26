@@ -111,6 +111,7 @@ public partial class SettingsView : UserControl
 
             // Preset swatches
             RebuildBackgroundPresets(settings);
+            RebuildSidebarPresets(settings);
             RebuildForegroundPresets(settings);
 
             // Custom background picker
@@ -121,6 +122,15 @@ public partial class SettingsView : UserControl
                 ? parsedBg
                 : (ThemeManager.IsDark ? new RgbColor(0x17, 0x17, 0x17) : new RgbColor(0xF8, 0xF6, 0xF1));
             SyncColorPicker(customBg, CustomBgPreviewSwatch, CustomBgHexBox, CustomBgRSlider, CustomBgGSlider, CustomBgBSlider, CustomBgRText, CustomBgGText, CustomBgBText);
+
+            // Custom sidebar background picker
+            CustomSidebarPanel.Visibility = settings.SidebarBackgroundPreset == BackgroundColorPreset.Custom
+                ? Visibility.Visible
+                : Visibility.Collapsed;
+            RgbColor customSidebarBg = ColorMath.TryParseHex(settings.CustomSidebarBackgroundHex, out var parsedSidebarBg)
+                ? parsedSidebarBg
+                : (ThemeManager.IsDark ? new RgbColor(0x18, 0x18, 0x18) : new RgbColor(0xEF, 0xEF, 0xEF));
+            SyncColorPicker(customSidebarBg, CustomSidebarPreviewSwatch, CustomSidebarHexBox, CustomSidebarRSlider, CustomSidebarGSlider, CustomSidebarBSlider, CustomSidebarRText, CustomSidebarGText, CustomSidebarBText);
 
             // Custom foreground & accent picker
             CustomForegroundPanel.Visibility = settings.ForegroundPreset == ForegroundColorPreset.Custom
@@ -139,10 +149,16 @@ public partial class SettingsView : UserControl
                 : (ThemeManager.IsDark ? AppearancePresets.LightTextOnDark : AppearancePresets.DarkTextOnLight);
             SyncColorPicker(customFg, CustomFgPreviewSwatch, CustomFgHexBox, CustomFgRSlider, CustomFgGSlider, CustomFgBSlider, CustomFgRText, CustomFgGText, CustomFgBText);
 
-            // Opacity sliders
-            int bgPct = (int)Math.Round(settings.BackgroundOpacity * 100.0);
-            WindowOpacitySlider.Value = Math.Clamp(bgPct, 25, 100);
+            // Opacity sliders + live preview content backdrop opacity
+            double clampedBgOpacity = AppearanceSettings.ClampBackgroundOpacity(settings.BackgroundOpacity);
+            LivePreviewContentBackdrop.Opacity = clampedBgOpacity;
+            int bgPct = (int)Math.Round(clampedBgOpacity * 100.0);
+            WindowOpacitySlider.Value = Math.Clamp(bgPct, 15, 100);
             WindowOpacityValueText.Text = $"{bgPct}%";
+
+            int sidebarPct = (int)Math.Round(settings.ResolveEffectiveSidebarOpacity() * 100.0);
+            SidebarOpacitySlider.Value = Math.Clamp(sidebarPct, 15, 100);
+            SidebarOpacityValueText.Text = $"{sidebarPct}%";
 
             // Background image preview + visibility & blur sliders
             string? imagePath = ThemeManager.ResolveBackgroundImagePath();
@@ -272,6 +288,26 @@ public partial class SettingsView : UserControl
             BackgroundColorPreset captured = preset;
             btn.Click += (_, _) => ThemeManager.SetBackgroundPreset(Application.Current, captured);
             BackgroundPresetsPanel.Children.Add(btn);
+        }
+    }
+
+    private void RebuildSidebarPresets(AppearanceSettings settings)
+    {
+        SidebarPresetsPanel.Children.Clear();
+        foreach (BackgroundColorPreset preset in AppearancePresets.AllBackgroundPresets)
+        {
+            bool selected = settings.SidebarBackgroundPreset == preset;
+            string label = preset == BackgroundColorPreset.Default
+                ? L.Get("Settings_SidebarPreset_Default")
+                : L.Get($"Settings_BgPreset_{preset}");
+            string? hex = preset == BackgroundColorPreset.Custom
+                ? settings.CustomSidebarBackgroundHex
+                : AppearancePresets.GetBackgroundHex(preset);
+
+            var btn = CreatePresetSwatchButton(label, hex, isCustom: preset == BackgroundColorPreset.Custom, isDefault: preset == BackgroundColorPreset.Default, selected: selected);
+            BackgroundColorPreset captured = preset;
+            btn.Click += (_, _) => ThemeManager.SetSidebarBackgroundPreset(Application.Current, captured);
+            SidebarPresetsPanel.Children.Add(btn);
         }
     }
 
@@ -455,6 +491,28 @@ public partial class SettingsView : UserControl
         ThemeManager.SetCustomBackgroundHex(Application.Current, ColorMath.ToHex(rgb));
     }
 
+    private void CustomSidebarHexBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_isUpdatingUi || !IsLoaded) return;
+        if (ColorMath.TryParseHex(CustomSidebarHexBox.Text, out var rgb))
+        {
+            ThemeManager.SetCustomSidebarBackgroundHex(Application.Current, ColorMath.ToHex(rgb));
+        }
+    }
+
+    private void CustomSidebarHexBox_LostFocus(object sender, RoutedEventArgs e)
+    {
+        if (!IsLoaded) return;
+        RefreshAppearanceSection();
+    }
+
+    private void CustomSidebarRgbSlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_isUpdatingUi || !IsLoaded) return;
+        var rgb = new RgbColor((byte)CustomSidebarRSlider.Value, (byte)CustomSidebarGSlider.Value, (byte)CustomSidebarBSlider.Value);
+        ThemeManager.SetCustomSidebarBackgroundHex(Application.Current, ColorMath.ToHex(rgb));
+    }
+
     private void CustomAccentHexBox_TextChanged(object sender, TextChangedEventArgs e)
     {
         if (_isUpdatingUi || !IsLoaded) return;
@@ -521,6 +579,14 @@ public partial class SettingsView : UserControl
         double opacity = Math.Round(e.NewValue) / 100.0;
         WindowOpacityValueText.Text = $"{(int)Math.Round(e.NewValue)}%";
         ThemeManager.SetBackgroundOpacity(Application.Current, opacity);
+    }
+
+    private void SidebarOpacitySlider_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_isUpdatingUi || !IsLoaded) return;
+        double opacity = Math.Round(e.NewValue) / 100.0;
+        SidebarOpacityValueText.Text = $"{(int)Math.Round(e.NewValue)}%";
+        ThemeManager.SetSidebarOpacity(Application.Current, opacity);
     }
 
     private void ChooseBgImage_Click(object sender, RoutedEventArgs e)

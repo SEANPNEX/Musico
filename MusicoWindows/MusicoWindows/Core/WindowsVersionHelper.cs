@@ -35,13 +35,21 @@ public static class WindowsVersionHelper
         Version osVersion,
         double backgroundOpacity,
         bool hasCustomBackgroundColor,
-        bool hasBackgroundImage)
+        bool hasBackgroundImage,
+        double? sidebarOpacity = null,
+        bool hasCustomSidebarColor = false)
     {
         double clampedOpacity = AppearanceSettings.ClampBackgroundOpacity(backgroundOpacity);
+        double clampedSidebarOpacity = sidebarOpacity.HasValue
+            ? AppearanceSettings.ClampSidebarOpacity(sidebarOpacity.Value)
+            : clampedOpacity;
+        double effectiveMinOpacity = Math.Min(clampedOpacity, clampedSidebarOpacity);
+
         if (SupportsDwmSystemBackdrop(osVersion) &&
-            clampedOpacity >= 0.995 &&
+            effectiveMinOpacity >= 0.995 &&
             !hasCustomBackgroundColor &&
-            !hasBackgroundImage)
+            !hasBackgroundImage &&
+            !hasCustomSidebarColor)
         {
             return WindowsBackdropKind.DwmTransientWindow;
         }

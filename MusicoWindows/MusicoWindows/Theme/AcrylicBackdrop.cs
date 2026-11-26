@@ -71,7 +71,9 @@ public static class AcrylicBackdrop
         Color? tintBaseColor = null,
         double backgroundOpacity = 1.0,
         bool hasCustomBackgroundColor = false,
-        bool hasBackgroundImage = false)
+        bool hasBackgroundImage = false,
+        double? sidebarOpacity = null,
+        bool hasCustomSidebarColor = false)
     {
         if (!OperatingSystem.IsWindows())
             return;
@@ -102,7 +104,9 @@ public static class AcrylicBackdrop
                 osVersion,
                 backgroundOpacity,
                 hasCustomBackgroundColor,
-                hasBackgroundImage);
+                hasBackgroundImage,
+                sidebarOpacity,
+                hasCustomSidebarColor);
 
             if (kind == WindowsBackdropKind.DwmTransientWindow)
             {
@@ -118,10 +122,16 @@ public static class AcrylicBackdrop
                 DwmSetWindowAttribute(hwnd, DWMWA_SYSTEMBACKDROP_TYPE, ref noneBackdrop, sizeof(int));
             }
 
+            double clampedBgOpacity = AppearanceSettings.ClampBackgroundOpacity(backgroundOpacity);
+            double clampedSidebarOpacity = sidebarOpacity.HasValue
+                ? AppearanceSettings.ClampSidebarOpacity(sidebarOpacity.Value)
+                : clampedBgOpacity;
+            double effectiveMinOpacity = Math.Min(clampedBgOpacity, clampedSidebarOpacity);
+
             Color resolvedTint = tintBaseColor ?? (isDark ? Color.FromRgb(0x18, 0x18, 0x18) : Color.FromRgb(0xF2, 0xF2, 0xF2));
             uint tintAbgr = ColorMath.ToAcrylicAbgr(
                 new RgbColor(resolvedTint.R, resolvedTint.G, resolvedTint.B),
-                backgroundOpacity);
+                effectiveMinOpacity);
 
             var accent = new AccentPolicy
             {

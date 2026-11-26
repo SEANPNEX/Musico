@@ -278,6 +278,8 @@
     <sys:String x:Key="Str_Settings_ThemeDark">Dark</sys:String>
     <sys:String x:Key="Str_Settings_BackgroundColor">Background Color</sys:String>
     <sys:String x:Key="Str_Settings_BackgroundColorDesc">Preset window tint or custom hex/RGB color with adaptive text contrast</sys:String>
+    <sys:String x:Key="Str_Settings_SidebarColor">Sidebar Background Color</sys:String>
+    <sys:String x:Key="Str_Settings_SidebarColorDesc">Customize navigation and side panel color independently from main content</sys:String>
     <sys:String x:Key="Str_Settings_CustomColorHex">Hex Color</sys:String>
     <sys:String x:Key="Str_Settings_ColorRed">R</sys:String>
     <sys:String x:Key="Str_Settings_ColorGreen">G</sys:String>
@@ -287,7 +289,9 @@
     <sys:String x:Key="Str_Settings_CustomAccentColor">Custom Accent</sys:String>
     <sys:String x:Key="Str_Settings_CustomTextOverride">Custom Text Color (Optional)</sys:String>
     <sys:String x:Key="Str_Settings_WindowOpacity">Window Background Opacity</sys:String>
-    <sys:String x:Key="Str_Settings_WindowOpacityDesc">Adjust desktop Acrylic transparency (25%–100%)</sys:String>
+    <sys:String x:Key="Str_Settings_WindowOpacityDesc">Adjust desktop Acrylic transparency (15%–100%)</sys:String>
+    <sys:String x:Key="Str_Settings_SidebarOpacity">Sidebar Opacity</sys:String>
+    <sys:String x:Key="Str_Settings_SidebarOpacityDesc">Adjust sidebar Acrylic transparency independently (15%–100%)</sys:String>
     <sys:String x:Key="Str_Settings_BackgroundImage">Background Image</sys:String>
     <sys:String x:Key="Str_Settings_BackgroundImageDesc">Use a custom wallpaper behind the player interface</sys:String>
     <sys:String x:Key="Str_Settings_ChooseImage">Choose Image...</sys:String>

@@ -278,6 +278,8 @@
     <sys:String x:Key="Str_Settings_ThemeDark">深色</sys:String>
     <sys:String x:Key="Str_Settings_BackgroundColor">背景配色</sys:String>
     <sys:String x:Key="Str_Settings_BackgroundColorDesc">选择预设窗口色调或自定义十六进制/RGB 颜色，文本对比度将自动适配</sys:String>
+    <sys:String x:Key="Str_Settings_SidebarColor">侧边栏背景配色</sys:String>
+    <sys:String x:Key="Str_Settings_SidebarColorDesc">独立自定义左侧导航栏与右侧面板的背景颜色</sys:String>
     <sys:String x:Key="Str_Settings_CustomColorHex">十六进制颜色</sys:String>
     <sys:String x:Key="Str_Settings_ColorRed">红</sys:String>
     <sys:String x:Key="Str_Settings_ColorGreen">绿</sys:String>
@@ -287,7 +289,9 @@
     <sys:String x:Key="Str_Settings_CustomAccentColor">自定义强调色</sys:String>
     <sys:String x:Key="Str_Settings_CustomTextOverride">自定义文本颜色（可选）</sys:String>
     <sys:String x:Key="Str_Settings_WindowOpacity">窗口背景不透明度</sys:String>
-    <sys:String x:Key="Str_Settings_WindowOpacityDesc">调节桌面亚克力背景不透明度（25%–100%）</sys:String>
+    <sys:String x:Key="Str_Settings_WindowOpacityDesc">调节桌面亚克力背景不透明度（15%–100%）</sys:String>
+    <sys:String x:Key="Str_Settings_SidebarOpacity">侧边栏不透明度</sys:String>
+    <sys:String x:Key="Str_Settings_SidebarOpacityDesc">独立调节侧边栏的亚克力透明程度（15%–100%）</sys:String>
     <sys:String x:Key="Str_Settings_BackgroundImage">背景图片</sys:String>
     <sys:String x:Key="Str_Settings_BackgroundImageDesc">在播放器界面后方显示自定义背景图片</sys:String>
     <sys:String x:Key="Str_Settings_ChooseImage">选择图片...</sys:String>

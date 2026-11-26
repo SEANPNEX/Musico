@@ -38,6 +38,9 @@
     <SolidColorBrush x:Key="TextPrimaryBrush" Color="#FF111111" />
     <SolidColorBrush x:Key="TextSecondaryBrush" Color="#FF5E5E5E" />
     <SolidColorBrush x:Key="TextTertiaryBrush" Color="#FF8A8A8A" />
+    <SolidColorBrush x:Key="SidebarTextPrimaryBrush" Color="#FF111111" />
+    <SolidColorBrush x:Key="SidebarTextSecondaryBrush" Color="#FF5E5E5E" />
+    <SolidColorBrush x:Key="SidebarTextTertiaryBrush" Color="#FF8A8A8A" />
     <SolidColorBrush x:Key="TextOnAccentBrush" Color="#FFFFFFFF" />
 
     <!-- Window Chrome Caption Buttons -->

@@ -123,6 +123,7 @@ public partial class MainWindow : Window
         };
 
         RefreshBackgroundImageLayer();
+        ApplySidebarTextOverrides();
         RebuildDynamicPlaylists();
         RefreshDownloadsFooter();
         RestoreWindowAndShellState();
@@ -132,6 +133,54 @@ public partial class MainWindow : Window
     {
         ThemeManager.ApplyBackdrop(this);
         RefreshBackgroundImageLayer();
+        ApplySidebarTextOverrides();
+    }
+
+    private void ApplySidebarTextOverrides()
+    {
+        ThemePalette? palette = ThemeManager.CurrentPalette;
+        if (palette is not null && palette.SidebarIsDark != palette.IsDark)
+        {
+            Brush primary = Application.Current.TryFindResource("SidebarTextPrimaryBrush") as Brush
+                ?? CreateFrozenSidebarBrush(palette.SidebarTextPrimary);
+            Brush secondary = Application.Current.TryFindResource("SidebarTextSecondaryBrush") as Brush
+                ?? CreateFrozenSidebarBrush(palette.SidebarTextSecondary);
+            Brush tertiary = Application.Current.TryFindResource("SidebarTextTertiaryBrush") as Brush
+                ?? CreateFrozenSidebarBrush(palette.SidebarTextTertiary);
+
+            SetSidebarTextResources(NavPaneBorder.Resources, primary, secondary, tertiary);
+            SetSidebarTextResources(SidePanelBorder.Resources, primary, secondary, tertiary);
+        }
+        else
+        {
+            ClearSidebarTextResources(NavPaneBorder.Resources);
+            ClearSidebarTextResources(SidePanelBorder.Resources);
+        }
+    }
+
+    private static void SetSidebarTextResources(
+        ResourceDictionary resources,
+        Brush primary,
+        Brush secondary,
+        Brush tertiary)
+    {
+        resources["TextPrimaryBrush"] = primary;
+        resources["TextSecondaryBrush"] = secondary;
+        resources["TextTertiaryBrush"] = tertiary;
+    }
+
+    private static void ClearSidebarTextResources(ResourceDictionary resources)
+    {
+        resources.Remove("TextPrimaryBrush");
+        resources.Remove("TextSecondaryBrush");
+        resources.Remove("TextTertiaryBrush");
+    }
+
+    private static SolidColorBrush CreateFrozenSidebarBrush(ArgbColor c)
+    {
+        var brush = new SolidColorBrush(Color.FromArgb(c.A, c.R, c.G, c.B));
+        brush.Freeze();
+        return brush;
     }
 
     private void OnLanguageChanged(ResolvedLanguage _)
@@ -143,6 +192,9 @@ public partial class MainWindow : Window
 
     private void RefreshBackgroundImageLayer()
     {
+        AppearanceSettings settings = ThemeManager.CurrentSettings;
+        ContentBackdropLayer.Opacity = AppearanceSettings.ClampBackgroundOpacity(settings.BackgroundOpacity);
+
         string? imagePath = ThemeManager.ResolveBackgroundImagePath();
         if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
         {
@@ -174,7 +226,6 @@ public partial class MainWindow : Window
                 _cachedBgImageWriteUtc = writeUtc;
             }
 
-            AppearanceSettings settings = ThemeManager.CurrentSettings;
             WindowBackgroundImage.Opacity = settings.BackgroundImageOpacity;
             WindowBackgroundImage.Effect = settings.BackgroundImageBlur > 0.05
                 ? new BlurEffect

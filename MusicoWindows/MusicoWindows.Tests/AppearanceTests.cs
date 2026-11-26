@@ -129,11 +129,17 @@ public sealed class AppearanceTests : IDisposable
     [Fact]
     public void OpacityClampingAndAcrylicAbgrStayWithinBounds()
     {
-        Assert.Equal(0.25, AppearanceSettings.ClampBackgroundOpacity(0.0));
-        Assert.Equal(0.25, AppearanceSettings.ClampBackgroundOpacity(-1.0));
+        Assert.Equal(0.15, AppearanceSettings.ClampBackgroundOpacity(0.0));
+        Assert.Equal(0.15, AppearanceSettings.ClampBackgroundOpacity(-1.0));
         Assert.Equal(1.0, AppearanceSettings.ClampBackgroundOpacity(2.5));
         Assert.Equal(1.0, AppearanceSettings.ClampBackgroundOpacity(double.NaN));
         Assert.Equal(0.62, AppearanceSettings.ClampBackgroundOpacity(0.62));
+
+        Assert.Equal(0.15, AppearanceSettings.ClampSidebarOpacity(0.0));
+        Assert.Equal(0.15, AppearanceSettings.ClampSidebarOpacity(-1.0));
+        Assert.Equal(1.0, AppearanceSettings.ClampSidebarOpacity(2.5));
+        Assert.Equal(1.0, AppearanceSettings.ClampSidebarOpacity(double.NaN));
+        Assert.Equal(0.42, AppearanceSettings.ClampSidebarOpacity(0.42));
 
         Assert.Equal(0.10, AppearanceSettings.ClampBackgroundImageOpacity(0.01));
         Assert.Equal(1.0, AppearanceSettings.ClampBackgroundImageOpacity(3.0));
@@ -144,12 +150,15 @@ public sealed class AppearanceTests : IDisposable
         uint fullDark = ColorMath.ToAcrylicAbgr(new RgbColor(0x18, 0x18, 0x18), 1.0);
         Assert.Equal(0xD2181818u, fullDark);
 
-        uint minTint = ColorMath.ToAcrylicAbgr(new RgbColor(0x12, 0x34, 0x56), 0.25);
-        byte alpha = (byte)(minTint >> 24);
-        Assert.True(alpha >= 0x14);
+        // Translucent Acrylic uses minimal tint alpha (0x01) so WPF brushes own opacity/color without double-tinting
+        uint minTint = ColorMath.ToAcrylicAbgr(new RgbColor(0x12, 0x34, 0x56), 0.15);
+        Assert.Equal((byte)0x01, (byte)(minTint >> 24));
         Assert.Equal((byte)0x56, (byte)((minTint >> 16) & 0xFF));
         Assert.Equal((byte)0x34, (byte)((minTint >> 8) & 0xFF));
         Assert.Equal((byte)0x12, (byte)(minTint & 0xFF));
+
+        uint midTint = ColorMath.ToAcrylicAbgr(new RgbColor(0x12, 0x34, 0x56), 0.50);
+        Assert.Equal((byte)0x01, (byte)(midTint >> 24));
     }
 
     [Fact]
@@ -157,18 +166,110 @@ public sealed class AppearanceTests : IDisposable
     {
         var defaults = new AppearanceSettings();
         ThemePalette opaquePalette = ColorMath.BuildPalette(defaults, systemAppsUseLightTheme: false, hasBackgroundImage: false);
+        Assert.Equal(0xFF, opaquePalette.WindowBackground.A);
+        Assert.Equal(0xFF, opaquePalette.ContentBackground.A);
+        Assert.Equal(0xFF, opaquePalette.NavPane.A);
+        Assert.Equal(0xFF, opaquePalette.SidePanel.A);
+        Assert.Equal(0xFF, opaquePalette.PlayerBar.A);
+        Assert.Equal(0xFF, opaquePalette.TitleBar.A);
         Assert.Equal(0xFF, opaquePalette.CardBackground.A);
-        Assert.Equal(0xF2, opaquePalette.ContentBackground.A);
+        Assert.Equal(0xFF, opaquePalette.ControlFill.A);
 
         var translucent = defaults with { BackgroundOpacity = 0.40 };
         ThemePalette translucentPalette = ColorMath.BuildPalette(translucent, systemAppsUseLightTheme: false, hasBackgroundImage: false);
-        Assert.True(translucentPalette.ContentBackground.A < opaquePalette.ContentBackground.A);
-        Assert.True(translucentPalette.NavPane.A < opaquePalette.NavPane.A);
+        Assert.Equal(0x00, translucentPalette.WindowBackground.A);
+        Assert.Equal(0xFF, translucentPalette.ContentBackground.A);
+        Assert.Equal((byte)Math.Round(255.0 * 0.40), translucentPalette.NavPane.A);
+        Assert.Equal(translucentPalette.NavPane.A, translucentPalette.SidePanel.A);
+        Assert.Equal(translucentPalette.NavPane.A, translucentPalette.PlayerBar.A);
+        Assert.Equal(translucentPalette.NavPane.A, translucentPalette.TitleBar.A);
         Assert.True(translucentPalette.CardBackground.A < 0xFF);
+        Assert.True(translucentPalette.ControlFill.A < 0xFF);
+
+        // CardBackground & ControlFill scale proportionally below old 0.55 floor
+        var veryTranslucent = defaults with { BackgroundOpacity = 0.15 };
+        ThemePalette veryTranslucentPalette = ColorMath.BuildPalette(veryTranslucent, systemAppsUseLightTheme: false, hasBackgroundImage: false);
+        Assert.Equal(0x00, veryTranslucentPalette.WindowBackground.A);
+        Assert.Equal(0x24, veryTranslucentPalette.CardBackground.A);
+        Assert.Equal(0x38, veryTranslucentPalette.ControlFill.A);
+        Assert.True(veryTranslucentPalette.CardBackground.A < translucentPalette.CardBackground.A);
 
         ThemePalette imagePalette = ColorMath.BuildPalette(defaults, systemAppsUseLightTheme: false, hasBackgroundImage: true);
-        Assert.True(imagePalette.ContentBackground.A <= 0x30);
+        Assert.Equal(0x00, imagePalette.WindowBackground.A);
+        Assert.Equal(0xFF, imagePalette.ContentBackground.A);
         Assert.True(imagePalette.CardBackground.A < 0xFF);
+    }
+
+    [Fact]
+    public void SidebarPresetsHexAndOpacityResolveAndContrastAdapt()
+    {
+        var defaults = new AppearanceSettings();
+        Assert.Equal(1.0, defaults.ResolveEffectiveSidebarOpacity());
+        Assert.Null(AppearancePresets.ResolveSidebarBackgroundColor(defaults));
+        Assert.True(AppearancePresets.ResolveSidebarIsDark(defaults, mainIsDark: true));
+        Assert.Equal(
+            AppearancePresets.LightTextOnDark,
+            AppearancePresets.ResolveSidebarForegroundColor(defaults, mainIsDark: true, AppearancePresets.LightTextOnDark));
+
+        // Explicit null SidebarOpacity tracks BackgroundOpacity
+        var followingMain = defaults with { BackgroundOpacity = 0.45, SidebarOpacity = null };
+        Assert.Equal(0.45, followingMain.ResolveEffectiveSidebarOpacity());
+
+        // Light sidebar preset on dark main theme adapts sidebar text independently
+        var lightSidebarOnDark = new AppearanceSettings
+        {
+            BackgroundPreset = BackgroundColorPreset.Obsidian,
+            SidebarBackgroundPreset = BackgroundColorPreset.Paper,
+            BackgroundOpacity = 1.0,
+            SidebarOpacity = 0.30
+        };
+        ThemePalette mixedPalette = ColorMath.BuildPalette(lightSidebarOnDark, systemAppsUseLightTheme: false, hasBackgroundImage: false);
+        Assert.True(mixedPalette.IsDark);
+        Assert.False(mixedPalette.SidebarIsDark);
+        Assert.Equal(0x00, mixedPalette.WindowBackground.A);
+        Assert.Equal(new ArgbColor((byte)Math.Round(255.0 * 0.30), 0xF8, 0xF6, 0xF1), mixedPalette.NavPane);
+        Assert.Equal(0xFF, mixedPalette.PlayerBar.A);
+        Assert.Equal(AppearancePresets.LightTextOnDark, new RgbColor(mixedPalette.TextPrimary.R, mixedPalette.TextPrimary.G, mixedPalette.TextPrimary.B));
+        Assert.Equal(AppearancePresets.DarkTextOnLight, new RgbColor(mixedPalette.SidebarTextPrimary.R, mixedPalette.SidebarTextPrimary.G, mixedPalette.SidebarTextPrimary.B));
+
+        // Custom sidebar hex + dark sidebar on light main theme
+        var customDarkSidebarOnLight = new AppearanceSettings
+        {
+            BackgroundPreset = BackgroundColorPreset.Paper,
+            SidebarBackgroundPreset = BackgroundColorPreset.Custom,
+            CustomSidebarBackgroundHex = "102030",
+            BackgroundOpacity = 0.80,
+            SidebarOpacity = 0.20
+        }.Normalize();
+        Assert.Equal("#102030", customDarkSidebarOnLight.CustomSidebarBackgroundHex);
+        ThemePalette reversePalette = ColorMath.BuildPalette(customDarkSidebarOnLight, systemAppsUseLightTheme: true, hasBackgroundImage: false);
+        Assert.False(reversePalette.IsDark);
+        Assert.True(reversePalette.SidebarIsDark);
+        Assert.Equal(new ArgbColor((byte)Math.Round(255.0 * 0.20), 0x10, 0x20, 0x30), reversePalette.NavPane);
+        Assert.Equal((byte)Math.Round(255.0 * 0.80), reversePalette.PlayerBar.A);
+        Assert.Equal(AppearancePresets.LightTextOnDark, new RgbColor(reversePalette.SidebarTextPrimary.R, reversePalette.SidebarTextPrimary.G, reversePalette.SidebarTextPrimary.B));
+    }
+
+    [Fact]
+    public void ComputeEffectiveBackgroundImageOpacityAndScrimWork()
+    {
+        var s1 = new AppearanceSettings
+        {
+            BackgroundOpacity = 0.50,
+            BackgroundImageOpacity = 0.40
+        };
+        Assert.Equal(0.20, ColorMath.ComputeEffectiveBackgroundImageOpacity(s1), precision: 5);
+
+        // Scrim alpha is independent of BackgroundOpacity because ContentBackdropLayer.Opacity owns BackgroundOpacity
+        var s2 = s1 with { BackgroundOpacity = 0.15 };
+        Assert.Equal(ColorMath.ComputeBackgroundScrimAlpha(s1), ColorMath.ComputeBackgroundScrimAlpha(s2));
+
+        // Higher image opacity lowers scrim alpha, bounded within [0.08, 0.45] * 255
+        byte lowImgScrim = ColorMath.ComputeBackgroundScrimAlpha(s1 with { BackgroundImageOpacity = 0.10 });
+        byte highImgScrim = ColorMath.ComputeBackgroundScrimAlpha(s1 with { BackgroundImageOpacity = 1.0 });
+        Assert.True(lowImgScrim > highImgScrim);
+        Assert.InRange(highImgScrim, (byte)20, (byte)115);
+        Assert.InRange(lowImgScrim, (byte)20, (byte)115);
     }
 
     [Fact]
@@ -182,10 +283,13 @@ public sealed class AppearanceTests : IDisposable
             ThemeMode = AppThemeMode.Dark,
             BackgroundPreset = BackgroundColorPreset.Custom,
             CustomBackgroundHex = "1e293b",
+            SidebarBackgroundPreset = BackgroundColorPreset.Custom,
+            CustomSidebarBackgroundHex = "0f172a",
             ForegroundPreset = ForegroundColorPreset.Custom,
             CustomAccentHex = "#10b981",
             CustomForegroundHex = "bad-hex",
             BackgroundOpacity = 0.05,
+            SidebarOpacity = 0.02,
             BackgroundImageFileName = "nested/path/background.png",
             BackgroundImageOpacity = 5.0
         };
@@ -193,9 +297,11 @@ public sealed class AppearanceTests : IDisposable
         AppearanceSettings saved = store.Save(raw);
         Assert.True(File.Exists(store.SettingsPath));
         Assert.Equal("#1E293B", saved.CustomBackgroundHex);
+        Assert.Equal("#0F172A", saved.CustomSidebarBackgroundHex);
         Assert.Equal("#10B981", saved.CustomAccentHex);
         Assert.Null(saved.CustomForegroundHex);
-        Assert.Equal(0.25, saved.BackgroundOpacity);
+        Assert.Equal(0.15, saved.BackgroundOpacity);
+        Assert.Equal(0.15, saved.SidebarOpacity);
         Assert.Equal(1.0, saved.BackgroundImageOpacity);
         Assert.Equal("background.png", saved.BackgroundImageFileName);
 
@@ -341,7 +447,7 @@ public sealed class AppearanceTests : IDisposable
             WindowsBackdropKind.DwmTransientWindow,
             WindowsVersionHelper.ResolveBackdropKind(win1122H2, 1.0, hasCustomBackgroundColor: false, hasBackgroundImage: false));
 
-        // Any custom opacity < 0.995, custom background color, or background image falls back to Acrylic composition
+        // Any custom opacity < 0.995, custom background color, background image, sidebar opacity < 0.995, or custom sidebar color falls back to Acrylic composition
         Assert.Equal(
             WindowsBackdropKind.Acrylic,
             WindowsVersionHelper.ResolveBackdropKind(win1122H2, 0.85, hasCustomBackgroundColor: false, hasBackgroundImage: false));
@@ -351,6 +457,12 @@ public sealed class AppearanceTests : IDisposable
         Assert.Equal(
             WindowsBackdropKind.Acrylic,
             WindowsVersionHelper.ResolveBackdropKind(win1122H2, 1.0, hasCustomBackgroundColor: false, hasBackgroundImage: true));
+        Assert.Equal(
+            WindowsBackdropKind.Acrylic,
+            WindowsVersionHelper.ResolveBackdropKind(win1122H2, 1.0, hasCustomBackgroundColor: false, hasBackgroundImage: false, sidebarOpacity: 0.70));
+        Assert.Equal(
+            WindowsBackdropKind.Acrylic,
+            WindowsVersionHelper.ResolveBackdropKind(win1122H2, 1.0, hasCustomBackgroundColor: false, hasBackgroundImage: false, sidebarOpacity: 1.0, hasCustomSidebarColor: true));
 
         // Win11 21H2 and Win10 1803+ use Acrylic composition; older Win10 falls back to BlurBehind
         Assert.Equal(

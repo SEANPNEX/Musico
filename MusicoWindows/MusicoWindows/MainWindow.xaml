@@ -36,17 +36,6 @@
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
-        <!-- Full-Window Custom Background Image + Contrast Scrim -->
-        <Image x:Name="WindowBackgroundImage"
-               Grid.RowSpan="2"
-               Stretch="UniformToFill"
-               IsHitTestVisible="False"
-               Visibility="Collapsed" />
-        <Border x:Name="WindowBackgroundScrim"
-                Grid.RowSpan="2"
-                IsHitTestVisible="False"
-                Visibility="Collapsed" />
-
         <!-- Custom Title Bar -->
         <Grid Grid.Row="0" Background="{DynamicResource TitleBarBrush}">
             <Grid.ColumnDefinitions>
@@ -111,7 +100,8 @@
                     </Grid.ColumnDefinitions>
 
                     <!-- Left Collapsible Acrylic NavigationView Pane -->
-                    <Border Grid.Column="0"
+                    <Border x:Name="NavPaneBorder"
+                            Grid.Column="0"
                             Background="{DynamicResource NavPaneBrush}"
                             BorderBrush="{DynamicResource DividerBrush}"
                             BorderThickness="0,0,1,0">
@@ -397,8 +387,20 @@
                     </Border>
 
                     <!-- Active Content View -->
-                    <Border Grid.Column="1" Background="{DynamicResource ContentBackgroundBrush}">
-                        <ContentControl x:Name="ContentHost" />
+                    <Border Grid.Column="1" ClipToBounds="True">
+                        <Grid>
+                            <Grid x:Name="ContentBackdropLayer" IsHitTestVisible="False">
+                                <Border Background="{DynamicResource ContentBackgroundBrush}" />
+                                <Image x:Name="WindowBackgroundImage"
+                                       Stretch="UniformToFill"
+                                       IsHitTestVisible="False"
+                                       Visibility="Collapsed" />
+                                <Border x:Name="WindowBackgroundScrim"
+                                        IsHitTestVisible="False"
+                                        Visibility="Collapsed" />
+                            </Grid>
+                            <ContentControl x:Name="ContentHost" />
+                        </Grid>
                     </Border>
 
                     <!-- Optional Right Side Panel (340px Lyrics or Queue) -->
