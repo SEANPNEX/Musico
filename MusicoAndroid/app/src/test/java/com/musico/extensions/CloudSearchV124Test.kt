@@ -1232,4 +1232,111 @@ class CloudSearchV124Test {
             extScope.cancel()
         }
     }
+
+    @Test
+    fun firstTapSearchPlayWhileTrackIsLoadedPreservesEphemeralTracks() = runBlocking {
+        val harness = newSearchHarness()
+        val ext = installExtension(
+            harness.extStore,
+            manifestJson = """
+                {
+                  "apiVersion": 1,
+                  "id": "ext.firsttap.test",
+                  "name": "First Tap Test",
+                  "version": "1.0.0",
+                  "capabilities": ["search", "stream"],
+                  "permissions": { "hosts": ["cdn.firsttap.test"] },
+                  "entry": "index.js"
+                }
+            """.trimIndent(),
+            scriptJs = """
+                function search(ctx, req) { return { items: [] }; }
+                function resolveStream(ctx, req) {
+                  return { url: "https://cdn.firsttap.test/tracks/" + req.remoteTrackId + ".mp3" };
+                }
+                module.exports = { search: search, resolveStream: resolveStream };
+            """.trimIndent(),
+        )
+        val engine = FakeAudioEngine()
+        val player = PlayerController(
+            context = null,
+            library = harness.libraryStore,
+            queues = harness.queueStore,
+            history = harness.historyStore,
+            engine = engine,
+            settingsFile = File(harness.stateDir, "settings.json"),
+            cloudResolver = CloudStreamResolver(providerRegistry = harness.registry),
+        )
+        val initialTrack = ExtSearchResultItem.TrackItem(
+            remoteTrackId = "initial",
+            title = "Initial Track",
+            artist = "Band",
+            durationSec = 100.0,
+        ).toEphemeralTrack(ext.id)
+        val eph1 = ExtSearchResultItem.TrackItem(
+            remoteTrackId = "s1",
+            title = "Search Song 1",
+            artist = "Band",
+            durationSec = 100.0,
+        ).toEphemeralTrack(ext.id)
+        val eph2 = ExtSearchResultItem.TrackItem(
+            remoteTrackId = "s2",
+            title = "Search Song 2",
+            artist = "Band",
+            durationSec = 100.0,
+        ).toEphemeralTrack(ext.id)
+        val eph3 = ExtSearchResultItem.TrackItem(
+            remoteTrackId = "s3",
+            title = "Search Song 3",
+            artist = "Band",
+            durationSec = 100.0,
+        ).toEphemeralTrack(ext.id)
+        val eph4 = ExtSearchResultItem.TrackItem(
+            remoteTrackId = "s4",
+            title = "New Queue Song 4",
+            artist = "Band",
+            durationSec = 100.0,
+        ).toEphemeralTrack(ext.id)
+
+        try {
+            // Load and play an initial track so PlayerController.isLoaded == true and persistPosition() flushes queues.save().
+            harness.libraryStore.registerEphemeralTrack(initialTrack)
+            player.play(listOf(initialTrack.id), startAt = 0)
+            withTimeout(5_000L) {
+                player.state.first { !it.isLoadingCloud && engine.streamCalls.size == 1 }
+            }
+
+            // Simulate first tap on search results while another track is loaded.
+            harness.libraryStore.registerEphemeralTracks(listOf(eph1, eph2, eph3))
+            player.playInNamedQueue(
+                name = "Search (First Tap Test): hello",
+                ids = listOf(eph1.id, eph2.id, eph3.id),
+                startAt = 0,
+                shuffle = false,
+            )
+            withTimeout(5_000L) {
+                player.state.first { !it.isLoadingCloud && (engine.streamCalls.size >= 2 || it.playbackError != null) }
+            }
+
+            assertNotNull(harness.libraryStore.track(eph1.id))
+            assertNotNull(harness.libraryStore.track(eph2.id))
+            assertNotNull(harness.libraryStore.track(eph3.id))
+            assertNull(player.state.value.playbackError)
+            assertNull(player.state.value.errorMessage)
+            assertEquals("https://cdn.firsttap.test/tracks/s1.mp3", engine.streamCalls.last().first)
+
+            // Also verify playInNewQueue while isLoaded == true preserves newly registered ephemeral tracks.
+            harness.libraryStore.registerEphemeralTrack(eph4)
+            player.playInNewQueue(listOf(eph4.id), startAt = 0)
+            withTimeout(5_000L) {
+                player.state.first { !it.isLoadingCloud && (engine.streamCalls.size >= 3 || it.playbackError != null) }
+            }
+            assertNotNull(harness.libraryStore.track(eph4.id))
+            assertNull(player.state.value.playbackError)
+            assertNull(player.state.value.errorMessage)
+            assertEquals("https://cdn.firsttap.test/tracks/s4.mp3", engine.streamCalls.last().first)
+        } finally {
+            player.shutdown()
+        }
+    }
 }

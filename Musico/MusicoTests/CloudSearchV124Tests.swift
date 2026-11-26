@@ -882,6 +882,111 @@ final class CloudSearchV124Tests: XCTestCase {
         XCTAssertEqual(library.roots.count, rootCountBefore + 1)
         XCTAssertTrue(library.hasCloudRoot(providerID: ext.providerID, remoteID: "alb-1"))
     }
+
+    @MainActor
+    func testFirstTapSearchPlayWhileTrackIsLoadedPreservesEphemeralTracks() async throws {
+        let stateDir = makeTempDir()
+        let docsDir = makeTempDir()
+        let sampleURL = try XCTUnwrap(Bundle(for: CloudSearchV124Tests.self).url(forResource: "sample", withExtension: "mp3"))
+        let sampleData = try Data(contentsOf: sampleURL)
+        try sampleData.write(to: docsDir.appendingPathComponent("local.mp3"))
+
+        let extScript = """
+        exports.manifest = {
+          apiVersion: 1,
+          id: "com.test.firsttap",
+          name: "First Tap Ext",
+          version: "1.0.0",
+          capabilities: ["search", "stream"],
+          permissions: { hosts: ["cdn.firsttap.test"] }
+        };
+        exports.search = async function() { return { items: [] }; };
+        exports.resolveStream = async function(ctx, req) {
+          return { url: "https://cdn.firsttap.test/" + req.remoteTrackId + ".mp3", fileExtension: "mp3" };
+        };
+        """
+        let registry = CloudProviderRegistry()
+        let extStore = ExtensionStore(
+            baseDirectory: makeTempDir(),
+            registry: registry,
+            transport: SearchFixtureTransport { req in
+                HTTPResponseData(statusCode: 200, headers: [:], data: Data(), finalURL: req.url)
+            }
+        )
+        let installed = try await extStore.importPackageData(Data(extScript.utf8), fileName: "firsttap.musico.js", sourceURL: nil)
+        extStore.approvePermissionsAndEnable(id: installed.id)
+
+        let service = LiveCloudService(registry: registry)
+        let cache = CloudAudioCache(
+            directory: makeTempDir(),
+            maxBytes: 20_000_000,
+            resolver: service,
+            downloader: { _, _ in
+                let tmp = makeTempDir().appendingPathComponent("dl.mp3")
+                try sampleData.write(to: tmp)
+                return (tmp, 200, "audio/mpeg")
+            }
+        )
+        let library = LibraryStore(
+            directory: stateDir,
+            documentsURL: docsDir,
+            reader: StubReader(),
+            artwork: ArtworkCache(directory: stateDir.appendingPathComponent("Artwork")),
+            cloudFetcher: service,
+            providerRegistry: registry,
+            extensionAvailability: { extStore.availability(forProviderID: $0) }
+        )
+        await library.rescan()
+        let localID = try XCTUnwrap(library.tracks.first?.id)
+
+        let queues = QueueStore(directory: stateDir)
+        let history = PlayHistoryStore(directory: stateDir)
+        let player = PlayerController(
+            library: library,
+            queues: queues,
+            history: history,
+            engine: AudioEngine(),
+            settingsURL: stateDir.appendingPathComponent("settings.json"),
+            cloudAudio: cache
+        )
+        defer { player.shutdown() }
+
+        // Load a local track first so player.isLoaded == true and persistPosition() flushes queues.save().
+        player.play([localID], startAt: 0)
+        XCTAssertTrue(player.isPlaying)
+        XCTAssertEqual(player.currentTrack?.id, localID)
+
+        let eph1 = CloudSearchResult(extensionID: installed.id, kind: .track, remoteTrackID: "s1", title: "Search 1", durationSec: 58).makeEphemeralTrack()!
+        let eph2 = CloudSearchResult(extensionID: installed.id, kind: .track, remoteTrackID: "s2", title: "Search 2", durationSec: 58).makeEphemeralTrack()!
+        let eph3 = CloudSearchResult(extensionID: installed.id, kind: .track, remoteTrackID: "s3", title: "Search 3", durationSec: 58).makeEphemeralTrack()!
+
+        library.registerEphemeralTracks([eph1, eph2, eph3])
+        player.playInNamedQueue([eph1.id, eph2.id, eph3.id], name: "Search (First Tap Ext): hello", startAt: 0, shuffle: false)
+
+        for _ in 0..<40 {
+            if player.isPlaying || player.errorMessage != nil { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertNotNil(library.track(eph1.id))
+        XCTAssertNotNil(library.track(eph2.id))
+        XCTAssertNotNil(library.track(eph3.id))
+        XCTAssertNil(player.errorMessage)
+        XCTAssertEqual(player.currentTrack?.id, eph1.id)
+        XCTAssertTrue(player.isPlaying)
+
+        // Also verify playInNewQueue while isLoaded == true preserves newly registered ephemeral tracks.
+        let eph4 = CloudSearchResult(extensionID: installed.id, kind: .track, remoteTrackID: "s4", title: "Search 4", durationSec: 58).makeEphemeralTrack()!
+        library.registerEphemeralTracks([eph4])
+        player.playInNewQueue([eph4.id], startAt: 0, name: "New Search Queue")
+
+        for _ in 0..<40 {
+            if (player.currentTrack?.id == eph4.id && player.isPlaying) || player.errorMessage != nil { break }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertNotNil(library.track(eph4.id))
+        XCTAssertNil(player.errorMessage)
+        XCTAssertEqual(player.currentTrack?.id, eph4.id)
+    }
 }
 
 private struct InlineStreamResolver: CloudStreamResolving {

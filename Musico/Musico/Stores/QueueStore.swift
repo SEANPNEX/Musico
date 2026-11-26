@@ -34,13 +34,17 @@ final class QueueStore {
 
     func save() {
         try? Persistence.save(QueueFile(queues: queues, activeID: activeID), to: fileURL)
+    }
+
+    private func saveAndNotify() {
+        save()
         onQueuesChanged?(allReferencedTrackIDs)
     }
 
     func update(_ id: UUID, _ body: (inout PlayQueue) -> Void) {
         guard let index = queues.firstIndex(where: { $0.id == id }) else { return }
         body(&queues[index])
-        save()
+        saveAndNotify()
     }
 
     /// Records the playback position without writing the file; callers flush with `save()`.
@@ -53,15 +57,30 @@ final class QueueStore {
     func updateActive(_ body: (inout PlayQueue) -> Void) { update(activeID, body) }
 
     @discardableResult
-    func addQueue(name: String?) -> UUID {
+    func addQueue(
+        name: String?,
+        trackIDs: [String] = [],
+        startAt: Int = 0,
+        activate: Bool = false
+    ) -> UUID {
         var title = name?.trimmingCharacters(in: .whitespaces) ?? ""
         if title.isEmpty {
             let used = Set(queues.map(\.name))
             title = (1...).lazy.map { "Queue \($0)" }.first { !used.contains($0) }!
         }
-        let queue = PlayQueue(name: title)
+        var queue = PlayQueue(name: title)
+        if !trackIDs.isEmpty {
+            queue.replace(with: trackIDs, startAt: startAt)
+        }
         queues.append(queue)
-        save()
+        if activate {
+            activeID = queue.id
+        }
+        if trackIDs.isEmpty {
+            save()
+        } else {
+            saveAndNotify()
+        }
         return queue.id
     }
 
@@ -83,13 +102,13 @@ final class QueueStore {
             } else {
                 queues[index].replace(with: trackIDs, startAt: 0)
             }
-            save()
+            saveAndNotify()
             return queues[index].id
         }
         var queue = PlayQueue(name: title)
         queue.replace(with: trackIDs, startAt: startAt ?? 0)
         queues.append(queue)
-        save()
+        saveAndNotify()
         return queue.id
     }
 
@@ -106,7 +125,7 @@ final class QueueStore {
         let fallbackID = queues[min(index, queues.count - 1)].id
         if activeID == id { activeID = fallbackID }
         if viewedQueueID == id { viewedQueueID = fallbackID }
-        save()
+        saveAndNotify()
     }
 
     func selectViewedQueue(_ id: UUID) {
@@ -126,6 +145,6 @@ final class QueueStore {
             let valid = Set(queues[index].trackIDs).subtracting(ids)
             queues[index].removeTracks(notIn: valid)
         }
-        save()
+        saveAndNotify()
     }
 }

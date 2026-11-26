@@ -993,4 +993,51 @@ public sealed class V124CloudSearchTests : IDisposable
         Assert.Equal("disc2/101.flac", observedRelativePath);
         Assert.Equal("flac", stream.Extension);
     }
+
+    [Fact]
+    public async Task FirstTapSearchPlayWhileTrackIsLoaded_PreservesEphemeralTracks()
+    {
+        string stateDir = NewTempDir();
+        string musicDir = NewTempDir();
+        string track0Path = Path.Combine(musicDir, "local-initial.mp3");
+        TestHelpers.TouchFile(musicDir, "local-initial.mp3");
+        File.WriteAllBytes(track0Path, MakeMinimalMp3Bytes());
+
+        var artwork = new ArtworkCache(Path.Combine(stateDir, "Artwork"));
+        var lib = new LibraryStore(stateDir, musicDir, new StubMetadataReader(), artwork);
+        await lib.RescanAsync();
+        string initialLocalId = Assert.Single(lib.Tracks).Id;
+
+        var queues = new QueueStore(stateDir);
+        var history = new PlayHistoryStore(stateDir);
+        var engine = new FakeAudioEngine();
+        using var player = new PlayerController(lib, queues, history, engine, Path.Combine(stateDir, "settings.json"), enableTicker: false);
+
+        // Load a local track first so _isLoaded == true and PersistPosition() calls Queues.Save().
+        player.Play([initialLocalId], 0);
+        for (int i = 0; i < 40 && player.CurrentTrack?.Id != initialLocalId; i++)
+        {
+            await Task.Delay(25);
+        }
+        Assert.Equal(initialLocalId, player.CurrentTrack?.Id);
+
+        var eph1 = Track.MakeEphemeral("firsttap", "s1", "Search Song 1", artist: "Artist", durationSeconds: 180);
+        var eph2 = Track.MakeEphemeral("firsttap", "s2", "Search Song 2", artist: "Artist", durationSeconds: 180);
+        var eph3 = Track.MakeEphemeral("firsttap", "s3", "Search Song 3", artist: "Artist", durationSeconds: 180);
+        lib.RegisterEphemeralTracks([eph1, eph2, eph3]);
+
+        // ClearPlayback / queue transition happens while PersistPosition() runs before CreateOrReplaceQueue.
+        player.PlayInNamedQueue("Search (FIRSTTAP): hello", [eph1.Id, eph2.Id, eph3.Id], startAt: 0, shuffle: false);
+
+        Assert.NotNull(lib.GetTrack(eph1.Id));
+        Assert.NotNull(lib.GetTrack(eph2.Id));
+        Assert.NotNull(lib.GetTrack(eph3.Id));
+        Assert.Equal(eph1.Id, queues.Active.CurrentTrackId);
+
+        var eph4 = Track.MakeEphemeral("firsttap", "s4", "New Queue Song 4", artist: "Artist", durationSeconds: 180);
+        lib.RegisterEphemeralTrack(eph4);
+        player.PlayInNewQueue([eph4.Id]);
+        Assert.NotNull(lib.GetTrack(eph4.Id));
+        Assert.Equal(eph4.Id, queues.Active.CurrentTrackId);
+    }
 }

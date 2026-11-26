@@ -569,9 +569,14 @@ class PlayerController(
     fun playInNewQueue(ids: List<String>, startAt: Int = 0, name: String? = null) {
         if (ids.isEmpty()) return
         persistPosition()
-        val newId = queues.addQueue(name = name)
-        queues.setActive(newId)
-        play(ids, startAt = startAt)
+        queues.addQueue(
+            name = name,
+            trackIds = ids,
+            startAt = startAt,
+            activate = true,
+        )
+        _state.value = _state.value.copy(errorMessage = null, playbackError = null)
+        startCurrent(autoplay = true)
     }
 
     fun playInNamedQueue(

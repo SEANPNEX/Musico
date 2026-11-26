@@ -65,7 +65,11 @@ class QueueStore(
         runCatching {
             Persistence.save(QueueFile(queues = current.queues, activeId = current.activeId), file)
         }
-        onReferencedTrackIdsChanged?.invoke(current.queues.flatMapTo(HashSet()) { it.trackIds })
+    }
+
+    private fun saveAndNotify() {
+        save()
+        onReferencedTrackIdsChanged?.invoke(allReferencedTrackIds())
     }
 
     fun update(id: String, block: (PlayQueue) -> PlayQueue) {
@@ -75,7 +79,7 @@ class QueueStore(
         val updatedList = current.queues.toMutableList()
         updatedList[index] = block(updatedList[index])
         _state.value = current.copy(queues = updatedList)
-        save()
+        saveAndNotify()
     }
 
     fun updateActive(block: (PlayQueue) -> PlayQueue) {
@@ -94,15 +98,27 @@ class QueueStore(
         _state.value = current.copy(queues = updatedList)
     }
 
-    fun addQueue(name: String? = null, selectAsViewed: Boolean = true): String {
+    fun addQueue(
+        name: String? = null,
+        selectAsViewed: Boolean = true,
+        trackIds: List<String> = emptyList(),
+        startAt: Int = 0,
+        activate: Boolean = false,
+    ): String {
         val current = _state.value
         val title = resolveQueueTitle(name, current.queues)
-        val queue = PlayQueue(name = title)
+        val base = PlayQueue(name = title)
+        val queue = if (trackIds.isNotEmpty()) base.replace(trackIds, startAt = startAt) else base
         _state.value = current.copy(
             queues = current.queues + queue,
-            viewedId = if (selectAsViewed) queue.id else current.viewedId,
+            activeId = if (activate) queue.id else current.activeId,
+            viewedId = if (selectAsViewed || activate) queue.id else current.viewedId,
         )
-        save()
+        if (trackIds.isNotEmpty()) {
+            saveAndNotify()
+        } else {
+            save()
+        }
         return queue.id
     }
 
@@ -131,11 +147,11 @@ class QueueStore(
             val nextActiveId = if (wasActive) created.id else current.activeId
             val nextViewedId = if (wasViewed) created.id else current.viewedId
             _state.value = QueueUiState(queues = nextQueues, activeId = nextActiveId, viewedId = nextViewedId)
-            save()
+            saveAndNotify()
             created.id to wasActive
         } else {
             _state.value = current.copy(queues = current.queues + created)
-            save()
+            saveAndNotify()
             created.id to false
         }
     }
@@ -166,7 +182,7 @@ class QueueStore(
         val nextActiveId = if (current.activeId == id) fallbackId else current.activeId
         val nextViewedId = if (current.viewedId == id) fallbackId else current.viewedId
         _state.value = QueueUiState(queues = nextQueues, activeId = nextActiveId, viewedId = nextViewedId)
-        save()
+        saveAndNotify()
     }
 
     fun selectViewedQueue(id: String) {
@@ -194,7 +210,7 @@ class QueueStore(
             queue.removeTracksNotIn(valid)
         }
         _state.value = current.copy(queues = nextQueues)
-        save()
+        saveAndNotify()
     }
 
     fun remapTracks(idMap: Map<String, String>) {
@@ -221,7 +237,7 @@ class QueueStore(
         }
         if (changed) {
             _state.value = current.copy(queues = nextQueues)
-            save()
+            saveAndNotify()
         }
     }
 }

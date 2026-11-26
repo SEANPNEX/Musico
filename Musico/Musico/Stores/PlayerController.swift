@@ -628,8 +628,9 @@ final class PlayerController {
     func playInNewQueue(_ ids: [String], startAt: Int = 0, name: String? = nil) {
         guard !ids.isEmpty else { return }
         persistPosition()
-        queues.setActive(queues.addQueue(name: name))
-        play(ids, startAt: startAt)
+        _ = queues.addQueue(name: name, trackIDs: ids, startAt: startAt, activate: true)
+        errorMessage = nil
+        startCurrent(autoplay: true)
     }
 
     func playInNamedQueue(_ ids: [String], name: String, startAt: Int = 0, shuffle: Bool? = nil) {
