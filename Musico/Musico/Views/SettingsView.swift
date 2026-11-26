@@ -8,6 +8,7 @@ struct SettingsView: View {
 
     @Environment(\.themeManager) private var themeManager
     @Environment(\.languageManager) private var languageManager
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(LibraryStore.self) private var library: LibraryStore?
     #if targetEnvironment(macCatalyst)
     @Environment(\.updateManager) private var updateManager
@@ -90,7 +91,10 @@ struct SettingsView: View {
     // MARK: - Sections
 
     private var appearanceSection: some View {
-        Section(L10n.tr("Appearance")) {
+        let effectiveScheme = themeManager.preferredColorScheme ?? colorScheme
+        return Section(L10n.tr("Appearance")) {
+            appearanceLivePreviewCard
+
             Picker(L10n.tr("Theme Mode"), selection: Binding(
                 get: { themeManager.settings.themeMode },
                 set: { themeManager.setThemeMode($0) }
@@ -148,6 +152,28 @@ struct SettingsView: View {
                 }
             }
 
+            if themeManager.hasLowContrast(fallbackScheme: effectiveScheme) {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(L10n.tr("Low Contrast Warning"))
+                                .font(.subheadline.weight(.semibold))
+                            Text(L10n.tr("Current text or accent color may be hard to read against the background."))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Button(L10n.tr("Auto-fix Contrast")) {
+                        themeManager.autoFixContrast(fallbackScheme: effectiveScheme)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
+                .padding(.vertical, 4)
+            }
+
             backgroundImageControls
 
             #if targetEnvironment(macCatalyst)
@@ -174,6 +200,74 @@ struct SettingsView: View {
                 themeManager.resetToDefaults()
             }
         }
+    }
+
+    private var appearanceLivePreviewCard: some View {
+        let bgColor = themeManager.activeBackgroundColor ?? Color(.secondarySystemBackground)
+        let fgPrimary = themeManager.primaryForegroundColor ?? Color.primary
+        let fgSecondary = themeManager.secondaryForegroundColor ?? Color.secondary
+        let accent = themeManager.accentColor
+
+        return ZStack {
+            bgColor
+            if let previewImage {
+                GeometryReader { proxy in
+                    Image(uiImage: previewImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .blur(radius: themeManager.settings.backgroundImageBlur * 0.6)
+                        .clipped()
+                        .opacity(themeManager.settings.backgroundImageOpacity)
+                }
+            }
+            HStack(spacing: 12) {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(accent.opacity(0.20))
+                    .frame(width: 44, height: 44)
+                    .overlay {
+                        Image(systemName: "music.note")
+                            .font(.headline)
+                            .foregroundStyle(accent)
+                    }
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(L10n.tr("Now Playing Preview"))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(fgPrimary)
+                        .lineLimit(1)
+                    Text(L10n.tr("Sample Artist — Sample Album"))
+                        .font(.caption)
+                        .foregroundStyle(fgSecondary)
+                        .lineLimit(1)
+                    Capsule()
+                        .fill(fgSecondary.opacity(0.25))
+                        .frame(height: 4)
+                        .overlay(alignment: .leading) {
+                            GeometryReader { barProxy in
+                                Capsule()
+                                    .fill(accent)
+                                    .frame(width: barProxy.size.width * 0.62, height: 4)
+                            }
+                        }
+                        .padding(.top, 3)
+                }
+
+                Spacer(minLength: 4)
+
+                Image(systemName: "play.circle.fill")
+                    .font(.title2)
+                    .foregroundStyle(accent)
+            }
+            .padding(12)
+        }
+        .frame(height: 76)
+        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.75)
+        }
+        .padding(.vertical, 4)
     }
 
     private var backgroundPresetRow: some View {
@@ -215,7 +309,8 @@ struct SettingsView: View {
                                 .foregroundStyle(isSelected ? themeManager.accentColor : .secondary)
                                 .lineLimit(1)
                         }
-                        .frame(minWidth: 52)
+                        .frame(minWidth: 52, minHeight: 52)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
@@ -263,7 +358,8 @@ struct SettingsView: View {
                                 .foregroundStyle(isSelected ? themeManager.accentColor : .secondary)
                                 .lineLimit(1)
                         }
-                        .frame(minWidth: 52)
+                        .frame(minWidth: 52, minHeight: 52)
+                        .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
                 }
@@ -346,6 +442,25 @@ struct SettingsView: View {
                             set: { themeManager.setBackgroundImageOpacity($0) }
                         ),
                         in: AppearanceSettings.backgroundImageOpacityRange
+                    )
+                }
+                .padding(.top, 2)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    HStack {
+                        Text(L10n.tr("Background Blur"))
+                        Spacer()
+                        Text("\(Int(themeManager.settings.backgroundImageBlur.rounded())) pt")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    Slider(
+                        value: Binding(
+                            get: { themeManager.settings.backgroundImageBlur },
+                            set: { themeManager.setBackgroundImageBlur($0) }
+                        ),
+                        in: AppearanceSettings.backgroundImageBlurRange,
+                        step: 1
                     )
                 }
                 .padding(.top, 2)

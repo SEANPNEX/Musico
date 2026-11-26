@@ -183,4 +183,79 @@ final class ThemeManagerTests: XCTestCase {
         let reloaded = ThemeManager(directory: dir)
         XCTAssertEqual(reloaded.settings, AppearanceSettings())
     }
+
+    func testBlurLyricsTypographyAndBackwardCompatibleDecoding() throws {
+        let dir = makeTempDir()
+        // Legacy JSON missing backgroundImageBlur, lyricsFontSize, lyricsAlignment
+        let legacyJSON = """
+        {
+          "themeMode": "dark",
+          "backgroundPreset": "obsidian",
+          "foregroundPreset": "emerald",
+          "backgroundImageOpacity": 0.6,
+          "backgroundOpacity": 0.8
+        }
+        """
+        try Data(legacyJSON.utf8).write(to: dir.appendingPathComponent("appearance.json"))
+
+        let manager = ThemeManager(directory: dir)
+        XCTAssertEqual(manager.settings.themeMode, .dark)
+        XCTAssertEqual(manager.settings.backgroundPreset, .obsidian)
+        XCTAssertEqual(manager.settings.foregroundPreset, .emerald)
+        XCTAssertEqual(manager.settings.backgroundImageBlur, 0.0, accuracy: 0.0001)
+        XCTAssertEqual(manager.settings.lyricsFontSize, .medium)
+        XCTAssertEqual(manager.settings.lyricsAlignment, .leading)
+
+        // Clamping and non-finite blur
+        manager.setBackgroundImageBlur(-5)
+        XCTAssertEqual(manager.settings.backgroundImageBlur, 0.0, accuracy: 0.0001)
+        manager.setBackgroundImageBlur(99)
+        XCTAssertEqual(manager.settings.backgroundImageBlur, 24.0, accuracy: 0.0001)
+        manager.setBackgroundImageBlur(.nan)
+        XCTAssertEqual(manager.settings.backgroundImageBlur, 0.0, accuracy: 0.0001)
+        manager.setBackgroundImageBlur(12)
+
+        manager.setLyricsFontSize(.large)
+        manager.setLyricsAlignment(.center)
+
+        let reloaded = ThemeManager(directory: dir)
+        XCTAssertEqual(reloaded.settings.backgroundImageBlur, 12.0, accuracy: 0.0001)
+        XCTAssertEqual(reloaded.settings.lyricsFontSize, .large)
+        XCTAssertEqual(reloaded.settings.lyricsAlignment, .center)
+    }
+
+    func testWCAGContrastRatioAndAutoFixContrast() {
+        let maxRatio = ThemeColorHex.contrastRatio(hexA: "#FFFFFF", hexB: "#000000") ?? 0
+        XCTAssertEqual(maxRatio, 21.0, accuracy: 0.01)
+        let sameRatio = ThemeColorHex.contrastRatio(hexA: "#336699", hexB: "#336699") ?? 0
+        XCTAssertEqual(sameRatio, 1.0, accuracy: 0.001)
+
+        // Linearized sRGB check for mid-gray #808080 (~0.21586)
+        let grayLum = ThemeColorHex.relativeLuminance(hex: "#808080") ?? -1
+        XCTAssertEqual(grayLum, 0.21586, accuracy: 0.001)
+
+        let dir = makeTempDir()
+        let manager = ThemeManager(directory: dir)
+        manager.setCustomBackgroundHex("#111827")
+        manager.setCustomForegroundHex("#1F2937")
+        manager.setCustomAccentHex("#1E293B")
+        XCTAssertTrue(manager.hasLowContrast(fallbackScheme: .dark))
+        XCTAssertLessThan(manager.foregroundContrastRatio(fallbackScheme: .dark), 4.5)
+        XCTAssertLessThan(manager.accentContrastRatio(fallbackScheme: .dark), 3.0)
+
+        manager.autoFixContrast(fallbackScheme: .dark)
+        XCTAssertFalse(manager.hasLowContrast(fallbackScheme: .dark))
+        XCTAssertGreaterThanOrEqual(manager.foregroundContrastRatio(fallbackScheme: .dark), 4.5)
+        XCTAssertGreaterThanOrEqual(manager.accentContrastRatio(fallbackScheme: .dark), 3.0)
+
+        // Also test light background low contrast auto-fix
+        manager.setCustomBackgroundHex("#F8FAFC")
+        manager.setCustomForegroundHex("#E2E8F0")
+        manager.setCustomAccentHex("#F1F5F9")
+        XCTAssertTrue(manager.hasLowContrast(fallbackScheme: .light))
+        manager.autoFixContrast(fallbackScheme: .light)
+        XCTAssertFalse(manager.hasLowContrast(fallbackScheme: .light))
+        XCTAssertGreaterThanOrEqual(manager.foregroundContrastRatio(fallbackScheme: .light), 4.5)
+        XCTAssertGreaterThanOrEqual(manager.accentContrastRatio(fallbackScheme: .light), 3.0)
+    }
 }

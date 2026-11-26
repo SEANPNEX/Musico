@@ -15,6 +15,7 @@ struct SidebarRootView: View {
     @Environment(NewPlaylistPrompt.self) private var newPlaylist
     @Environment(CloudExportPrompt.self) private var cloudExport
     @Environment(SongInfoPrompt.self) private var songInfo
+    @Environment(DeleteItemPrompt.self) private var deletePrompt: DeleteItemPrompt?
     @Environment(\.appNavigation) private var navigation
     @Environment(\.downloadManager) private var downloadManager
     @Environment(\.extensionStore) private var extensionStore
@@ -111,23 +112,33 @@ struct SidebarRootView: View {
                 if !show { sidePanel = nil }
             }
         })) {
-            panel
-                .inspectorColumnWidth(min: 300, ideal: 360, max: 460)
-                .background { ThemeBackdropView() }
-                .environment(library)
-                .environment(player)
-                .environment(queues)
-                .environment(history)
-                .environment(newPlaylist)
-                .environment(cloudExport)
-                .environment(songInfo)
-                .environment(\.appNavigation, navigation)
-                .environment(\.downloadManager, downloadManager)
-                .environment(\.extensionStore, extensionStore)
-                .environment(\.lyricsStore, lyricsStore)
-                .environment(\.languageManager, languageManager)
-                .environment(\.locale, languageManager.effectiveLocale)
-                .applyTheme(themeManager)
+            inspectorContent
+        }
+    }
+
+    @ViewBuilder
+    private var inspectorContent: some View {
+        let base = panel
+            .inspectorColumnWidth(min: 300, ideal: 360, max: 460)
+            .background { ThemeBackdropView() }
+            .environment(library)
+            .environment(player)
+            .environment(queues)
+            .environment(history)
+            .environment(newPlaylist)
+            .environment(cloudExport)
+            .environment(songInfo)
+            .environment(\.appNavigation, navigation)
+            .environment(\.downloadManager, downloadManager)
+            .environment(\.extensionStore, extensionStore)
+            .environment(\.lyricsStore, lyricsStore)
+            .environment(\.languageManager, languageManager)
+            .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
+        if let deletePrompt {
+            base.environment(deletePrompt)
+        } else {
+            base
         }
     }
 

@@ -388,10 +388,13 @@ struct PlaylistDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.languageManager) private var languageManager
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.toastManager) private var toastManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @State private var showAddSongs = false
     @State private var showRenameSheet = false
     @State private var confirmDelete = false
+    @State private var reorderFeedbackTrigger = 0
 
     private var isFavourites: Bool {
         if case .favourites = ref { return true }
@@ -458,10 +461,11 @@ struct PlaylistDetailView: View {
                         isAvailable: library.isAvailable(track),
                         onTap: { player.playInNamedQueue(trackIDs, name: title, startAt: index) },
                         onMove: { from, to in
+                            reorderFeedbackTrigger += 1
                             library.movePlaylistTracks(id, from: IndexSet(integer: from), to: to)
                         },
                         onRemove: {
-                            library.removeFromPlaylist(id, at: IndexSet(integer: index))
+                            removePlaylistOffsets(IndexSet(integer: index), playlistID: id)
                         },
                         removeHelp: L10n.tr("Remove from Playlist")
                     )
@@ -469,12 +473,15 @@ struct PlaylistDetailView: View {
                         TrackMenuItems(ids: [track.id], favouriteID: track.id)
                         Divider()
                         Button(L10n.tr("Remove from Playlist"), systemImage: "minus.circle", role: .destructive) {
-                            library.removeFromPlaylist(id, at: IndexSet(integer: index))
+                            removePlaylistOffsets(IndexSet(integer: index), playlistID: id)
                         }
                     }
                 }
-                .onDelete { library.removeFromPlaylist(id, at: $0) }
-                .onMove { library.movePlaylistTracks(id, from: $0, to: $1) }
+                .onDelete { removePlaylistOffsets($0, playlistID: id) }
+                .onMove { source, destination in
+                    reorderFeedbackTrigger += 1
+                    library.movePlaylistTracks(id, from: source, to: destination)
+                }
             } else {
                 ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
                     ReorderableTrackRow(
@@ -486,12 +493,14 @@ struct PlaylistDetailView: View {
                         isAvailable: library.isAvailable(track),
                         onTap: { player.playInNamedQueue(trackIDs, name: title, startAt: index) },
                         onMove: { from, to in
+                            reorderFeedbackTrigger += 1
                             library.moveFavourites(currentTrackIDs: trackIDs, from: IndexSet(integer: from), to: to)
                         }
                     )
                     .contextMenu { TrackMenuItems(ids: [track.id], favouriteID: track.id) }
                 }
                 .onMove { source, destination in
+                    reorderFeedbackTrigger += 1
                     library.moveFavourites(currentTrackIDs: trackIDs, from: source, to: destination)
                 }
             }
@@ -584,6 +593,21 @@ struct PlaylistDetailView: View {
                     .environment(\.locale, languageManager.effectiveLocale)
                     .applyTheme(themeManager)
             }
+        }
+        #if !targetEnvironment(macCatalyst)
+        .sensoryFeedback(.impact(weight: .light), trigger: reorderFeedbackTrigger)
+        #endif
+    }
+
+    private func removePlaylistOffsets(_ offsets: IndexSet, playlistID: UUID) {
+        let previousTrackIDs = library.playlists.first { $0.id == playlistID }?.trackIDs ?? []
+        library.removeFromPlaylist(playlistID, at: offsets)
+        toastManager.show(
+            L10n.tr("Removed from playlist"),
+            systemImage: "minus.circle",
+            undoTitle: L10n.tr("Undo")
+        ) {
+            library.restorePlaylistTracks(playlistID, trackIDs: previousTrackIDs)
         }
     }
 

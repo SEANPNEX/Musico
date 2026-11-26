@@ -37,6 +37,7 @@ struct AlbumGrid: View {
 
 private struct AlbumGridCard: View {
     let album: LibraryStore.Album
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
 
     var body: some View {
@@ -51,8 +52,8 @@ private struct AlbumGridCard: View {
                 Text(L10n.displayAlbum(album.title)).font(.subheadline.weight(.medium)).lineLimit(1)
                 Text(L10n.displayArtist(album.artist)).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             }
-            .scaleEffect(isHovered ? 1.025 : 1.0)
-            .animation(.easeOut(duration: 0.16), value: isHovered)
+            .scaleEffect(!reduceMotion && isHovered ? 1.025 : 1.0)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovered)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)

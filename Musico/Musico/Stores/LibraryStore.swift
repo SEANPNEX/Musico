@@ -5,11 +5,17 @@ enum LibraryError: LocalizedError {
     case duplicateRoot
     case notAFolder
     case invalidCloudURL
+    case cannotDeleteAppFolderRoot
+    case fileNotFoundOnDisk
+    case cannotDeleteCloudItem
     var errorDescription: String? {
         switch self {
         case .duplicateRoot: L10n.trNonisolated("That location is already in your library.")
         case .notAFolder: L10n.trNonisolated("That location could not be opened as a folder.")
         case .invalidCloudURL: L10n.trNonisolated("Enter a valid YouTube, Bilibili, or Google Drive link.")
+        case .cannotDeleteAppFolderRoot: L10n.trNonisolated("The built-in music folder cannot be deleted from disk.")
+        case .fileNotFoundOnDisk: L10n.trNonisolated("The file or folder could not be found on disk.")
+        case .cannotDeleteCloudItem: L10n.trNonisolated("Cloud items can only be removed from the library.")
         }
     }
 }
@@ -85,6 +91,7 @@ final class LibraryStore {
     /// On the Mac the built-in root is the user's Music folder, which they may not want indexed.
     @ObservationIgnored let appFolderRemovable: Bool
 
+    @ObservationIgnored var onBeforeDeletingTracks: ((Set<String>) -> Void)?
     @ObservationIgnored var onTracksRemoved: ((Set<String>) -> Void)?
     @ObservationIgnored var onTrackUpdated: ((Track) -> Void)?
     @ObservationIgnored var onFolderAdded: ((_ name: String, _ trackIDs: [String]) -> Void)?
@@ -1177,6 +1184,177 @@ final class LibraryStore {
             let artwork = self.artwork
             Task.detached(priority: .utility) { artwork.prune(keeping: keys) }
         }
+    }
+
+    func displayLocation(for track: Track) -> String {
+        if track.isEphemeral {
+            return L10n.tr("Cloud Search")
+        }
+        if let fileURL = url(for: track) {
+            return fileURL.path
+        }
+        if let root = self.root(track.rootID) {
+            let rootName = L10n.displayRootName(root)
+            if track.relativePath.isEmpty {
+                return rootName
+            }
+            return track.isCloud ? "\(rootName) / \(track.relativePath)" : "\(rootName)/\(track.relativePath)"
+        }
+        return track.relativePath
+    }
+
+    func displayLocation(forRoot rootID: UUID, path: String) -> String {
+        let normPath = LibraryRoot.normalizeFolderPath(path)
+        if let rootURL = rootURLs[rootID] {
+            let targetURL = normPath.isEmpty ? rootURL : rootURL.appendingPathComponent(normPath, isDirectory: true)
+            return targetURL.path
+        }
+        if let root = self.root(rootID) {
+            let rootName = L10n.displayRootName(root)
+            if normPath.isEmpty {
+                return rootName
+            }
+            return root.kind.isCloud ? "\(rootName) / \(normPath)" : "\(rootName)/\(normPath)"
+        }
+        return normPath
+    }
+
+    /// Removes a single song from the library by excluding its relative path so rescans will not re-add it.
+    func removeTrackFromLibrary(_ trackID: String) {
+        guard let track = byID[trackID] else { return }
+        let normRel = LibraryRoot.normalizeFolderPath(track.relativePath)
+        if !normRel.isEmpty, let rootIndex = roots.firstIndex(where: { $0.id == track.rootID }) {
+            let current = roots[rootIndex].normalizedExcludedPaths.map(LibraryRoot.normalizeFolderPath).filter { !$0.isEmpty }
+            let alreadyCovered = current.contains { ex in normRel == ex || normRel.hasPrefix(ex + "/") }
+            if !alreadyCovered {
+                var next = current
+                next.append(normRel)
+                next.sort()
+                roots[rootIndex].excludedPaths = next
+            }
+        }
+        tracks.removeAll { $0.id == trackID }
+        forget([trackID])
+        saveLibrary()
+        let keys = Set(tracks.compactMap(\.artworkKey))
+        let artwork = self.artwork
+        Task.detached(priority: .utility) { artwork.prune(keeping: keys) }
+    }
+
+    private static func trashOrRemoveItem(at url: URL) throws {
+        let fm = FileManager.default
+        #if targetEnvironment(macCatalyst)
+        try fm.trashItem(at: url, resultingItemURL: nil)
+        #else
+        do {
+            try fm.trashItem(at: url, resultingItemURL: nil)
+        } catch {
+            try fm.removeItem(at: url)
+        }
+        #endif
+    }
+
+    /// Deletes a local non-ephemeral track's file from disk (Trash with iOS fallback) and removes it from the library.
+    func deleteTrackFile(_ trackID: String) throws {
+        guard let track = byID[trackID], !track.isCloud, !track.isEphemeral else {
+            throw LibraryError.cannotDeleteCloudItem
+        }
+        guard let fileURL = url(for: track), FileManager.default.fileExists(atPath: fileURL.path) else {
+            throw LibraryError.fileNotFoundOnDisk
+        }
+        onBeforeDeletingTracks?([trackID])
+        try Self.trashOrRemoveItem(at: fileURL)
+
+        tracks.removeAll { $0.id == trackID }
+        forget([trackID])
+        saveLibrary()
+        let keys = Set(tracks.compactMap(\.artworkKey))
+        let artwork = self.artwork
+        Task.detached(priority: .utility) { artwork.prune(keeping: keys) }
+    }
+
+    /// Deletes a local folder (picked root or subfolder) from disk (Trash with iOS fallback) and removes affected library state.
+    func deleteFolderFiles(rootID: UUID, path: String) throws {
+        let normPath = LibraryRoot.normalizeFolderPath(path)
+        guard let rootIndex = roots.firstIndex(where: { $0.id == rootID }) else {
+            throw LibraryError.notAFolder
+        }
+        let targetRoot = roots[rootIndex]
+        guard targetRoot.kind.isLocal else {
+            throw LibraryError.cannotDeleteCloudItem
+        }
+        if targetRoot.kind == .appFolder && normPath.isEmpty {
+            throw LibraryError.cannotDeleteAppFolderRoot
+        }
+        guard let rootURL = rootURLs[rootID] else {
+            throw LibraryError.fileNotFoundOnDisk
+        }
+        let targetURL = normPath.isEmpty ? rootURL : rootURL.appendingPathComponent(normPath, isDirectory: true)
+        guard FileManager.default.fileExists(atPath: targetURL.path) else {
+            throw LibraryError.fileNotFoundOnDisk
+        }
+
+        let removedIDs: Set<String>
+        if normPath.isEmpty {
+            removedIDs = Set(tracks.filter { $0.rootID == rootID }.map(\.id))
+        } else {
+            removedIDs = Set(tracks.filter {
+                $0.rootID == rootID && LibraryRoot.folder(normPath, contains: $0.relativePath)
+            }.map(\.id))
+        }
+
+        onBeforeDeletingTracks?(removedIDs)
+        try Self.trashOrRemoveItem(at: targetURL)
+
+        if normPath.isEmpty {
+            driveCrawlTasks[rootID]?.cancel()
+            driveCrawlTasks[rootID] = nil
+            driveCrawlPriorities[rootID] = nil
+            cloudSyncProgress[rootID] = nil
+            knownDriveSubfolders[rootID] = nil
+            let keyPrefix = "\(rootID.uuidString)::"
+            for key in onDemandDriveFolderTasks.keys where key.hasPrefix(keyPrefix) {
+                onDemandDriveFolderTasks[key]?.cancel()
+                onDemandDriveFolderTasks[key] = nil
+            }
+            if targetRoot.kind == .picked {
+                rootURLs[rootID]?.stopAccessingSecurityScopedResource()
+            }
+            rootURLs[rootID] = nil
+            cloudSyncErrors[rootID] = nil
+            roots.remove(at: rootIndex)
+            tracks.removeAll { $0.rootID == rootID }
+            for key in folderOrders.keys where key.hasPrefix(keyPrefix) {
+                folderOrders.removeValue(forKey: key)
+            }
+        } else {
+            if !removedIDs.isEmpty {
+                tracks.removeAll { removedIDs.contains($0.id) }
+            }
+            if rootID == LibraryRoot.appFolderID && !normPath.contains("/") {
+                knownAppFolders.remove(normPath)
+            }
+            if var tracked = roots[rootIndex].trackedSubfolders, !tracked.isEmpty {
+                for key in tracked.keys where LibraryRoot.folder(normPath, contains: key) {
+                    tracked.removeValue(forKey: key)
+                }
+                roots[rootIndex].trackedSubfolders = tracked.isEmpty ? nil : tracked
+            }
+            if var excluded = roots[rootIndex].excludedPaths, !excluded.isEmpty {
+                excluded.removeAll { LibraryRoot.folder(normPath, contains: $0) }
+                roots[rootIndex].excludedPaths = excluded.isEmpty ? nil : excluded
+            }
+            let prefixKey = Self.folderKey(rootID: rootID, path: normPath)
+            for key in folderOrders.keys where key == prefixKey || key.hasPrefix(prefixKey + "/") {
+                folderOrders.removeValue(forKey: key)
+            }
+        }
+
+        forget(removedIDs)
+        saveLibrary()
+        let keys = Set(tracks.compactMap(\.artworkKey))
+        let artwork = self.artwork
+        Task.detached(priority: .utility) { artwork.prune(keeping: keys) }
     }
 
     /// Clears excluded subfolders on a root and rescans so their songs return.
@@ -2500,6 +2678,12 @@ final class LibraryStore {
     func removeFromPlaylist(_ id: UUID, at offsets: IndexSet) {
         updatePlaylist(id) { playlist in
             for index in offsets.reversed() where playlist.trackIDs.indices.contains(index) { playlist.trackIDs.remove(at: index) }
+        }
+    }
+
+    func restorePlaylistTracks(_ id: UUID, trackIDs: [String]) {
+        updatePlaylist(id) { playlist in
+            playlist.trackIDs = trackIDs
         }
     }
 

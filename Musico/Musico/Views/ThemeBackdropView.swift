@@ -12,6 +12,7 @@ struct ThemeBackdropView: View {
         let baseColor = themeManager.activeBackgroundColor ?? Color(.systemBackground)
         let windowOpacity = themeManager.effectiveBackgroundOpacity
         let imageOpacity = themeManager.settings.backgroundImageOpacity
+        let imageBlur = themeManager.settings.backgroundImageBlur
 
         Group {
             if let loadedImage {
@@ -22,6 +23,7 @@ struct ThemeBackdropView: View {
                             .resizable()
                             .scaledToFill()
                             .frame(width: proxy.size.width, height: proxy.size.height)
+                            .blur(radius: imageBlur)
                             .clipped()
                             .opacity(imageOpacity)
                     }

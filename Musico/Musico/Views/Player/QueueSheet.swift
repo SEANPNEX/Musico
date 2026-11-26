@@ -18,6 +18,10 @@ struct QueueSheet: View {
         .modifier(NewPlaylistAlert())
         .modifier(CloudExportHostModifier())
         .modifier(SongInfoHostModifier())
+        .modifier(DeleteConfirmHostModifier())
+        .overlay(alignment: .bottom) {
+            ToastOverlayView()
+        }
     }
 }
 
@@ -31,8 +35,10 @@ struct QueuesView: View {
     @Environment(QueueStore.self) private var queues
     @Environment(\.languageManager) private var languageManager
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.toastManager) private var toastManager
     @State private var renaming: PlayQueue?
     @State private var clearingQueue: PlayQueue?
+    @State private var reorderFeedbackTrigger = 0
 
     var body: some View {
         let canDeleteQueues = queues.queues.count > 1
@@ -77,9 +83,24 @@ struct QueuesView: View {
                 titleVisibility: .visible,
                 presenting: clearingQueue
             ) { target in
-                Button(L10n.tr("Clear Queue"), role: .destructive) { player.clearQueue(target.id) }
+                Button(L10n.tr("Clear Queue"), role: .destructive) {
+                    let snapshot = target
+                    let ephemeralSnapshots = snapshot.trackIDs.compactMap { library.track($0) }.filter(\.isEphemeral)
+                    let wasPlaying = snapshot.id == queues.activeID && (player.isPlaying || player.isBuffering)
+                    player.clearQueue(target.id)
+                    toastManager.show(
+                        L10n.tr("Cleared queue"),
+                        systemImage: "eraser",
+                        undoTitle: L10n.tr("Undo")
+                    ) {
+                        player.restoreQueue(snapshot, ephemeralTracks: ephemeralSnapshots, autoplay: wasPlaying)
+                    }
+                }
                 Button(L10n.tr("Cancel"), role: .cancel) {}
             }
+            #if !targetEnvironment(macCatalyst)
+            .sensoryFeedback(.impact(weight: .light), trigger: reorderFeedbackTrigger)
+            #endif
             .sheet(item: $renaming) { queue in
                 NamePromptSheet(
                     title: L10n.tr("Rename Queue"),
@@ -280,6 +301,7 @@ struct QueuesView: View {
                                 isActive: isRowActive,
                                 onTap: { player.playTrack(inQueue: viewed.id, at: index) },
                                 onMove: { from, to in
+                                    reorderFeedbackTrigger += 1
                                     player.moveInQueue(from: IndexSet(integer: from), to: to, inQueue: viewed.id)
                                 },
                                 onRemove: { player.removeFromQueue(at: index, inQueue: viewed.id) },
@@ -310,7 +332,10 @@ struct QueuesView: View {
                 .onDelete { offsets in
                     for index in offsets.sorted(by: >) { player.removeFromQueue(at: index, inQueue: viewed.id) }
                 }
-                .onMove { player.moveInQueue(from: $0, to: $1, inQueue: viewed.id) }
+                .onMove { source, destination in
+                    reorderFeedbackTrigger += 1
+                    player.moveInQueue(from: source, to: destination, inQueue: viewed.id)
+                }
             } header: {
                 HStack(spacing: 6) {
                     MarqueeText(

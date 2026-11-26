@@ -11,6 +11,8 @@ struct PlaybackScrubber: View {
 
     var style: Style = .stacked
     @Environment(PlayerController.self) private var player
+    @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// Slider position while the user is dragging. Only used while `isScrubbing`:
     /// the system slider also writes through its binding when playback moves the value.
     @State private var scrubTime: Double = 0
@@ -30,9 +32,17 @@ struct PlaybackScrubber: View {
                 isScrubbing = false
             }
         }
+        .tint(isScrubbing ? themeManager.accentColor : nil)
+        .scaleEffect(y: (!reduceMotion && isScrubbing) ? 1.08 : 1.0)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: isScrubbing)
+
         let elapsed = Text(formatTime(shown))
+            .fontWeight(isScrubbing ? .semibold : .regular)
+            .foregroundStyle(isScrubbing ? themeManager.accentColor : .secondary)
             .contentTransition(.numericText())
         let remaining = Text("-" + formatTime(max(player.duration - shown, 0)))
+            .fontWeight(isScrubbing ? .semibold : .regular)
+            .foregroundStyle(isScrubbing ? themeManager.accentColor : .secondary)
             .contentTransition(.numericText())
         Group {
             switch style {

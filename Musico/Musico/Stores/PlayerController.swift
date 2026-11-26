@@ -7,6 +7,15 @@ import UIKit
 /// lock-screen controls, Now Playing info, sleep timer.
 @MainActor @Observable
 final class PlayerController {
+    private struct PlayerSettingsFile: Codable {
+        var enabled: Bool = false
+        var preamp: Float = 0
+        var gains: [Float] = Array(repeating: 0, count: EQSettings.frequencies.count)
+        var presetName: String? = "Flat"
+        var volume: Float? = nil
+        var isMuted: Bool? = nil
+    }
+
     enum SleepMode: Equatable {
         case off
         case until(Date)
@@ -26,9 +35,31 @@ final class PlayerController {
     var eq: EQSettings {
         didSet {
             engine.apply(eq)
-            try? Persistence.save(eq, to: settingsURL)
+            persistSettings()
         }
     }
+    var volume: Float {
+        didSet {
+            let clamped = Self.clampVolume(volume)
+            if volume != clamped {
+                volume = clamped
+                return
+            }
+            if clamped > 0, isMuted {
+                isMuted = false
+                return
+            }
+            applyEffectiveVolume()
+            persistSettings()
+        }
+    }
+    var isMuted: Bool {
+        didSet {
+            applyEffectiveVolume()
+            persistSettings()
+        }
+    }
+    @ObservationIgnored private var preMuteVolume: Float = 1.0
 
     @ObservationIgnored let library: LibraryStore
     @ObservationIgnored let queues: QueueStore
@@ -67,9 +98,28 @@ final class PlayerController {
         self.engine = engine
         self.settingsURL = settingsURL
         self.cloudAudio = cloudAudio
-        eq = Persistence.load(EQSettings.self, from: settingsURL) ?? EQSettings()
+        let loadedSettings = Persistence.load(PlayerSettingsFile.self, from: settingsURL)
+        if let loadedSettings {
+            eq = EQSettings(
+                enabled: loadedSettings.enabled,
+                preamp: loadedSettings.preamp,
+                gains: loadedSettings.gains,
+                presetName: loadedSettings.presetName
+            )
+            let loadedVolume = Self.clampVolume(loadedSettings.volume ?? 1.0)
+            volume = loadedVolume
+            preMuteVolume = loadedVolume > 0 ? loadedVolume : 1.0
+            isMuted = loadedSettings.isMuted ?? false
+        } else {
+            eq = EQSettings()
+            volume = 1.0
+            preMuteVolume = 1.0
+            isMuted = false
+        }
         engine.apply(eq)
+        applyEffectiveVolume()
         engine.onTrackEnded = { [weak self] in self?.trackDidEnd() }
+        library.onBeforeDeletingTracks = { [weak self] ids in self?.prepareForDeletingTracks(ids) }
         library.onTracksRemoved = { [weak self] ids in self?.tracksRemoved(ids) }
         library.onTrackUpdated = { [weak self] track in self?.trackUpdated(track) }
         library.onFolderAdded = { [weak self] name, trackIDs in self?.syncFolderQueue(name: name, trackIDs: trackIDs) }
@@ -893,6 +943,39 @@ final class PlayerController {
         }
     }
 
+    func toggleMute() {
+        if isMuted {
+            isMuted = false
+            if volume <= 0 {
+                volume = preMuteVolume > 0 ? preMuteVolume : 0.5
+            }
+        } else {
+            if volume > 0 { preMuteVolume = volume }
+            isMuted = true
+        }
+    }
+
+    private static func clampVolume(_ value: Float) -> Float {
+        guard value.isFinite else { return 1.0 }
+        return min(max(value, 0), 1)
+    }
+
+    private func applyEffectiveVolume() {
+        engine.outputVolume = isMuted ? 0 : volume
+    }
+
+    private func persistSettings() {
+        let file = PlayerSettingsFile(
+            enabled: eq.enabled,
+            preamp: eq.preamp,
+            gains: eq.gains,
+            presetName: eq.presetName,
+            volume: volume,
+            isMuted: isMuted
+        )
+        try? Persistence.save(file, to: settingsURL)
+    }
+
     func clearQueue(_ id: UUID? = nil) {
         let target = id ?? queues.activeID
         if target == queues.activeID {
@@ -901,6 +984,21 @@ final class PlayerController {
         } else {
             queues.update(target) { $0.replace(with: [], startAt: 0) }
         }
+    }
+
+    func restoreQueue(_ snapshot: PlayQueue, ephemeralTracks: [Track] = [], autoplay: Bool = false) {
+        if !ephemeralTracks.isEmpty {
+            library.registerEphemeralTracks(ephemeralTracks)
+        }
+        queues.update(snapshot.id) { $0 = snapshot }
+        if snapshot.id == queues.activeID {
+            startCurrent(autoplay: autoplay, at: snapshot.position)
+        }
+    }
+
+    private func prepareForDeletingTracks(_ ids: Set<String>) {
+        guard let current = currentTrack, ids.contains(current.id) else { return }
+        clearPlayback()
     }
 
     private func trackUpdated(_ track: Track) {

@@ -8,8 +8,10 @@ struct PlayerBar: View {
     @Environment(PlayerController.self) private var player
     @Environment(QueueStore.self) private var queues
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isTrackHovered = false
     @State private var isMoreHovered = false
+    @State private var playFeedbackTrigger = 0
 
     var body: some View {
         let track = player.currentTrack
@@ -19,7 +21,7 @@ struct PlayerBar: View {
                     ArtworkView(artworkKey: track?.artworkKey, remoteArtworkURL: track?.remoteArtworkURL, size: 46)
                         .id(track?.id)
                         .transition(.opacity)
-                        .animation(.easeInOut(duration: 0.2), value: track?.id)
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: track?.id)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(track?.title ?? L10n.tr("Not Playing"))
                             .font(.subheadline.weight(.medium))
@@ -38,7 +40,7 @@ struct PlayerBar: View {
                                 .contentTransition(.opacity)
                         }
                     }
-                    .animation(.easeInOut(duration: 0.2), value: track?.id)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: track?.id)
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
@@ -48,7 +50,7 @@ struct PlayerBar: View {
             }
             .buttonStyle(.plain)
             .onHover { isTrackHovered = $0 }
-            .animation(.easeOut(duration: 0.14), value: isTrackHovered)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isTrackHovered)
             .accessibilityLabel(L10n.tr("Open Now Playing"))
             .contextMenu {
                 if let track {
@@ -64,6 +66,14 @@ struct PlayerBar: View {
             .disabled(track == nil)
 
             HStack(spacing: 4) {
+                #if targetEnvironment(macCatalyst)
+                volumeControls
+                AudioRoutePickerView(
+                    tintColor: themeManager.primaryForegroundColor.map(UIColor.init) ?? .label,
+                    activeTintColor: UIColor(themeManager.accentColor)
+                )
+                .frame(width: 30, height: 30)
+                #endif
                 if let track {
                     Menu {
                         TrackMenuItems(ids: [track.id], favouriteID: track.isEphemeral ? nil : track.id)
@@ -80,7 +90,7 @@ struct PlayerBar: View {
                     }
                     .buttonStyle(.borderless)
                     .onHover { isMoreHovered = $0 }
-                    .animation(.easeOut(duration: 0.14), value: isMoreHovered)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isMoreHovered)
                     .help(L10n.tr("Song options"))
                     .accessibilityLabel(L10n.tr("Song options"))
                 }
@@ -128,6 +138,41 @@ struct PlayerBar: View {
         return parts.isEmpty ? nil : parts.joined(separator: " · ")
     }
 
+    #if targetEnvironment(macCatalyst)
+    private var volumeControls: some View {
+        @Bindable var player = player
+        let effectiveVolume = player.isMuted ? 0 : player.volume
+        let speakerIcon: String = {
+            if player.isMuted || effectiveVolume <= 0.001 { return "speaker.slash.fill" }
+            if effectiveVolume < 0.34 { return "speaker.wave.1.fill" }
+            if effectiveVolume < 0.67 { return "speaker.wave.2.fill" }
+            return "speaker.wave.3.fill"
+        }()
+        return HStack(spacing: 4) {
+            DockIconButton(
+                title: player.isMuted ? L10n.tr("Unmute") : L10n.tr("Mute"),
+                systemImage: speakerIcon,
+                foreground: player.isMuted ? themeManager.accentColor : .secondary,
+                width: 28,
+                height: 28
+            ) {
+                player.toggleMute()
+            }
+            Slider(
+                value: Binding(
+                    get: { Double(player.isMuted ? 0 : player.volume) },
+                    set: { player.volume = Float($0) }
+                ),
+                in: 0...1
+            )
+            .controlSize(.mini)
+            .frame(width: 76)
+            .accessibilityLabel(L10n.tr("Volume"))
+        }
+        .padding(.trailing, 4)
+    }
+    #endif
+
     private var transport: some View {
         let queue = queues.active
         return HStack(spacing: 12) {
@@ -138,7 +183,7 @@ struct PlayerBar: View {
                 width: 32,
                 height: 30
             ) {
-                withAnimation(.spring(duration: 0.25)) { player.toggleShuffle() }
+                withAnimation(reduceMotion ? nil : .spring(duration: 0.25)) { player.toggleShuffle() }
             }
 
             DockIconButton(
@@ -164,9 +209,13 @@ struct PlayerBar: View {
                     height: 30
                 ) {
                     player.togglePlayPause()
+                    playFeedbackTrigger += 1
                 }
                 .contentTransition(.symbolEffect(.replace))
-                .animation(.spring(duration: 0.25), value: player.isPlaying)
+                .animation(reduceMotion ? nil : .spring(duration: 0.25), value: player.isPlaying)
+                #if !targetEnvironment(macCatalyst)
+                .sensoryFeedback(.impact(flexibility: .soft), trigger: playFeedbackTrigger)
+                #endif
             }
 
             DockIconButton(
@@ -186,7 +235,7 @@ struct PlayerBar: View {
                 width: 32,
                 height: 30
             ) {
-                withAnimation(.spring(duration: 0.25)) { player.cycleRepeat() }
+                withAnimation(reduceMotion ? nil : .spring(duration: 0.25)) { player.cycleRepeat() }
             }
             .contentTransition(.symbolEffect(.replace))
         }
@@ -203,7 +252,7 @@ struct PlayerBar: View {
             width: 36,
             height: 32
         ) {
-            withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+            withAnimation(reduceMotion ? nil : .spring(response: 0.30, dampingFraction: 0.86)) {
                 if panel == .queue && isQueueMainActive {
                     sidePanel = nil
                 } else {
@@ -212,7 +261,7 @@ struct PlayerBar: View {
             }
         }
         .contentTransition(.symbolEffect(.replace))
-        .animation(.spring(duration: 0.25), value: isOn)
+        .animation(reduceMotion ? nil : .spring(duration: 0.25), value: isOn)
         .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }
@@ -228,6 +277,7 @@ private struct DockIconButton: View {
     let action: () -> Void
 
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
 
     var body: some View {
@@ -238,9 +288,14 @@ private struct DockIconButton: View {
                 .frame(width: width, height: height)
                 .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
         }
-        .buttonStyle(DockIconButtonStyle(isSelected: isSelected, isHovered: isHovered, accentColor: themeManager.accentColor))
+        .buttonStyle(DockIconButtonStyle(
+            isSelected: isSelected,
+            isHovered: isHovered,
+            accentColor: themeManager.accentColor,
+            reduceMotion: reduceMotion
+        ))
         .onHover { isHovered = $0 }
-        .animation(.easeOut(duration: 0.14), value: isHovered)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isHovered)
         .accessibilityLabel(title)
         .help(title)
     }
@@ -250,6 +305,7 @@ private struct DockIconButtonStyle: ButtonStyle {
     let isSelected: Bool
     let isHovered: Bool
     let accentColor: Color
+    let reduceMotion: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -257,8 +313,8 @@ private struct DockIconButtonStyle: ButtonStyle {
                 backgroundColor(isPressed: configuration.isPressed),
                 in: RoundedRectangle(cornerRadius: 7, style: .continuous)
             )
-            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
-            .animation(.easeOut(duration: 0.08), value: configuration.isPressed)
+            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.94 : 1.0)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.08), value: configuration.isPressed)
     }
 
     private func backgroundColor(isPressed: Bool) -> Color {

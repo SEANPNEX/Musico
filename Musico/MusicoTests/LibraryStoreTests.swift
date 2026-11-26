@@ -918,6 +918,85 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(store.playlists.first { $0.id == playlistID }?.trackIDs, [syncedTrack.id])
         XCTAssertTrue(store.isFavourite(syncedTrack.id))
     }
+
+    func testDisplayLocationRemoveTrackDeleteTrackAndFolderGuards() async throws {
+        let dir = makeTempDir()
+        let docs = makeTempDir()
+        let pickedRootURL = makeTempDir()
+        let subFolderURL = pickedRootURL.appendingPathComponent("AlbumA", isDirectory: true)
+        try FileManager.default.createDirectory(at: subFolderURL, withIntermediateDirectories: true)
+
+        let fixture = try XCTUnwrap(Bundle(for: LibraryStoreTests.self).url(forResource: "sample", withExtension: "mp3"))
+        let appTrackURL = docs.appendingPathComponent("root-song.mp3")
+        let pickedRootTrackURL = pickedRootURL.appendingPathComponent("keep.mp3")
+        let subTrackURL = subFolderURL.appendingPathComponent("sub-song.mp3")
+        try FileManager.default.copyItem(at: fixture, to: appTrackURL)
+        try FileManager.default.copyItem(at: fixture, to: pickedRootTrackURL)
+        try FileManager.default.copyItem(at: fixture, to: subTrackURL)
+
+        let store = LibraryStore(
+            directory: dir,
+            documentsURL: docs,
+            reader: StubReader(),
+            artwork: ArtworkCache(directory: makeTempDir())
+        )
+        try await store.addRoot(url: pickedRootURL)
+        await store.rescan()
+
+        let pickedRoot = try XCTUnwrap(store.roots.first { $0.kind == .picked })
+        let appTrack = try XCTUnwrap(store.tracks.first { $0.rootID == LibraryRoot.appFolderID && $0.fileName == "root-song.mp3" })
+        let keepTrack = try XCTUnwrap(store.tracks.first { $0.rootID == pickedRoot.id && $0.fileName == "keep.mp3" })
+        let subTrack = try XCTUnwrap(store.tracks.first { $0.rootID == pickedRoot.id && $0.fileName == "sub-song.mp3" })
+
+        XCTAssertEqual(store.displayLocation(for: appTrack), appTrackURL.path)
+        XCTAssertEqual(store.displayLocation(forRoot: pickedRoot.id, path: "AlbumA"), subFolderURL.path)
+
+        // 1. removeTrackFromLibrary excludes path so rescan doesn't bring it back, file stays on disk
+        let playlistID = store.createPlaylist(name: "Mix")
+        store.add([keepTrack.id, subTrack.id], toPlaylist: playlistID)
+        store.toggleFavourite(keepTrack.id)
+
+        store.removeTrackFromLibrary(keepTrack.id)
+        XCTAssertNil(store.track(keepTrack.id))
+        XCTAssertFalse(store.isFavourite(keepTrack.id))
+        XCTAssertEqual(store.playlists.first { $0.id == playlistID }?.trackIDs, [subTrack.id])
+        XCTAssertTrue(FileManager.default.fileExists(atPath: pickedRootTrackURL.path))
+        await store.rescan()
+        XCTAssertNil(store.track(keepTrack.id))
+
+        // Restore brings it back
+        await store.restoreExcludedFolders(pickedRoot.id)
+        XCTAssertNotNil(store.track(keepTrack.id))
+
+        // 2. appFolder root deletion on disk MUST throw and leave docs intact
+        XCTAssertThrowsError(try store.deleteFolderFiles(rootID: LibraryRoot.appFolderID, path: "")) { error in
+            XCTAssertEqual(error as? LibraryError, .cannotDeleteAppFolderRoot)
+        }
+        XCTAssertTrue(FileManager.default.fileExists(atPath: docs.path))
+        XCTAssertNotNil(store.root(LibraryRoot.appFolderID))
+
+        // 3. deleteTrackFile invokes onBeforeDeletingTracks, deletes file on disk, and removes track
+        var deletedCallbacks: [Set<String>] = []
+        store.onBeforeDeletingTracks = { deletedCallbacks.append($0) }
+        try store.deleteTrackFile(appTrack.id)
+        XCTAssertEqual(deletedCallbacks.last, [appTrack.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: appTrackURL.path))
+        XCTAssertNil(store.track(appTrack.id))
+
+        // 4. deleteFolderFiles on subfolder deletes subfolder on disk and affected tracks
+        try store.deleteFolderFiles(rootID: pickedRoot.id, path: "AlbumA")
+        XCTAssertEqual(deletedCallbacks.last, [subTrack.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: subFolderURL.path))
+        XCTAssertNil(store.track(subTrack.id))
+        XCTAssertNotNil(store.track(keepTrack.id))
+
+        // 5. deleteFolderFiles on picked root deletes root folder on disk and removes root
+        try store.deleteFolderFiles(rootID: pickedRoot.id, path: "")
+        XCTAssertEqual(deletedCallbacks.last, [keepTrack.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: pickedRootURL.path))
+        XCTAssertNil(store.root(pickedRoot.id))
+        XCTAssertNil(store.track(keepTrack.id))
+    }
 }
 
 private final class MutableCloudFetcher: CloudPlaylistFetching, @unchecked Sendable {

@@ -11,8 +11,10 @@ struct FoldersView: View {
     @Environment(PlayerController.self) private var player
     @Environment(\.downloadManager) private var downloadManager
     @Environment(\.extensionStore) private var extensionStore
+    @Environment(\.lyricsStore) private var lyricsStore
     @Environment(\.languageManager) private var languageManager
     @Environment(\.themeManager) private var themeManager
+    @Environment(DeleteItemPrompt.self) private var deletePrompt: DeleteItemPrompt?
     @State private var showImporter = false
     @State private var showCloudSheet = false
     @State private var showDownloadsSheet = false
@@ -21,8 +23,6 @@ struct FoldersView: View {
     /// When set, the next picked folder replaces this unavailable root instead of adding a new one.
     @State private var relocating: UUID?
     @State private var importError: String?
-    /// The folder the user asked to remove, awaiting confirmation.
-    @State private var removing: LibraryRoot?
     /// Cloud root queued for local export.
     @State private var exportingRoot: LibraryRoot?
     /// Local folder linked to a cloud source queued for incremental sync.
@@ -232,23 +232,25 @@ struct FoldersView: View {
                 }
             }
         }
-        .confirmationDialog(L10n.tr("Remove “%@” from your library?", removing.map { L10n.displayRootName($0) } ?? ""),
-                            isPresented: Binding(get: { removing != nil }, set: { if !$0 { removing = nil } }),
-                            titleVisibility: .visible, presenting: removing) { root in
-            Button(L10n.tr("Remove from Library"), role: .destructive) { library.removeRoot(root.id) }
-            Button(L10n.tr("Cancel"), role: .cancel) {}
-        } message: { root in
-            if root.kind.isCloud {
-                Text(L10n.tr("Its songs leave your library, playlists and queues."))
-            } else {
-                Text(L10n.tr("Its songs leave your library, playlists and queues. The files themselves are not deleted."))
-            }
-        }
         .alert(L10n.tr("Couldn’t Add Folder"), isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
             Button(L10n.tr("OK"), role: .cancel) {}
         } message: {
             Text(importError ?? "")
         }
+    }
+
+    private func confirmRemoveRoot(_ root: LibraryRoot) {
+        let songCount = library.tracks.lazy.filter { $0.rootID == root.id }.count
+        deletePrompt?.confirmFolder(
+            rootID: root.id,
+            path: "",
+            name: L10n.displayRootName(root),
+            songCount: songCount,
+            isCloud: root.kind.isCloud,
+            isAppFolderRoot: root.kind == .appFolder,
+            library: library,
+            lyricsStore: lyricsStore
+        )
     }
 
     private static var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
@@ -431,7 +433,7 @@ struct FoldersView: View {
                 }
                 if removable {
                     Spacer()
-                    Button(L10n.tr("Remove Folder"), systemImage: "minus.circle") { removing = root }
+                    Button(L10n.tr("Remove Folder"), systemImage: "minus.circle") { confirmRemoveRoot(root) }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
                         .foregroundStyle(.secondary)
@@ -442,7 +444,7 @@ struct FoldersView: View {
         }
         .swipeActions(edge: .trailing) {
             if removable {
-                Button(L10n.tr("Remove"), systemImage: "trash", role: .destructive) { library.removeRoot(root.id) }
+                Button(L10n.tr("Remove"), systemImage: "trash", role: .destructive) { confirmRemoveRoot(root) }
             }
         }
         .contextMenu {
@@ -500,7 +502,7 @@ struct FoldersView: View {
                 }
             }
             if removable {
-                Button(L10n.tr("Remove Folder"), systemImage: "trash", role: .destructive) { removing = root }
+                Button(L10n.tr("Remove Folder"), systemImage: "trash", role: .destructive) { confirmRemoveRoot(root) }
             }
             TrackMenuItems(ids: library.tracks(under: root.id, path: "").map(\.id))
         }
@@ -663,15 +665,16 @@ struct FolderDetailView: View {
     @Environment(PlayHistoryStore.self) private var history
     @Environment(\.downloadManager) private var downloadManager
     @Environment(\.extensionStore) private var extensionStore
+    @Environment(\.lyricsStore) private var lyricsStore
     @Environment(\.languageManager) private var languageManager
     @Environment(\.themeManager) private var themeManager
+    @Environment(DeleteItemPrompt.self) private var deletePrompt: DeleteItemPrompt?
     @Environment(\.dismiss) private var dismiss
-    @State private var confirmRemove = false
-    @State private var removingSubfolder: FolderRef?
     @State private var showExportSheet = false
     @State private var showExtensionsSheet = false
     @State private var updatingTarget: FolderTrackingTarget?
     @State private var editingTarget: FolderTrackingTarget?
+    @State private var reorderFeedbackTrigger = 0
 
     var body: some View {
         let root = library.root(ref.root)
@@ -780,7 +783,7 @@ struct FolderDetailView: View {
                         }
                         Spacer()
                         Button(L10n.tr("Remove Folder"), systemImage: "minus.circle") {
-                            removingSubfolder = child
+                            confirmRemoveFolder(rootID: child.root, path: child.path, name: name, root: root)
                         }
                         .labelStyle(.iconOnly)
                         .buttonStyle(.borderless)
@@ -791,7 +794,7 @@ struct FolderDetailView: View {
                 }
                 .swipeActions(edge: .trailing) {
                     Button(L10n.tr("Remove"), systemImage: "trash", role: .destructive) {
-                        removingSubfolder = child
+                        confirmRemoveFolder(rootID: child.root, path: child.path, name: name, root: root)
                     }
                 }
                 .contextMenu {
@@ -810,7 +813,7 @@ struct FolderDetailView: View {
                         }
                     }
                     Button(L10n.tr("Remove Folder"), systemImage: "trash", role: .destructive) {
-                        removingSubfolder = child
+                        confirmRemoveFolder(rootID: child.root, path: child.path, name: name, root: root)
                     }
                     TrackMenuItems(ids: childIDs)
                 }
@@ -828,6 +831,7 @@ struct FolderDetailView: View {
                         player.playInNamedQueue(allIDs, name: queueName, startAt: startAt)
                     },
                     onMove: { from, to in
+                        reorderFeedbackTrigger += 1
                         library.moveFolderTracks(
                             root: ref.root,
                             path: ref.path,
@@ -840,6 +844,7 @@ struct FolderDetailView: View {
                 .contextMenu { TrackMenuItems(ids: [track.id], favouriteID: track.id) }
             }
             .onMove { source, destination in
+                reorderFeedbackTrigger += 1
                 library.moveFolderTracks(
                     root: ref.root,
                     path: ref.path,
@@ -892,7 +897,13 @@ struct FolderDetailView: View {
                 }
                 if canRemoveCurrentFolder {
                     Button(L10n.tr("Remove Folder"), systemImage: "trash", role: .destructive) {
-                        confirmRemove = true
+                        confirmRemoveFolder(
+                            rootID: ref.root,
+                            path: ref.path,
+                            name: currentName,
+                            root: root,
+                            onCompleted: { dismiss() }
+                        )
                     }
                     .help(L10n.tr("Remove Folder"))
                 }
@@ -943,40 +954,31 @@ struct FolderDetailView: View {
             .environment(\.locale, languageManager.effectiveLocale)
             .applyTheme(themeManager)
         }
-        .confirmationDialog(L10n.tr("Remove “%@” from your library?", currentName),
-                            isPresented: $confirmRemove,
-                            titleVisibility: .visible) {
-            Button(L10n.tr("Remove from Library"), role: .destructive) {
-                if ref.path.isEmpty {
-                    library.removeRoot(ref.root)
-                } else {
-                    library.removeSubfolder(rootID: ref.root, path: ref.path)
-                }
-                dismiss()
-            }
-            Button(L10n.tr("Cancel"), role: .cancel) {}
-        } message: {
-            if root?.kind.isCloud == true {
-                Text(L10n.tr("Its songs leave your library, playlists and queues."))
-            } else {
-                Text(L10n.tr("Its songs leave your library, playlists and queues. The files themselves are not deleted."))
-            }
-        }
-        .confirmationDialog(L10n.tr("Remove “%@” from your library?", (removingSubfolder?.path as NSString?)?.lastPathComponent ?? ""),
-                            isPresented: Binding(get: { removingSubfolder != nil }, set: { if !$0 { removingSubfolder = nil } }),
-                            titleVisibility: .visible,
-                            presenting: removingSubfolder) { target in
-            Button(L10n.tr("Remove from Library"), role: .destructive) {
-                library.removeSubfolder(rootID: target.root, path: target.path)
-            }
-            Button(L10n.tr("Cancel"), role: .cancel) {}
-        } message: { _ in
-            if root?.kind.isCloud == true {
-                Text(L10n.tr("Its songs leave your library, playlists and queues."))
-            } else {
-                Text(L10n.tr("Its songs leave your library, playlists and queues. The files themselves are not deleted."))
-            }
-        }
+        #if !targetEnvironment(macCatalyst)
+        .sensoryFeedback(.impact(weight: .light), trigger: reorderFeedbackTrigger)
+        #endif
+    }
+
+    private func confirmRemoveFolder(
+        rootID: UUID,
+        path: String,
+        name: String,
+        root: LibraryRoot?,
+        onCompleted: (() -> Void)? = nil
+    ) {
+        let songCount = library.tracks(under: rootID, path: path).count
+        let normPath = LibraryRoot.normalizeFolderPath(path)
+        deletePrompt?.confirmFolder(
+            rootID: rootID,
+            path: normPath,
+            name: name,
+            songCount: songCount,
+            isCloud: root?.kind.isCloud == true,
+            isAppFolderRoot: root?.kind == .appFolder && normPath.isEmpty,
+            library: library,
+            lyricsStore: lyricsStore,
+            onCompleted: onCompleted
+        )
     }
 
     @MainActor

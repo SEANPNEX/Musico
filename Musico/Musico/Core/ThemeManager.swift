@@ -111,14 +111,48 @@ enum ForegroundColorPreset: String, CaseIterable, Identifiable, Codable, Sendabl
     }
 }
 
+enum LyricsFontSize: String, CaseIterable, Identifiable, Codable, Sendable {
+    case compact
+    case medium
+    case large
+
+    var id: String { rawValue }
+
+    @MainActor
+    var displayName: String {
+        switch self {
+        case .compact: L10n.tr("Compact")
+        case .medium: L10n.tr("Medium")
+        case .large: L10n.tr("Large")
+        }
+    }
+}
+
+enum LyricsAlignment: String, CaseIterable, Identifiable, Codable, Sendable {
+    case leading
+    case center
+
+    var id: String { rawValue }
+
+    @MainActor
+    var displayName: String {
+        switch self {
+        case .leading: L10n.tr("Leading")
+        case .center: L10n.tr("Center")
+        }
+    }
+}
+
 struct AppearanceSettings: Codable, Equatable, Sendable {
     static let defaultAccentHex = "#E85440"
     static let lightForegroundHex = "#F5F5F7"
     static let darkForegroundHex = "#141416"
     static let defaultBackgroundImageOpacity: Double = 0.35
     static let defaultBackgroundOpacity: Double = 1.0
+    static let defaultBackgroundImageBlur: Double = 0.0
     static let backgroundImageOpacityRange: ClosedRange<Double> = 0.10...1.0
     static let backgroundOpacityRange: ClosedRange<Double> = 0.25...1.0
+    static let backgroundImageBlurRange: ClosedRange<Double> = 0.0...24.0
 
     var themeMode: AppThemeMode
     var backgroundPreset: BackgroundColorPreset
@@ -129,6 +163,9 @@ struct AppearanceSettings: Codable, Equatable, Sendable {
     var backgroundImageFileName: String?
     var backgroundImageOpacity: Double
     var backgroundOpacity: Double
+    var backgroundImageBlur: Double
+    var lyricsFontSize: LyricsFontSize
+    var lyricsAlignment: LyricsAlignment
 
     init(
         themeMode: AppThemeMode = .system,
@@ -139,7 +176,10 @@ struct AppearanceSettings: Codable, Equatable, Sendable {
         customForegroundHex: String? = nil,
         backgroundImageFileName: String? = nil,
         backgroundImageOpacity: Double = AppearanceSettings.defaultBackgroundImageOpacity,
-        backgroundOpacity: Double = AppearanceSettings.defaultBackgroundOpacity
+        backgroundOpacity: Double = AppearanceSettings.defaultBackgroundOpacity,
+        backgroundImageBlur: Double = AppearanceSettings.defaultBackgroundImageBlur,
+        lyricsFontSize: LyricsFontSize = .medium,
+        lyricsAlignment: LyricsAlignment = .leading
     ) {
         self.themeMode = themeMode
         self.backgroundPreset = backgroundPreset
@@ -150,6 +190,9 @@ struct AppearanceSettings: Codable, Equatable, Sendable {
         self.backgroundImageFileName = backgroundImageFileName
         self.backgroundImageOpacity = Self.clampBackgroundImageOpacity(backgroundImageOpacity)
         self.backgroundOpacity = Self.clampBackgroundOpacity(backgroundOpacity)
+        self.backgroundImageBlur = Self.clampBackgroundImageBlur(backgroundImageBlur)
+        self.lyricsFontSize = lyricsFontSize
+        self.lyricsAlignment = lyricsAlignment
     }
 
     init(from decoder: Decoder) throws {
@@ -163,6 +206,9 @@ struct AppearanceSettings: Codable, Equatable, Sendable {
         let backgroundImageFileName = try container.decodeIfPresent(String.self, forKey: .backgroundImageFileName)
         let backgroundImageOpacity = try container.decodeIfPresent(Double.self, forKey: .backgroundImageOpacity) ?? Self.defaultBackgroundImageOpacity
         let backgroundOpacity = try container.decodeIfPresent(Double.self, forKey: .backgroundOpacity) ?? Self.defaultBackgroundOpacity
+        let backgroundImageBlur = try container.decodeIfPresent(Double.self, forKey: .backgroundImageBlur) ?? Self.defaultBackgroundImageBlur
+        let lyricsFontSize = try container.decodeIfPresent(LyricsFontSize.self, forKey: .lyricsFontSize) ?? .medium
+        let lyricsAlignment = try container.decodeIfPresent(LyricsAlignment.self, forKey: .lyricsAlignment) ?? .leading
 
         self.init(
             themeMode: themeMode,
@@ -173,7 +219,10 @@ struct AppearanceSettings: Codable, Equatable, Sendable {
             customForegroundHex: customForegroundHex,
             backgroundImageFileName: backgroundImageFileName,
             backgroundImageOpacity: backgroundImageOpacity,
-            backgroundOpacity: backgroundOpacity
+            backgroundOpacity: backgroundOpacity,
+            backgroundImageBlur: backgroundImageBlur,
+            lyricsFontSize: lyricsFontSize,
+            lyricsAlignment: lyricsAlignment
         )
     }
 
@@ -185,6 +234,11 @@ struct AppearanceSettings: Codable, Equatable, Sendable {
     static func clampBackgroundOpacity(_ value: Double) -> Double {
         guard value.isFinite else { return defaultBackgroundOpacity }
         return min(max(value, backgroundOpacityRange.lowerBound), backgroundOpacityRange.upperBound)
+    }
+
+    static func clampBackgroundImageBlur(_ value: Double) -> Double {
+        guard value.isFinite else { return defaultBackgroundImageBlur }
+        return min(max(value, backgroundImageBlurRange.lowerBound), backgroundImageBlurRange.upperBound)
     }
 }
 
@@ -222,13 +276,53 @@ enum ThemeColorHex {
         return String(format: "#%02X%02X%02X", cr, cg, cb)
     }
 
+    static func linearizeSRGB(_ component: Double) -> Double {
+        let c = min(max(component, 0), 1)
+        return c <= 0.04045 ? c / 12.92 : pow((c + 0.055) / 1.055, 2.4)
+    }
+
     static func relativeLuminance(r: Double, g: Double, b: Double) -> Double {
-        0.2126 * r + 0.7152 * g + 0.0722 * b
+        0.2126 * linearizeSRGB(r) + 0.7152 * linearizeSRGB(g) + 0.0722 * linearizeSRGB(b)
     }
 
     static func relativeLuminance(hex: String) -> Double? {
         guard let rgb = parseRGB(hex) else { return nil }
         return relativeLuminance(r: rgb.r, g: rgb.g, b: rgb.b)
+    }
+
+    static func contrastRatio(hexA: String, hexB: String) -> Double? {
+        guard let lumA = relativeLuminance(hex: hexA),
+              let lumB = relativeLuminance(hex: hexB) else {
+            return nil
+        }
+        let lighter = max(lumA, lumB)
+        let darker = min(lumA, lumB)
+        return (lighter + 0.05) / (darker + 0.05)
+    }
+
+    static func adjustForContrast(hex: String, againstBackgroundHex bgHex: String, minimumRatio: Double) -> String? {
+        guard let rgb = parseRGB(hex),
+              let bgLum = relativeLuminance(hex: bgHex) else {
+            return nil
+        }
+        if let current = contrastRatio(hexA: hex, hexB: bgHex), current >= minimumRatio {
+            return normalize(hex)
+        }
+        let target: (r: Double, g: Double, b: Double) = bgLum < 0.179 ? (1, 1, 1) : (0, 0, 0)
+        var bestHex = formatRGB(r: target.r, g: target.g, b: target.b)
+        for step in 1...100 {
+            let t = Double(step) / 100.0
+            let candidate = formatRGB(
+                r: rgb.r + (target.r - rgb.r) * t,
+                g: rgb.g + (target.g - rgb.g) * t,
+                b: rgb.b + (target.b - rgb.b) * t
+            )
+            if let ratio = contrastRatio(hexA: candidate, hexB: bgHex), ratio >= minimumRatio {
+                bestHex = candidate
+                break
+            }
+        }
+        return bestHex
     }
 }
 
@@ -378,7 +472,7 @@ final class ThemeManager {
         guard let luminance = activeBackgroundLuminance else {
             return nil
         }
-        return luminance < 0.5 ? AppearanceSettings.lightForegroundHex : AppearanceSettings.darkForegroundHex
+        return luminance < 0.179 ? AppearanceSettings.lightForegroundHex : AppearanceSettings.darkForegroundHex
     }
 
     var primaryForegroundColor: Color? {
@@ -391,9 +485,82 @@ final class ThemeManager {
 
     var preferredColorScheme: ColorScheme? {
         if let luminance = activeBackgroundLuminance {
-            return luminance < 0.5 ? .dark : .light
+            return luminance < 0.179 ? .dark : .light
         }
         return settings.themeMode.colorScheme
+    }
+
+    func effectiveBackgroundHex(fallbackScheme: ColorScheme = .light) -> String {
+        if let activeBackgroundHex {
+            return activeBackgroundHex
+        }
+        let effectiveScheme = preferredColorScheme ?? fallbackScheme
+        return effectiveScheme == .dark ? "#141416" : "#FFFFFF"
+    }
+
+    func effectiveForegroundHex(fallbackScheme: ColorScheme = .light) -> String {
+        if let resolvedForegroundHex {
+            return resolvedForegroundHex
+        }
+        let effectiveScheme = preferredColorScheme ?? fallbackScheme
+        return effectiveScheme == .dark ? AppearanceSettings.lightForegroundHex : AppearanceSettings.darkForegroundHex
+    }
+
+    func foregroundContrastRatio(fallbackScheme: ColorScheme = .light) -> Double {
+        ThemeColorHex.contrastRatio(
+            hexA: effectiveForegroundHex(fallbackScheme: fallbackScheme),
+            hexB: effectiveBackgroundHex(fallbackScheme: fallbackScheme)
+        ) ?? 21.0
+    }
+
+    func accentContrastRatio(fallbackScheme: ColorScheme = .light) -> Double {
+        ThemeColorHex.contrastRatio(
+            hexA: activeAccentHex,
+            hexB: effectiveBackgroundHex(fallbackScheme: fallbackScheme)
+        ) ?? 21.0
+    }
+
+    func hasLowContrast(fallbackScheme: ColorScheme = .light) -> Bool {
+        foregroundContrastRatio(fallbackScheme: fallbackScheme) < 4.5
+            || accentContrastRatio(fallbackScheme: fallbackScheme) < 3.0
+    }
+
+    func autoFixContrast(fallbackScheme: ColorScheme = .light) {
+        let bgHex = effectiveBackgroundHex(fallbackScheme: fallbackScheme)
+        let bgLum = ThemeColorHex.relativeLuminance(hex: bgHex) ?? (fallbackScheme == .dark ? 0.01 : 1.0)
+        var changed = false
+
+        if foregroundContrastRatio(fallbackScheme: fallbackScheme) < 4.5 {
+            if activeBackgroundHex != nil {
+                let adaptive = bgLum < 0.179 ? AppearanceSettings.lightForegroundHex : AppearanceSettings.darkForegroundHex
+                if (ThemeColorHex.contrastRatio(hexA: adaptive, hexB: bgHex) ?? 0) >= 4.5 {
+                    settings.customForegroundHex = nil
+                } else {
+                    let whiteContrast = ThemeColorHex.contrastRatio(hexA: "#FFFFFF", hexB: bgHex) ?? 0
+                    let blackContrast = ThemeColorHex.contrastRatio(hexA: "#000000", hexB: bgHex) ?? 0
+                    settings.customForegroundHex = whiteContrast >= blackContrast ? "#FFFFFF" : "#000000"
+                }
+            } else {
+                settings.customForegroundHex = nil
+            }
+            changed = true
+        }
+
+        if accentContrastRatio(fallbackScheme: fallbackScheme) < 3.0 {
+            if let adjusted = ThemeColorHex.adjustForContrast(
+                hex: activeAccentHex,
+                againstBackgroundHex: bgHex,
+                minimumRatio: 3.1
+            ) {
+                settings.customAccentHex = adjusted
+                settings.foregroundPreset = .custom
+                changed = true
+            }
+        }
+
+        if changed {
+            persist()
+        }
     }
 
     // MARK: - Mutations
@@ -452,6 +619,25 @@ final class ThemeManager {
         let clamped = AppearanceSettings.clampBackgroundImageOpacity(opacity)
         guard settings.backgroundImageOpacity != clamped else { return }
         settings.backgroundImageOpacity = clamped
+        persist()
+    }
+
+    func setBackgroundImageBlur(_ blur: Double) {
+        let clamped = AppearanceSettings.clampBackgroundImageBlur(blur)
+        guard settings.backgroundImageBlur != clamped else { return }
+        settings.backgroundImageBlur = clamped
+        persist()
+    }
+
+    func setLyricsFontSize(_ size: LyricsFontSize) {
+        guard settings.lyricsFontSize != size else { return }
+        settings.lyricsFontSize = size
+        persist()
+    }
+
+    func setLyricsAlignment(_ alignment: LyricsAlignment) {
+        guard settings.lyricsAlignment != alignment else { return }
+        settings.lyricsAlignment = alignment
         persist()
     }
 

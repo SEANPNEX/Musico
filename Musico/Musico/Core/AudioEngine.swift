@@ -20,6 +20,16 @@ final class AudioEngine {
 
     private(set) var duration: TimeInterval = 0
     private(set) var isPlaying = false
+    var outputVolume: Float = 1.0 {
+        didSet {
+            let clamped = min(max(outputVolume.isFinite ? outputVolume : 1.0, 0), 1)
+            if outputVolume != clamped {
+                outputVolume = clamped
+                return
+            }
+            applyOutputVolume()
+        }
+    }
 
     private var backend: Backend = .localFile
     private let engine = AVAudioEngine()
@@ -66,6 +76,7 @@ final class AudioEngine {
             band.bypass = false
         }
         eq.bypass = true
+        applyOutputVolume()
         configObserver = NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
         ) { [weak self] _ in
@@ -144,6 +155,7 @@ final class AudioEngine {
         let item = AVPlayerItem(asset: asset)
         let remotePlayer = AVPlayer(playerItem: item)
         remotePlayer.automaticallyWaitsToMinimizeStalling = true
+        remotePlayer.volume = outputVolume
 
         streamLoader = loader
         avPlayer = remotePlayer
@@ -390,4 +402,10 @@ final class AudioEngine {
 
     var bandGains: [Float] { eq.bands.map(\.gain) }
     var isEQBypassed: Bool { eq.bypass }
+
+    private func applyOutputVolume() {
+        let clamped = min(max(outputVolume.isFinite ? outputVolume : 1.0, 0), 1)
+        engine.mainMixerNode.outputVolume = clamped
+        avPlayer?.volume = clamped
+    }
 }

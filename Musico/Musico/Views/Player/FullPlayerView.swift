@@ -33,6 +33,7 @@ struct FullPlayerView: View {
     @Environment(\.extensionStore) private var extensionStore
     @Environment(\.languageManager) private var languageManager
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         GeometryReader { proxy in
@@ -71,6 +72,10 @@ struct FullPlayerView: View {
         .modifier(NewPlaylistAlert())
         .modifier(CloudExportHostModifier())
         .modifier(SongInfoHostModifier())
+        .modifier(DeleteConfirmHostModifier())
+        .overlay(alignment: .bottom) {
+            ToastOverlayView()
+        }
         .sheet(item: $panel) { panel in
             sheetContent(for: panel)
                 .environment(\.appNavigation, navigation)
@@ -106,7 +111,7 @@ struct FullPlayerView: View {
     /// With two columns, Queue and Lyrics switch the right-hand column instead of opening a sheet.
     private var columnPanel: Binding<Panel?> {
         Binding(get: { panel }, set: { target in
-            withAnimation(.easeInOut(duration: 0.2)) {
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
                 switch target {
                 case .queue: sidePane = .queue
                 case .lyrics: sidePane = .lyrics
@@ -118,7 +123,7 @@ struct FullPlayerView: View {
 
     private var sideColumn: some View {
         VStack(spacing: 0) {
-            Picker(L10n.tr("Show"), selection: $sidePane.animation(.easeInOut(duration: 0.2))) {
+            Picker(L10n.tr("Show"), selection: $sidePane.animation(reduceMotion ? nil : .easeInOut(duration: 0.2))) {
                 ForEach(SidePane.allCases) { Text($0.localizedTitle).tag($0) }
             }
             .pickerStyle(.segmented)
@@ -136,7 +141,7 @@ struct FullPlayerView: View {
             }
             .id(sidePane)
             .transition(.opacity)
-            .animation(.easeInOut(duration: 0.2), value: sidePane)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: sidePane)
         }
     }
 }
@@ -153,8 +158,12 @@ private struct PlayerPage: View {
     @Environment(LibraryStore.self) private var library
     @Environment(QueueStore.self) private var queues
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
     @State private var isCloseHovered = false
+    @State private var artworkDragOffset: CGFloat = 0
+    @State private var playFeedbackTrigger = 0
+    @State private var favouriteFeedbackTrigger = 0
 
     var body: some View {
         VStack(spacing: 16) {
@@ -167,14 +176,35 @@ private struct PlayerPage: View {
                 ArtworkView(artworkKey: track.artworkKey, remoteArtworkURL: track.remoteArtworkURL)
                     .id(track.id)
                     .transition(.opacity)
-                    .animation(.easeInOut(duration: 0.25), value: track.id)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: track.id)
                     .padding(.horizontal, 12)
                     .shadow(color: .black.opacity(player.isPlaying ? 0.28 : 0.14),
                             radius: player.isPlaying ? 22 : 12,
                             y: player.isPlaying ? 12 : 6)
-                    .scaleEffect(player.isPlaying ? 1.0 : 0.92)
-                    .animation(.spring(response: 0.45, dampingFraction: 0.72), value: player.isPlaying)
+                    .scaleEffect(reduceMotion ? 1.0 : (player.isPlaying ? 1.0 : 0.92))
+                    .offset(x: reduceMotion ? 0 : artworkDragOffset)
+                    .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.72), value: player.isPlaying)
                     .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .gesture(
+                        DragGesture(minimumDistance: 24)
+                            .onChanged { value in
+                                guard abs(value.translation.width) > abs(value.translation.height) * 1.15 else { return }
+                                artworkDragOffset = reduceMotion ? 0 : value.translation.width * 0.35
+                            }
+                            .onEnded { value in
+                                if abs(value.translation.width) > abs(value.translation.height) {
+                                    if value.translation.width < -60 || value.predictedEndTranslation.width < -100 {
+                                        player.next()
+                                    } else if value.translation.width > 60 || value.predictedEndTranslation.width > 100 {
+                                        player.previous()
+                                    }
+                                }
+                                withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.78)) {
+                                    artworkDragOffset = 0
+                                }
+                            }
+                    )
                     .onTapGesture { panel = .lyrics }
                     .accessibilityAddTraits(.isButton)
                     .accessibilityLabel(L10n.tr("Show lyrics"))
@@ -200,22 +230,26 @@ private struct PlayerPage: View {
                             }
                         }
                     }
-                    .animation(.easeInOut(duration: 0.2), value: track.id)
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: track.id)
                     Spacer(minLength: 4)
                     if !track.isEphemeral {
                         let isFavourite = library.isFavourite(track.id)
                         Button {
                             library.toggleFavourite(track.id)
+                            favouriteFeedbackTrigger += 1
                         } label: {
                             Image(systemName: isFavourite ? "heart.fill" : "heart")
                                 .font(.title2)
                                 .foregroundStyle(isFavourite ? Color.red : Color.secondary)
-                                .frame(width: 36, height: 36)
+                                .frame(minWidth: 44, minHeight: 44)
                                 .contentShape(Rectangle())
                         }
                         .buttonStyle(.borderless)
                         .contentTransition(.symbolEffect(.replace))
-                        .symbolEffect(.bounce, value: isFavourite)
+                        .symbolEffect(.bounce, value: reduceMotion ? false : isFavourite)
+                        #if !targetEnvironment(macCatalyst)
+                        .sensoryFeedback(.impact(weight: .light), trigger: favouriteFeedbackTrigger)
+                        #endif
                         .accessibilityLabel(L10n.tr("Favourite"))
                     }
 
@@ -225,7 +259,7 @@ private struct PlayerPage: View {
                         Image(systemName: "ellipsis.circle")
                             .font(.title2)
                             .foregroundStyle(.secondary)
-                            .frame(width: 36, height: 36)
+                            .frame(minWidth: 44, minHeight: 44)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.borderless)
@@ -234,22 +268,30 @@ private struct PlayerPage: View {
 
                 PlaybackScrubber()
                 transport
-                HStack(spacing: 0) {
-                    MarqueeText(
-                        text: L10n.displayQueueName(queues.active.name),
-                        font: .footnote,
-                        alignment: .center
-                    )
-                    if !positionText.isEmpty {
-                        Text(" · " + positionText)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .layoutPriority(1)
+                HStack(spacing: 8) {
+                    HStack(spacing: 0) {
+                        MarqueeText(
+                            text: L10n.displayQueueName(queues.active.name),
+                            font: .footnote,
+                            alignment: .center
+                        )
+                        if !positionText.isEmpty {
+                            Text(" · " + positionText)
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                                .layoutPriority(1)
+                        }
                     }
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity)
+
+                    AudioRoutePickerView(
+                        tintColor: themeManager.primaryForegroundColor.map(UIColor.init) ?? .label,
+                        activeTintColor: UIColor(themeManager.accentColor)
+                    )
+                    .frame(width: 44, height: 44)
                 }
-                .font(.footnote)
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity)
                 panelButtons
             } else {
                 ContentUnavailableView(L10n.tr("Nothing Playing"), systemImage: "music.note",
@@ -301,9 +343,9 @@ private struct PlayerPage: View {
                 }
                 .allowsHitTesting(false)
             }
-            .scaleEffect(isCloseHovered ? 1.05 : 1.0)
+            .scaleEffect(!reduceMotion && isCloseHovered ? 1.05 : 1.0)
             .onHover { isCloseHovered = $0 }
-            .animation(.easeOut(duration: 0.14), value: isCloseHovered)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isCloseHovered)
         } else {
             Button(action: performClose) {
                 Image(systemName: "chevron.down")
@@ -316,7 +358,7 @@ private struct PlayerPage: View {
             .accessibilityLabel(L10n.tr("Close"))
             .help(L10n.tr("Close"))
             .onHover { isCloseHovered = $0 }
-            .animation(.easeOut(duration: 0.14), value: isCloseHovered)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isCloseHovered)
         }
     }
 
@@ -410,6 +452,7 @@ private struct PlayerPage: View {
             } else {
                 Button {
                     player.togglePlayPause()
+                    playFeedbackTrigger += 1
                 } label: {
                     Image(systemName: player.isPlaying ? "pause.circle.fill" : "play.circle.fill")
                         .font(.system(size: 68))
@@ -419,7 +462,10 @@ private struct PlayerPage: View {
                 }
                 .buttonStyle(.borderless)
                 .contentTransition(.symbolEffect(.replace))
-                .symbolEffect(.bounce, value: player.isPlaying)
+                .symbolEffect(.bounce, value: reduceMotion ? false : player.isPlaying)
+                #if !targetEnvironment(macCatalyst)
+                .sensoryFeedback(.impact(flexibility: .soft), trigger: playFeedbackTrigger)
+                #endif
                 .accessibilityLabel(L10n.tr("Play or Pause"))
             }
 
@@ -480,6 +526,7 @@ private struct PlayerPanelButton: View {
     let action: () -> Void
 
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
 
     var body: some View {
@@ -521,7 +568,7 @@ private struct PlayerPanelButton: View {
         }
         .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
         .onHover { isHovered = $0 }
-        .animation(.easeOut(duration: 0.14), value: isHovered)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isHovered)
     }
 }
 
@@ -529,6 +576,7 @@ private struct PlayerPanelButton: View {
 private struct AmbientPlayerBackdrop: View {
     @Environment(PlayerController.self) private var player
     @Environment(LibraryStore.self) private var library
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var image: UIImage?
 
     var body: some View {
@@ -550,7 +598,7 @@ private struct AmbientPlayerBackdrop: View {
         .ignoresSafeArea()
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-        .animation(.easeInOut(duration: 0.6), value: taskID)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.6), value: taskID)
         .task(id: taskID) {
             if let key {
                 let cache = library.artwork

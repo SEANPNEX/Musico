@@ -207,6 +207,11 @@ struct SongInfoSheet: View {
             }
 
             Section(L10n.tr("File & Playback Info")) {
+                detailTextRow(
+                    L10n.tr("File Name"),
+                    value: track.isCloud ? track.fileName : (library.url(for: track)?.lastPathComponent ?? track.fileName)
+                )
+                detailTextRow(L10n.tr("Location"), value: library.displayLocation(for: track))
                 infoRow(L10n.tr("Precision"), value: L10n.precisionDisplay(techInfo))
                 infoRow(L10n.tr("Frequency"), value: L10n.frequencyDisplay(techInfo))
                 infoRow(L10n.tr("Bit Rate"), value: L10n.bitRateDisplay(techInfo))
@@ -266,6 +271,18 @@ struct SongInfoSheet: View {
             Text(value)
                 .monospacedDigit()
                 .multilineTextAlignment(.trailing)
+        }
+    }
+
+    private func detailTextRow(_ label: String, value: String) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Spacer(minLength: 8)
+            Text(value)
+                .multilineTextAlignment(.trailing)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

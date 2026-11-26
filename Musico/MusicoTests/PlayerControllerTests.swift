@@ -569,6 +569,28 @@ final class PlayerControllerTests: XCTestCase {
         XCTAssertTrue(calls.contains { $0.trackID == "q1" && $0.purpose == .stream && $0.quality == "highest" && $0.forceRefresh })
         XCTAssertTrue(calls.contains { $0.trackID == "q2" && $0.purpose == .stream && $0.quality == "standard" && !$0.forceRefresh })
     }
+
+    func testVolumeMutePersistenceAndDeleteTrackStopsPlayback() throws {
+        player.volume = 0.42
+        player.toggleMute()
+        XCTAssertTrue(player.isMuted)
+        player.shutdown()
+
+        makePlayer()
+        XCTAssertEqual(player.volume, 0.42, accuracy: 0.001)
+        XCTAssertTrue(player.isMuted)
+        player.toggleMute()
+        XCTAssertFalse(player.isMuted)
+        XCTAssertEqual(player.volume, 0.42, accuracy: 0.001)
+
+        // Playing track gets stopped/cleared before disk deletion
+        let trackA = id("a.mp3")
+        player.play([trackA, id("b.mp3")], startAt: 0)
+        XCTAssertEqual(player.currentTrack?.id, trackA)
+        try library.deleteTrackFile(trackA)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: docs.appendingPathComponent("a.mp3").path))
+        XCTAssertNotEqual(player.currentTrack?.id, trackA)
+    }
 }
 
 private struct QualityAwareTestCloudResolver: CloudStreamResolving {

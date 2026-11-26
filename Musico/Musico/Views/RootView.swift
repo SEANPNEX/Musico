@@ -18,6 +18,7 @@ struct RootView: View {
     @Environment(\.lyricsStore) private var lyricsStore
     @Environment(\.languageManager) private var languageManager
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.horizontalSizeClass) private var sizeClass
     @State private var localShowPlayer: Bool
     @State private var didApplyInitialPlayerState = false
@@ -48,7 +49,7 @@ struct RootView: View {
                         tabs
                     case .sidebar:
                         SidebarRootView {
-                            withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
+                            withAnimation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.88)) {
                                 localShowPlayer = true
                                 navigation.showPlayer = true
                             }
@@ -60,7 +61,7 @@ struct RootView: View {
                 .accessibilityHidden(layout == .sidebar && localShowPlayer)
                 if layout == .sidebar && localShowPlayer {
                     fullPlayerView {
-                        withAnimation(.spring(response: 0.36, dampingFraction: 0.88)) {
+                        withAnimation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.88)) {
                             localShowPlayer = false
                             navigation.showPlayer = false
                         }
@@ -71,11 +72,18 @@ struct RootView: View {
                             Color(.systemBackground)
                         }
                     }
-                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
                     .zIndex(1)
                 }
+                if !(layout == .sidebar && localShowPlayer) {
+                    let toastPadding: CGFloat = layout == .sidebar
+                        ? 96
+                        : (player.currentTrack == nil ? 64 : 124)
+                    ToastOverlayView(bottomPadding: toastPadding)
+                        .zIndex(2)
+                }
             }
-            .animation(.spring(response: 0.36, dampingFraction: 0.88), value: localShowPlayer && layout == .sidebar)
+            .animation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.88), value: localShowPlayer && layout == .sidebar)
             // The full player is a sheet over the tabs and an in-window overlay over the sidebar layout.
             .sheet(isPresented: playerShown(when: layout == .tabs)) {
                 fullPlayerView()
@@ -103,6 +111,7 @@ struct RootView: View {
         .modifier(NewPlaylistAlert())
         .modifier(CloudExportHostModifier())
         .modifier(SongInfoHostModifier())
+        .modifier(DeleteConfirmHostModifier())
         .alert(L10n.tr("Playback Problem"), isPresented: Binding(get: { player.errorMessage != nil }, set: { if !$0 { player.errorMessage = nil } })) {
             Button(L10n.tr("OK"), role: .cancel) {}
         } message: {

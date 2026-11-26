@@ -59,6 +59,7 @@ struct TrackRow: View {
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let isCurrent = player.currentTrack?.id == track.id
@@ -77,7 +78,7 @@ struct TrackRow: View {
             if isCurrent {
                 Image(systemName: player.isPlaying ? "waveform" : "pause.fill")
                     .foregroundStyle(themeManager.accentColor)
-                    .symbolEffect(.variableColor.iterative, isActive: player.isPlaying)
+                    .symbolEffect(.variableColor.iterative, isActive: player.isPlaying && !reduceMotion)
             }
             Text(formatTime(track.duration))
                 .font(.subheadline.monospacedDigit())
@@ -99,6 +100,9 @@ struct TrackRows: View {
 
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
+    @Environment(\.themeManager) private var themeManager
+    @Environment(\.toastManager) private var toastManager
+    @State private var favouriteFeedbackTrigger = 0
 
     var body: some View {
         ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
@@ -118,7 +122,51 @@ struct TrackRows: View {
             .buttonStyle(.plain)
             .disabled(!library.isAvailable(track))
             .contextMenu { TrackMenuItems(ids: [track.id], favouriteID: track.isEphemeral ? nil : track.id) }
+            #if !targetEnvironment(macCatalyst)
+            .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                if library.isAvailable(track) {
+                    Button {
+                        player.playNext([track.id])
+                        toastManager.show(L10n.tr("Playing next"), systemImage: "text.line.first.and.arrowtriangle.forward")
+                    } label: {
+                        Label(L10n.tr("Play Next"), systemImage: "text.line.first.and.arrowtriangle.forward")
+                    }
+                    .tint(themeManager.accentColor)
+                }
+            }
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                if !track.isEphemeral {
+                    let isFavourite = library.isFavourite(track.id)
+                    Button {
+                        library.toggleFavourite(track.id)
+                        favouriteFeedbackTrigger += 1
+                        toastManager.show(
+                            isFavourite ? L10n.tr("Removed from favourites") : L10n.tr("Added to favourites"),
+                            systemImage: isFavourite ? "heart.slash" : "heart.fill"
+                        )
+                    } label: {
+                        Label(
+                            isFavourite ? L10n.tr("Remove from Favourites") : L10n.tr("Add to Favourites"),
+                            systemImage: isFavourite ? "heart.slash" : "heart"
+                        )
+                    }
+                    .tint(.pink)
+                }
+                if library.isAvailable(track) {
+                    Button {
+                        player.addToQueue([track.id], queue: nil)
+                        toastManager.show(L10n.tr("Added to queue"), systemImage: "text.append")
+                    } label: {
+                        Label(L10n.tr("Add to Queue"), systemImage: "text.append")
+                    }
+                    .tint(.indigo)
+                }
+            }
+            #endif
         }
+        #if !targetEnvironment(macCatalyst)
+        .sensoryFeedback(.impact(weight: .light), trigger: favouriteFeedbackTrigger)
+        #endif
     }
 }
 
@@ -139,6 +187,7 @@ struct ReorderableTrackRow: View {
     @State private var isDropTargeted = false
     @State private var isRowHovered = false
     @State private var isRemoveHovered = false
+    @State private var dropFeedbackTrigger = 0
 
     var body: some View {
         HStack(spacing: 8) {
@@ -212,11 +261,15 @@ struct ReorderableTrackRow: View {
                 return false
             }
             let destination = sourceIndex < index ? index + 1 : index
+            dropFeedbackTrigger += 1
             onMove(sourceIndex, destination)
             return true
         } isTargeted: { targeted in
             isDropTargeted = targeted
         }
+        #if !targetEnvironment(macCatalyst)
+        .sensoryFeedback(.impact(weight: .light), trigger: dropFeedbackTrigger)
+        #endif
     }
 
     static func parseSourceIndex(_ payload: String, scopeID: String) -> Int? {
@@ -466,8 +519,12 @@ struct TrackMenuItems: View {
     @Environment(NewPlaylistPrompt.self) private var newPlaylist
     @Environment(CloudExportPrompt.self) private var cloudExport
     @Environment(SongInfoPrompt.self) private var songInfo
+    @Environment(DeleteItemPrompt.self) private var deletePrompt: DeleteItemPrompt?
     @Environment(\.appNavigation) private var navigation
     @Environment(\.extensionStore) private var extensionStore
+    @Environment(\.lyricsStore) private var lyricsStore
+    @Environment(\.toastManager) private var toastManager
+    @State private var favouriteFeedbackTrigger = 0
 
     private var hasEphemeralTrack: Bool {
         ids.contains { library.track($0)?.isEphemeral == true || $0.hasPrefix(Track.ephemeralIDPrefix) }
@@ -482,12 +539,21 @@ struct TrackMenuItems: View {
     }
 
     var body: some View {
-        Button(L10n.tr("Play Next"), systemImage: "text.line.first.and.arrowtriangle.forward") { player.playNext(ids) }
-        Button(L10n.tr("Add to Queue"), systemImage: "text.append") { player.addToQueue(ids, queue: nil) }
+        Button(L10n.tr("Play Next"), systemImage: "text.line.first.and.arrowtriangle.forward") {
+            player.playNext(ids)
+            toastManager.show(L10n.tr("Playing next"), systemImage: "text.line.first.and.arrowtriangle.forward")
+        }
+        Button(L10n.tr("Add to Queue"), systemImage: "text.append") {
+            player.addToQueue(ids, queue: nil)
+            toastManager.show(L10n.tr("Added to queue"), systemImage: "text.append")
+        }
         if queues.queues.count > 1 {
             Menu(L10n.tr("Add to Another Queue"), systemImage: "rectangle.stack.badge.plus") {
                 ForEach(queues.queues.filter { $0.id != queues.viewedQueueID }) { queue in
-                    Button(L10n.displayQueueName(queue.name)) { player.addToQueue(ids, queue: queue.id) }
+                    Button(L10n.displayQueueName(queue.name)) {
+                        player.addToQueue(ids, queue: queue.id)
+                        toastManager.show(L10n.tr("Added to queue"), systemImage: "text.append")
+                    }
                 }
             }
         }
@@ -501,12 +567,16 @@ struct TrackMenuItems: View {
             Divider()
             Menu(L10n.tr("Add to Playlist"), systemImage: "music.note.list") {
                 ForEach(library.playlists) { playlist in
-                    Button(playlist.name) { library.add(ids, toPlaylist: playlist.id) }
+                    Button(playlist.name) {
+                        library.add(ids, toPlaylist: playlist.id)
+                        toastManager.show(L10n.tr("Added to playlist"), systemImage: "music.note.list")
+                    }
                 }
                 Button(L10n.tr("New Playlist…"), systemImage: "plus") {
                     newPlaylist.songCount = ids.count
-                    newPlaylist.create = { [library, ids] name in
+                    newPlaylist.create = { [library, ids, toastManager] name in
                         library.add(ids, toPlaylist: library.createPlaylist(name: name))
+                        toastManager.show(L10n.tr("Added to playlist"), systemImage: "music.note.list")
                     }
                 }
             }
@@ -514,7 +584,11 @@ struct TrackMenuItems: View {
                 let isFavourite = library.isFavourite(favouriteID)
                 Button(isFavourite ? L10n.tr("Remove from Favourites") : L10n.tr("Add to Favourites"), systemImage: isFavourite ? "heart.slash" : "heart") {
                     library.toggleFavourite(favouriteID)
+                    favouriteFeedbackTrigger += 1
                 }
+                #if !targetEnvironment(macCatalyst)
+                .sensoryFeedback(.impact(weight: .light), trigger: favouriteFeedbackTrigger)
+                #endif
             }
         }
         if ids.count == 1, let trackID = ids.first, let track = library.track(trackID), canSaveCloudTrack(track) {
@@ -526,6 +600,16 @@ struct TrackMenuItems: View {
                         await library.rescan()
                     }
                 }
+            }
+        }
+        if ids.count == 1, let trackID = ids.first, let track = library.track(trackID), !track.isEphemeral {
+            Divider()
+            Button(
+                track.isCloud ? L10n.tr("Remove from Library…") : L10n.tr("Delete…"),
+                systemImage: "trash",
+                role: .destructive
+            ) {
+                deletePrompt?.confirmTrack(track, library: library, lyricsStore: lyricsStore)
             }
         }
     }
