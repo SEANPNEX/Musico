@@ -1,58 +1,121 @@
 import SwiftUI
 import UIKit
 
-/// Renders the configured theme background color and optional full-bleed background image
-/// with opacity/scrim controls behind views and sheets.
+/// Renders per-region theme backdrops:
+/// - `mainContent`: full-bleed color and optional blurred background image scaled together by window opacity.
+/// - `sidebar`: clean sidebar background color + independent sidebar opacity (never renders background images).
+/// - `playerBar`: clean player bar base color + window opacity (never renders background images).
 struct ThemeBackdropView: View {
+    enum Role {
+        case mainContent
+        case sidebar
+        case playerBar
+    }
+
+    var role: Role = .mainContent
+
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.colorScheme) private var colorScheme
     @State private var loadedImage: UIImage?
 
     var body: some View {
-        let imageURL = themeManager.backgroundImageURL
+        switch role {
+        case .mainContent:
+            mainContentBackdrop
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+                .task(id: themeManager.backgroundImageURL) {
+                    guard let imageURL = themeManager.backgroundImageURL else {
+                        loadedImage = nil
+                        return
+                    }
+                    let image = await Task.detached(priority: .userInitiated) {
+                        UIImage(contentsOfFile: imageURL.path)
+                    }.value
+                    if !Task.isCancelled {
+                        loadedImage = image
+                    }
+                }
+        case .sidebar:
+            sidebarBackdrop
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        case .playerBar:
+            playerBarBackdrop
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+
+    @ViewBuilder
+    private var mainContentBackdrop: some View {
         let baseColor = themeManager.activeBackgroundColor ?? Color(.systemBackground)
         let windowOpacity = themeManager.effectiveBackgroundOpacity
         let imageOpacity = themeManager.settings.backgroundImageOpacity
         let imageBlur = themeManager.settings.backgroundImageBlur
 
-        Group {
-            if let loadedImage {
-                ZStack {
-                    baseColor
-                    GeometryReader { proxy in
-                        Image(uiImage: loadedImage)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(width: proxy.size.width, height: proxy.size.height)
-                            .blur(radius: imageBlur)
-                            .clipped()
-                            .opacity(imageOpacity)
-                    }
+        if let loadedImage {
+            ZStack {
+                baseColor
+                GeometryReader { proxy in
+                    Image(uiImage: loadedImage)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .blur(radius: imageBlur)
+                        .clipped()
+                        .opacity(imageOpacity)
                 }
-                .compositingGroup()
-                .opacity(windowOpacity)
-            } else if let customColor = themeManager.activeBackgroundColor {
-                customColor.opacity(windowOpacity)
-            } else if themeManager.isWindowTranslucent {
-                Color(.systemBackground).opacity(windowOpacity)
-            } else {
-                Color.clear
             }
+            .compositingGroup()
+            .opacity(windowOpacity)
+        } else if let customColor = themeManager.activeBackgroundColor {
+            customColor.opacity(windowOpacity)
+        } else if themeManager.isWindowTranslucent {
+            defaultMainBaseColor.opacity(windowOpacity)
+        } else {
+            Color.clear
         }
-        .ignoresSafeArea()
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-        .task(id: imageURL) {
-            guard let imageURL else {
-                loadedImage = nil
-                return
-            }
-            let image = await Task.detached(priority: .userInitiated) {
-                UIImage(contentsOfFile: imageURL.path)
-            }.value
-            if !Task.isCancelled {
-                loadedImage = image
-            }
+    }
+
+    @ViewBuilder
+    private var sidebarBackdrop: some View {
+        if themeManager.hasCustomSidebarBackdrop {
+            let base = themeManager.activeSidebarBackgroundColor
+                ?? themeManager.activeBackgroundColor
+                ?? defaultSidebarBaseColor
+            base.opacity(themeManager.effectiveSidebarOpacity)
+        } else {
+            Color.clear
         }
+    }
+
+    @ViewBuilder
+    private var playerBarBackdrop: some View {
+        if themeManager.isWindowTranslucent || themeManager.activeBackgroundColor != nil {
+            let base = themeManager.activeBackgroundColor ?? defaultPlayerBarBaseColor
+            base.opacity(themeManager.effectiveBackgroundOpacity)
+        } else {
+            Color.clear
+        }
+    }
+
+    private var defaultMainBaseColor: Color {
+        let scheme = themeManager.preferredColorScheme ?? colorScheme
+        return scheme == .dark ? Color(red: 0.09, green: 0.09, blue: 0.10) : Color.white
+    }
+
+    private var defaultSidebarBaseColor: Color {
+        let scheme = themeManager.sidebarColorSchemeOverride ?? themeManager.preferredColorScheme ?? colorScheme
+        return scheme == .dark ? Color(red: 0.11, green: 0.11, blue: 0.12) : Color(red: 0.95, green: 0.95, blue: 0.96)
+    }
+
+    private var defaultPlayerBarBaseColor: Color {
+        let scheme = themeManager.preferredColorScheme ?? colorScheme
+        return scheme == .dark ? Color(red: 0.12, green: 0.12, blue: 0.13) : Color(red: 0.98, green: 0.98, blue: 0.98)
     }
 }
 

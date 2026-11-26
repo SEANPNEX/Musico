@@ -71,11 +71,6 @@ struct PlayerBar: View {
             HStack(spacing: 4) {
                 #if targetEnvironment(macCatalyst)
                 volumeControls
-                AudioRoutePickerView(
-                    tintColor: themeManager.primaryForegroundColor.map(UIColor.init) ?? .label,
-                    activeTintColor: UIColor(themeManager.accentColor)
-                )
-                .frame(width: 30, height: 30)
                 #endif
                 if let track {
                     Menu {
@@ -114,6 +109,7 @@ struct PlayerBar: View {
             .frame(minWidth: 112, maxWidth: .infinity, alignment: .trailing)
         }
 
+        let pillShape = RoundedRectangle(cornerRadius: 20, style: .continuous)
         if #available(iOS 26.0, macCatalyst 26.0, *) {
             VStack(spacing: 0) {
                 Divider().opacity(0.35)
@@ -121,19 +117,37 @@ struct PlayerBar: View {
                     .padding(.horizontal, 16)
                     .padding(.vertical, 10)
                     .background {
-                        Color.clear
-                            .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                            .allowsHitTesting(false)
+                        Group {
+                            if themeManager.isWindowTranslucent {
+                                Color.clear
+                                    .background(.ultraThinMaterial, in: pillShape)
+                                    .opacity(themeManager.effectiveBackgroundOpacity)
+                                    .overlay {
+                                        pillShape.strokeBorder(Color.primary.opacity(0.14), lineWidth: 0.75)
+                                    }
+                            } else {
+                                Color.clear
+                                    .glassEffect(.regular, in: pillShape)
+                            }
+                        }
+                        .allowsHitTesting(false)
                     }
                     .padding(.horizontal, 14)
                     .padding(.top, 8)
                     .padding(.bottom, 10)
             }
+            .background { ThemeBackdropView(role: .playerBar) }
         } else {
             barContent
                 .padding(.horizontal, 16)
                 .padding(.vertical, 8)
-                .background(.bar)
+                .background {
+                    if themeManager.isWindowTranslucent || themeManager.activeBackgroundColor != nil {
+                        ThemeBackdropView(role: .playerBar)
+                    } else {
+                        Rectangle().fill(.bar)
+                    }
+                }
                 .overlay(alignment: .top) { Divider() }
         }
     }

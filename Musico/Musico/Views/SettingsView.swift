@@ -40,10 +40,15 @@ struct SettingsView: View {
     private var formBody: some View {
         Form {
             appearanceSection
+                .listRowBackground(settingsRowBackground)
             generalSection
+                .listRowBackground(settingsRowBackground)
             googleDriveSection
+                .listRowBackground(settingsRowBackground)
             librarySection
+                .listRowBackground(settingsRowBackground)
             aboutSection
+                .listRowBackground(settingsRowBackground)
         }
         .hiddenScrollBackgroundIfThemed(themeManager)
         .background {
@@ -194,6 +199,39 @@ struct SettingsView: View {
                 )
             }
             .padding(.vertical, 2)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(L10n.tr("Sidebar Background Color"))
+                    .font(.subheadline.weight(.medium))
+                sidebarBackgroundPresetRow
+            }
+            .padding(.vertical, 4)
+
+            if themeManager.settings.sidebarBackgroundPreset == .custom {
+                ColorPicker(
+                    L10n.tr("Custom Sidebar Color"),
+                    selection: customSidebarBackgroundColorBinding,
+                    supportsOpacity: false
+                )
+            }
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(L10n.tr("Sidebar Opacity"))
+                    Spacer()
+                    Text("\(Int((themeManager.effectiveSidebarOpacity * 100).rounded()))%")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                Slider(
+                    value: Binding(
+                        get: { themeManager.effectiveSidebarOpacity },
+                        set: { themeManager.setSidebarOpacity($0) }
+                    ),
+                    in: AppearanceSettings.sidebarOpacityRange
+                )
+            }
+            .padding(.vertical, 2)
             #endif
 
             Button(L10n.tr("Reset to Default"), role: .destructive) {
@@ -207,20 +245,26 @@ struct SettingsView: View {
         let fgPrimary = themeManager.primaryForegroundColor ?? Color.primary
         let fgSecondary = themeManager.secondaryForegroundColor ?? Color.secondary
         let accent = themeManager.accentColor
+        let windowOpacity = themeManager.effectiveBackgroundOpacity
 
-        return ZStack {
-            bgColor
-            if let previewImage {
-                GeometryReader { proxy in
-                    Image(uiImage: previewImage)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .blur(radius: themeManager.settings.backgroundImageBlur * 0.6)
-                        .clipped()
-                        .opacity(themeManager.settings.backgroundImageOpacity)
+        let mainPreview = ZStack {
+            ZStack {
+                bgColor
+                if let previewImage {
+                    GeometryReader { proxy in
+                        Image(uiImage: previewImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: proxy.size.width, height: proxy.size.height)
+                            .blur(radius: themeManager.settings.backgroundImageBlur * 0.6)
+                            .clipped()
+                            .opacity(themeManager.settings.backgroundImageOpacity)
+                    }
                 }
             }
+            .compositingGroup()
+            .opacity(windowOpacity)
+
             HStack(spacing: 12) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .fill(accent.opacity(0.20))
@@ -261,6 +305,41 @@ struct SettingsView: View {
             }
             .padding(12)
         }
+
+        return Group {
+            #if targetEnvironment(macCatalyst)
+            let sidebarColor = (themeManager.activeSidebarBackgroundColor
+                ?? themeManager.activeBackgroundColor
+                ?? Color(.tertiarySystemBackground))
+                .opacity(themeManager.effectiveSidebarOpacity)
+            let sidebarFg = themeManager.sidebarPrimaryForegroundColor ?? fgPrimary
+
+            HStack(spacing: 0) {
+                VStack(alignment: .leading, spacing: 6) {
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(accent.opacity(0.32))
+                        .frame(width: 34, height: 8)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(sidebarFg.opacity(0.35))
+                        .frame(width: 28, height: 6)
+                    RoundedRectangle(cornerRadius: 3, style: .continuous)
+                        .fill(sidebarFg.opacity(0.25))
+                        .frame(width: 32, height: 6)
+                }
+                .padding(.horizontal, 8)
+                .frame(width: 52)
+                .frame(maxHeight: .infinity)
+                .background(sidebarColor)
+
+                Divider()
+
+                mainPreview
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            #else
+            mainPreview
+            #endif
+        }
         .frame(height: 76)
         .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         .overlay {
@@ -271,20 +350,55 @@ struct SettingsView: View {
     }
 
     private var backgroundPresetRow: some View {
+        backgroundColorPresetRow(
+            selectedPreset: themeManager.settings.backgroundPreset,
+            customHex: themeManager.settings.customBackgroundHex,
+            defaultTitle: BackgroundColorPreset.default.displayName,
+            defaultColor: nil,
+            defaultLuminance: nil
+        ) { preset in
+            if preset == .custom && themeManager.settings.customBackgroundHex == nil {
+                themeManager.setCustomBackgroundHex("#1E293B")
+            } else {
+                themeManager.setBackgroundPreset(preset)
+            }
+        }
+    }
+
+    private var sidebarBackgroundPresetRow: some View {
+        backgroundColorPresetRow(
+            selectedPreset: themeManager.settings.sidebarBackgroundPreset,
+            customHex: themeManager.settings.customSidebarBackgroundHex,
+            defaultTitle: L10n.tr("Follow Main"),
+            defaultColor: themeManager.activeBackgroundColor,
+            defaultLuminance: themeManager.activeBackgroundLuminance
+        ) { preset in
+            if preset == .custom && themeManager.settings.customSidebarBackgroundHex == nil {
+                themeManager.setCustomSidebarBackgroundHex("#1E293B")
+            } else {
+                themeManager.setSidebarBackgroundPreset(preset)
+            }
+        }
+    }
+
+    private func backgroundColorPresetRow(
+        selectedPreset: BackgroundColorPreset,
+        customHex: String?,
+        defaultTitle: String,
+        defaultColor: Color?,
+        defaultLuminance: Double?,
+        onSelect: @escaping (BackgroundColorPreset) -> Void
+    ) -> some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 12) {
                 ForEach(BackgroundColorPreset.allCases) { preset in
-                    let isSelected = themeManager.settings.backgroundPreset == preset
+                    let isSelected = selectedPreset == preset
                     Button {
-                        if preset == .custom && themeManager.settings.customBackgroundHex == nil {
-                            themeManager.setCustomBackgroundHex("#1E293B")
-                        } else {
-                            themeManager.setBackgroundPreset(preset)
-                        }
+                        onSelect(preset)
                     } label: {
                         VStack(spacing: 5) {
                             ZStack {
-                                backgroundSwatchFill(for: preset)
+                                backgroundSwatchFill(for: preset, customHex: customHex, defaultColor: defaultColor)
                                     .frame(width: 34, height: 34)
                                     .clipShape(Circle())
                                     .overlay {
@@ -297,14 +411,14 @@ struct SettingsView: View {
                                 if isSelected {
                                     Image(systemName: "checkmark")
                                         .font(.caption.weight(.bold))
-                                        .foregroundStyle(swatchCheckmarkColor(for: preset))
+                                        .foregroundStyle(swatchCheckmarkColor(for: preset, customHex: customHex, defaultLuminance: defaultLuminance))
                                 } else if preset == .custom {
                                     Image(systemName: "eyedropper")
                                         .font(.caption2.weight(.semibold))
-                                        .foregroundStyle(swatchCheckmarkColor(for: preset))
+                                        .foregroundStyle(swatchCheckmarkColor(for: preset, customHex: customHex, defaultLuminance: defaultLuminance))
                                 }
                             }
-                            Text(preset.displayName)
+                            Text(preset == .default ? defaultTitle : preset.displayName)
                                 .font(.caption2)
                                 .foregroundStyle(isSelected ? themeManager.accentColor : .secondary)
                                 .lineLimit(1)
@@ -623,6 +737,12 @@ struct SettingsView: View {
         return short
     }
 
+    private var settingsRowBackground: Color? {
+        guard themeManager.hasCustomBackdrop else { return nil }
+        return (themeManager.activeBackgroundColor ?? Color(.secondarySystemGroupedBackground))
+            .opacity(themeManager.translucentSurfaceOpacity)
+    }
+
     private var customBackgroundColorBinding: Binding<Color> {
         Binding(
             get: {
@@ -632,6 +752,20 @@ struct SettingsView: View {
             set: { newColor in
                 if let hex = newColor.toHexString() {
                     themeManager.setCustomBackgroundHex(hex)
+                }
+            }
+        )
+    }
+
+    private var customSidebarBackgroundColorBinding: Binding<Color> {
+        Binding(
+            get: {
+                themeManager.settings.customSidebarBackgroundHex.flatMap { Color(hex: $0) }
+                    ?? Color(hex: "#1E293B")!
+            },
+            set: { newColor in
+                if let hex = newColor.toHexString() {
+                    themeManager.setCustomSidebarBackgroundHex(hex)
                 }
             }
         )
@@ -681,16 +815,20 @@ struct SettingsView: View {
     }
 
     @ViewBuilder
-    private func backgroundSwatchFill(for preset: BackgroundColorPreset) -> some View {
+    private func backgroundSwatchFill(for preset: BackgroundColorPreset, customHex: String?, defaultColor: Color?) -> some View {
         switch preset {
         case .default:
-            LinearGradient(
-                colors: [Color(.systemBackground), Color(.secondarySystemBackground)],
-                startPoint: .topLeading,
-                endPoint: .bottomTrailing
-            )
+            if let defaultColor {
+                defaultColor
+            } else {
+                LinearGradient(
+                    colors: [Color(.systemBackground), Color(.secondarySystemBackground)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            }
         case .custom:
-            if let hex = themeManager.settings.customBackgroundHex, let color = Color(hex: hex) {
+            if let hex = customHex, let color = Color(hex: hex) {
                 color
             } else {
                 AngularGradient(
@@ -703,12 +841,15 @@ struct SettingsView: View {
         }
     }
 
-    private func swatchCheckmarkColor(for preset: BackgroundColorPreset) -> Color {
+    private func swatchCheckmarkColor(for preset: BackgroundColorPreset, customHex: String?, defaultLuminance: Double?) -> Color {
         switch preset {
         case .default:
+            if let defaultLuminance {
+                return defaultLuminance < 0.5 ? .white : .black
+            }
             return .primary
         case .custom:
-            if let hex = themeManager.settings.customBackgroundHex,
+            if let hex = customHex,
                let lum = ThemeColorHex.relativeLuminance(hex: hex) {
                 return lum < 0.5 ? .white : .black
             }

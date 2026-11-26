@@ -108,7 +108,10 @@ struct RootView: View {
         }
         .background {
             #if targetEnvironment(macCatalyst)
-            MacWindowTransparencyApplier(isTranslucent: themeManager.isWindowTranslucent)
+            MacWindowTransparencyApplier(
+                isTranslucent: themeManager.isWindowTranslucent,
+                hasCustomSidebarColor: themeManager.activeSidebarBackgroundColor != nil
+            )
                 .allowsHitTesting(false)
             #endif
         }

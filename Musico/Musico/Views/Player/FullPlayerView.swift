@@ -168,9 +168,11 @@ private struct PlayerPage: View {
     var body: some View {
         VStack(spacing: 16) {
             if showsClose {
-                closeButton
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .keyboardShortcut(.cancelAction)
+                HStack {
+                    closeButton
+                    Spacer()
+                }
+                .zIndex(10)
             }
             if let track = player.currentTrack {
                 ArtworkView(artworkKey: track.artworkKey, remoteArtworkURL: track.remoteArtworkURL)
@@ -208,6 +210,8 @@ private struct PlayerPage: View {
                     .onTapGesture { panel = .lyrics }
                     .accessibilityAddTraits(.isButton)
                     .accessibilityLabel(L10n.tr("Show lyrics"))
+                    .clipped()
+                    .zIndex(0)
 
                 HStack(alignment: .center, spacing: 8) {
                     VStack(alignment: .leading, spacing: 4) {
@@ -268,30 +272,22 @@ private struct PlayerPage: View {
 
                 PlaybackScrubber()
                 transport
-                HStack(spacing: 8) {
-                    HStack(spacing: 0) {
-                        MarqueeText(
-                            text: L10n.displayQueueName(queues.active.name),
-                            font: .footnote,
-                            alignment: .center
-                        )
-                        if !positionText.isEmpty {
-                            Text(" · " + positionText)
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                                .layoutPriority(1)
-                        }
-                    }
-                    .font(.footnote)
-                    .foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity)
-
-                    AudioRoutePickerView(
-                        tintColor: themeManager.primaryForegroundColor.map(UIColor.init) ?? .label,
-                        activeTintColor: UIColor(themeManager.accentColor)
+                HStack(spacing: 0) {
+                    MarqueeText(
+                        text: L10n.displayQueueName(queues.active.name),
+                        font: .footnote,
+                        alignment: .center
                     )
-                    .frame(width: 44, height: 44)
+                    if !positionText.isEmpty {
+                        Text(" · " + positionText)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(1)
+                    }
                 }
+                .font(.footnote)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity)
                 panelButtons
             } else {
                 ContentUnavailableView(L10n.tr("Nothing Playing"), systemImage: "music.note",
@@ -321,40 +317,27 @@ private struct PlayerPage: View {
             Button(action: performClose) {
                 Image(systemName: "chevron.down")
                     .font(.body.weight(.semibold))
-                    .frame(width: 38, height: 38)
-                    .contentShape(Capsule())
+                    .frame(width: 22, height: 22)
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.glass)
+            .buttonBorderShape(.circle)
+            .keyboardShortcut(.cancelAction)
             .accessibilityLabel(L10n.tr("Close"))
             .help(L10n.tr("Close"))
-            .background {
-                Color.clear
-                    .glassEffect(.regular, in: Capsule())
-                    .allowsHitTesting(false)
-            }
-            .overlay {
-                ZStack {
-                    Capsule()
-                        .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.5)
-                    if isCloseHovered {
-                        Capsule()
-                            .fill(Color.primary.opacity(0.08))
-                    }
-                }
-                .allowsHitTesting(false)
-            }
-            .scaleEffect(!reduceMotion && isCloseHovered ? 1.05 : 1.0)
-            .onHover { isCloseHovered = $0 }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isCloseHovered)
         } else {
             Button(action: performClose) {
                 Image(systemName: "chevron.down")
                     .font(.title3.weight(.semibold))
-                    .frame(width: 44, height: 32)
-                    .background(isCloseHovered ? Color.primary.opacity(0.08) : .clear, in: Capsule())
+                    .frame(width: 38, height: 34)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay {
+                        Capsule()
+                            .fill(isCloseHovered ? Color.primary.opacity(0.08) : .clear)
+                    }
                     .contentShape(Capsule())
             }
-            .buttonStyle(.plain)
+            .buttonStyle(.borderless)
+            .keyboardShortcut(.cancelAction)
             .accessibilityLabel(L10n.tr("Close"))
             .help(L10n.tr("Close"))
             .onHover { isCloseHovered = $0 }

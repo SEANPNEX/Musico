@@ -151,18 +151,22 @@ struct AppearanceSettings: Codable, Equatable, Sendable {
     static let defaultBackgroundOpacity: Double = 1.0
     static let defaultBackgroundImageBlur: Double = 0.0
     static let backgroundImageOpacityRange: ClosedRange<Double> = 0.10...1.0
-    static let backgroundOpacityRange: ClosedRange<Double> = 0.25...1.0
+    static let backgroundOpacityRange: ClosedRange<Double> = 0.15...1.0
+    static let sidebarOpacityRange: ClosedRange<Double> = 0.15...1.0
     static let backgroundImageBlurRange: ClosedRange<Double> = 0.0...24.0
 
     var themeMode: AppThemeMode
     var backgroundPreset: BackgroundColorPreset
     var customBackgroundHex: String?
+    var sidebarBackgroundPreset: BackgroundColorPreset
+    var customSidebarBackgroundHex: String?
     var foregroundPreset: ForegroundColorPreset
     var customAccentHex: String?
     var customForegroundHex: String?
     var backgroundImageFileName: String?
     var backgroundImageOpacity: Double
     var backgroundOpacity: Double
+    var sidebarOpacity: Double?
     var backgroundImageBlur: Double
     var lyricsFontSize: LyricsFontSize
     var lyricsAlignment: LyricsAlignment
@@ -171,12 +175,15 @@ struct AppearanceSettings: Codable, Equatable, Sendable {
         themeMode: AppThemeMode = .system,
         backgroundPreset: BackgroundColorPreset = .default,
         customBackgroundHex: String? = nil,
+        sidebarBackgroundPreset: BackgroundColorPreset = .default,
+        customSidebarBackgroundHex: String? = nil,
         foregroundPreset: ForegroundColorPreset = .coral,
         customAccentHex: String? = nil,
         customForegroundHex: String? = nil,
         backgroundImageFileName: String? = nil,
         backgroundImageOpacity: Double = AppearanceSettings.defaultBackgroundImageOpacity,
         backgroundOpacity: Double = AppearanceSettings.defaultBackgroundOpacity,
+        sidebarOpacity: Double? = nil,
         backgroundImageBlur: Double = AppearanceSettings.defaultBackgroundImageBlur,
         lyricsFontSize: LyricsFontSize = .medium,
         lyricsAlignment: LyricsAlignment = .leading
@@ -184,12 +191,15 @@ struct AppearanceSettings: Codable, Equatable, Sendable {
         self.themeMode = themeMode
         self.backgroundPreset = backgroundPreset
         self.customBackgroundHex = customBackgroundHex.flatMap(ThemeColorHex.normalize)
+        self.sidebarBackgroundPreset = sidebarBackgroundPreset
+        self.customSidebarBackgroundHex = customSidebarBackgroundHex.flatMap(ThemeColorHex.normalize)
         self.foregroundPreset = foregroundPreset
         self.customAccentHex = customAccentHex.flatMap(ThemeColorHex.normalize)
         self.customForegroundHex = customForegroundHex.flatMap(ThemeColorHex.normalize)
         self.backgroundImageFileName = backgroundImageFileName
         self.backgroundImageOpacity = Self.clampBackgroundImageOpacity(backgroundImageOpacity)
         self.backgroundOpacity = Self.clampBackgroundOpacity(backgroundOpacity)
+        self.sidebarOpacity = sidebarOpacity.map(Self.clampSidebarOpacity)
         self.backgroundImageBlur = Self.clampBackgroundImageBlur(backgroundImageBlur)
         self.lyricsFontSize = lyricsFontSize
         self.lyricsAlignment = lyricsAlignment
@@ -200,12 +210,15 @@ struct AppearanceSettings: Codable, Equatable, Sendable {
         let themeMode = try container.decodeIfPresent(AppThemeMode.self, forKey: .themeMode) ?? .system
         let backgroundPreset = try container.decodeIfPresent(BackgroundColorPreset.self, forKey: .backgroundPreset) ?? .default
         let customBackgroundHex = try container.decodeIfPresent(String.self, forKey: .customBackgroundHex)
+        let sidebarBackgroundPreset = try container.decodeIfPresent(BackgroundColorPreset.self, forKey: .sidebarBackgroundPreset) ?? .default
+        let customSidebarBackgroundHex = try container.decodeIfPresent(String.self, forKey: .customSidebarBackgroundHex)
         let foregroundPreset = try container.decodeIfPresent(ForegroundColorPreset.self, forKey: .foregroundPreset) ?? .coral
         let customAccentHex = try container.decodeIfPresent(String.self, forKey: .customAccentHex)
         let customForegroundHex = try container.decodeIfPresent(String.self, forKey: .customForegroundHex)
         let backgroundImageFileName = try container.decodeIfPresent(String.self, forKey: .backgroundImageFileName)
         let backgroundImageOpacity = try container.decodeIfPresent(Double.self, forKey: .backgroundImageOpacity) ?? Self.defaultBackgroundImageOpacity
         let backgroundOpacity = try container.decodeIfPresent(Double.self, forKey: .backgroundOpacity) ?? Self.defaultBackgroundOpacity
+        let sidebarOpacity = try container.decodeIfPresent(Double.self, forKey: .sidebarOpacity)
         let backgroundImageBlur = try container.decodeIfPresent(Double.self, forKey: .backgroundImageBlur) ?? Self.defaultBackgroundImageBlur
         let lyricsFontSize = try container.decodeIfPresent(LyricsFontSize.self, forKey: .lyricsFontSize) ?? .medium
         let lyricsAlignment = try container.decodeIfPresent(LyricsAlignment.self, forKey: .lyricsAlignment) ?? .leading
@@ -214,12 +227,15 @@ struct AppearanceSettings: Codable, Equatable, Sendable {
             themeMode: themeMode,
             backgroundPreset: backgroundPreset,
             customBackgroundHex: customBackgroundHex,
+            sidebarBackgroundPreset: sidebarBackgroundPreset,
+            customSidebarBackgroundHex: customSidebarBackgroundHex,
             foregroundPreset: foregroundPreset,
             customAccentHex: customAccentHex,
             customForegroundHex: customForegroundHex,
             backgroundImageFileName: backgroundImageFileName,
             backgroundImageOpacity: backgroundImageOpacity,
             backgroundOpacity: backgroundOpacity,
+            sidebarOpacity: sidebarOpacity,
             backgroundImageBlur: backgroundImageBlur,
             lyricsFontSize: lyricsFontSize,
             lyricsAlignment: lyricsAlignment
@@ -234,6 +250,11 @@ struct AppearanceSettings: Codable, Equatable, Sendable {
     static func clampBackgroundOpacity(_ value: Double) -> Double {
         guard value.isFinite else { return defaultBackgroundOpacity }
         return min(max(value, backgroundOpacityRange.lowerBound), backgroundOpacityRange.upperBound)
+    }
+
+    static func clampSidebarOpacity(_ value: Double) -> Double {
+        guard value.isFinite else { return defaultBackgroundOpacity }
+        return min(max(value, sidebarOpacityRange.lowerBound), sidebarOpacityRange.upperBound)
     }
 
     static func clampBackgroundImageBlur(_ value: Double) -> Double {
@@ -439,9 +460,52 @@ final class ThemeManager {
         #endif
     }
 
+    var effectiveSidebarOpacity: Double {
+        #if targetEnvironment(macCatalyst)
+        settings.sidebarOpacity.map(AppearanceSettings.clampSidebarOpacity) ?? effectiveBackgroundOpacity
+        #else
+        1.0
+        #endif
+    }
+
+    var activeSidebarBackgroundHex: String? {
+        switch settings.sidebarBackgroundPreset {
+        case .default:
+            return nil
+        case .custom:
+            return settings.customSidebarBackgroundHex
+        default:
+            return settings.sidebarBackgroundPreset.hexString
+        }
+    }
+
+    var activeSidebarBackgroundColor: Color? {
+        activeSidebarBackgroundHex.flatMap { Color(hex: $0) }
+    }
+
+    var activeSidebarBackgroundLuminance: Double? {
+        activeSidebarBackgroundHex.flatMap { ThemeColorHex.relativeLuminance(hex: $0) }
+    }
+
+    var resolvedSidebarForegroundHex: String? {
+        if let lum = activeSidebarBackgroundLuminance {
+            return lum < 0.179 ? AppearanceSettings.lightForegroundHex : AppearanceSettings.darkForegroundHex
+        }
+        return resolvedForegroundHex
+    }
+
+    var sidebarPrimaryForegroundColor: Color? {
+        resolvedSidebarForegroundHex.flatMap { Color(hex: $0) }
+    }
+
+    var sidebarColorSchemeOverride: ColorScheme? {
+        guard let lum = activeSidebarBackgroundLuminance else { return nil }
+        return lum < 0.179 ? .dark : .light
+    }
+
     var isWindowTranslucent: Bool {
         #if targetEnvironment(macCatalyst)
-        effectiveBackgroundOpacity < 0.999
+        effectiveBackgroundOpacity < 0.999 || effectiveSidebarOpacity < 0.999
         #else
         false
         #endif
@@ -449,6 +513,20 @@ final class ThemeManager {
 
     var hasCustomBackdrop: Bool {
         activeBackgroundColor != nil || hasBackgroundImage || isWindowTranslucent
+    }
+
+    var hasCustomSidebarBackdrop: Bool {
+        activeSidebarBackgroundColor != nil || activeBackgroundColor != nil || isWindowTranslucent
+    }
+
+    var translucentSurfaceOpacity: Double {
+        if isWindowTranslucent {
+            return max(0.14, effectiveBackgroundOpacity * 0.55)
+        }
+        if hasBackgroundImage {
+            return 0.78
+        }
+        return 1.0
     }
 
     var activeAccentHex: String {
@@ -612,6 +690,28 @@ final class ThemeManager {
         let clamped = AppearanceSettings.clampBackgroundOpacity(opacity)
         guard settings.backgroundOpacity != clamped else { return }
         settings.backgroundOpacity = clamped
+        persist()
+    }
+
+    func setSidebarBackgroundPreset(_ preset: BackgroundColorPreset) {
+        guard settings.sidebarBackgroundPreset != preset else { return }
+        settings.sidebarBackgroundPreset = preset
+        persist()
+    }
+
+    func setCustomSidebarBackgroundHex(_ hex: String?) {
+        let normalized = hex.flatMap(ThemeColorHex.normalize)
+        settings.customSidebarBackgroundHex = normalized
+        if normalized != nil {
+            settings.sidebarBackgroundPreset = .custom
+        }
+        persist()
+    }
+
+    func setSidebarOpacity(_ opacity: Double?) {
+        let clamped = opacity.map(AppearanceSettings.clampSidebarOpacity)
+        guard settings.sidebarOpacity != clamped else { return }
+        settings.sidebarOpacity = clamped
         persist()
     }
 

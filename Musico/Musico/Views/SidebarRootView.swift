@@ -47,7 +47,6 @@ struct SidebarRootView: View {
                 onOpen: openPlayer
             )
         }
-        .background { ThemeBackdropView() }
         .overlay {
             if isDropTargeted {
                 dropOverlayBanner
@@ -109,11 +108,11 @@ struct SidebarRootView: View {
         @Bindable var navigation = navigation
         return NavigationSplitView(columnVisibility: $columnVisibility) {
             sidebar
-                .background { ThemeBackdropView() }
+                .modifier(SidebarPaneModifier(themeManager: themeManager))
         } detail: {
             NavigationStack(path: $navigation.sidebarDetailPath) {
                 detail
-                    .background { ThemeBackdropView() }
+                    .background { ThemeBackdropView(role: .mainContent) }
             }
         }
         .navigationSplitViewStyle(.balanced)
@@ -131,7 +130,6 @@ struct SidebarRootView: View {
     private var inspectorContent: some View {
         let base = panel
             .inspectorColumnWidth(min: 300, ideal: 360, max: 460)
-            .background { ThemeBackdropView() }
             .environment(library)
             .environment(player)
             .environment(queues)
@@ -146,6 +144,7 @@ struct SidebarRootView: View {
             .environment(\.languageManager, languageManager)
             .environment(\.locale, languageManager.effectiveLocale)
             .applyTheme(themeManager)
+            .modifier(SidebarPaneModifier(themeManager: themeManager))
         if let deletePrompt {
             base.environment(deletePrompt)
         } else {
@@ -610,5 +609,27 @@ private struct SidebarFooterButtonStyle: ButtonStyle {
                 in: RoundedRectangle(cornerRadius: 8, style: .continuous)
             )
             .onHover { isHovered = $0 }
+    }
+}
+
+private struct SidebarPaneModifier: ViewModifier {
+    let themeManager: ThemeManager
+
+    func body(content: Content) -> some View {
+        let backed = content.background { ThemeBackdropView(role: .sidebar) }
+        if let scheme = themeManager.sidebarColorSchemeOverride,
+           let fg = themeManager.sidebarPrimaryForegroundColor {
+            backed
+                .foregroundStyle(fg, fg.opacity(0.68))
+                .environment(\.colorScheme, scheme)
+        } else if let scheme = themeManager.sidebarColorSchemeOverride {
+            backed
+                .environment(\.colorScheme, scheme)
+        } else if let fg = themeManager.sidebarPrimaryForegroundColor {
+            backed
+                .foregroundStyle(fg, fg.opacity(0.68))
+        } else {
+            backed
+        }
     }
 }

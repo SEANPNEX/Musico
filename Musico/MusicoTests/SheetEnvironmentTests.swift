@@ -380,8 +380,6 @@ final class SheetEnvironmentTests: XCTestCase {
             PlayerBar(sidePanel: .constant(.queue), isQueueMainActive: true, onOpen: {})
             QueuesView(embeddedInInspector: true, onDone: {})
             FullPlayerView(onClose: {})
-            AudioRoutePickerView()
-                .frame(width: 44, height: 44)
             ToastOverlayView()
             MarqueeText(text: "A Very Long Queue Name That Should Scroll Cleanly Across Narrow Screens", font: .footnote)
                 .frame(width: 140)

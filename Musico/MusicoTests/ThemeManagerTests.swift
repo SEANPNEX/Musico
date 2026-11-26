@@ -65,11 +65,20 @@ final class ThemeManagerTests: XCTestCase {
         XCTAssertEqual(manager.settings.backgroundImageOpacity, AppearanceSettings.defaultBackgroundImageOpacity, accuracy: 0.0001)
 
         manager.setBackgroundOpacity(0.05)
-        XCTAssertEqual(manager.settings.backgroundOpacity, 0.25, accuracy: 0.0001)
+        XCTAssertEqual(manager.settings.backgroundOpacity, 0.15, accuracy: 0.0001)
         manager.setBackgroundOpacity(3.0)
         XCTAssertEqual(manager.settings.backgroundOpacity, 1.0, accuracy: 0.0001)
         manager.setBackgroundOpacity(.infinity)
         XCTAssertEqual(manager.settings.backgroundOpacity, AppearanceSettings.defaultBackgroundOpacity, accuracy: 0.0001)
+
+        manager.setSidebarOpacity(0.05)
+        XCTAssertEqual(manager.settings.sidebarOpacity ?? -1, 0.15, accuracy: 0.0001)
+        manager.setSidebarOpacity(2.0)
+        XCTAssertEqual(manager.settings.sidebarOpacity ?? -1, 1.0, accuracy: 0.0001)
+        manager.setSidebarOpacity(.nan)
+        XCTAssertEqual(manager.settings.sidebarOpacity ?? -1, AppearanceSettings.defaultBackgroundOpacity, accuracy: 0.0001)
+        manager.setSidebarOpacity(nil)
+        XCTAssertNil(manager.settings.sidebarOpacity)
     }
 
     func testHexParsingAndFormatting() {
@@ -202,6 +211,9 @@ final class ThemeManagerTests: XCTestCase {
         XCTAssertEqual(manager.settings.themeMode, .dark)
         XCTAssertEqual(manager.settings.backgroundPreset, .obsidian)
         XCTAssertEqual(manager.settings.foregroundPreset, .emerald)
+        XCTAssertEqual(manager.settings.sidebarBackgroundPreset, .default)
+        XCTAssertNil(manager.settings.customSidebarBackgroundHex)
+        XCTAssertNil(manager.settings.sidebarOpacity)
         XCTAssertEqual(manager.settings.backgroundImageBlur, 0.0, accuracy: 0.0001)
         XCTAssertEqual(manager.settings.lyricsFontSize, .medium)
         XCTAssertEqual(manager.settings.lyricsAlignment, .leading)
@@ -257,5 +269,59 @@ final class ThemeManagerTests: XCTestCase {
         XCTAssertFalse(manager.hasLowContrast(fallbackScheme: .light))
         XCTAssertGreaterThanOrEqual(manager.foregroundContrastRatio(fallbackScheme: .light), 4.5)
         XCTAssertGreaterThanOrEqual(manager.accentContrastRatio(fallbackScheme: .light), 3.0)
+    }
+
+    func testSidebarThemingOpacityAndPersistence() {
+        let dir = makeTempDir()
+        let manager = ThemeManager(directory: dir)
+
+        // Default follows main
+        XCTAssertEqual(manager.settings.sidebarBackgroundPreset, .default)
+        XCTAssertNil(manager.activeSidebarBackgroundHex)
+        XCTAssertNil(manager.sidebarColorSchemeOverride)
+        XCTAssertEqual(manager.effectiveSidebarOpacity, manager.effectiveBackgroundOpacity, accuracy: 0.0001)
+
+        // When sidebarOpacity is nil, effectiveSidebarOpacity follows effectiveBackgroundOpacity
+        manager.setBackgroundOpacity(0.5)
+        #if targetEnvironment(macCatalyst)
+        XCTAssertEqual(manager.effectiveSidebarOpacity, 0.5, accuracy: 0.0001)
+        #else
+        XCTAssertEqual(manager.effectiveSidebarOpacity, 1.0, accuracy: 0.0001)
+        #endif
+
+        // Setting sidebarOpacity overrides independently
+        manager.setSidebarOpacity(0.35)
+        XCTAssertEqual(manager.settings.sidebarOpacity ?? -1, 0.35, accuracy: 0.0001)
+        #if targetEnvironment(macCatalyst)
+        XCTAssertEqual(manager.effectiveSidebarOpacity, 0.35, accuracy: 0.0001)
+        #else
+        XCTAssertEqual(manager.effectiveSidebarOpacity, 1.0, accuracy: 0.0001)
+        #endif
+
+        // Preset sidebar colors drive sidebarColorSchemeOverride and sidebarPrimaryForegroundColor
+        manager.setSidebarBackgroundPreset(.midnight)
+        XCTAssertEqual(manager.activeSidebarBackgroundHex, "#0F172A")
+        XCTAssertEqual(manager.sidebarColorSchemeOverride, .dark)
+        XCTAssertEqual(manager.resolvedSidebarForegroundHex, AppearanceSettings.lightForegroundHex)
+        XCTAssertNotNil(manager.sidebarPrimaryForegroundColor)
+        XCTAssertTrue(manager.hasCustomSidebarBackdrop)
+
+        manager.setSidebarBackgroundPreset(.paper)
+        XCTAssertEqual(manager.activeSidebarBackgroundHex, "#F8F6F1")
+        XCTAssertEqual(manager.sidebarColorSchemeOverride, .light)
+        XCTAssertEqual(manager.resolvedSidebarForegroundHex, AppearanceSettings.darkForegroundHex)
+
+        // Custom sidebar hex
+        manager.setCustomSidebarBackgroundHex("#102A43")
+        XCTAssertEqual(manager.settings.sidebarBackgroundPreset, .custom)
+        XCTAssertEqual(manager.activeSidebarBackgroundHex, "#102A43")
+        XCTAssertEqual(manager.sidebarColorSchemeOverride, .dark)
+
+        // Persistence round-trip
+        let reloaded = ThemeManager(directory: dir)
+        XCTAssertEqual(reloaded.settings.sidebarBackgroundPreset, .custom)
+        XCTAssertEqual(reloaded.settings.customSidebarBackgroundHex, "#102A43")
+        XCTAssertEqual(reloaded.settings.sidebarOpacity ?? -1, 0.35, accuracy: 0.0001)
+        XCTAssertEqual(reloaded.sidebarColorSchemeOverride, .dark)
     }
 }
