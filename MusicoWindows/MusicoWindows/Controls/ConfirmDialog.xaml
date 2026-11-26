@@ -6,7 +6,7 @@
           Background="{DynamicResource DialogOverlayBrush}"
           MouseDown="Overlay_MouseDown">
         <Border x:Name="DialogCard"
-                Width="440"
+                Width="460"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
                 Background="{DynamicResource DialogSurfaceBrush}"

@@ -84,12 +84,18 @@ struct DownloadsListView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
                 } else {
                     Button(L10n.tr("Dismiss")) {
                         manager.dismiss(jobID: job.id)
                     }
                     .buttonStyle(.borderless)
                     .font(.caption)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
                 }
             }
 

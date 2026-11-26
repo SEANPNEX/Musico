@@ -447,7 +447,12 @@ fun TrackActionDialogs(
                         )
                     }
                 ) {
-                    Text(strings.saveToMusicoFolder)
+                    Text(
+                        text = strings.saveToMusicoFolder,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             },
             dismissButton = {
@@ -464,7 +469,12 @@ fun TrackActionDialogs(
                         }
                     }
                 ) {
-                    Text(strings.chooseFolderEllipsis)
+                    Text(
+                        text = strings.chooseFolderEllipsis,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             },
         )
@@ -662,11 +672,16 @@ private fun SaveSingleCloudTrackDialog(
         confirmButton = {
             if (isExporting) {
                 TextButton(onClick = onDismiss) {
-                    Text(strings.runInBackground)
+                    Text(strings.runInBackground, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             } else {
                 TextButton(onClick = onDismiss) {
-                    Text(if (isFailed || isCancelled) strings.close else strings.ok)
+                    Text(
+                        text = if (isFailed || isCancelled) strings.close else strings.ok,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         },
@@ -678,7 +693,7 @@ private fun SaveSingleCloudTrackDialog(
                         onDismiss()
                     }
                 ) {
-                    Text(strings.cancel)
+                    Text(strings.cancel, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
         },

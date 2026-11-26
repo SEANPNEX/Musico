@@ -255,17 +255,17 @@ fun CloudCollectionPreviewSheet(
                                     strokeWidth = 2.dp,
                                 )
                                 Spacer(Modifier.width(8.dp))
-                                Text(strings.addingEllipsis)
+                                Text(strings.addingEllipsis, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                             }
                             folderAdded -> {
                                 Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text(strings.addedToFolders)
+                                Text(strings.addedToFolders, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                             }
                             else -> {
                                 Icon(Icons.Rounded.CreateNewFolder, contentDescription = null, modifier = Modifier.size(18.dp))
                                 Spacer(Modifier.width(6.dp))
-                                Text(strings.addAsCloudFolder)
+                                Text(strings.addAsCloudFolder, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -320,7 +320,7 @@ fun CloudCollectionPreviewSheet(
                             )
                             if (extension.supportsCollection && sourceUrl != null) {
                                 TextButton(onClick = { reloadNonce++ }) {
-                                    Text(strings.retry)
+                                    Text(strings.retry, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                                 }
                             }
                         }

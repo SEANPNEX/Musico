@@ -200,49 +200,86 @@ private struct CloudCollectionPreviewContent: View {
                 Spacer(minLength: 0)
             }
 
-            HStack(spacing: 10) {
-                Button {
-                    addAsCloudFolder()
-                } label: {
-                    if isAddingFolder {
-                        HStack(spacing: 6) {
-                            ProgressView().controlSize(.small)
-                            Text(L10n.tr("Adding…"))
-                        }
-                        .frame(maxWidth: .infinity)
-                    } else if isAlreadyMounted {
-                        Label(L10n.tr("Added to Folders"), systemImage: "checkmark.circle.fill")
-                            .frame(maxWidth: .infinity)
-                    } else {
-                        Label(L10n.tr("Add as Cloud Folder"), systemImage: "folder.badge.plus")
-                            .frame(maxWidth: .infinity)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    addFolderButton(stretch: false)
+                    if !previewTracks.isEmpty {
+                        playPreviewButton(stretch: false)
+                        shufflePreviewButton(stretch: false)
                     }
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(!canAddFolder)
-
-                if !previewTracks.isEmpty {
-                    Button {
-                        playAll(startAt: 0, shuffle: false)
-                    } label: {
-                        Label(L10n.tr("Play"), systemImage: "play.fill")
+                VStack(spacing: 8) {
+                    addFolderButton(stretch: true)
+                    if !previewTracks.isEmpty {
+                        HStack(spacing: 10) {
+                            playPreviewButton(stretch: true)
+                            shufflePreviewButton(stretch: true)
+                        }
                     }
-                    .buttonStyle(.bordered)
-                    .disabled(player == nil || library == nil)
-
-                    Button {
-                        let start = Int.random(in: 0..<max(previewTracks.count, 1))
-                        playAll(startAt: start, shuffle: true)
-                    } label: {
-                        Label(L10n.tr("Shuffle"), systemImage: "shuffle")
-                    }
-                    .buttonStyle(.bordered)
-                    .disabled(player == nil || library == nil)
                 }
             }
         }
         .padding(.vertical, 6)
         .listRowSeparator(.hidden)
+    }
+
+    private func addFolderButton(stretch: Bool) -> some View {
+        Button {
+            addAsCloudFolder()
+        } label: {
+            Group {
+                if isAddingFolder {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text(L10n.tr("Adding…"))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.85)
+                    }
+                } else if isAlreadyMounted {
+                    Label(L10n.tr("Added to Folders"), systemImage: "checkmark.circle.fill")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                } else {
+                    Label(L10n.tr("Add as Cloud Folder"), systemImage: "folder.badge.plus")
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.85)
+                }
+            }
+            .frame(maxWidth: stretch ? .infinity : nil)
+            .fixedSize(horizontal: !stretch, vertical: false)
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(!canAddFolder)
+    }
+
+    private func playPreviewButton(stretch: Bool) -> some View {
+        Button {
+            playAll(startAt: 0, shuffle: false)
+        } label: {
+            Label(L10n.tr("Play"), systemImage: "play.fill")
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(maxWidth: stretch ? .infinity : nil)
+                .fixedSize(horizontal: !stretch, vertical: false)
+        }
+        .buttonStyle(.bordered)
+        .disabled(player == nil || library == nil)
+    }
+
+    private func shufflePreviewButton(stretch: Bool) -> some View {
+        Button {
+            let start = Int.random(in: 0..<max(previewTracks.count, 1))
+            playAll(startAt: start, shuffle: true)
+        } label: {
+            Label(L10n.tr("Shuffle"), systemImage: "shuffle")
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(maxWidth: stretch ? .infinity : nil)
+                .fixedSize(horizontal: !stretch, vertical: false)
+        }
+        .buttonStyle(.bordered)
+        .disabled(player == nil || library == nil)
     }
 
     @ViewBuilder

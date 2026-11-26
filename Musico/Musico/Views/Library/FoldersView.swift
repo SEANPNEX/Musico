@@ -711,23 +711,19 @@ struct FolderDetailView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    HStack(spacing: 12) {
-                        if let suggested = compatible.first {
-                            Button(L10n.tr("Switch Source…")) {
-                                editingTarget = FolderTrackingTarget(
-                                    root: root,
-                                    path: "",
-                                    displayName: currentName,
-                                    preselectedProviderID: suggested.id
-                                )
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: 12) {
+                            if let suggested = compatible.first {
+                                switchSourceBannerButton(root: root, currentName: currentName, suggestedID: suggested.id)
                             }
-                            .buttonStyle(.borderedProminent)
-                            .controlSize(.small)
+                            manageExtensionsBannerButton
                         }
-                        Button(L10n.tr("Manage Extensions")) {
-                            showExtensionsSheet = true
+                        VStack(alignment: .leading, spacing: 8) {
+                            if let suggested = compatible.first {
+                                switchSourceBannerButton(root: root, currentName: currentName, suggestedID: suggested.id)
+                            }
+                            manageExtensionsBannerButton
                         }
-                        .font(.subheadline.weight(.medium))
                     }
                 }
                 .padding(.vertical, 4)
@@ -963,6 +959,30 @@ struct FolderDetailView: View {
         #if !targetEnvironment(macCatalyst)
         .sensoryFeedback(.impact(weight: .light), trigger: reorderFeedbackTrigger)
         #endif
+    }
+
+    private func switchSourceBannerButton(root: LibraryRoot, currentName: String, suggestedID: String) -> some View {
+        Button(L10n.tr("Switch Source…")) {
+            editingTarget = FolderTrackingTarget(
+                root: root,
+                path: "",
+                displayName: currentName,
+                preselectedProviderID: suggestedID
+            )
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.small)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var manageExtensionsBannerButton: some View {
+        Button(L10n.tr("Manage Extensions")) {
+            showExtensionsSheet = true
+        }
+        .font(.subheadline.weight(.medium))
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func confirmRemoveFolder(
@@ -1281,6 +1301,9 @@ struct UpdateTrackedFolderSheet: View {
                                 showEditSheet = true
                             }
                             .buttonStyle(.borderless)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(1)
                             .disabled(library == nil)
                         }
                     }

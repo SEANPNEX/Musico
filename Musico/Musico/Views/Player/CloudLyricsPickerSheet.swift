@@ -104,6 +104,9 @@ struct CloudLyricsPickerSheet: View {
                 .onSubmit { triggerSearch() }
             Button(L10n.tr("Search")) { triggerSearch() }
                 .buttonStyle(.borderedProminent)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
                 .disabled(isSearching || (queryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && queryArtist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
         }
         .padding(.horizontal, 16)

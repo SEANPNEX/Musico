@@ -12,6 +12,8 @@ import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -1248,6 +1250,7 @@ private fun CloudSourceBadge(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ExtensionUnavailableBanner(
     availability: CloudProviderAvailability,
@@ -1296,14 +1299,19 @@ private fun ExtensionUnavailableBanner(
                 )
             }
             if ((bestRecoveryProvider != null && onSwitchSource != null) || onOpenExtensions != null) {
-                Row(
+                FlowRow(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     if (onOpenExtensions != null) {
                         TextButton(onClick = onOpenExtensions) {
-                            Text(strings.manageExtensions)
+                            Text(
+                                text = strings.manageExtensions,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                     if (bestRecoveryProvider != null && onSwitchSource != null) {
@@ -1314,7 +1322,12 @@ private fun ExtensionUnavailableBanner(
                                 modifier = Modifier.size(16.dp),
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text(strings.switchSourceAction)
+                            Text(
+                                text = strings.switchSourceAction,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                 }
@@ -1358,7 +1371,7 @@ private fun DownloadsBottomSheet(
                     enabled = hasFinished,
                     onClick = { cloudDownloadManager.clearFinished() },
                 ) {
-                    Text(strings.clearFinished)
+                    Text(strings.clearFinished, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
             HorizontalDivider()
@@ -1597,7 +1610,7 @@ private fun SaveCloudPlaylistDialog(
                                     }
                                 },
                             ) {
-                                Text(strings.chooseFolder)
+                                Text(strings.chooseFolder, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                             }
                         }
                     }
@@ -1705,17 +1718,17 @@ private fun SaveCloudPlaylistDialog(
                             )
                         },
                     ) {
-                        Text(strings.save)
+                        Text(strings.save, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 }
                 isExporting -> {
                     TextButton(onClick = onDismiss) {
-                        Text(strings.runInBackground)
+                        Text(strings.runInBackground, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 }
                 else -> {
                     Button(onClick = onDismiss) {
-                        Text(strings.done)
+                        Text(strings.done, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }
@@ -1728,7 +1741,7 @@ private fun SaveCloudPlaylistDialog(
                         onDismiss()
                     },
                 ) {
-                    Text(strings.cancel)
+                    Text(strings.cancel, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
         },
@@ -1891,11 +1904,11 @@ private fun UpdateTrackedFolderDialog(
         confirmButton = {
             if (isUpdating) {
                 TextButton(onClick = onDismiss) {
-                    Text(strings.runInBackground)
+                    Text(strings.runInBackground, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             } else {
                 Button(onClick = onDismiss) {
-                    Text(strings.done)
+                    Text(strings.done, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
         },
@@ -1907,7 +1920,7 @@ private fun UpdateTrackedFolderDialog(
                         onDismiss()
                     },
                 ) {
-                    Text(strings.cancel)
+                    Text(strings.cancel, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
         },
@@ -2440,7 +2453,7 @@ private fun FolderRootList(
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(Modifier.width(8.dp))
-                    Text(strings.addCloudFolder)
+                    Text(strings.addCloudFolder, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
         }
@@ -2733,7 +2746,7 @@ private fun RootItemRow(
                         modifier = Modifier.weight(1f)
                     )
                     FilledTonalButton(onClick = onRelocate) {
-                        Text(strings.relocate)
+                        Text(strings.relocate, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

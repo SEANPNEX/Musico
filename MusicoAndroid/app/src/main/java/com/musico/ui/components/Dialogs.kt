@@ -85,12 +85,22 @@ fun TextInputDialog(
                     onDismiss()
                 }
             ) {
-                Text(confirmLabel ?: strings.save)
+                Text(
+                    text = confirmLabel ?: strings.save,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text(strings.cancel)
+                Text(
+                    text = strings.cancel,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     )
@@ -116,12 +126,22 @@ fun ConfirmDialog(
                     onDismiss()
                 }
             ) {
-                Text(confirmLabel)
+                Text(
+                    text = confirmLabel,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text(strings.cancel)
+                Text(
+                    text = strings.cancel,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     )
@@ -186,7 +206,12 @@ fun LocalDeleteOptionsDialog(
                 verticalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 TextButton(onClick = onDismiss) {
-                    Text(strings.cancel)
+                    Text(
+                        text = strings.cancel,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 TextButton(
                     onClick = {
@@ -194,7 +219,12 @@ fun LocalDeleteOptionsDialog(
                         onRemoveFromLibrary()
                     },
                 ) {
-                    Text(strings.removeFromLibrary)
+                    Text(
+                        text = strings.removeFromLibrary,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
                 TextButton(
                     onClick = {
@@ -206,6 +236,9 @@ fun LocalDeleteOptionsDialog(
                         text = strings.deleteFromDevice,
                         color = MaterialTheme.colorScheme.error,
                         fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
                     )
                 }
             }

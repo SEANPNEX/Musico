@@ -4,6 +4,8 @@ import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -42,6 +44,7 @@ import com.musico.update.UpdateUiState
 import kotlinx.coroutines.launch
 import java.util.Locale
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun UpdateDialog(
     updateManager: UpdateManager,
@@ -123,7 +126,12 @@ fun UpdateDialog(
                                 modifier = Modifier.size(18.dp),
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text(strings.openReleasePage)
+                            Text(
+                                text = strings.openReleasePage,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
 
@@ -144,7 +152,12 @@ fun UpdateDialog(
                                 modifier = Modifier.size(18.dp),
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text(strings.openReleasePage)
+                            Text(
+                                text = strings.openReleasePage,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
 
@@ -200,7 +213,12 @@ fun UpdateDialog(
                                 modifier = Modifier.size(18.dp),
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text(strings.openReleasePage)
+                            Text(
+                                text = strings.openReleasePage,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
 
@@ -224,7 +242,12 @@ fun UpdateDialog(
                                 modifier = Modifier.size(18.dp),
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text(strings.openReleasePage)
+                            Text(
+                                text = strings.openReleasePage,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                 }
@@ -233,17 +256,48 @@ fun UpdateDialog(
         confirmButton = {
             when (val current = state) {
                 is UpdateUiState.Available -> {
-                    Button(
-                        onClick = {
-                            scope.launch {
-                                val result = updateManager.downloadAndVerify(current.release)
-                                result.onSuccess { apkFile ->
-                                    updateManager.installApk(context, apkFile)
-                                }
-                            }
-                        },
+                    FlowRow(
+                        horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        Text(strings.downloadAndInstall)
+                        TextButton(
+                            onClick = {
+                                updateManager.skipVersion(current.release.version.toString())
+                                onDismiss()
+                            },
+                        ) {
+                            Text(
+                                text = strings.skipVersion,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        TextButton(onClick = onDismiss) {
+                            Text(
+                                text = strings.later,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    val result = updateManager.downloadAndVerify(current.release)
+                                    result.onSuccess { apkFile ->
+                                        updateManager.installApk(context, apkFile)
+                                    }
+                                }
+                            },
+                        ) {
+                            Text(
+                                text = strings.downloadAndInstall,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                        }
                     }
                 }
 
@@ -253,7 +307,12 @@ fun UpdateDialog(
                             updateManager.installApk(context, current.apkFile)
                         },
                     ) {
-                        Text(strings.install)
+                        Text(
+                            text = strings.install,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
 
@@ -263,7 +322,12 @@ fun UpdateDialog(
                             scope.launch { updateManager.checkForUpdates(silent = false) }
                         },
                     ) {
-                        Text(strings.checkAgain)
+                        Text(
+                            text = strings.checkAgain,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
 
@@ -273,7 +337,12 @@ fun UpdateDialog(
                             scope.launch { updateManager.checkForUpdates(silent = false) }
                         },
                     ) {
-                        Text(strings.retry)
+                        Text(
+                            text = strings.retry,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
 
@@ -285,32 +354,28 @@ fun UpdateDialog(
             }
         },
         dismissButton = {
-            when (val current = state) {
-                is UpdateUiState.Available -> {
-                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                        TextButton(
-                            onClick = {
-                                updateManager.skipVersion(current.release.version.toString())
-                                onDismiss()
-                            },
-                        ) {
-                            Text(strings.skipVersion)
-                        }
-                        TextButton(onClick = onDismiss) {
-                            Text(strings.later)
-                        }
-                    }
-                }
+            when (state) {
+                is UpdateUiState.Available -> Unit
 
                 is UpdateUiState.Downloading -> {
                     TextButton(onClick = onDismiss) {
-                        Text(strings.hide)
+                        Text(
+                            text = strings.hide,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
 
                 else -> {
                     TextButton(onClick = onDismiss) {
-                        Text(strings.close)
+                        Text(
+                            text = strings.close,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }

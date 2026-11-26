@@ -169,7 +169,12 @@ fun ExtensionWebLoginDialog(
                             },
                             modifier = Modifier.padding(end = 8.dp),
                         ) {
-                            Text(strings.saveCookiesAction)
+                            Text(
+                                text = strings.saveCookiesAction,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     },
                 )

@@ -154,6 +154,8 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.borderless)
                     .font(.subheadline)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
             }
 
@@ -175,6 +177,8 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 }
                 .padding(.vertical, 4)
             }
@@ -522,23 +526,21 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.borderless)
                     .font(.subheadline)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
                 }
             }
 
-            HStack(spacing: 12) {
-                PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
-                    Label(L10n.tr("Choose from Photos…"), systemImage: "photo.on.rectangle")
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    chooseFromPhotosButton
+                    chooseImageFileButton
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
-
-                Button {
-                    showImageFileImporter = true
-                } label: {
-                    Label(L10n.tr("Choose Image File…"), systemImage: "folder")
+                VStack(alignment: .leading, spacing: 8) {
+                    chooseFromPhotosButton
+                    chooseImageFileButton
                 }
-                .buttonStyle(.bordered)
-                .controlSize(.small)
             }
 
             if themeManager.hasBackgroundImage {
@@ -581,6 +583,28 @@ struct SettingsView: View {
             }
         }
         .padding(.vertical, 4)
+    }
+
+    private var chooseFromPhotosButton: some View {
+        PhotosPicker(selection: $selectedPhotoItem, matching: .images) {
+            Label(L10n.tr("Choose from Photos…"), systemImage: "photo.on.rectangle")
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
+    }
+
+    private var chooseImageFileButton: some View {
+        Button {
+            showImageFileImporter = true
+        } label: {
+            Label(L10n.tr("Choose Image File…"), systemImage: "folder")
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(.bordered)
+        .controlSize(.small)
     }
 
     private var generalSection: some View {

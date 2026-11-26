@@ -90,14 +90,19 @@
 
                 <!-- Footer -->
                 <Grid>
-                    <Button Style="{StaticResource Win10ButtonStyle}"
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0"
+                            Style="{StaticResource Win10ButtonStyle}"
                             Content="{DynamicResource Str_Equalizer_ResetToFlat}"
-                            HorizontalAlignment="Left"
                             Click="Reset_Click" />
-                    <Button Style="{StaticResource Win10PrimaryButtonStyle}"
+                    <Button Grid.Column="2"
+                            Style="{StaticResource Win10PrimaryButtonStyle}"
                             Content="{DynamicResource Str_Common_Done}"
-                            Width="100"
-                            HorizontalAlignment="Right"
+                            MinWidth="100"
                             Click="Done_Click" />
                 </Grid>
             </StackPanel>

@@ -698,18 +698,19 @@
                                                Margin="0,2,0,0" />
                                 </StackPanel>
 
-                                <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                                <WrapPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
                                     <Button x:Name="ChooseBgImageButton"
                                             Style="{StaticResource Win10ButtonStyle}"
                                             Content="{DynamicResource Str_Settings_ChooseImage}"
+                                            Margin="0,2,8,2"
                                             Click="ChooseBgImage_Click" />
                                     <Button x:Name="RemoveBgImageButton"
                                             Style="{StaticResource Win10ButtonStyle}"
                                             Content="{DynamicResource Str_Settings_RemoveImage}"
-                                            Margin="8,0,0,0"
+                                            Margin="0,2,0,2"
                                             Visibility="Collapsed"
                                             Click="RemoveBgImage_Click" />
-                                </StackPanel>
+                                </WrapPanel>
                             </Grid>
 
                             <!-- Image Visibility Slider (when image active) -->
@@ -900,21 +901,22 @@
                                          LostFocus="GDriveCredentials_LostFocus" />
                         </Grid>
 
-                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                        <WrapPanel Orientation="Horizontal" Margin="0,0,0,8">
                             <Button x:Name="GDriveSignInButton"
                                     Style="{StaticResource Win10PrimaryButtonStyle}"
                                     Click="GDriveSignIn_Click"
-                                    Margin="0,0,8,0">
+                                    Margin="0,2,8,2">
                                 <TextBlock x:Name="GDriveSignInLabel"
                                            Text="{DynamicResource Str_Settings_GDriveSignIn}" />
                             </Button>
                             <Button x:Name="GDriveSignOutButton"
                                     Style="{StaticResource Win10ButtonStyle}"
                                     Click="GDriveSignOut_Click"
+                                    Margin="0,2,0,2"
                                     Visibility="Collapsed">
                                 <TextBlock Text="{DynamicResource Str_Settings_GDriveSignOut}" />
                             </Button>
-                        </StackPanel>
+                        </WrapPanel>
 
                         <TextBlock x:Name="GDriveErrorText"
                                    FontFamily="{StaticResource Win10Font}"

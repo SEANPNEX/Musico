@@ -242,6 +242,8 @@ struct AlbumDetailView: View {
                                 player.playInNamedQueue(album.trackIDs, name: queueName, startAt: 0, shuffle: false)
                             } label: {
                                 Label(L10n.tr("Play"), systemImage: "play.fill")
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                             .buttonStyle(.borderedProminent)
                             .disabled(album.trackIDs.isEmpty)
@@ -251,6 +253,8 @@ struct AlbumDetailView: View {
                                 player.playInNamedQueue(album.trackIDs, name: queueName, startAt: start, shuffle: true)
                             } label: {
                                 Label(L10n.tr("Shuffle"), systemImage: "shuffle")
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                             .buttonStyle(.bordered)
                             .disabled(album.trackIDs.isEmpty)
@@ -417,6 +421,8 @@ struct ArtistDetailView: View {
                                 player.playInNamedQueue(trackIDs, name: queueName, startAt: 0, shuffle: false)
                             } label: {
                                 Label(L10n.tr("Play"), systemImage: "play.fill")
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                             .buttonStyle(.borderedProminent)
                             .disabled(trackIDs.isEmpty)
@@ -426,6 +432,8 @@ struct ArtistDetailView: View {
                                 player.playInNamedQueue(trackIDs, name: queueName, startAt: start, shuffle: true)
                             } label: {
                                 Label(L10n.tr("Shuffle"), systemImage: "shuffle")
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                             .buttonStyle(.bordered)
                             .disabled(trackIDs.isEmpty)

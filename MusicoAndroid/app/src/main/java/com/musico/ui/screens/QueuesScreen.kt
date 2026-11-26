@@ -221,19 +221,32 @@ fun QueueSheet(
                 ) {
                     Text(
                         text = strings.queuesTitle,
-                        style = MaterialTheme.typography.titleLarge
+                        style = MaterialTheme.typography.titleLarge,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
                     )
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         if (viewed.trackIds.isNotEmpty()) {
                             TextButton(onClick = { editing = !editing }) {
-                                Text(if (editing) strings.done else strings.edit)
+                                Text(
+                                    text = if (editing) strings.done else strings.edit,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
                             IconButton(onClick = { confirmClear = true }) {
                                 Icon(Icons.Rounded.DeleteSweep, contentDescription = strings.clearQueue)
                             }
                         }
                         TextButton(onClick = onDismiss) {
-                            Text(strings.done)
+                            Text(
+                                text = strings.done,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                 }

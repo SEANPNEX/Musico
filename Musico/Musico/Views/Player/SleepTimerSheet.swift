@@ -37,6 +37,9 @@ struct SleepTimerSheet: View {
                         Spacer()
                         Button(L10n.tr("Cancel Timer"), role: .destructive) { player.setSleep(.off) }
                             .buttonStyle(.borderless)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                            .layoutPriority(1)
                     }
                 }
             }
@@ -48,6 +51,9 @@ struct SleepTimerSheet: View {
                     Stepper(L10n.tr("%@ minutes", String(customMinutes)), value: $customMinutes, in: 1...240)
                     Button(L10n.tr("Start")) { start(customMinutes, player: player) }
                         .buttonStyle(.borderedProminent)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
+                        .layoutPriority(1)
                 }
                 Button(L10n.tr("End of current song")) {
                     player.setSleep(.endOfTrack)

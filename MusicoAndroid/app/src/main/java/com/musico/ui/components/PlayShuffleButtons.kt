@@ -1,6 +1,7 @@
 package com.musico.ui.components
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -17,6 +18,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.musico.i18n.LocalStrings
 
@@ -37,6 +39,7 @@ fun PlayShuffleButtons(
         FilledTonalButton(
             onClick = onPlay,
             enabled = enabled,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
             modifier = Modifier.weight(1f)
         ) {
             Icon(
@@ -45,11 +48,17 @@ fun PlayShuffleButtons(
                 modifier = Modifier.size(ButtonDefaults.IconSize)
             )
             Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-            Text(strings.play)
+            Text(
+                text = strings.play,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         OutlinedButton(
             onClick = onShuffle,
             enabled = enabled,
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
             modifier = Modifier.weight(1f)
         ) {
             Icon(
@@ -58,7 +67,12 @@ fun PlayShuffleButtons(
                 modifier = Modifier.size(ButtonDefaults.IconSize)
             )
             Spacer(Modifier.width(ButtonDefaults.IconSpacing))
-            Text(strings.shuffle)
+            Text(
+                text = strings.shuffle,
+                maxLines = 1,
+                softWrap = false,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
     }
 }

@@ -122,9 +122,12 @@ fun SongInfoSheet(
                 Text(
                     text = strings.songInfo,
                     style = MaterialTheme.typography.titleLarge,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
                 TextButton(onClick = onDismiss) {
-                    Text(strings.close)
+                    Text(strings.close, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
 
@@ -186,7 +189,7 @@ fun SongInfoSheet(
                                 modifier = Modifier.size(18.dp),
                             )
                             Spacer(Modifier.width(6.dp))
-                            Text(strings.changeCover)
+                            Text(strings.changeCover, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     if (coverError != null) {
@@ -252,7 +255,7 @@ fun SongInfoSheet(
                             )
                         },
                     ) {
-                        Text(strings.saveChanges)
+                        Text(strings.saveChanges, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

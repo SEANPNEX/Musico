@@ -635,42 +635,30 @@ struct PlaylistDetailView: View {
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
 
-                        HStack(spacing: 10) {
-                            Button {
-                                player.playInNamedQueue(trackIDs, name: title, startAt: 0, shuffle: false)
-                            } label: {
-                                Label(L10n.tr("Play"), systemImage: "play.fill")
-                            }
-                            .buttonStyle(.borderedProminent)
-                            .disabled(trackIDs.isEmpty)
-
-                            Button {
-                                let start = Int.random(in: 0..<max(trackIDs.count, 1))
-                                player.playInNamedQueue(trackIDs, name: title, startAt: start, shuffle: true)
-                            } label: {
-                                Label(L10n.tr("Shuffle"), systemImage: "shuffle")
-                            }
-                            .buttonStyle(.bordered)
-                            .disabled(trackIDs.isEmpty)
-
-                            if playlistID != nil {
-                                Button {
-                                    showAddSongs = true
-                                } label: {
-                                    Label(L10n.tr("Add Songs"), systemImage: "plus")
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 10) {
+                                heroPlayButton(trackIDs: trackIDs, title: title)
+                                heroShuffleButton(trackIDs: trackIDs, title: title)
+                                if playlistID != nil {
+                                    heroAddSongsButton
                                 }
-                                .buttonStyle(.bordered)
-                            }
-
-                            if playlistID != nil || !trackIDs.isEmpty {
-                                Menu {
-                                    detailMoreMenu(trackIDs: trackIDs)
-                                } label: {
-                                    Image(systemName: "ellipsis")
-                                        .frame(width: 24, height: 20)
+                                if playlistID != nil || !trackIDs.isEmpty {
+                                    heroMoreMenu(trackIDs: trackIDs)
                                 }
-                                .buttonStyle(.bordered)
-                                .accessibilityLabel(L10n.tr("More"))
+                            }
+                            VStack(alignment: .leading, spacing: 8) {
+                                HStack(spacing: 10) {
+                                    heroPlayButton(trackIDs: trackIDs, title: title)
+                                    heroShuffleButton(trackIDs: trackIDs, title: title)
+                                }
+                                if playlistID != nil || !trackIDs.isEmpty {
+                                    HStack(spacing: 10) {
+                                        if playlistID != nil {
+                                            heroAddSongsButton
+                                        }
+                                        heroMoreMenu(trackIDs: trackIDs)
+                                    }
+                                }
                             }
                         }
                         .controlSize(.regular)
@@ -694,6 +682,8 @@ struct PlaylistDetailView: View {
                             showAddSongs = true
                         } label: {
                             Label(L10n.tr("Add Songs"), systemImage: "plus")
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.85)
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
@@ -707,6 +697,53 @@ struct PlaylistDetailView: View {
             HeroHeaderBackdrop(artworkKey: heroArtworkKey, fallbackColor: fallbackColor)
         }
         .padding(.vertical, 4)
+    }
+
+    private func heroPlayButton(trackIDs: [String], title: String) -> some View {
+        Button {
+            player.playInNamedQueue(trackIDs, name: title, startAt: 0, shuffle: false)
+        } label: {
+            Label(L10n.tr("Play"), systemImage: "play.fill")
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(.borderedProminent)
+        .disabled(trackIDs.isEmpty)
+    }
+
+    private func heroShuffleButton(trackIDs: [String], title: String) -> some View {
+        Button {
+            let start = Int.random(in: 0..<max(trackIDs.count, 1))
+            player.playInNamedQueue(trackIDs, name: title, startAt: start, shuffle: true)
+        } label: {
+            Label(L10n.tr("Shuffle"), systemImage: "shuffle")
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(.bordered)
+        .disabled(trackIDs.isEmpty)
+    }
+
+    private var heroAddSongsButton: some View {
+        Button {
+            showAddSongs = true
+        } label: {
+            Label(L10n.tr("Add Songs"), systemImage: "plus")
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .buttonStyle(.bordered)
+    }
+
+    private func heroMoreMenu(trackIDs: [String]) -> some View {
+        Menu {
+            detailMoreMenu(trackIDs: trackIDs)
+        } label: {
+            Image(systemName: "ellipsis")
+                .frame(width: 24, height: 20)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityLabel(L10n.tr("More"))
     }
 
     private var emptyStateView: some View {

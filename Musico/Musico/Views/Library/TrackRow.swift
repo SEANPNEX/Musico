@@ -474,12 +474,16 @@ struct NamePromptSheet: View {
                     dismiss()
                 }
                 .buttonStyle(.bordered)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .keyboardShortcut(.cancelAction)
 
                 Button(confirmLabel) {
                     submit()
                 }
                 .buttonStyle(.borderedProminent)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
                 .keyboardShortcut(.defaultAction)
                 .disabled(trimmed.isEmpty)
             }
@@ -652,7 +656,10 @@ struct PlayShuffleButtons: View {
                 player.play(ids, startAt: 0)
             }
         } label: {
-            Label(L10n.tr("Play"), systemImage: "play.fill").frame(maxWidth: .infinity)
+            Label(L10n.tr("Play"), systemImage: "play.fill")
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(maxWidth: .infinity)
         }
     }
 
@@ -666,7 +673,10 @@ struct PlayShuffleButtons: View {
                 player.play(ids, startAt: startIndex)
             }
         } label: {
-            Label(L10n.tr("Shuffle"), systemImage: "shuffle").frame(maxWidth: .infinity)
+            Label(L10n.tr("Shuffle"), systemImage: "shuffle")
+                .lineLimit(1)
+                .minimumScaleFactor(0.85)
+                .frame(maxWidth: .infinity)
         }
     }
 }

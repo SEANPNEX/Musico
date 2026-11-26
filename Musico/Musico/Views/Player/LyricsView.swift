@@ -42,9 +42,13 @@ struct LyricsView: View {
                     } actions: {
                         Button(L10n.tr("Search Online…")) { showCloudSearch = true }
                             .buttonStyle(.borderedProminent)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                             .disabled(player?.currentTrack == nil)
                         Button(L10n.tr("Import from File…")) { showImporter = true }
                             .buttonStyle(.bordered)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                             .disabled(player?.currentTrack == nil)
                     }
                 }

@@ -91,25 +91,20 @@
                 Background="{DynamicResource CardBackgroundBrush}"
                 BorderBrush="{DynamicResource DividerBrush}"
                 BorderThickness="0,0,0,1"
-                Padding="24,10"
+                Padding="24,10,24,4"
                 Visibility="Collapsed">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
+            <StackPanel>
                 <WrapPanel x:Name="BreadcrumbPanel"
-                           Grid.Column="0"
-                           VerticalAlignment="Center" />
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
+                           Margin="0,0,0,8" />
+                <WrapPanel Orientation="Horizontal">
                     <ComboBox x:Name="SortCombo"
                               Style="{StaticResource Win10ComboBoxStyle}"
                               Width="148"
-                              Margin="0,0,8,0"
+                              Margin="0,0,8,6"
                               SelectionChanged="SortCombo_SelectionChanged" />
                     <Button x:Name="PlayFolderButton"
                             Style="{StaticResource Win10PrimaryButtonStyle}"
-                            Margin="0,0,8,0"
+                            Margin="0,0,8,6"
                             Click="PlayFolder_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
@@ -118,6 +113,7 @@
                     </Button>
                     <Button x:Name="ShuffleFolderButton"
                             Style="{StaticResource Win10ButtonStyle}"
+                            Margin="0,0,8,6"
                             Click="ShuffleFolder_Click">
                         <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
@@ -126,7 +122,7 @@
                     </Button>
                     <Button x:Name="NewFolderButton"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Margin="8,0,0,0"
+                            Margin="0,0,8,6"
                             Visibility="Collapsed"
                             Click="NewFolder_Click">
                         <StackPanel Orientation="Horizontal">
@@ -136,7 +132,7 @@
                     </Button>
                     <Button x:Name="SaveCloudFolderButton"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Margin="8,0,0,0"
+                            Margin="0,0,8,6"
                             Visibility="Collapsed"
                             Click="SaveCloudFolder_Click">
                         <StackPanel Orientation="Horizontal">
@@ -146,7 +142,7 @@
                     </Button>
                     <Button x:Name="UpdateTrackedFolderButton"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Margin="8,0,0,0"
+                            Margin="0,0,8,6"
                             Visibility="Collapsed"
                             Click="UpdateTrackedFolder_Click">
                         <StackPanel Orientation="Horizontal">
@@ -156,7 +152,7 @@
                     </Button>
                     <Button x:Name="EditCloudSourceButton"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Margin="8,0,0,0"
+                            Margin="0,0,8,6"
                             Visibility="Collapsed"
                             Click="EditCloudSource_Click">
                         <StackPanel Orientation="Horizontal">
@@ -166,7 +162,7 @@
                     </Button>
                     <Button x:Name="RemoveRootButton"
                             Style="{StaticResource Win10ButtonStyle}"
-                            Margin="8,0,0,0"
+                            Margin="0,0,8,6"
                             Visibility="Collapsed"
                             Click="RemoveRoot_Click">
                         <StackPanel Orientation="Horizontal">
@@ -174,8 +170,8 @@
                             <TextBlock Text="{DynamicResource Str_Folders_RemoveFolder}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
-                </StackPanel>
-            </Grid>
+                </WrapPanel>
+            </StackPanel>
         </Border>
 
         <!-- Scrollable Folder / Track List -->

@@ -54,16 +54,15 @@ struct ExtensionsView: View {
                     } description: {
                         Text(L10n.tr("Import a .musicoext bundle, .musico.js script, or multi-extension .zip pack to add custom cloud music sources."))
                     } actions: {
-                        HStack(spacing: 12) {
-                            Button(L10n.tr("Import File…")) {
-                                showFileImporter = true
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 12) {
+                                emptyImportFileButton
+                                emptyImportURLButton
                             }
-                            .buttonStyle(.borderedProminent)
-
-                            Button(L10n.tr("Import URL…")) {
-                                showURLImporter = true
+                            VStack(spacing: 10) {
+                                emptyImportFileButton
+                                emptyImportURLButton
                             }
-                            .buttonStyle(.bordered)
                         }
                     }
                     .frame(maxWidth: .infinity)
@@ -199,6 +198,24 @@ struct ExtensionsView: View {
         }
     }
 
+    private var emptyImportFileButton: some View {
+        Button(L10n.tr("Import File…")) {
+            showFileImporter = true
+        }
+        .buttonStyle(.borderedProminent)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var emptyImportURLButton: some View {
+        Button(L10n.tr("Import URL…")) {
+            showURLImporter = true
+        }
+        .buttonStyle(.bordered)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
     private func presentImportedExtensions(_ installed: [InstalledExtension]) {
         if installed.count == 1, let single = installed.first {
             reviewTarget = single
@@ -241,6 +258,9 @@ struct ExtensionsView: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
             }
             Toggle(
                 "",

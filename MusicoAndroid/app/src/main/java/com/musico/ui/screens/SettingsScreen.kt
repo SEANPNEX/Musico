@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -130,7 +132,7 @@ private enum class ActiveColorDialog {
     TEXT,
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     themeStore: ThemeStore,
@@ -349,36 +351,48 @@ fun SettingsScreen(
                                 color = MaterialTheme.colorScheme.errorContainer,
                                 modifier = Modifier.fillMaxWidth(),
                             ) {
-                                Row(
+                                Column(
                                     modifier = Modifier
                                         .fillMaxWidth()
                                         .padding(horizontal = 12.dp, vertical = 10.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.WarningAmber,
-                                        contentDescription = null,
-                                        tint = MaterialTheme.colorScheme.onErrorContainer,
-                                        modifier = Modifier.size(20.dp),
-                                    )
-                                    Text(
-                                        text = when {
-                                            lowTextContrast && lowAccentContrast -> strings.lowContrastWarningBoth
-                                            lowTextContrast -> strings.lowContrastWarningText
-                                            else -> strings.lowContrastWarningAccent
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onErrorContainer,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    FilledTonalButton(
-                                        onClick = { themeStore.autoFixContrast(systemDark) },
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                                     ) {
-                                        Text(
-                                            text = strings.autoFixContrastAction,
-                                            maxLines = 1,
+                                        Icon(
+                                            imageVector = Icons.Rounded.WarningAmber,
+                                            contentDescription = null,
+                                            tint = MaterialTheme.colorScheme.onErrorContainer,
+                                            modifier = Modifier.size(20.dp),
                                         )
+                                        Text(
+                                            text = when {
+                                                lowTextContrast && lowAccentContrast -> strings.lowContrastWarningBoth
+                                                lowTextContrast -> strings.lowContrastWarningText
+                                                else -> strings.lowContrastWarningAccent
+                                            },
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onErrorContainer,
+                                            modifier = Modifier.weight(1f),
+                                        )
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End,
+                                    ) {
+                                        FilledTonalButton(
+                                            onClick = { themeStore.autoFixContrast(systemDark) },
+                                        ) {
+                                            Text(
+                                                text = strings.autoFixContrastAction,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -735,7 +749,12 @@ fun SettingsScreen(
                                         modifier = Modifier.size(18.dp),
                                     )
                                     Spacer(Modifier.width(8.dp))
-                                    Text(strings.chooseImageAction)
+                                    Text(
+                                        text = strings.chooseImageAction,
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
                                 }
                             }
                         }
@@ -754,7 +773,12 @@ fun SettingsScreen(
                                     modifier = Modifier.size(18.dp),
                                 )
                                 Spacer(Modifier.width(6.dp))
-                                Text(strings.resetAppearanceToDefault)
+                                Text(
+                                    text = strings.resetAppearanceToDefault,
+                                    maxLines = 1,
+                                    softWrap = false,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
                             }
                         }
                     }
@@ -866,9 +890,10 @@ fun SettingsScreen(
                                 modifier = Modifier.fillMaxWidth(),
                             )
 
-                            Row(
+                            FlowRow(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
                                 FilledTonalButton(
                                     enabled = !oauthState.isSigningIn && oauthState.clientId.trim().isNotEmpty(),
@@ -884,17 +909,25 @@ fun SettingsScreen(
                                         Spacer(Modifier.width(8.dp))
                                     }
                                     Text(
-                                        if (oauthState.isSignedIn) {
+                                        text = if (oauthState.isSignedIn) {
                                             strings.reconnectGoogleDriveAction
                                         } else {
                                             strings.signInWithGoogleAction
-                                        }
+                                        },
+                                        maxLines = 1,
+                                        softWrap = false,
+                                        overflow = TextOverflow.Ellipsis,
                                     )
                                 }
 
                                 if (oauthState.isSignedIn) {
                                     OutlinedButton(onClick = { googleDriveOAuthManager.signOut() }) {
-                                        Text(strings.signOutGoogleDriveAction)
+                                        Text(
+                                            text = strings.signOutGoogleDriveAction,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
                                     }
                                 }
                             }
@@ -1247,6 +1280,7 @@ private fun ColorPresetSwatch(
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 private fun ColorPickerDialog(
     title: String,
@@ -1341,43 +1375,46 @@ private fun ColorPickerDialog(
             }
         },
         confirmButton = {
-            ButtonRowConfirm(
-                confirmLabel = strings.save,
-                canConfirm = parsedHex != null,
-                onConfirm = {
-                    if (parsedHex != null) {
-                        onConfirm(parsedHex)
-                    }
-                },
-            )
-        },
-        dismissButton = {
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            FlowRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
                 if (clearActionLabel != null && onClear != null) {
                     TextButton(onClick = onClear) {
-                        Text(clearActionLabel)
+                        Text(
+                            text = clearActionLabel,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
                 TextButton(onClick = onDismiss) {
-                    Text(strings.cancel)
+                    Text(
+                        text = strings.cancel,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                TextButton(
+                    enabled = parsedHex != null,
+                    onClick = {
+                        if (parsedHex != null) {
+                            onConfirm(parsedHex)
+                        }
+                    },
+                ) {
+                    Text(
+                        text = strings.save,
+                        maxLines = 1,
+                        softWrap = false,
+                        overflow = TextOverflow.Ellipsis,
+                    )
                 }
             }
         },
     )
-}
-
-@Composable
-private fun ButtonRowConfirm(
-    confirmLabel: String,
-    canConfirm: Boolean,
-    onConfirm: () -> Unit,
-) {
-    TextButton(
-        enabled = canConfirm,
-        onClick = onConfirm,
-    ) {
-        Text(confirmLabel)
-    }
 }
 
 @Composable

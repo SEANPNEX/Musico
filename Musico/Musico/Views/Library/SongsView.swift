@@ -240,10 +240,14 @@ struct SongsView: View {
                         } else {
                             Text(L10n.tr("Search"))
                                 .font(.subheadline.weight(.semibold))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
                         }
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
                     .disabled(trimmedQuery.isEmpty || cloudSearch.isLoading)
                 }
             }
@@ -407,6 +411,9 @@ struct SongsView: View {
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .layoutPriority(1)
                 }
                 .padding(.vertical, 8)
                 .listRowSeparator(.hidden)
@@ -443,21 +450,44 @@ struct SongsView: View {
                 Text(error.message)
             }
         } actions: {
-            HStack(spacing: 10) {
-                if error.kind == .authRequired {
-                    Button(ext.supportsCookie ? L10n.tr("Configure Cookie…") : L10n.tr("Open Extension Manager")) {
-                        extensionManagerTargetID = ext.id
-                        showExtensionManager = true
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) {
+                    if error.kind == .authRequired {
+                        cloudErrorAuthButton(ext: ext)
                     }
-                    .buttonStyle(.bordered)
+                    cloudErrorRetryButton(ext: ext, cloudSearch: cloudSearch)
                 }
-                Button(L10n.tr("Retry")) {
-                    cloudSearch.retry(currentQuery: trimmedQuery, descriptor: ext, extensionStore: extensionStore)
+                VStack(spacing: 10) {
+                    if error.kind == .authRequired {
+                        cloudErrorAuthButton(ext: ext)
+                    }
+                    cloudErrorRetryButton(ext: ext, cloudSearch: cloudSearch)
                 }
-                .buttonStyle(.borderedProminent)
             }
         }
         .padding(.vertical, 20)
+    }
+
+    private func cloudErrorAuthButton(ext: CloudSearchExtensionDescriptor) -> some View {
+        Button(ext.supportsCookie ? L10n.tr("Configure Cookie…") : L10n.tr("Open Extension Manager")) {
+            extensionManagerTargetID = ext.id
+            showExtensionManager = true
+        }
+        .buttonStyle(.bordered)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func cloudErrorRetryButton(
+        ext: CloudSearchExtensionDescriptor,
+        cloudSearch: CloudSearchController
+    ) -> some View {
+        Button(L10n.tr("Retry")) {
+            cloudSearch.retry(currentQuery: trimmedQuery, descriptor: ext, extensionStore: extensionStore)
+        }
+        .buttonStyle(.borderedProminent)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder

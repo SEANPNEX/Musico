@@ -6,7 +6,7 @@
           Background="{DynamicResource DialogOverlayBrush}"
           MouseDown="Overlay_MouseDown">
         <Border x:Name="DialogCard"
-                Width="420"
+                Width="460"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
                 Background="{DynamicResource DialogSurfaceBrush}"
@@ -41,7 +41,11 @@
                         Margin="0,0,0,16"
                         Visibility="Collapsed">
                     <Grid>
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center" Margin="0,0,10,0">
                             <TextBlock Text="&#xE708;"
                                        FontFamily="{StaticResource Win10GlyphFont}"
                                        FontSize="15"
@@ -53,12 +57,14 @@
                                        FontSize="13"
                                        FontWeight="SemiBold"
                                        Foreground="{DynamicResource TextPrimaryBrush}"
+                                       TextWrapping="Wrap"
                                        VerticalAlignment="Center" />
                         </StackPanel>
-                        <Button Style="{StaticResource Win10ButtonStyle}"
+                        <Button Grid.Column="1"
+                                Style="{StaticResource Win10ButtonStyle}"
                                 Content="{DynamicResource Str_SleepTimer_CancelTimer}"
-                                HorizontalAlignment="Right"
                                 Padding="10,4"
+                                VerticalAlignment="Center"
                                 Click="CancelTimer_Click" />
                     </Grid>
                 </Border>
@@ -132,7 +138,7 @@
 
                 <Button Style="{StaticResource Win10ButtonStyle}"
                         Content="{DynamicResource Str_Common_Done}"
-                        Width="100"
+                        MinWidth="100"
                         HorizontalAlignment="Right"
                         Click="Done_Click" />
             </StackPanel>

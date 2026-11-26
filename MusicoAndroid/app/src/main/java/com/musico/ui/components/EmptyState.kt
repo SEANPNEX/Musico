@@ -17,6 +17,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 
 @Composable
@@ -60,13 +61,23 @@ fun EmptyState(
         if (actionLabel != null && onAction != null) {
             Spacer(Modifier.height(20.dp))
             Button(onClick = onAction) {
-                Text(actionLabel)
+                Text(
+                    text = actionLabel,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
         if (secondaryActionLabel != null && onSecondaryAction != null) {
             Spacer(Modifier.height(10.dp))
             OutlinedButton(onClick = onSecondaryAction) {
-                Text(secondaryActionLabel)
+                Text(
+                    text = secondaryActionLabel,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         }
     }

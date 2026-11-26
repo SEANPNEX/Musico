@@ -262,7 +262,12 @@ fun ExtensionsScreen(
                         ) {
                             Icon(Icons.Rounded.Link, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text(strings.importFromUrl)
+                            Text(
+                                text = strings.importFromUrl,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                 }
@@ -309,10 +314,9 @@ fun ExtensionsScreen(
                                         onCheckedChange = { extensionStore.setAutoUpdateEnabled(it) },
                                     )
                                 }
-                                Row(
+                                Column(
                                     modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically,
+                                    verticalArrangement = Arrangement.spacedBy(8.dp),
                                 ) {
                                     val statusMsg = when {
                                         isCheckingUpdates -> strings.checkingExtensionUpdates
@@ -327,23 +331,34 @@ fun ExtensionsScreen(
                                         }
                                         else -> null
                                     }
-                                    Text(
-                                        text = statusMsg.orEmpty(),
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                        modifier = Modifier.weight(1f),
-                                    )
-                                    FilledTonalButton(
-                                        enabled = !isCheckingUpdates && !isStaging,
-                                        onClick = { scope.launch { extensionStore.checkAllForUpdates(manual = true) } },
-                                    ) {
-                                        Icon(
-                                            imageVector = Icons.Rounded.SystemUpdate,
-                                            contentDescription = null,
-                                            modifier = Modifier.size(16.dp),
+                                    if (statusMsg != null) {
+                                        Text(
+                                            text = statusMsg,
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
                                         )
-                                        Spacer(Modifier.width(6.dp))
-                                        Text(strings.checkForUpdates)
+                                    }
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.End,
+                                    ) {
+                                        FilledTonalButton(
+                                            enabled = !isCheckingUpdates && !isStaging,
+                                            onClick = { scope.launch { extensionStore.checkAllForUpdates(manual = true) } },
+                                        ) {
+                                            Icon(
+                                                imageVector = Icons.Rounded.SystemUpdate,
+                                                contentDescription = null,
+                                                modifier = Modifier.size(16.dp),
+                                            )
+                                            Spacer(Modifier.width(6.dp))
+                                            Text(
+                                                text = strings.checkForUpdates,
+                                                maxLines = 1,
+                                                softWrap = false,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                        }
                                     }
                                 }
                             }
@@ -691,7 +706,12 @@ private fun ExtensionItemCard(
                             )
                         }
                         FilledTonalButton(onClick = onReviewUpdate) {
-                            Text(strings.reviewUpdateAction)
+                            Text(
+                                text = strings.reviewUpdateAction,
+                                maxLines = 1,
+                                softWrap = false,
+                                overflow = TextOverflow.Ellipsis,
+                            )
                         }
                     }
                 }
@@ -735,19 +755,20 @@ private fun ExtensionItemCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 FlowRow(
+                    modifier = Modifier.weight(1f),
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                     verticalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     TextButton(onClick = onOpenPermissions) {
                         Icon(Icons.Rounded.Security, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text(strings.permissionsLabel)
+                        Text(strings.permissionsLabel, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                     if (pendingUpdate != null) {
                         TextButton(onClick = onReviewUpdate) {
                             Icon(Icons.Rounded.SystemUpdate, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text(strings.reviewUpdateAction)
+                            Text(strings.reviewUpdateAction, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                         }
                     } else if (hasUpdateUrl) {
                         TextButton(
@@ -763,34 +784,39 @@ private fun ExtensionItemCard(
                                 Icon(Icons.Rounded.SystemUpdate, contentDescription = null, modifier = Modifier.size(16.dp))
                             }
                             Spacer(Modifier.width(4.dp))
-                            Text(strings.updateAction)
+                            Text(strings.updateAction, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     if (manifest.settings.isNotEmpty() || manifest.supportsCookieAuth || manifest.qualities.isNotEmpty()) {
                         TextButton(onClick = onOpenSettings) {
                             Icon(Icons.Rounded.Tune, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text(strings.settingsLabel)
+                            Text(strings.settingsLabel, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     if (manifest.supportsQrLogin) {
                         TextButton(enabled = extension.enabled, onClick = onOpenQrLogin) {
                             Icon(Icons.Rounded.QrCode2, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text(strings.qrLoginAction)
+                            Text(strings.qrLoginAction, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     if (manifest.supportsWebLogin) {
                         TextButton(onClick = onOpenWebLogin) {
                             Icon(Icons.Rounded.Language, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(Modifier.width(4.dp))
-                            Text(strings.webLoginAction)
+                            Text(strings.webLoginAction, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     TextButton(onClick = onOpenLogs) {
                         Icon(Icons.Rounded.Description, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(4.dp))
-                        Text(if (logCount > 0) strings.extensionLogsCountLabel(logCount) else strings.logsLabel)
+                        Text(
+                            text = if (logCount > 0) strings.extensionLogsCountLabel(logCount) else strings.logsLabel,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
                 IconButton(onClick = onRequestUninstall) {
@@ -954,12 +980,12 @@ internal fun ReviewExtensionUpdateDialog(
         },
         confirmButton = {
             Button(onClick = onApprove) {
-                Text(strings.approveAndUpdate)
+                Text(strings.approveAndUpdate, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text(strings.later)
+                Text(strings.later, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
             }
         },
     )
@@ -1156,12 +1182,12 @@ private fun BatchPermissionReviewDialog(
                 enabled = selectedPackages.isNotEmpty(),
                 onClick = { onConfirmInstall(selectedPackages) },
             ) {
-                Text(strings.installAndEnableCount(selectedPackages.size))
+                Text(strings.installAndEnableCount(selectedPackages.size), maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text(strings.cancel)
+                Text(strings.cancel, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
             }
         },
     )
@@ -1294,18 +1320,18 @@ private fun PermissionReviewDialog(
         confirmButton = {
             if (isInteractiveInstall) {
                 Button(onClick = onConfirmInstall) {
-                    Text(strings.installAndEnable)
+                    Text(strings.installAndEnable, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             } else {
                 TextButton(onClick = onConfirmInstall) {
-                    Text(strings.close)
+                    Text(strings.close, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
         },
         dismissButton = {
             if (isInteractiveInstall) {
                 TextButton(onClick = onDismiss) {
-                    Text(strings.cancel)
+                    Text(strings.cancel, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
         },
@@ -1394,7 +1420,7 @@ private fun ExtensionSettingsDialog(
                         ) {
                             Icon(Icons.Rounded.QrCode2, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text(strings.signInWithQrCode)
+                            Text(strings.signInWithQrCode, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     if (hasWebLogin) {
@@ -1404,7 +1430,7 @@ private fun ExtensionSettingsDialog(
                         ) {
                             Icon(Icons.Rounded.Language, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(Modifier.width(8.dp))
-                            Text(strings.signInInBrowser)
+                            Text(strings.signInInBrowser, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                         }
                     }
                     OutlinedButton(
@@ -1413,7 +1439,7 @@ private fun ExtensionSettingsDialog(
                     ) {
                         Icon(Icons.Rounded.UploadFile, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(Modifier.width(8.dp))
-                        Text(strings.importCookiesFile)
+                        Text(strings.importCookiesFile, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                     OutlinedTextField(
                         value = cookieValue,
@@ -1449,13 +1475,13 @@ private fun ExtensionSettingsDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text(strings.done)
+                Text(strings.done, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
             }
         },
         dismissButton = if (extension.manifest.settings.isNotEmpty() || hasQualities) {
             {
                 TextButton(onClick = onResetDefaults) {
-                    Text(strings.resetDefaults)
+                    Text(strings.resetDefaults, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
         } else {
@@ -1689,12 +1715,12 @@ private fun ExtensionLogsDialog(
         },
         confirmButton = {
             TextButton(onClick = onDismiss) {
-                Text(strings.close)
+                Text(strings.close, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
             }
         },
         dismissButton = {
             TextButton(enabled = logs.isNotEmpty(), onClick = onClear) {
-                Text(strings.clearLogs)
+                Text(strings.clearLogs, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
             }
         },
     )
@@ -1930,13 +1956,18 @@ private fun ExtensionQrLoginDialog(
                 TextButton(onClick = { reloadToken += 1 }) {
                     Icon(Icons.Rounded.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
-                    Text(strings.qrLoginRefresh)
+                    Text(strings.qrLoginRefresh, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                 }
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text(if (pollResult?.status == ExtQrLoginStatus.CONFIRMED) strings.done else strings.cancel)
+                Text(
+                    text = if (pollResult?.status == ExtQrLoginStatus.CONFIRMED) strings.done else strings.cancel,
+                    maxLines = 1,
+                    softWrap = false,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         },
     )

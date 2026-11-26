@@ -38,6 +38,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.musico.i18n.LocalStrings
 import com.musico.model.SleepMode
@@ -101,10 +102,13 @@ fun SleepTimerSheetContent(
         ) {
             Text(
                 text = strings.sleepTimer,
-                style = MaterialTheme.typography.titleLarge
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f),
             )
             TextButton(onClick = onDismiss) {
-                Text(strings.done)
+                Text(strings.done, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
             }
         }
 
@@ -144,7 +148,13 @@ fun SleepTimerSheetContent(
                         modifier = Modifier.weight(1f)
                     )
                     TextButton(onClick = { onSetSleep(SleepMode.Off) }) {
-                        Text(strings.cancelTimer, color = MaterialTheme.colorScheme.error)
+                        Text(
+                            text = strings.cancelTimer,
+                            color = MaterialTheme.colorScheme.error,
+                            maxLines = 1,
+                            softWrap = false,
+                            overflow = TextOverflow.Ellipsis,
+                        )
                     }
                 }
             }
@@ -183,7 +193,10 @@ fun SleepTimerSheetContent(
             ) {
                 Text(
                     text = strings.customMinutes(customMinutes),
-                    style = MaterialTheme.typography.bodyLarge.copy(fontFeatureSettings = "tnum")
+                    style = MaterialTheme.typography.bodyLarge.copy(fontFeatureSettings = "tnum"),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f),
                 )
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     IconButton(
@@ -206,7 +219,7 @@ fun SleepTimerSheetContent(
                             onDismiss()
                         }
                     ) {
-                        Text(strings.start)
+                        Text(strings.start, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
                     }
                 }
             }

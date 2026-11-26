@@ -47,6 +47,7 @@ import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.musico.i18n.LocalStrings
@@ -111,14 +112,16 @@ fun EqualizerSheetContent(
                     )
                 }
             ) {
-                Text(strings.reset)
+                Text(strings.reset, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
             }
             Text(
                 text = strings.equalizer,
-                style = MaterialTheme.typography.titleLarge
+                style = MaterialTheme.typography.titleLarge,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
             TextButton(onClick = onDismiss) {
-                Text(strings.done)
+                Text(strings.done, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
             }
         }
 

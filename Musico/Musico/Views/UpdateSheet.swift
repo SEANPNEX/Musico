@@ -20,10 +20,12 @@ struct UpdateSheet: View {
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button(L10n.tr("Done")) { dismiss() }
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
             }
         }
-        .frame(minWidth: 440, minHeight: 360)
+        .frame(minWidth: 540, idealWidth: 560, minHeight: 380, idealHeight: 420)
     }
 
     @ViewBuilder
@@ -35,9 +37,11 @@ struct UpdateSheet: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(L10n.tr("Checking for updates…"))
                         .font(.headline)
+                        .fixedSize(horizontal: false, vertical: true)
                     Text(L10n.tr("Current version: %@", updateManager.currentVersion.description))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
 
@@ -48,39 +52,34 @@ struct UpdateSheet: View {
             Text(L10n.tr("Version %@ is the latest available release.", updateManager.currentVersion.description))
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            HStack(spacing: 12) {
-                Button(L10n.tr("Check Again")) {
-                    Task { await updateManager.checkForUpdates(manual: true) }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    checkAgainButton
+                    openReleasePageButton
                 }
-                .buttonStyle(.borderedProminent)
-                Button(L10n.tr("Open Release Page")) {
-                    Task { await updateManager.openReleasePage() }
+                VStack(alignment: .leading, spacing: 10) {
+                    checkAgainButton
+                    openReleasePageButton
                 }
-                .buttonStyle(.bordered)
             }
 
         case .available(let release):
             releaseHeader(release, subtitle: L10n.tr("Update Available"))
             releaseNotes(release)
-            HStack(spacing: 12) {
-                Button(L10n.tr("Download & Install Update")) {
-                    Task { await updateManager.downloadAndOpenUpdate() }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    downloadAndInstallButton(disabled: release.dmgAsset == nil)
+                    skipVersionButton(release: release)
+                    Spacer(minLength: 12)
+                    openReleasePageButton
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(release.dmgAsset == nil)
-
-                Button(L10n.tr("Skip Version")) {
-                    updateManager.skipVersion(release.version)
-                    dismiss()
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack(spacing: 12) {
+                        downloadAndInstallButton(disabled: release.dmgAsset == nil)
+                        skipVersionButton(release: release)
+                    }
+                    openReleasePageButton
                 }
-                .buttonStyle(.bordered)
-
-                Spacer()
-
-                Button(L10n.tr("Open Release Page")) {
-                    Task { await updateManager.openReleasePage() }
-                }
-                .buttonStyle(.bordered)
             }
 
         case .downloading(let release, let progress):
@@ -103,10 +102,7 @@ struct UpdateSheet: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             }
-            Button(L10n.tr("Open Release Page")) {
-                Task { await updateManager.openReleasePage() }
-            }
-            .buttonStyle(.bordered)
+            openReleasePageButton
 
         case .installing(let release):
             releaseHeader(release, subtitle: L10n.tr("Installing Update…"))
@@ -115,6 +111,7 @@ struct UpdateSheet: View {
                 Text(L10n.tr("Replacing application bundle and relaunching Musico %@…", release.version.description))
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
             releaseNotes(release)
 
@@ -124,16 +121,15 @@ struct UpdateSheet: View {
                 .font(.subheadline)
                 .foregroundStyle(.green)
             releaseNotes(release)
-            HStack(spacing: 12) {
-                Button(L10n.tr("Install & Relaunch")) {
-                    Task { await updateManager.downloadAndOpenUpdate() }
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    installAndRelaunchButton
+                    openReleasePageButton
                 }
-                .buttonStyle(.borderedProminent)
-
-                Button(L10n.tr("Open Release Page")) {
-                    Task { await updateManager.openReleasePage() }
+                VStack(alignment: .leading, spacing: 10) {
+                    installAndRelaunchButton
+                    openReleasePageButton
                 }
-                .buttonStyle(.bordered)
             }
 
         case .error(let message):
@@ -143,18 +139,65 @@ struct UpdateSheet: View {
             Text(message)
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
-            HStack(spacing: 12) {
-                Button(L10n.tr("Check Again")) {
-                    Task { await updateManager.checkForUpdates(manual: true) }
+                .fixedSize(horizontal: false, vertical: true)
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 12) {
+                    checkAgainButton
+                    openReleasePageButton
                 }
-                .buttonStyle(.borderedProminent)
-
-                Button(L10n.tr("Open Release Page")) {
-                    Task { await updateManager.openReleasePage() }
+                VStack(alignment: .leading, spacing: 10) {
+                    checkAgainButton
+                    openReleasePageButton
                 }
-                .buttonStyle(.bordered)
             }
         }
+    }
+
+    private var checkAgainButton: some View {
+        Button(L10n.tr("Check Again")) {
+            Task { await updateManager.checkForUpdates(manual: true) }
+        }
+        .buttonStyle(.borderedProminent)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private func downloadAndInstallButton(disabled: Bool) -> some View {
+        Button(L10n.tr("Download & Install Update")) {
+            Task { await updateManager.downloadAndOpenUpdate() }
+        }
+        .buttonStyle(.borderedProminent)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+        .disabled(disabled)
+    }
+
+    private func skipVersionButton(release: ReleaseInfo) -> some View {
+        Button(L10n.tr("Skip Version")) {
+            updateManager.skipVersion(release.version)
+            dismiss()
+        }
+        .buttonStyle(.bordered)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var installAndRelaunchButton: some View {
+        Button(L10n.tr("Install & Relaunch")) {
+            Task { await updateManager.downloadAndOpenUpdate() }
+        }
+        .buttonStyle(.borderedProminent)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
+    }
+
+    private var openReleasePageButton: some View {
+        Button(L10n.tr("Open Release Page")) {
+            Task { await updateManager.openReleasePage() }
+        }
+        .buttonStyle(.bordered)
+        .lineLimit(1)
+        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func releaseHeader(_ release: ReleaseInfo, subtitle: String) -> some View {
