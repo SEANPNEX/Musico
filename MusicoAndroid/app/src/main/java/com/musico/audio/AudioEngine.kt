@@ -156,7 +156,7 @@ class AudioEngine(
         val dataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
-            .setReadTimeoutMs(20_000)
+            .setReadTimeoutMs(60_000)
             .setDefaultRequestProperties(headers)
         val mediaSourceFactory = ProgressiveMediaSource.Factory(dataSourceFactory)
         val itemBuilder = MediaItem.Builder().setUri(url)

@@ -179,6 +179,7 @@ final class DownloadManager {
         track: Track,
         root: LibraryRoot?,
         folderURL: URL,
+        qualityID: String? = nil,
         onSaved: (@MainActor (URL) async -> Void)? = nil
     ) -> DownloadJob {
         let job = DownloadJob(
@@ -202,6 +203,7 @@ final class DownloadManager {
                     root: root,
                     toFolder: folderURL,
                     cache: cache,
+                    qualityID: qualityID,
                     onProgress: { progress in
                         guard job.state == .running else { return }
                         job.bytesDownloaded = progress.bytesDownloaded

@@ -26,6 +26,10 @@ public partial class SaveCloudFolderDialog : UserControl
     private Guid? _activeJobId;
     private string? _completedFolder;
     private string? _completedFile;
+    private bool _singleTrackMode;
+    private Track? _singleTrack;
+
+    private sealed record QualityChoice(string QualityId, string Label);
 
     public SaveCloudFolderDialog()
     {
@@ -45,6 +49,8 @@ public partial class SaveCloudFolderDialog : UserControl
         _activeJobId = null;
         _completedFolder = null;
         _completedFile = null;
+        _singleTrackMode = false;
+        _singleTrack = null;
 
         TitleText.Text = L.Get("SaveCloud_Title");
         SourceSummaryText.Text = $"{root.Name} · {L.SongsCount(tracks.Count)}";
@@ -55,6 +61,11 @@ public partial class SaveCloudFolderDialog : UserControl
         string defaultLocation = ResolveDefaultSaveLocation(services);
 
         FormPanel.Visibility = Visibility.Visible;
+        FolderNameSection.Visibility = Visibility.Visible;
+        SingleTrackQualitySection.Visibility = Visibility.Collapsed;
+        SingleTrackQualityCombo.ItemsSource = null;
+        DestinationPreviewText.Visibility = Visibility.Visible;
+        AddToLibraryCheckBox.Visibility = Visibility.Visible;
         ProgressPanel.Visibility = Visibility.Collapsed;
         SummaryPanel.Visibility = Visibility.Collapsed;
         PartialErrorsBanner.Visibility = Visibility.Collapsed;
@@ -63,6 +74,7 @@ public partial class SaveCloudFolderDialog : UserControl
         DoneActionsPanel.Visibility = Visibility.Collapsed;
         ResetFooterLayout();
 
+        SaveButton.Content = L.Get("SaveCloud_SaveFolder");
         SaveButton.Visibility = Visibility.Visible;
         BackgroundButton.Visibility = Visibility.Collapsed;
         CancelButton.IsEnabled = true;
@@ -101,6 +113,67 @@ public partial class SaveCloudFolderDialog : UserControl
         EditSourceUrlButton.Visibility = Visibility.Collapsed;
         EditSourcePanel.Visibility = Visibility.Collapsed;
 
+        var provider = CloudStreamResolver.GetProvider(services.CloudProviders, track, _root);
+        var qualities = provider?.AvailableQualities ?? Array.Empty<ExtensionQualityOption>();
+        if (qualities.Count > 1)
+        {
+            _singleTrackMode = true;
+            _singleTrack = track;
+            _activeJobId = null;
+
+            FormPanel.Visibility = Visibility.Visible;
+            FolderNameSection.Visibility = Visibility.Collapsed;
+            SingleTrackQualitySection.Visibility = Visibility.Visible;
+            DestinationPreviewText.Visibility = Visibility.Collapsed;
+            AddToLibraryCheckBox.Visibility = Visibility.Collapsed;
+
+            var choices = qualities
+                .Select(q => new QualityChoice(
+                    q.Id,
+                    !string.IsNullOrWhiteSpace(q.Badge) ? $"{q.Label} ({q.Badge})" : q.Label))
+                .ToList();
+            SingleTrackQualityCombo.ItemsSource = choices;
+
+            string? preferredQuality = CloudStreamResolver.ResolveRequestedQuality(
+                provider,
+                track,
+                _root,
+                services.Extensions,
+                CloudStreamPurpose.Download);
+            int idx = !string.IsNullOrWhiteSpace(preferredQuality)
+                ? choices.FindIndex(c => string.Equals(c.QualityId, preferredQuality, StringComparison.OrdinalIgnoreCase))
+                : -1;
+            SingleTrackQualityCombo.SelectedIndex = idx >= 0 ? idx : 0;
+
+            LocationBox.IsEnabled = true;
+            BrowseButton.IsEnabled = true;
+            LocationBox.Text = destinationDirectory;
+
+            ProgressPanel.Visibility = Visibility.Collapsed;
+            SummaryPanel.Visibility = Visibility.Collapsed;
+            PartialErrorsBanner.Visibility = Visibility.Collapsed;
+            ErrorBanner.Visibility = Visibility.Collapsed;
+            ActiveActionsPanel.Visibility = Visibility.Visible;
+            DoneActionsPanel.Visibility = Visibility.Collapsed;
+            ResetFooterLayout();
+
+            SaveButton.Content = L.Get("Common_Save");
+            SaveButton.Visibility = Visibility.Visible;
+            BackgroundButton.Visibility = Visibility.Collapsed;
+            CancelButton.IsEnabled = true;
+            CancelButton.Content = L.Get("Common_Cancel");
+            Grid.SetColumn(CancelButton, 2);
+            Grid.SetColumnSpan(CancelButton, 1);
+
+            UpdateFormState();
+
+            Visibility = Visibility.Visible;
+            Win10Animations.AnimateModalOpen(BackdropGrid, DialogCard);
+            return;
+        }
+
+        _singleTrackMode = false;
+        _singleTrack = null;
         var job = services.Downloads.StartSingleTrackExport(track, _root, destinationDirectory);
         AttachToJob(services, job);
 
@@ -382,8 +455,14 @@ public partial class SaveCloudFolderDialog : UserControl
     {
         if (_activeJobId is not null) return;
 
-        string folderName = FolderNameBox.Text.Trim();
         string location = LocationBox.Text.Trim();
+        if (_singleTrackMode)
+        {
+            SaveButton.IsEnabled = !string.IsNullOrWhiteSpace(location) && _singleTrack is not null;
+            return;
+        }
+
+        string folderName = FolderNameBox.Text.Trim();
         bool valid = !string.IsNullOrWhiteSpace(folderName) &&
                      !string.IsNullOrWhiteSpace(location) &&
                      _tracks.Count > 0;
@@ -403,7 +482,36 @@ public partial class SaveCloudFolderDialog : UserControl
         }
     }
 
-    private void Save_Click(object sender, RoutedEventArgs e) => StartPlaylistExport();
+    private void Save_Click(object sender, RoutedEventArgs e)
+    {
+        if (_singleTrackMode)
+        {
+            StartSingleTrackFormExport();
+            return;
+        }
+        StartPlaylistExport();
+    }
+
+    private void StartSingleTrackFormExport()
+    {
+        if (_services is null || _singleTrack is null || _activeJobId is not null) return;
+
+        string destDir = LocationBox.Text.Trim();
+        if (string.IsNullOrWhiteSpace(destDir))
+        {
+            ShowError(L.Get("SaveCloud_ChooseSaveLocation"));
+            return;
+        }
+
+        string? chosenQuality = (SingleTrackQualityCombo.SelectedItem as QualityChoice)?.QualityId;
+        ErrorBanner.Visibility = Visibility.Collapsed;
+        var track = _singleTrack;
+        _singleTrackMode = false;
+        _singleTrack = null;
+
+        var job = _services.Downloads.StartSingleTrackExport(track, _root, destDir, chosenQuality);
+        AttachToJob(_services, job);
+    }
 
     private void StartPlaylistExport()
     {
@@ -574,7 +682,14 @@ public partial class SaveCloudFolderDialog : UserControl
         if (e.Key == Key.Enter && SaveButton.Visibility == Visibility.Visible && SaveButton.IsEnabled)
         {
             e.Handled = true;
-            StartPlaylistExport();
+            if (_singleTrackMode)
+            {
+                StartSingleTrackFormExport();
+            }
+            else
+            {
+                StartPlaylistExport();
+            }
         }
         else if (e.Key == Key.Escape)
         {

@@ -32,7 +32,7 @@ final class ChunkedCloudResourceLoader: NSObject, AVAssetResourceLoaderDelegate,
         self.knownTotalLength = (contentLength ?? 0) > 0 ? contentLength : nil
         self.fileExtension = fileExtension.trimmingCharacters(in: CharacterSet(charactersIn: ". ")).lowercased()
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 300
         config.httpMaximumConnectionsPerHost = 4
         self.session = URLSession(configuration: config)

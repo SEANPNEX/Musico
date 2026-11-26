@@ -545,7 +545,7 @@ public sealed class CloudExporter
         LibraryRoot? root,
         string destinationDirectory,
         CancellationToken ct = default) =>
-        ExportTrackAsync(track, root, destinationDirectory, progress: null, suppliedArtworkBytes: null, ct: ct);
+        ExportTrackAsync(track, root, destinationDirectory, progress: null, suppliedArtworkBytes: null, qualityOverride: null, ct: ct);
 
     public Task<string> ExportTrackAsync(
         Track track,
@@ -553,7 +553,7 @@ public sealed class CloudExporter
         string destinationDirectory,
         IProgress<CloudExportProgress>? progress,
         CancellationToken ct = default) =>
-        ExportTrackAsync(track, root, destinationDirectory, progress, suppliedArtworkBytes: null, ct: ct);
+        ExportTrackAsync(track, root, destinationDirectory, progress, suppliedArtworkBytes: null, qualityOverride: null, ct: ct);
 
     public async Task<string> ExportTrackAsync(
         Track track,
@@ -561,7 +561,8 @@ public sealed class CloudExporter
         string destinationDirectory,
         IProgress<CloudExportProgress>? progress,
         byte[]? suppliedArtworkBytes,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        string? qualityOverride = null)
     {
         ArgumentNullException.ThrowIfNull(track);
         if (!track.IsCloud)
@@ -602,11 +603,12 @@ public sealed class CloudExporter
             track,
             root,
             _extensions,
-            CloudStreamPurpose.Download);
+            CloudStreamPurpose.Download,
+            qualityOverride: qualityOverride);
 
         string cachedPath = await _cloudCache.GetOrDownloadAsync(
             track.Id,
-            token => ResolveCloudStreamAsync(track, root, token),
+            token => ResolveCloudStreamAsync(track, root, token, qualityOverride),
             root?.ProxyUrl,
             ct,
             onDownloadProgress,
@@ -750,7 +752,11 @@ public sealed class CloudExporter
         public void Report(T value) => handler(value);
     }
 
-    private Task<CloudAudioStream> ResolveCloudStreamAsync(Track track, LibraryRoot? root, CancellationToken ct) =>
+    private Task<CloudAudioStream> ResolveCloudStreamAsync(
+        Track track,
+        LibraryRoot? root,
+        CancellationToken ct,
+        string? qualityOverride = null) =>
         CloudStreamResolver.ResolveAsync(
             _providerRegistry,
             track,
@@ -758,7 +764,8 @@ public sealed class CloudExporter
             _extensions,
             forceRefresh: false,
             ct: ct,
-            purpose: CloudStreamPurpose.Download);
+            purpose: CloudStreamPurpose.Download,
+            qualityOverride: qualityOverride);
 
     private static bool IsNonEmbeddableContainer(string filePath)
     {

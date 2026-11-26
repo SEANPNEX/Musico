@@ -9,6 +9,25 @@ private struct StubCloudStreamResolver: CloudStreamResolving {
     }
 }
 
+private struct QualityRecordingStreamResolver: CloudStreamResolving {
+    let handler: @Sendable (String?) async throws -> CloudStreamResult
+
+    func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult {
+        try await handler(nil)
+    }
+
+    func resolveStream(
+        track: Track,
+        root: LibraryRoot?,
+        purpose: CloudStreamPurpose,
+        qualityID: String?,
+        forceRefresh: Bool
+    ) async throws -> CloudStreamResult {
+        _ = (track, root, purpose, forceRefresh)
+        return try await handler(qualityID)
+    }
+}
+
 final class CloudExporterTests: XCTestCase {
     private func makeCloudRoot(name: String = "Cloud: Mix / 2026") -> LibraryRoot {
         LibraryRoot(
@@ -560,6 +579,44 @@ final class CloudExporterTests: XCTestCase {
         XCTAssertNotNil(exportedMP3Meta.artwork)
         let exportedWebMMeta = await MetadataReader().read(exportedWebM)
         XCTAssertEqual(exportedWebMMeta.artwork, png)
+    }
+
+    func testExportTrackForwardsQualityIDToCacheAndResolver() async throws {
+        let root = makeCloudRoot()
+        let track = makeCloudTrack(rootID: root.id, remoteID: "am_1", title: "HiRes Song")
+        let recordedQualities = LockBox<[String?]>([])
+        let resolver = QualityRecordingStreamResolver { qualityID in
+            recordedQualities.withLock { $0.append(qualityID) }
+            return CloudStreamResult(
+                url: URL(string: "https://cdn.example/\(qualityID ?? "default").m4a")!,
+                headers: [:],
+                fileExtension: "m4a",
+                expiresAt: Date().addingTimeInterval(600),
+                actualQuality: qualityID
+            )
+        }
+        let cache = CloudAudioCache(
+            directory: makeTempDir(),
+            maxBytes: 50_000_000,
+            resolver: resolver,
+            downloader: { _, _ in
+                let tmp = makeTempDir().appendingPathComponent("dl.m4a")
+                try Data("alac-audio".utf8).write(to: tmp)
+                return (tmp, 200, "audio/mp4")
+            }
+        )
+
+        let outDir = makeTempDir()
+        let savedURL = try await CloudExporter.exportTrack(
+            track,
+            root: root,
+            toFolder: outDir,
+            cache: cache,
+            qualityID: "alac"
+        )
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: savedURL.path))
+        XCTAssertEqual(recordedQualities.value, ["alac"])
     }
 
     private static func makeImageData(color: UIColor, png: Bool) -> Data {

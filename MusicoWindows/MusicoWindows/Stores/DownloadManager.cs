@@ -178,7 +178,8 @@ public sealed class DownloadManager
     public DownloadJob StartSingleTrackExport(
         Track track,
         LibraryRoot? root,
-        string destinationDirectory)
+        string destinationDirectory,
+        string? qualityOverride = null)
     {
         ArgumentNullException.ThrowIfNull(track);
 
@@ -199,7 +200,7 @@ public sealed class DownloadManager
             TargetRootId: track.RootId);
 
         var entry = RegisterJob(job);
-        _ = RunSingleTrackExportAsync(entry, track, root, destinationDirectory);
+        _ = RunSingleTrackExportAsync(entry, track, root, destinationDirectory, qualityOverride);
         return job;
     }
 
@@ -488,7 +489,8 @@ public sealed class DownloadManager
         JobEntry entry,
         Track track,
         LibraryRoot? root,
-        string destinationDirectory)
+        string destinationDirectory,
+        string? qualityOverride = null)
     {
         var ct = entry.Cts.Token;
         var progress = new InlineProgress(p =>
@@ -507,7 +509,7 @@ public sealed class DownloadManager
         try
         {
             string savedPath = await Task.Run(
-                () => _exporter.ExportTrackAsync(track, root, destinationDirectory, progress, ct),
+                () => _exporter.ExportTrackAsync(track, root, destinationDirectory, progress, suppliedArtworkBytes: null, ct: ct, qualityOverride: qualityOverride),
                 ct).ConfigureAwait(false);
 
             string savedFolder = Path.GetDirectoryName(savedPath) ?? destinationDirectory;

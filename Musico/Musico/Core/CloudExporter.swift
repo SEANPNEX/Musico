@@ -581,6 +581,7 @@ enum CloudExporter {
         artworkData: Data? = nil,
         artworkCache: ArtworkCache = .shared,
         thumbnailCache: CloudThumbnailCache = .shared,
+        qualityID: String? = nil,
         onProgress: (@MainActor @Sendable (CloudDownloadProgress) -> Void)? = nil
     ) async throws -> URL {
         try Task.checkCancellation()
@@ -589,7 +590,7 @@ enum CloudExporter {
             track: track,
             root: root,
             purpose: .download,
-            qualityID: root?.downloadQualityID,
+            qualityID: qualityID ?? root?.downloadQualityID,
             onProgress: onProgress.map { callback in
                 { progress in
                     Task { @MainActor in
@@ -631,8 +632,11 @@ final class CloudExportPrompt {
 struct CloudExportHostModifier: ViewModifier {
     @Environment(\.downloadManager) private var downloadManager
     @State private var prompt = CloudExportPrompt()
+    @State private var showQualityPicker = false
     @State private var showFolderPicker = false
     @State private var pendingRequest: CloudExportPrompt.Request?
+    @State private var pendingQualityOptions: [CloudQualityOption] = []
+    @State private var selectedQualityID: String?
     @State private var alertTitle = ""
     @State private var alertMessage: String?
 
@@ -643,17 +647,50 @@ struct CloudExportHostModifier: ViewModifier {
                 guard hasRequest, let req = prompt.request else { return }
                 pendingRequest = req
                 prompt.request = nil
-                showFolderPicker = true
+                selectedQualityID = nil
+                let providerID = CloudProviderRegistry.providerID(for: req.track, root: req.root)
+                let qualities = CloudProviderRegistry.shared.provider(forID: providerID)?.availableQualities ?? []
+                if qualities.count > 1 {
+                    pendingQualityOptions = qualities
+                    showQualityPicker = true
+                } else {
+                    pendingQualityOptions = []
+                    showFolderPicker = true
+                }
+            }
+            .confirmationDialog(
+                L10n.tr("Download Quality"),
+                isPresented: $showQualityPicker,
+                titleVisibility: .visible
+            ) {
+                ForEach(pendingQualityOptions) { option in
+                    Button(option.label) {
+                        selectedQualityID = option.id
+                        showFolderPicker = true
+                    }
+                }
+                Button(L10n.tr("Cancel"), role: .cancel) {
+                    pendingRequest = nil
+                    pendingQualityOptions = []
+                    selectedQualityID = nil
+                }
+            } message: {
+                if let title = pendingRequest?.track.title {
+                    Text(title)
+                }
             }
             .fileImporter(isPresented: $showFolderPicker, allowedContentTypes: [.folder]) { result in
                 guard let req = pendingRequest else { return }
+                let chosenQuality = selectedQualityID
                 pendingRequest = nil
+                pendingQualityOptions = []
+                selectedQualityID = nil
                 switch result {
                 case .failure(let error):
                     alertTitle = L10n.tr("Couldn’t Save Song")
                     alertMessage = error.localizedDescription
                 case .success(let folderURL):
-                    startSingleExport(req, to: folderURL)
+                    startSingleExport(req, to: folderURL, qualityID: chosenQuality)
                 }
             }
             .alert(
@@ -669,11 +706,12 @@ struct CloudExportHostModifier: ViewModifier {
             }
     }
 
-    private func startSingleExport(_ req: CloudExportPrompt.Request, to folderURL: URL) {
+    private func startSingleExport(_ req: CloudExportPrompt.Request, to folderURL: URL, qualityID: String?) {
         let job = downloadManager.startSingleTrackExport(
             track: req.track,
             root: req.root,
             folderURL: folderURL,
+            qualityID: qualityID,
             onSaved: req.onSaved
         )
         Task { @MainActor in

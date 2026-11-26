@@ -187,7 +187,7 @@ fun interface CloudStreamDownloader {
 
 class UrlConnectionCloudStreamDownloader(
     private val connectTimeoutMs: Int = 15_000,
-    private val readTimeoutMs: Int = 30_000,
+    private val readTimeoutMs: Int = 60_000,
 ) : CloudStreamDownloader {
 
     private data class DownloadResult(
@@ -950,6 +950,7 @@ class CloudExporter(
         targetDir: File,
         onDetailedProgress: ((CloudExportProgress) -> Unit)? = null,
         artworkBytes: ByteArray? = null,
+        qualityOverride: String? = null,
     ): String = withContext(Dispatchers.IO) {
         if (!targetDir.exists() && !targetDir.mkdirs()) {
             throw IOException("Could not create destination folder: ${targetDir.absolutePath}")
@@ -971,6 +972,7 @@ class CloudExporter(
             targetDir = targetDir,
             existingNames = existingNames,
             suppliedArtworkBytes = artworkBytes,
+            qualityOverride = qualityOverride,
         ) { bp ->
             onDetailedProgress?.invoke(
                 CloudExportProgress(
@@ -999,10 +1001,11 @@ class CloudExporter(
         targetTreeUri: Uri,
         onDetailedProgress: ((CloudExportProgress) -> Unit)? = null,
         artworkBytes: ByteArray? = null,
+        qualityOverride: String? = null,
     ): String {
         if (targetTreeUri.scheme == "file") {
             val path = targetTreeUri.path ?: throw IOException("Invalid file URI: $targetTreeUri")
-            return exportTrack(track, root, File(path), onDetailedProgress, artworkBytes)
+            return exportTrack(track, root, File(path), onDetailedProgress, artworkBytes, qualityOverride)
         }
         return withContext(Dispatchers.IO) {
             val ctx = context ?: throw IOException("Android context unavailable for SAF export.")
@@ -1026,6 +1029,7 @@ class CloudExporter(
                 dirDoc = dirDoc,
                 existingNames = existingNames,
                 suppliedArtworkBytes = artworkBytes,
+                qualityOverride = qualityOverride,
             ) { bp ->
                 onDetailedProgress?.invoke(
                     CloudExportProgress(
@@ -1056,9 +1060,10 @@ class CloudExporter(
         existingNames: Set<String>,
         suppliedArtworkBytes: ByteArray? = null,
         coverCacheByUrl: MutableMap<String, DetectedImageInfo?>? = null,
+        qualityOverride: String? = null,
         onBytesProgress: ((ByteTransferProgress) -> Unit)? = null,
     ): String {
-        return withStreamRetry(track, root, onBytesProgress) { stream ->
+        return withStreamRetry(track, root, qualityOverride, onBytesProgress) { stream ->
             val (ext, _) = extensionAndMimeFor(stream)
             val baseName = sanitizeFileName(track.title, track.remoteTrackId ?: "track")
             val fileName = uniqueFileName(existingNames, baseName, ext)
@@ -1110,9 +1115,10 @@ class CloudExporter(
         existingNames: Set<String>,
         suppliedArtworkBytes: ByteArray? = null,
         coverCacheByUrl: MutableMap<String, DetectedImageInfo?>? = null,
+        qualityOverride: String? = null,
         onBytesProgress: ((ByteTransferProgress) -> Unit)? = null,
     ): String {
-        return withStreamRetry(track, root, onBytesProgress) { stream ->
+        return withStreamRetry(track, root, qualityOverride, onBytesProgress) { stream ->
             val (ext, mimeType) = extensionAndMimeFor(stream)
             val baseName = sanitizeFileName(track.title, track.remoteTrackId ?: "track")
             val fileName = uniqueFileName(existingNames, baseName, ext)
@@ -1342,6 +1348,7 @@ class CloudExporter(
     private suspend fun <T> withStreamRetry(
         track: Track,
         root: LibraryRoot?,
+        qualityOverride: String? = null,
         onBytesProgress: ((ByteTransferProgress) -> Unit)? = null,
         block: suspend (ResolvedStream) -> T,
     ): T {
@@ -1350,7 +1357,7 @@ class CloudExporter(
             root = root,
             forceRefresh = false,
             purpose = CloudStreamPurpose.DOWNLOAD,
-            requestedQualityId = null,
+            requestedQualityId = qualityOverride,
         )
         return try {
             block(firstStream)
@@ -1364,7 +1371,7 @@ class CloudExporter(
                 root = root,
                 forceRefresh = true,
                 purpose = CloudStreamPurpose.DOWNLOAD,
-                requestedQualityId = null,
+                requestedQualityId = qualityOverride,
             )
             block(refreshed)
         }

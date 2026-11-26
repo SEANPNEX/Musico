@@ -789,6 +789,74 @@ public sealed class CloudExporterTests
         Assert.Contains(progressEvents, p => p.BytesDownloaded > 0);
     }
 
+    [Fact]
+    public async Task ExportTrackAsyncForwardsQualityOverrideToCacheAndResolver()
+    {
+        string cacheDir = TestHelpers.MakeTempDir();
+        string destDir = TestHelpers.MakeTempDir();
+        byte[] mp3Bytes = MakeMinimalMp3Bytes();
+        var rootId = Guid.NewGuid();
+        var track = MakeCloudTrack(rootId, "vid_q1", "Quality Track");
+        var root = new LibraryRoot(
+            Id: rootId,
+            Name: "YT",
+            Kind: RootKind.CloudYouTube,
+            Path: null,
+            SourceUrl: "https://music.youtube.com/playlist?list=PL_Q",
+            RemoteId: "PL_Q");
+
+        var downloadedUrls = new List<string>();
+        var handler = new StubHttpHandler(req =>
+        {
+            string uri = req.RequestUri!.AbsoluteUri;
+            if (uri.Contains("youtubei/v1/player", StringComparison.Ordinal))
+            {
+                string json = """
+                {
+                  "streamingData": {
+                    "adaptiveFormats": [
+                      { "itag": 140, "url": "https://cdn.example/high-128.m4a", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 128000 },
+                      { "itag": 139, "url": "https://cdn.example/low-48.m4a", "mimeType": "audio/mp4; codecs=\"mp4a.40.5\"", "bitrate": 48000 }
+                    ]
+                  }
+                }
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json")
+                };
+            }
+
+            if (req.Method == HttpMethod.Get && uri.StartsWith("https://cdn.example/", StringComparison.Ordinal))
+            {
+                downloadedUrls.Add(uri);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(mp3Bytes)
+                };
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var cache = new CloudAudioCache(cacheDir, handler: handler);
+        var exporter = new CloudExporter(cache, new YouTubeClient(handler), new BilibiliClient(handler));
+
+        string savedPath = await exporter.ExportTrackAsync(
+            track,
+            root,
+            destDir,
+            progress: null,
+            suppliedArtworkBytes: null,
+            qualityOverride: "low");
+
+        Assert.True(File.Exists(savedPath));
+        Assert.NotEmpty(downloadedUrls);
+        Assert.All(downloadedUrls, u => Assert.Equal("https://cdn.example/low-48.m4a", u));
+        Assert.NotNull(cache.TryGetCachedPath(track.Id, "low"));
+        Assert.Null(cache.TryGetCachedPath(track.Id, "highest"));
+    }
+
     private sealed class SynchronousProgress<T> : IProgress<T>
     {
         private readonly Action<T> _handler;

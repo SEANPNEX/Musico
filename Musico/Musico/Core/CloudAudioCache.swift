@@ -558,7 +558,7 @@ actor CloudAudioCache {
     ) async throws -> (tempFile: URL, statusCode: Int, contentType: String?) {
         try Task.checkCancellation()
         let config = URLSessionConfiguration.default
-        config.timeoutIntervalForRequest = 30
+        config.timeoutIntervalForRequest = 60
         config.timeoutIntervalForResource = 300
         config.httpMaximumConnectionsPerHost = maxConcurrentChunks + 2
         let session = URLSession(configuration: config)

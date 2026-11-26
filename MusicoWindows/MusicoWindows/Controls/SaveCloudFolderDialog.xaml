@@ -113,19 +113,36 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Playlist Export Form -->
+                <!-- Playlist / Single-Track Export Form -->
                 <StackPanel x:Name="FormPanel">
-                    <TextBlock Text="{DynamicResource Str_SaveCloud_FolderName}"
-                               FontFamily="{StaticResource Win10Font}"
-                               FontSize="13"
-                               FontWeight="SemiBold"
-                               Foreground="{DynamicResource TextPrimaryBrush}"
-                               Margin="0,0,0,6" />
-                    <TextBox x:Name="FolderNameBox"
-                             Style="{StaticResource Win10TextBoxStyle}"
-                             Height="34"
-                             KeyDown="InputBox_KeyDown"
-                             TextChanged="FormInput_TextChanged" />
+                    <StackPanel x:Name="FolderNameSection">
+                        <TextBlock Text="{DynamicResource Str_SaveCloud_FolderName}"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   Margin="0,0,0,6" />
+                        <TextBox x:Name="FolderNameBox"
+                                 Style="{StaticResource Win10TextBoxStyle}"
+                                 Height="34"
+                                 KeyDown="InputBox_KeyDown"
+                                 TextChanged="FormInput_TextChanged" />
+                    </StackPanel>
+
+                    <StackPanel x:Name="SingleTrackQualitySection"
+                                Visibility="Collapsed"
+                                Margin="0">
+                        <TextBlock Text="{DynamicResource Str_Quality_DownloadLabel}"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   Margin="0,0,0,6" />
+                        <ComboBox x:Name="SingleTrackQualityCombo"
+                                  Style="{StaticResource Win10ComboBoxStyle}"
+                                  DisplayMemberPath="Label"
+                                  SelectedValuePath="QualityId" />
+                    </StackPanel>
 
                     <TextBlock Text="{DynamicResource Str_SaveCloud_SaveLocation}"
                                FontFamily="{StaticResource Win10Font}"

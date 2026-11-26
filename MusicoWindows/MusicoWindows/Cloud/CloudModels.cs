@@ -377,7 +377,7 @@ internal static class CloudHttpHelper
         {
             return new HttpClient(customHandler, disposeHandler: false)
             {
-                Timeout = timeout ?? TimeSpan.FromSeconds(30)
+                Timeout = timeout ?? TimeSpan.FromSeconds(60)
             };
         }
 
@@ -390,7 +390,7 @@ internal static class CloudHttpHelper
 
         return new HttpClient(handler, disposeHandler: true)
         {
-            Timeout = timeout ?? TimeSpan.FromSeconds(30)
+            Timeout = timeout ?? TimeSpan.FromSeconds(60)
         };
     }
 
@@ -400,7 +400,7 @@ internal static class CloudHttpHelper
         {
             return new HttpClient(customHandler, disposeHandler: false)
             {
-                Timeout = timeout ?? TimeSpan.FromSeconds(30)
+                Timeout = timeout ?? TimeSpan.FromSeconds(60)
             };
         }
 
@@ -413,7 +413,7 @@ internal static class CloudHttpHelper
 
         return new HttpClient(handler, disposeHandler: true)
         {
-            Timeout = timeout ?? TimeSpan.FromSeconds(30)
+            Timeout = timeout ?? TimeSpan.FromSeconds(60)
         };
     }
 

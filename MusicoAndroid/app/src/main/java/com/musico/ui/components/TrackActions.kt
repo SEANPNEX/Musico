@@ -2,6 +2,7 @@ package com.musico.ui.components
 
 import android.net.Uri
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.rememberScrollState
@@ -11,13 +12,16 @@ import androidx.compose.material.icons.automirrored.rounded.PlaylistAdd
 import androidx.compose.material.icons.automirrored.rounded.PlaylistPlay
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.AddToQueue
+import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Favorite
 import androidx.compose.material.icons.rounded.FavoriteBorder
 import androidx.compose.material.icons.rounded.Info
 import androidx.compose.material.icons.rounded.Queue
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -53,6 +57,12 @@ sealed interface SingleTrackSaveTarget {
     data object AppFolder : SingleTrackSaveTarget
 }
 
+data class PendingSingleTrackSave(
+    val track: Track,
+    val target: SingleTrackSaveTarget,
+    val qualityId: String? = null,
+)
+
 @Stable
 class TrackActionState(
     val libraryStore: LibraryStore,
@@ -67,7 +77,7 @@ class TrackActionState(
     var playlistPickerIds: List<String>? by mutableStateOf(null)
     var newPlaylistIds: List<String>? by mutableStateOf(null)
     var pendingSaveTrackDestination: Track? by mutableStateOf(null)
-    var savingCloudTrack: Pair<Track, SingleTrackSaveTarget>? by mutableStateOf(null)
+    var savingCloudTrack: PendingSingleTrackSave? by mutableStateOf(null)
     var songInfoTrackId: String? by mutableStateOf(null)
 
     fun requestSaveCloudTrack(track: Track) {
@@ -279,12 +289,41 @@ fun TrackActionDialogs(
 
     val pendingDestinationTrack = state.pendingSaveTrackDestination
     if (pendingDestinationTrack != null) {
+        val root = remember(pendingDestinationTrack.id, pendingDestinationTrack.rootId) {
+            state.libraryStore.rootFor(pendingDestinationTrack)
+        }
+        val provider = remember(pendingDestinationTrack.id, pendingDestinationTrack.cloudSource, root?.id) {
+            state.libraryStore.providerRegistry.providerForTrack(pendingDestinationTrack, root)
+        }
+        val qualities = remember(provider) { provider?.availableQualities.orEmpty() }
+        val initialQualityId = remember(pendingDestinationTrack.id, provider, root) {
+            if (qualities.isEmpty()) {
+                null
+            } else {
+                val validIds = qualities.mapTo(HashSet()) { it.id }
+                val extDownloadQuality = provider?.providerId?.let {
+                    state.libraryStore.providerRegistry.extensionQualityFor(it)?.second
+                }
+                listOfNotNull(
+                    root?.downloadQualityId,
+                    extDownloadQuality,
+                    provider?.defaultDownloadQualityId,
+                ).firstOrNull { it in validIds } ?: qualities.firstOrNull()?.id
+            }
+        }
+        var selectedQualityId by remember(pendingDestinationTrack.id, initialQualityId) {
+            mutableStateOf(initialQualityId)
+        }
+        var qualityMenuExpanded by remember(pendingDestinationTrack.id) {
+            mutableStateOf(false)
+        }
+
         AlertDialog(
             onDismissRequest = { state.pendingSaveTrackDestination = null },
             icon = { Icon(Icons.Rounded.Download, contentDescription = null) },
             title = { Text(strings.saveToLocalFolderTitle) },
             text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                     Text(
                         text = pendingDestinationTrack.title,
                         style = MaterialTheme.typography.titleSmall,
@@ -296,13 +335,68 @@ fun TrackActionDialogs(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    if (qualities.size > 1) {
+                        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            Text(
+                                text = strings.downloadQualityLabel,
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Box {
+                                FilledTonalButton(
+                                    onClick = { qualityMenuExpanded = true },
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    val selectedOption = qualities.firstOrNull { it.id == selectedQualityId }
+                                        ?: qualities.first()
+                                    Text(
+                                        text = selectedOption.label,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                }
+                                DropdownMenu(
+                                    expanded = qualityMenuExpanded,
+                                    onDismissRequest = { qualityMenuExpanded = false },
+                                ) {
+                                    qualities.forEach { option ->
+                                        val displayLabel = if (
+                                            option.lossless &&
+                                            !option.label.contains(strings.qualityLosslessBadge, ignoreCase = true) &&
+                                            !option.label.contains("Lossless", ignoreCase = true)
+                                        ) {
+                                            "${option.label} (${strings.qualityLosslessBadge})"
+                                        } else {
+                                            option.label
+                                        }
+                                        DropdownMenuItem(
+                                            text = { Text(displayLabel) },
+                                            leadingIcon = if (option.id == selectedQualityId) {
+                                                { Icon(Icons.Rounded.Check, contentDescription = null) }
+                                            } else null,
+                                            onClick = {
+                                                selectedQualityId = option.id
+                                                qualityMenuExpanded = false
+                                            },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
                 }
             },
             confirmButton = {
                 TextButton(
                     onClick = {
+                        val chosenQuality = if (qualities.size > 1) selectedQualityId else null
                         state.pendingSaveTrackDestination = null
-                        state.savingCloudTrack = pendingDestinationTrack to SingleTrackSaveTarget.AppFolder
+                        state.savingCloudTrack = PendingSingleTrackSave(
+                            track = pendingDestinationTrack,
+                            target = SingleTrackSaveTarget.AppFolder,
+                            qualityId = chosenQuality,
+                        )
                     }
                 ) {
                     Text(strings.saveToMusicoFolder)
@@ -311,9 +405,14 @@ fun TrackActionDialogs(
             dismissButton = {
                 TextButton(
                     onClick = {
+                        val chosenQuality = if (qualities.size > 1) selectedQualityId else null
                         state.pendingSaveTrackDestination = null
                         state.onPickFolder { uri ->
-                            state.savingCloudTrack = pendingDestinationTrack to SingleTrackSaveTarget.FolderUri(uri)
+                            state.savingCloudTrack = PendingSingleTrackSave(
+                                track = pendingDestinationTrack,
+                                target = SingleTrackSaveTarget.FolderUri(uri),
+                                qualityId = chosenQuality,
+                            )
                         }
                     }
                 ) {
@@ -323,11 +422,12 @@ fun TrackActionDialogs(
         )
     }
 
-    val saveTarget = state.savingCloudTrack
-    if (saveTarget != null) {
+    val saveRequest = state.savingCloudTrack
+    if (saveRequest != null) {
         SaveSingleCloudTrackDialog(
-            track = saveTarget.first,
-            target = saveTarget.second,
+            track = saveRequest.track,
+            target = saveRequest.target,
+            qualityId = saveRequest.qualityId,
             libraryStore = state.libraryStore,
             cloudDownloadManager = state.cloudDownloadManager,
             onDismiss = { state.savingCloudTrack = null },
@@ -352,24 +452,27 @@ fun TrackActionDialogs(
 private fun SaveSingleCloudTrackDialog(
     track: Track,
     target: SingleTrackSaveTarget,
+    qualityId: String?,
     libraryStore: LibraryStore,
     cloudDownloadManager: CloudDownloadManager,
     onDismiss: () -> Unit,
 ) {
     val strings = LocalStrings.current
     val jobs by cloudDownloadManager.jobs.collectAsStateWithLifecycle()
-    var jobId by remember(track.id, target) { mutableStateOf<String?>(null) }
+    var jobId by remember(track.id, target, qualityId) { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(track.id, target) {
+    LaunchedEffect(track.id, target, qualityId) {
         jobId = when (target) {
             is SingleTrackSaveTarget.FolderUri -> cloudDownloadManager.startTrackExport(
                 track = track,
                 root = libraryStore.rootFor(track),
                 targetUri = target.uri,
+                qualityOverride = qualityId,
             )
             SingleTrackSaveTarget.AppFolder -> cloudDownloadManager.startTrackExportToAppFolder(
                 track = track,
                 root = libraryStore.rootFor(track),
+                qualityOverride = qualityId,
             )
         }
     }

@@ -48,6 +48,7 @@ class CloudExporterTest {
         private val onResolve: suspend (Track, LibraryRoot?, Boolean) -> ResolvedStream,
     ) : CloudStreamResolver() {
         val invalidateCalls = mutableListOf<String>()
+        val requestedQualities = mutableListOf<String?>()
 
         override suspend fun resolve(
             track: Track,
@@ -61,7 +62,10 @@ class CloudExporterTest {
             forceRefresh: Boolean,
             purpose: CloudStreamPurpose,
             requestedQualityId: String?,
-        ): ResolvedStream = onResolve(track, root, forceRefresh)
+        ): ResolvedStream {
+            requestedQualities.add(requestedQualityId)
+            return onResolve(track, root, forceRefresh)
+        }
 
         override fun invalidate(track: Track, root: LibraryRoot?) {
             invalidateCalls.add(track.id)
@@ -981,5 +985,40 @@ class CloudExporterTest {
         assertNull(manager.job(singleJobId))
         manager.clearFinished()
         assertTrue(manager.jobs.value.isEmpty())
+    }
+
+    @Test
+    fun exportTrackForwardsQualityOverrideToStreamResolver() = runBlocking {
+        val root = cloudRoot()
+        val track = cloudTrack("q1", "Lossless Song", remoteId = "am_lossless")
+        val targetDir = tempFolder.newFolder("single_quality")
+        val resolver = FakeCloudStreamResolver { _, _, _ ->
+            ResolvedStream(
+                url = "https://cdn.example/song.m4a",
+                mimeType = "audio/mp4",
+                fileExtension = "m4a",
+            )
+        }
+        val downloader = object : CloudStreamDownloader {
+            override suspend fun download(url: String, headers: Map<String, String>, output: OutputStream) {
+                output.write("alac-data".toByteArray())
+            }
+        }
+        val exporter = CloudExporter(
+            context = null,
+            cloudResolver = resolver,
+            downloader = downloader,
+        )
+
+        val savedName = exporter.exportTrack(
+            track = track,
+            root = root,
+            targetDir = targetDir,
+            qualityOverride = "alac",
+        )
+
+        assertEquals("Lossless Song.m4a", savedName)
+        assertTrue(File(targetDir, savedName).isFile)
+        assertEquals(listOf("alac"), resolver.requestedQualities)
     }
 }
