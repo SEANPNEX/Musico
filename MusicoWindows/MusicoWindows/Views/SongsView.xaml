@@ -295,6 +295,7 @@
                                     Background="{Binding RowBackground}"
                                     BorderBrush="Transparent"
                                     BorderThickness="1"
+                                    CornerRadius="4"
                                     Padding="10,7"
                                     Cursor="Hand"
                                     Opacity="{Binding RowOpacity}"
@@ -347,6 +348,7 @@
                                         <Border Background="{DynamicResource SubtleFillBrush}"
                                                 BorderBrush="{DynamicResource ControlBorderBrush}"
                                                 BorderThickness="1"
+                                                CornerRadius="4"
                                                 Padding="6,2"
                                                 Margin="0,0,10,0"
                                                 VerticalAlignment="Center"
@@ -377,6 +379,14 @@
                         </DataTemplate>
                     </ListBox.ItemTemplate>
                 </ListBox>
+
+                <!-- Cloud Loading Skeleton Placeholders -->
+                <ScrollViewer x:Name="CloudSkeletonScroll"
+                              VerticalScrollBarVisibility="Auto"
+                              Padding="16,8"
+                              Visibility="Collapsed">
+                    <StackPanel x:Name="CloudSkeletonHost" Margin="0,0,0,28" />
+                </ScrollViewer>
 
                 <!-- Empty State -->
                 <StackPanel x:Name="EmptyState"

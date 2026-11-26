@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
@@ -11,6 +12,7 @@ using System.Windows.Media;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using MusicoWindows.Controls;
+using MusicoWindows.Core;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
@@ -24,8 +26,11 @@ public partial class MainWindow : Window
 {
     private readonly AppServices _services;
     private readonly ViewContext _ctx;
+    private readonly WindowStateStore _windowStateStore;
+    private readonly bool _isSmokeTest;
     private readonly List<RadioButton> _dynamicPlaylistButtons = new();
 
+    private MiniPlayerWindow? _miniPlayer;
     private bool _navExpanded = true;
     private SidePanelKind? _sidePanel;
     private string _activeRoute = "queues";
@@ -33,10 +38,12 @@ public partial class MainWindow : Window
     private string? _cachedBgImagePath;
     private DateTime _cachedBgImageWriteUtc;
 
-    public MainWindow(AppServices services)
+    public MainWindow(AppServices services, bool isSmokeTest = false)
     {
         InitializeComponent();
         _services = services;
+        _isSmokeTest = isSmokeTest;
+        _windowStateStore = new WindowStateStore(services.StateDirectory);
 
         _ctx = new ViewContext
         {
@@ -75,6 +82,7 @@ public partial class MainWindow : Window
         BottomPlayerBar.OpenEqualizerRequested += () => EqDialog.Show(_services);
         BottomPlayerBar.OpenSleepTimerRequested += () => SleepDialog.Show(_services);
         BottomPlayerBar.ToggleSidePanelRequested += ToggleSidePanel;
+        BottomPlayerBar.ToggleMiniPlayerRequested += ToggleMiniPlayer;
 
         FullPlayer.Initialize(_ctx);
         FullPlayer.CloseRequested += () => ShellBodyGrid.Visibility = Visibility.Visible;
@@ -101,8 +109,11 @@ public partial class MainWindow : Window
         SourceInitialized += (_, _) => ThemeManager.ApplyBackdrop(this);
         Loaded += OnMainWindowLoaded;
         StateChanged += (_, _) => UpdateMaximizedState();
+        Closing += OnMainWindowClosing;
         Closed += (_, _) =>
         {
+            _miniPlayer?.Close();
+            _miniPlayer = null;
             ThemeManager.AppearanceChanged -= OnAppearanceChanged;
             LocalizationManager.LanguageChanged -= OnLanguageChanged;
             _services.Library.PropertyChanged -= OnLibraryChanged;
@@ -114,8 +125,7 @@ public partial class MainWindow : Window
         RefreshBackgroundImageLayer();
         RebuildDynamicPlaylists();
         RefreshDownloadsFooter();
-        NavQueues.IsChecked = true;
-        NavigateTo("queues");
+        RestoreWindowAndShellState();
     }
 
     private void OnAppearanceChanged(AppearanceSettings _)
@@ -475,6 +485,7 @@ public partial class MainWindow : Window
 
     private void ShowAlbumDetail(AlbumInfo album)
     {
+        if (FullPlayer.IsOpen) FullPlayer.Close();
         var detail = new AlbumDetailView();
         detail.BackRequested += () => NavigateTo(_activeRoute == "artists" ? "artists" : "albums", slideFromX: -24);
         detail.Bind(_ctx, album);
@@ -484,6 +495,7 @@ public partial class MainWindow : Window
 
     private void ShowArtistDetail(string artist)
     {
+        if (FullPlayer.IsOpen) FullPlayer.Close();
         var detail = new ArtistDetailView();
         detail.BackRequested += () => NavigateTo("artists", slideFromX: -24);
         detail.Bind(_ctx, artist);
@@ -495,6 +507,7 @@ public partial class MainWindow : Window
 
     private void ShowPlaylistDetail(PlaylistRef playlistRef, bool showBack)
     {
+        if (FullPlayer.IsOpen) FullPlayer.Close();
         var detail = new PlaylistDetailView();
         detail.BackRequested += () =>
         {
@@ -633,7 +646,12 @@ public partial class MainWindow : Window
         double toW = _navExpanded ? 240 : 48;
         Win10Animations.AnimatePanelWidth(NavPaneColumn, fromW, toW, 200);
 
-        var labelVis = _navExpanded ? Visibility.Visible : Visibility.Collapsed;
+        SetNavLabelsVisibility(_navExpanded ? Visibility.Visible : Visibility.Collapsed);
+        RefreshDownloadsFooter();
+    }
+
+    private void SetNavLabelsVisibility(Visibility labelVis)
+    {
         LblFolders.Visibility = labelVis;
         HdrLibrary.Visibility = labelVis;
         LblSongs.Visibility = labelVis;
@@ -648,7 +666,6 @@ public partial class MainWindow : Window
         LblExtensions.Visibility = labelVis;
         LblSettings.Visibility = labelVis;
         DownloadsFooterDetails.Visibility = labelVis;
-        RefreshDownloadsFooter();
 
         foreach (var rb in _dynamicPlaylistButtons)
         {
@@ -728,6 +745,7 @@ public partial class MainWindow : Window
         {
             if (ConfirmOverlay.IsOpen) { ConfirmOverlay.Close(); e.Handled = true; return; }
             if (PromptDialog.IsOpen) { PromptDialog.Close(); e.Handled = true; return; }
+            if (CommandPaletteOverlay.IsOpen) { CommandPaletteOverlay.Close(); e.Handled = true; return; }
             if (SongInfoDialog.IsOpen) { SongInfoDialog.Close(); e.Handled = true; return; }
             if (UpdateDialog.IsOpen) { UpdateDialog.Close(); e.Handled = true; return; }
             if (DownloadsOverlay.IsOpen) { DownloadsOverlay.Close(); e.Handled = true; return; }
@@ -742,8 +760,37 @@ public partial class MainWindow : Window
             if (ContentHost.Content is ExtensionsView ev && ev.HandleEscape()) { e.Handled = true; return; }
         }
 
+        bool isTextInputFocused = Keyboard.FocusedElement is TextBoxBase or PasswordBox;
+        bool hasBlockingModal = CommandPaletteOverlay.IsOpen ||
+                                PromptDialog.IsOpen ||
+                                ConfirmOverlay.IsOpen ||
+                                CloudDialog.IsOpen ||
+                                EditCloudDialog.IsOpen ||
+                                SaveCloudDialog.IsOpen ||
+                                CollectionPreviewOverlay.IsOpen ||
+                                CloudLyricsOverlay.IsOpen ||
+                                DownloadsOverlay.IsOpen ||
+                                UpdateDialog.IsOpen ||
+                                SongInfoDialog.IsOpen;
+
         if (Keyboard.Modifiers == ModifierKeys.Control)
         {
+            if (e.Key == Key.K)
+            {
+                if (!ConfirmOverlay.IsOpen && !PromptDialog.IsOpen)
+                {
+                    if (CommandPaletteOverlay.IsOpen)
+                    {
+                        CommandPaletteOverlay.Close();
+                    }
+                    else
+                    {
+                        OpenCommandPalette();
+                    }
+                    e.Handled = true;
+                }
+                return;
+            }
             if (e.Key == Key.F)
             {
                 if (FullPlayer.IsOpen) FullPlayer.Close();
@@ -782,14 +829,457 @@ public partial class MainWindow : Window
                 e.Handled = true;
                 return;
             }
+            if (e.Key == Key.Up)
+            {
+                AdjustVolumeWithToast(0.05f);
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Down)
+            {
+                AdjustVolumeWithToast(-0.05f);
+                e.Handled = true;
+                return;
+            }
         }
 
-        if (e.Key == Key.Space && Keyboard.Modifiers == ModifierKeys.None)
+        if (Keyboard.Modifiers == (ModifierKeys.Control | ModifierKeys.Shift))
         {
-            if (Keyboard.FocusedElement is TextBoxBase or PasswordBox) return;
-            if (PromptDialog.IsOpen || ConfirmOverlay.IsOpen || CloudDialog.IsOpen || EditCloudDialog.IsOpen || SaveCloudDialog.IsOpen || CollectionPreviewOverlay.IsOpen || CloudLyricsOverlay.IsOpen || DownloadsOverlay.IsOpen || UpdateDialog.IsOpen || SongInfoDialog.IsOpen) return;
-            _services.Player.TogglePlayPause();
-            e.Handled = true;
+            if (e.Key == Key.M)
+            {
+                ToggleMuteWithToast();
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.L)
+            {
+                if (FullPlayer.IsOpen) FullPlayer.Close();
+                ToggleSidePanel(SidePanelKind.Lyrics);
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Q)
+            {
+                if (FullPlayer.IsOpen) FullPlayer.Close();
+                ToggleSidePanel(SidePanelKind.Queue);
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.N)
+            {
+                ToggleMiniPlayer();
+                e.Handled = true;
+                return;
+            }
         }
+
+        if (Keyboard.Modifiers == ModifierKeys.Shift && !isTextInputFocused && !hasBlockingModal)
+        {
+            if (e.Key == Key.Left)
+            {
+                SeekBySeconds(-10.0);
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Right)
+            {
+                SeekBySeconds(10.0);
+                e.Handled = true;
+                return;
+            }
+        }
+
+        if (Keyboard.Modifiers == ModifierKeys.None && !isTextInputFocused && !hasBlockingModal)
+        {
+            if (e.Key == Key.Space)
+            {
+                _services.Player.TogglePlayPause();
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.M)
+            {
+                ToggleMuteWithToast();
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.L)
+            {
+                if (FullPlayer.IsOpen) FullPlayer.Close();
+                ToggleSidePanel(SidePanelKind.Lyrics);
+                e.Handled = true;
+                return;
+            }
+            if (e.Key == Key.Q)
+            {
+                if (FullPlayer.IsOpen) FullPlayer.Close();
+                ToggleSidePanel(SidePanelKind.Queue);
+                e.Handled = true;
+            }
+        }
+    }
+
+    private void AdjustVolumeWithToast(float delta)
+    {
+        float next = Math.Clamp(_services.Player.Volume + delta, 0f, 1f);
+        _services.Player.Volume = next;
+        if (_services.Player.IsMuted && next > 0f)
+        {
+            _services.Player.IsMuted = false;
+        }
+        int pct = (int)Math.Round(_services.Player.Volume * 100);
+        ShowToastMessage(L.Format("Toast_VolumePercent", pct));
+    }
+
+    private void ToggleMuteWithToast()
+    {
+        _services.Player.IsMuted = !_services.Player.IsMuted;
+        ShowToastMessage(_services.Player.IsMuted ? L.Get("Toast_Muted") : L.Get("Toast_Unmuted"));
+    }
+
+    private void SeekBySeconds(double deltaSeconds)
+    {
+        if (_services.Player.CurrentTrack is null) return;
+        double max = Math.Max(0, _services.Player.DurationSeconds);
+        double target = Math.Clamp(_services.Player.CurrentTimeSeconds + deltaSeconds, 0, max);
+        _services.Player.Seek(target);
+    }
+
+    private void OpenCommandPalette()
+    {
+        CommandPaletteOverlay.Show(
+            _ctx,
+            SelectNavAndNavigate,
+            () =>
+            {
+                ShellBodyGrid.Visibility = Visibility.Hidden;
+                FullPlayer.Show();
+            },
+            ToggleMiniPlayer,
+            () => EqDialog.Show(_services),
+            () => SleepDialog.Show(_services));
+    }
+
+    private void ToggleMiniPlayer()
+    {
+        if (_miniPlayer is not null)
+        {
+            _miniPlayer.Close();
+            return;
+        }
+
+        var mini = new MiniPlayerWindow(_services);
+        mini.RestoreMainWindowRequested += () =>
+        {
+            if (WindowState == WindowState.Minimized)
+            {
+                WindowState = WindowState.Normal;
+            }
+            Activate();
+            mini.Close();
+        };
+        mini.Closed += (_, _) =>
+        {
+            _miniPlayer = null;
+            BottomPlayerBar.SetMiniPlayerOpen(false);
+        };
+        _miniPlayer = mini;
+        BottomPlayerBar.SetMiniPlayerOpen(true);
+        mini.Show();
+    }
+
+    private void SelectNavAndNavigate(string route)
+    {
+        if (FullPlayer.IsOpen) FullPlayer.Close();
+
+        RadioButton? target = route switch
+        {
+            "folders" => NavFolders,
+            "songs" => NavSongs,
+            "albums" => NavAlbums,
+            "artists" => NavArtists,
+            "playlists" => NavPlaylists,
+            "favourites" => NavFavourites,
+            "queues" => NavQueues,
+            "stats" => NavStats,
+            "extensions" => NavExtensions,
+            "settings" => NavSettings,
+            _ => NavQueues
+        };
+        string resolvedRoute = route switch
+        {
+            "folders" or "songs" or "albums" or "artists" or "playlists" or "favourites" or "queues" or "stats" or "extensions" or "settings" => route,
+            _ => "queues"
+        };
+
+        target.IsChecked = true;
+        NavigateTo(resolvedRoute);
+    }
+
+    private void RestoreWindowAndShellState()
+    {
+        WindowStateData state = _windowStateStore.Load();
+
+        if (!_isSmokeTest)
+        {
+            WindowBounds bounds = WindowStateStore.ClampToBounds(
+                state.Left,
+                state.Top,
+                state.Width,
+                state.Height,
+                SystemParameters.VirtualScreenLeft,
+                SystemParameters.VirtualScreenTop,
+                SystemParameters.VirtualScreenWidth,
+                SystemParameters.VirtualScreenHeight);
+
+            WindowStartupLocation = WindowStartupLocation.Manual;
+            Left = bounds.Left;
+            Top = bounds.Top;
+            Width = bounds.Width;
+            Height = bounds.Height;
+
+            if (state.IsMaximized)
+            {
+                WindowState = WindowState.Maximized;
+            }
+        }
+
+        if (!state.NavExpanded)
+        {
+            _navExpanded = false;
+            NavPaneColumn.Width = new GridLength(48);
+            SetNavLabelsVisibility(Visibility.Collapsed);
+            RefreshDownloadsFooter();
+        }
+
+        SelectNavAndNavigate(state.LastRoute);
+
+        if (state.SidePanel is "lyrics")
+        {
+            SetSidePanelImmediate(SidePanelKind.Lyrics);
+        }
+        else if (state.SidePanel is "queue")
+        {
+            SetSidePanelImmediate(SidePanelKind.Queue);
+        }
+    }
+
+    private void SetSidePanelImmediate(SidePanelKind kind)
+    {
+        _sidePanel = kind;
+        SidePanelBorder.Visibility = Visibility.Visible;
+        SideLyricsPanel.Visibility = kind == SidePanelKind.Lyrics ? Visibility.Visible : Visibility.Collapsed;
+        SideQueuesView.Visibility = kind == SidePanelKind.Queue ? Visibility.Visible : Visibility.Collapsed;
+        SidePanelColumn.Width = new GridLength(340);
+
+        if (kind == SidePanelKind.Lyrics)
+        {
+            _ = SideLyricsPanel.LoadLyricsAsync(forceReload: false);
+        }
+        else
+        {
+            SideQueuesView.Refresh();
+        }
+        BottomPlayerBar.SetActiveSidePanel(_sidePanel);
+    }
+
+    private void OnMainWindowClosing(object? sender, CancelEventArgs e)
+    {
+        _miniPlayer?.Close();
+        _miniPlayer = null;
+
+        if (_isSmokeTest) return;
+
+        bool maximized = WindowState == WindowState.Maximized;
+        Rect normalBounds = WindowState == WindowState.Normal || RestoreBounds.IsEmpty
+            ? new Rect(Left, Top, Width, Height)
+            : RestoreBounds;
+
+        string lastRoute = _activeRoute == "user-playlist" ? "playlists" : _activeRoute;
+        _windowStateStore.Save(new WindowStateData
+        {
+            Width = normalBounds.Width,
+            Height = normalBounds.Height,
+            Left = normalBounds.Left,
+            Top = normalBounds.Top,
+            IsMaximized = maximized,
+            NavExpanded = _navExpanded,
+            SidePanel = _sidePanel switch
+            {
+                SidePanelKind.Lyrics => "lyrics",
+                SidePanelKind.Queue => "queue",
+                _ => null
+            },
+            LastRoute = lastRoute
+        });
+    }
+
+    private static bool IsSupportedAudioFile(string path)
+    {
+        if (!File.Exists(path)) return false;
+        string ext = Path.GetExtension(path);
+        return ext.Length > 1 && FolderScanner.AudioExtensions.Contains(ext[1..]);
+    }
+
+    private static bool HasSupportedFileDrop(DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return false;
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] paths || paths.Length == 0) return false;
+        return paths.Any(p => Directory.Exists(p) || IsSupportedAudioFile(p));
+    }
+
+    private void RootGrid_DragEnter(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+        bool supported = HasSupportedFileDrop(e);
+        e.Effects = supported ? DragDropEffects.Copy : DragDropEffects.None;
+        DropOverlay.Visibility = supported ? Visibility.Visible : Visibility.Collapsed;
+        e.Handled = true;
+    }
+
+    private void RootGrid_DragOver(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+        bool supported = HasSupportedFileDrop(e);
+        e.Effects = supported ? DragDropEffects.Copy : DragDropEffects.None;
+        DropOverlay.Visibility = supported ? Visibility.Visible : Visibility.Collapsed;
+        e.Handled = true;
+    }
+
+    private void RootGrid_DragLeave(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+        Point pos = e.GetPosition(RootGrid);
+        if (pos.X <= 0 || pos.Y <= 0 || pos.X >= RootGrid.ActualWidth || pos.Y >= RootGrid.ActualHeight)
+        {
+            DropOverlay.Visibility = Visibility.Collapsed;
+        }
+    }
+
+    private void RootGrid_Drop(object sender, DragEventArgs e)
+    {
+        if (!e.Data.GetDataPresent(DataFormats.FileDrop)) return;
+        DropOverlay.Visibility = Visibility.Collapsed;
+        e.Handled = true;
+
+        if (e.Data.GetData(DataFormats.FileDrop) is not string[] paths || paths.Length == 0) return;
+        _ = HandleFileDropAsync(paths);
+    }
+
+    private async Task HandleFileDropAsync(string[] paths)
+    {
+        var dirs = paths.Where(Directory.Exists).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var audioFiles = paths.Where(IsSupportedAudioFile).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+
+        int addedDirs = 0;
+        foreach (string dir in dirs)
+        {
+            try
+            {
+                await _services.Library.AddRootAsync(dir);
+                addedDirs++;
+            }
+            catch (InvalidOperationException)
+            {
+                // Folder already indexed; skip duplicate add.
+            }
+            catch (Exception ex)
+            {
+                ShowToastMessage(ex.Message);
+            }
+        }
+
+        if (audioFiles.Count > 0)
+        {
+            var resolvedPaths = new List<string>(audioFiles.Count);
+            bool copiedAny = false;
+
+            var existingByPath = new Dictionary<string, Track>(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in _services.Library.Tracks)
+            {
+                if (_services.Library.GetFilePath(t) is { Length: > 0 } fp)
+                {
+                    existingByPath.TryAdd(Path.GetFullPath(fp), t);
+                }
+            }
+
+            foreach (string srcPath in audioFiles)
+            {
+                string fullSrc = Path.GetFullPath(srcPath);
+                if (existingByPath.ContainsKey(fullSrc))
+                {
+                    resolvedPaths.Add(fullSrc);
+                    continue;
+                }
+
+                string musicDir = Path.GetFullPath(_services.MusicDirectory);
+                Directory.CreateDirectory(musicDir);
+                if (fullSrc.StartsWith(musicDir + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+                {
+                    resolvedPaths.Add(fullSrc);
+                    copiedAny = true;
+                    continue;
+                }
+
+                string destPath = BuildUniqueCopyDestination(musicDir, Path.GetFileName(fullSrc));
+                await Task.Run(() => File.Copy(fullSrc, destPath, overwrite: false));
+                resolvedPaths.Add(Path.GetFullPath(destPath));
+                copiedAny = true;
+            }
+
+            if (copiedAny)
+            {
+                if (_services.Library.AppFolderRemoved)
+                {
+                    await _services.Library.RestoreAppFolderAsync();
+                }
+                else
+                {
+                    await _services.Library.RescanAsync();
+                }
+            }
+
+            var refreshedByPath = new Dictionary<string, Track>(StringComparer.OrdinalIgnoreCase);
+            foreach (var t in _services.Library.Tracks)
+            {
+                if (_services.Library.GetFilePath(t) is { Length: > 0 } fp)
+                {
+                    refreshedByPath.TryAdd(Path.GetFullPath(fp), t);
+                }
+            }
+
+            var trackIds = new List<string>();
+            foreach (string p in resolvedPaths)
+            {
+                if (refreshedByPath.TryGetValue(p, out var matched))
+                {
+                    trackIds.Add(matched.Id);
+                }
+            }
+
+            if (trackIds.Count > 0)
+            {
+                _services.Player.PlayInNamedQueue(L.Get("Drop_QueueName"), trackIds, startAt: 0);
+                ShowToastMessage(L.Format("Toast_DroppedFilesPlayed", trackIds.Count));
+            }
+        }
+        else if (addedDirs > 0)
+        {
+            ShowToastMessage(L.Format("Toast_DroppedFoldersAdded", addedDirs));
+        }
+    }
+
+    private static string BuildUniqueCopyDestination(string targetDirectory, string fileName)
+    {
+        string baseName = Path.GetFileNameWithoutExtension(fileName);
+        string ext = Path.GetExtension(fileName);
+        string candidate = Path.Combine(targetDirectory, fileName);
+        int suffix = 1;
+        while (File.Exists(candidate))
+        {
+            candidate = Path.Combine(targetDirectory, $"{baseName} ({suffix}){ext}");
+            suffix++;
+        }
+        return candidate;
     }
 }

@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using MusicoWindows.Controls;
+using MusicoWindows.Converters;
 using MusicoWindows.Core;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
@@ -122,7 +123,17 @@ public partial class PlaylistDetailView : UserControl
         _suppressSortSelection = false;
         SortCombo.IsEnabled = _tracks.Count > 1;
 
-        CountText.Text = L.SongsCount(_tracks.Count);
+        double totalDuration = _tracks.Sum(t => t.DurationSeconds);
+        string? heroArtKey = _tracks.Select(t => t.ArtworkKey).FirstOrDefault(k => !string.IsNullOrEmpty(k));
+        string? heroRemoteUrl = heroArtKey is null
+            ? _tracks.Select(t => t.RemoteArtworkUrl).FirstOrDefault(u => !string.IsNullOrWhiteSpace(u))
+            : null;
+        PlaylistArt.SetSource(lib.Artwork, heroArtKey, 160, heroRemoteUrl, _ctx.Services.Thumbnails);
+        HeroBackdropHelper.ApplyArtworkWash(HeroBackdropImage, lib.Artwork, heroArtKey);
+
+        CountText.Text = _tracks.Count > 0
+            ? $"{L.SongsCount(_tracks.Count)} · {TimeFormatter.Format(totalDuration)}"
+            : L.SongsCount(0);
         PlayAllButton.IsEnabled = _tracks.Count > 0;
         ShuffleAllButton.IsEnabled = _tracks.Count > 0;
 

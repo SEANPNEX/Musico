@@ -5,7 +5,7 @@
             Background="{DynamicResource CardBackgroundBrush}"
             BorderBrush="{DynamicResource ControlBorderBrush}"
             BorderThickness="1"
-            CornerRadius="0"
+            CornerRadius="4"
             ClipToBounds="True">
         <Grid>
             <TextBlock x:Name="PlaceholderGlyph"

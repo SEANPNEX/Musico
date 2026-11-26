@@ -4,8 +4,6 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
-            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -30,6 +28,7 @@
                         Background="{DynamicResource CardBackgroundBrush}"
                         BorderBrush="{DynamicResource ControlBorderBrush}"
                         BorderThickness="1"
+                        CornerRadius="4"
                         Padding="18,8">
                     <StackPanel Orientation="Horizontal">
                         <StackPanel MinWidth="72" HorizontalAlignment="Center">
@@ -86,106 +85,179 @@
             </Grid>
         </Border>
 
-        <!-- Win10 Pivot Underlined Section Tabs -->
-        <Border Grid.Row="1"
-                BorderBrush="{DynamicResource DividerBrush}"
-                BorderThickness="0,0,0,1"
-                Padding="20,4,24,0">
-            <Grid>
-                <StackPanel Orientation="Horizontal">
-                    <RadioButton x:Name="TabRecent"
-                                 Style="{StaticResource Win10PivotTabStyle}"
-                                 Content="{DynamicResource Str_Stats_TabRecent}"
-                                 GroupName="StatsPivot"
-                                 IsChecked="True"
-                                 Checked="Tab_Checked" />
-                    <RadioButton x:Name="TabPlays"
-                                 Style="{StaticResource Win10PivotTabStyle}"
-                                 Content="{DynamicResource Str_Stats_TabPlays}"
-                                 GroupName="StatsPivot"
-                                 Margin="12,0,0,0"
-                                 Checked="Tab_Checked" />
-                    <RadioButton x:Name="TabStale"
-                                 Style="{StaticResource Win10PivotTabStyle}"
-                                 Content="{DynamicResource Str_Stats_TabNotLately}"
-                                 GroupName="StatsPivot"
-                                 Margin="12,0,0,0"
-                                 Checked="Tab_Checked" />
-                    <RadioButton x:Name="TabNever"
-                                 Style="{StaticResource Win10PivotTabStyle}"
-                                 Content="{DynamicResource Str_Stats_TabNever}"
-                                 GroupName="StatsPivot"
-                                 Margin="12,0,0,0"
-                                 Checked="Tab_Checked" />
-                </StackPanel>
-
-                <ComboBox x:Name="PlaysOrderCombo"
-                          Style="{StaticResource Win10ComboBoxStyle}"
-                          Width="165"
-                          HorizontalAlignment="Right"
-                          VerticalAlignment="Center"
-                          Margin="0,0,0,4"
-                          Visibility="Collapsed"
-                          SelectionChanged="PlaysOrderCombo_SelectionChanged" />
-            </Grid>
-        </Border>
-
-        <!-- Play All / Shuffle -->
-        <Border x:Name="ActionBar"
-                Grid.Row="2"
-                Padding="24,10"
-                BorderBrush="{DynamicResource DividerBrush}"
-                BorderThickness="0,0,0,1">
-            <StackPanel Orientation="Horizontal">
-                <Button Style="{StaticResource Win10PrimaryButtonStyle}"
-                        Margin="0,0,8,0"
-                        Click="PlayAll_Click">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <TextBlock Text="{DynamicResource Str_Common_PlayAll}" VerticalAlignment="Center" />
-                    </StackPanel>
-                </Button>
-                <Button Style="{StaticResource Win10ButtonStyle}"
-                        Click="ShuffleAll_Click">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <TextBlock Text="{DynamicResource Str_Common_Shuffle}" VerticalAlignment="Center" />
-                    </StackPanel>
-                </Button>
-            </StackPanel>
-        </Border>
-
-        <!-- Track List / Empty State -->
-        <Grid Grid.Row="3">
-            <ScrollViewer x:Name="TracksScroll" VerticalScrollBarVisibility="Auto" Padding="20,12">
-                <StackPanel x:Name="TracksStack" Margin="0,0,0,28" />
-            </ScrollViewer>
-
-            <StackPanel x:Name="EmptyState"
-                        VerticalAlignment="Center"
-                        HorizontalAlignment="Center"
-                        Margin="32"
+        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
+            <StackPanel Margin="0,0,0,28">
+                <!-- Insights Section (Library Explored + Top Artists & Top Albums) -->
+                <Border x:Name="InsightsCard"
+                        Margin="24,16,24,8"
+                        Padding="18,16"
+                        Background="{DynamicResource CardBackgroundBrush}"
+                        BorderBrush="{DynamicResource ControlBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="4"
                         Visibility="Collapsed">
-                <TextBlock Text="&#xE9D9;"
-                           FontFamily="{StaticResource Win10GlyphFont}"
-                           FontSize="36"
-                           Foreground="{DynamicResource TextTertiaryBrush}"
-                           HorizontalAlignment="Center"
-                           Margin="0,0,0,12" />
-                <TextBlock x:Name="EmptyTitleText"
-                           FontFamily="{StaticResource Win10Font}"
-                           FontSize="17"
-                           FontWeight="SemiBold"
-                           Foreground="{DynamicResource TextPrimaryBrush}"
-                           HorizontalAlignment="Center"
-                           Margin="0,0,0,6" />
-                <TextBlock x:Name="EmptyDescText"
-                           FontFamily="{StaticResource Win10Font}"
-                           FontSize="13"
-                           Foreground="{DynamicResource TextSecondaryBrush}"
-                           TextWrapping="Wrap"
-                           TextAlignment="Center" />
+                    <StackPanel>
+                        <TextBlock Text="{DynamicResource Str_Stats_InsightsTitle}"
+                                   Style="{StaticResource Win10SectionTitleStyle}"
+                                   Margin="0,0,0,12" />
+
+                        <!-- Library Explored -->
+                        <Grid Margin="0,0,0,16">
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto" />
+                                <RowDefinition Height="Auto" />
+                            </Grid.RowDefinitions>
+                            <Grid Grid.Row="0" Margin="0,0,0,6">
+                                <TextBlock Text="{DynamicResource Str_Stats_LibraryExplored}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="12.5"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           HorizontalAlignment="Left" />
+                                <TextBlock x:Name="ExploredSummaryText"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           HorizontalAlignment="Right" />
+                            </Grid>
+                            <ProgressBar x:Name="ExploredProgressBar"
+                                         Grid.Row="1"
+                                         Style="{StaticResource Win10ProgressBarStyle}"
+                                         Height="6"
+                                         Minimum="0"
+                                         Maximum="1"
+                                         Value="0" />
+                        </Grid>
+
+                        <!-- Top Artists & Top Albums -->
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="20" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
+
+                            <StackPanel x:Name="TopArtistsSection" Grid.Column="0">
+                                <TextBlock Text="{DynamicResource Str_Stats_TopArtists}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="12.5"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,0,0,8" />
+                                <StackPanel x:Name="TopArtistsStack" />
+                            </StackPanel>
+
+                            <StackPanel x:Name="TopAlbumsSection" Grid.Column="2">
+                                <TextBlock Text="{DynamicResource Str_Stats_TopAlbums}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="12.5"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,0,0,8" />
+                                <StackPanel x:Name="TopAlbumsStack" />
+                            </StackPanel>
+                        </Grid>
+                    </StackPanel>
+                </Border>
+
+                <!-- Win10 Pivot Underlined Section Tabs -->
+                <Border BorderBrush="{DynamicResource DividerBrush}"
+                        BorderThickness="0,0,0,1"
+                        Padding="20,4,24,0">
+                    <Grid>
+                        <StackPanel Orientation="Horizontal">
+                            <RadioButton x:Name="TabRecent"
+                                         Style="{StaticResource Win10PivotTabStyle}"
+                                         Content="{DynamicResource Str_Stats_TabRecent}"
+                                         GroupName="StatsPivot"
+                                         IsChecked="True"
+                                         Checked="Tab_Checked" />
+                            <RadioButton x:Name="TabPlays"
+                                         Style="{StaticResource Win10PivotTabStyle}"
+                                         Content="{DynamicResource Str_Stats_TabPlays}"
+                                         GroupName="StatsPivot"
+                                         Margin="12,0,0,0"
+                                         Checked="Tab_Checked" />
+                            <RadioButton x:Name="TabStale"
+                                         Style="{StaticResource Win10PivotTabStyle}"
+                                         Content="{DynamicResource Str_Stats_TabNotLately}"
+                                         GroupName="StatsPivot"
+                                         Margin="12,0,0,0"
+                                         Checked="Tab_Checked" />
+                            <RadioButton x:Name="TabNever"
+                                         Style="{StaticResource Win10PivotTabStyle}"
+                                         Content="{DynamicResource Str_Stats_TabNever}"
+                                         GroupName="StatsPivot"
+                                         Margin="12,0,0,0"
+                                         Checked="Tab_Checked" />
+                        </StackPanel>
+
+                        <ComboBox x:Name="PlaysOrderCombo"
+                                  Style="{StaticResource Win10ComboBoxStyle}"
+                                  Width="165"
+                                  HorizontalAlignment="Right"
+                                  VerticalAlignment="Center"
+                                  Margin="0,0,0,4"
+                                  Visibility="Collapsed"
+                                  SelectionChanged="PlaysOrderCombo_SelectionChanged" />
+                    </Grid>
+                </Border>
+
+                <!-- Play All / Shuffle -->
+                <Border x:Name="ActionBar"
+                        Padding="24,10"
+                        BorderBrush="{DynamicResource DividerBrush}"
+                        BorderThickness="0,0,0,1">
+                    <StackPanel Orientation="Horizontal">
+                        <Button Style="{StaticResource Win10PrimaryButtonStyle}"
+                                Margin="0,0,8,0"
+                                Click="PlayAll_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                <TextBlock Text="{DynamicResource Str_Common_PlayAll}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button Style="{StaticResource Win10ButtonStyle}"
+                                Click="ShuffleAll_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                <TextBlock Text="{DynamicResource Str_Common_Shuffle}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </Border>
+
+                <!-- Track List / Empty State -->
+                <Grid Padding="20,12">
+                    <StackPanel x:Name="TracksStack" />
+
+                    <StackPanel x:Name="EmptyState"
+                                VerticalAlignment="Center"
+                                HorizontalAlignment="Center"
+                                Margin="32,48"
+                                Visibility="Collapsed">
+                        <TextBlock Text="&#xE9D9;"
+                                   FontFamily="{StaticResource Win10GlyphFont}"
+                                   FontSize="36"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,0,0,12" />
+                        <TextBlock x:Name="EmptyTitleText"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="17"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   HorizontalAlignment="Center"
+                                   Margin="0,0,0,6" />
+                        <TextBlock x:Name="EmptyDescText"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="13"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   TextAlignment="Center" />
+                    </StackPanel>
+                </Grid>
             </StackPanel>
-        </Grid>
+        </ScrollViewer>
     </Grid>
 </UserControl>

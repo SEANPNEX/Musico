@@ -68,6 +68,7 @@ public partial class AlbumDetailView : UserControl
         double totalDuration = tracks.Sum(t => t.DurationSeconds);
 
         AlbumArt.SetSource(lib.Artwork, live.ArtworkKey, 240);
+        HeroBackdropHelper.ApplyArtworkWash(HeroBackdropImage, lib.Artwork, live.ArtworkKey);
         AlbumTitleText.Text = L.DisplayAlbum(live.Title);
         AlbumArtistText.Text = L.DisplayArtist(live.Artist);
         AlbumMetaText.Text = $"{L.SongsCount(tracks.Count)} · {TimeFormatter.Format(totalDuration)}";

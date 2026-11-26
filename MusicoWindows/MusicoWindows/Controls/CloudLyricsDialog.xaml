@@ -13,7 +13,7 @@
                 Background="{DynamicResource DialogSurfaceBrush}"
                 BorderBrush="{DynamicResource ControlBorderBrush}"
                 BorderThickness="1"
-                CornerRadius="0"
+                CornerRadius="8"
                 Padding="24"
                 MouseDown="Card_MouseDown">
             <Grid>

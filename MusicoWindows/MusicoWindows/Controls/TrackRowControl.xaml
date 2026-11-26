@@ -7,7 +7,7 @@
                 Background="Transparent"
                 BorderBrush="Transparent"
                 BorderThickness="1"
-                CornerRadius="0"
+                CornerRadius="4"
                 Padding="10,7"
                 Cursor="Hand"
                 MouseEnter="Row_MouseEnter"

@@ -78,7 +78,7 @@ public partial class AlbumsView : UserControl
             Margin = new Thickness(0, 0, 14, 16),
             Padding = new Thickness(8),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(0),
+            CornerRadius = new CornerRadius(4),
             Cursor = Cursors.Hand
         };
         card.SetResourceReference(Border.BackgroundProperty, "CardBackgroundBrush");

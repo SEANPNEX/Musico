@@ -148,7 +148,7 @@ public partial class QueuesView : UserControl
                 Margin = new Thickness(0, 0, 8, 6),
                 Padding = isViewedQueue ? new Thickness(9, 5, 9, 5) : new Thickness(10, 6, 10, 6),
                 BorderThickness = isViewedQueue ? new Thickness(2) : new Thickness(1),
-                CornerRadius = new CornerRadius(0),
+                CornerRadius = new CornerRadius(4),
                 Cursor = Cursors.Hand,
                 MaxWidth = _compact ? 290 : 340
             };
@@ -190,7 +190,7 @@ public partial class QueuesView : UserControl
                     Margin = new Thickness(6, 0, 0, 0),
                     Padding = new Thickness(5, 1, 5, 1),
                     BorderThickness = new Thickness(1),
-                    CornerRadius = new CornerRadius(0),
+                    CornerRadius = new CornerRadius(4),
                     VerticalAlignment = VerticalAlignment.Center
                 };
                 badge.SetResourceReference(Border.BackgroundProperty, isAudioPlaying ? "AccentBrush" : "AccentSubtleBrush");

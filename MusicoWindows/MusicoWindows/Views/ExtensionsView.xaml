@@ -274,7 +274,7 @@
                     Background="{DynamicResource DialogSurfaceBrush}"
                     BorderBrush="{DynamicResource ControlBorderBrush}"
                     BorderThickness="1"
-                    CornerRadius="0"
+                    CornerRadius="8"
                     Padding="24"
                     MouseDown="ReviewCard_MouseDown">
                 <Grid>
@@ -422,7 +422,7 @@
                     Background="{DynamicResource DialogSurfaceBrush}"
                     BorderBrush="{DynamicResource ControlBorderBrush}"
                     BorderThickness="1"
-                    CornerRadius="0"
+                    CornerRadius="8"
                     Padding="24"
                     MouseDown="QrCard_MouseDown">
                 <Grid>

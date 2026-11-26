@@ -142,6 +142,7 @@ import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
 import com.musico.ui.components.dragHandle
 import com.musico.ui.components.rememberDragReorderState
+import com.musico.ui.components.skeletonTrackRows
 import com.musico.ui.theme.MusicoMotion
 import com.musico.ui.theme.ThemeStore
 import com.musico.ui.theme.musicoListItemColors
@@ -2887,7 +2888,13 @@ private fun FolderDetailContent(
             }
         }
 
-        if (allTracks.isEmpty()) {
+        val isCloudFolderLoading = root?.kind?.isCloud == true &&
+            (syncProgress != null || libraryState.isScanning) &&
+            allTracks.isEmpty()
+
+        if (isCloudFolderLoading) {
+            skeletonTrackRows(count = 7, keyPrefix = "cloud_folder_skeleton")
+        } else if (allTracks.isEmpty()) {
             item(key = "empty_folder") {
                 EmptyState(
                     icon = Icons.Rounded.Folder,

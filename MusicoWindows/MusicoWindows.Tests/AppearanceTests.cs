@@ -320,4 +320,47 @@ public sealed class AppearanceTests : IDisposable
         Assert.Equal(LyricsFontSize.Medium, invalidEnum.LyricsFontSize);
         Assert.Equal(LyricsAlignment.Leading, invalidEnum.LyricsAlignment);
     }
+
+    [Fact]
+    public void WindowsVersionHelperAndBackdropSelectionHandleWin10AndWin11Builds()
+    {
+        var win10Pre1803 = new Version(10, 0, 16299, 0);
+        var win10Acrylic = new Version(10, 0, 19045, 0);
+        var win11Initial = new Version(10, 0, 22000, 0);
+        var win1122H2 = new Version(10, 0, 22621, 0);
+
+        Assert.False(WindowsVersionHelper.IsWindows11(win10Acrylic));
+        Assert.True(WindowsVersionHelper.IsWindows11(win11Initial));
+        Assert.True(WindowsVersionHelper.IsWindows11(win1122H2));
+
+        Assert.False(WindowsVersionHelper.SupportsDwmSystemBackdrop(win11Initial));
+        Assert.True(WindowsVersionHelper.SupportsDwmSystemBackdrop(win1122H2));
+
+        // Win11 22H2+ with default opaque background uses native DWM transient backdrop
+        Assert.Equal(
+            WindowsBackdropKind.DwmTransientWindow,
+            WindowsVersionHelper.ResolveBackdropKind(win1122H2, 1.0, hasCustomBackgroundColor: false, hasBackgroundImage: false));
+
+        // Any custom opacity < 0.995, custom background color, or background image falls back to Acrylic composition
+        Assert.Equal(
+            WindowsBackdropKind.Acrylic,
+            WindowsVersionHelper.ResolveBackdropKind(win1122H2, 0.85, hasCustomBackgroundColor: false, hasBackgroundImage: false));
+        Assert.Equal(
+            WindowsBackdropKind.Acrylic,
+            WindowsVersionHelper.ResolveBackdropKind(win1122H2, 1.0, hasCustomBackgroundColor: true, hasBackgroundImage: false));
+        Assert.Equal(
+            WindowsBackdropKind.Acrylic,
+            WindowsVersionHelper.ResolveBackdropKind(win1122H2, 1.0, hasCustomBackgroundColor: false, hasBackgroundImage: true));
+
+        // Win11 21H2 and Win10 1803+ use Acrylic composition; older Win10 falls back to BlurBehind
+        Assert.Equal(
+            WindowsBackdropKind.Acrylic,
+            WindowsVersionHelper.ResolveBackdropKind(win11Initial, 1.0, hasCustomBackgroundColor: false, hasBackgroundImage: false));
+        Assert.Equal(
+            WindowsBackdropKind.Acrylic,
+            WindowsVersionHelper.ResolveBackdropKind(win10Acrylic, 1.0, hasCustomBackgroundColor: false, hasBackgroundImage: false));
+        Assert.Equal(
+            WindowsBackdropKind.BlurBehind,
+            WindowsVersionHelper.ResolveBackdropKind(win10Pre1803, 1.0, hasCustomBackgroundColor: false, hasBackgroundImage: false));
+    }
 }

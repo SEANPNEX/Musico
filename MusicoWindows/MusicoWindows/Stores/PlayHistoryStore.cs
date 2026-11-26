@@ -3,6 +3,10 @@ using MusicoWindows.Models;
 
 namespace MusicoWindows.Stores;
 
+public sealed record TopArtistStat(string Artist, int PlayCount, int TrackCount, string? ArtworkKey);
+
+public sealed record TopAlbumStat(string Album, string Artist, int PlayCount, int TrackCount, string? ArtworkKey);
+
 /// <summary>
 /// How often and how recently each song was played, for the Stats view.
 /// </summary>
@@ -196,5 +200,97 @@ public sealed class PlayHistoryStore : ObservableStore
             .OrderBy(x => x.Entry.LastPlayedUtc)
             .Select(x => x.Track)
             .ToList();
+    }
+
+    public IReadOnlyList<TopArtistStat> GetTopArtists(IEnumerable<Track> tracks, int limit = 5)
+    {
+        if (limit <= 0) return Array.Empty<TopArtistStat>();
+
+        var grouped = new Dictionary<string, (int PlayCount, int TrackCount, DateTimeOffset LastPlayed, string? ArtworkKey)>(StringComparer.Ordinal);
+        foreach (var track in tracks)
+        {
+            if (track.IsEphemeral || IsExcludedId(track.Id)) continue;
+            string artist = string.IsNullOrWhiteSpace(track.Artist) ? "Unknown Artist" : track.Artist;
+            int count = GetCount(track.Id);
+            DateTimeOffset last = count > 0 ? (GetLastPlayed(track.Id) ?? DateTimeOffset.MinValue) : DateTimeOffset.MinValue;
+
+            if (grouped.TryGetValue(artist, out var acc))
+            {
+                grouped[artist] = (
+                    acc.PlayCount + count,
+                    acc.TrackCount + 1,
+                    last > acc.LastPlayed ? last : acc.LastPlayed,
+                    acc.ArtworkKey ?? track.ArtworkKey);
+            }
+            else
+            {
+                grouped[artist] = (count, 1, last, track.ArtworkKey);
+            }
+        }
+
+        return grouped
+            .Where(kvp => kvp.Value.PlayCount > 0)
+            .OrderByDescending(kvp => kvp.Value.PlayCount)
+            .ThenByDescending(kvp => kvp.Value.LastPlayed)
+            .ThenBy(kvp => kvp.Key, StringComparer.CurrentCultureIgnoreCase)
+            .Take(limit)
+            .Select(kvp => new TopArtistStat(kvp.Key, kvp.Value.PlayCount, kvp.Value.TrackCount, kvp.Value.ArtworkKey))
+            .ToList();
+    }
+
+    public IReadOnlyList<TopAlbumStat> GetTopAlbums(IEnumerable<Track> tracks, int limit = 5)
+    {
+        if (limit <= 0) return Array.Empty<TopAlbumStat>();
+
+        var grouped = new Dictionary<string, (string Album, string Artist, int PlayCount, int TrackCount, DateTimeOffset LastPlayed, string? ArtworkKey)>(StringComparer.Ordinal);
+        foreach (var track in tracks)
+        {
+            if (track.IsEphemeral || IsExcludedId(track.Id)) continue;
+            string album = string.IsNullOrWhiteSpace(track.Album) ? "Unknown Album" : track.Album;
+            string albumArtist = string.IsNullOrWhiteSpace(track.AlbumArtist)
+                ? (string.IsNullOrWhiteSpace(track.Artist) ? "Unknown Artist" : track.Artist)
+                : track.AlbumArtist;
+            string key = $"{albumArtist}\u001F{album}";
+
+            int count = GetCount(track.Id);
+            DateTimeOffset last = count > 0 ? (GetLastPlayed(track.Id) ?? DateTimeOffset.MinValue) : DateTimeOffset.MinValue;
+
+            if (grouped.TryGetValue(key, out var acc))
+            {
+                grouped[key] = (
+                    acc.Album,
+                    acc.Artist,
+                    acc.PlayCount + count,
+                    acc.TrackCount + 1,
+                    last > acc.LastPlayed ? last : acc.LastPlayed,
+                    acc.ArtworkKey ?? track.ArtworkKey);
+            }
+            else
+            {
+                grouped[key] = (album, albumArtist, count, 1, last, track.ArtworkKey);
+            }
+        }
+
+        return grouped
+            .Where(kvp => kvp.Value.PlayCount > 0)
+            .OrderByDescending(kvp => kvp.Value.PlayCount)
+            .ThenByDescending(kvp => kvp.Value.LastPlayed)
+            .ThenBy(kvp => kvp.Value.Album, StringComparer.CurrentCultureIgnoreCase)
+            .Take(limit)
+            .Select(kvp => new TopAlbumStat(kvp.Value.Album, kvp.Value.Artist, kvp.Value.PlayCount, kvp.Value.TrackCount, kvp.Value.ArtworkKey))
+            .ToList();
+    }
+
+    public double GetPlayedLibraryFraction(IEnumerable<Track> tracks)
+    {
+        int total = 0;
+        int played = 0;
+        foreach (var track in tracks)
+        {
+            if (track.IsEphemeral || IsExcludedId(track.Id)) continue;
+            total++;
+            if (GetCount(track.Id) > 0) played++;
+        }
+        return total == 0 ? 0.0 : (double)played / total;
     }
 }

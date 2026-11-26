@@ -11,7 +11,7 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="260" />
                 <ColumnDefinition Width="*" />
-                <ColumnDefinition Width="270" />
+                <ColumnDefinition Width="308" />
             </Grid.ColumnDefinitions>
 
             <!-- Left: Artwork + Title + Artist (click opens FullPlayerView) -->
@@ -143,27 +143,32 @@
                 </Grid>
             </Grid>
 
-            <!-- Right: Volume, EQ, Sleep Timer, Lyrics & Queue toggles -->
+            <!-- Right: Volume, EQ, Sleep Timer, Lyrics, Queue & Mini Player toggles -->
             <StackPanel Grid.Column="2"
                         Orientation="Horizontal"
                         HorizontalAlignment="Right"
                         VerticalAlignment="Center">
-                <Button x:Name="MuteButton"
-                        Style="{StaticResource Win10IconButtonStyle}"
-                        Content="&#xE767;"
-                        ToolTip="{DynamicResource Str_PlayerBar_MuteTooltip}"
-                        AutomationProperties.Name="{DynamicResource Str_PlayerBar_MuteTooltip}"
-                        Click="Mute_Click" />
-                <Slider x:Name="VolumeSlider"
-                        Style="{StaticResource Win10SliderStyle}"
-                        Width="72"
-                        Minimum="0"
-                        Maximum="1"
-                        Value="1"
-                        Margin="2,0,8,0"
-                        ToolTip="{DynamicResource Str_PlayerBar_VolumeTooltip}"
-                        AutomationProperties.Name="{DynamicResource Str_PlayerBar_VolumeTooltip}"
-                        ValueChanged="VolumeSlider_ValueChanged" />
+                <StackPanel x:Name="VolumeArea"
+                            Orientation="Horizontal"
+                            Background="Transparent"
+                            PreviewMouseWheel="VolumeArea_PreviewMouseWheel">
+                    <Button x:Name="MuteButton"
+                            Style="{StaticResource Win10IconButtonStyle}"
+                            Content="&#xE767;"
+                            ToolTip="{DynamicResource Str_PlayerBar_MuteTooltip}"
+                            AutomationProperties.Name="{DynamicResource Str_PlayerBar_MuteTooltip}"
+                            Click="Mute_Click" />
+                    <Slider x:Name="VolumeSlider"
+                            Style="{StaticResource Win10SliderStyle}"
+                            Width="72"
+                            Minimum="0"
+                            Maximum="1"
+                            Value="1"
+                            Margin="2,0,8,0"
+                            ToolTip="{DynamicResource Str_PlayerBar_VolumeTooltip}"
+                            AutomationProperties.Name="{DynamicResource Str_PlayerBar_VolumeTooltip}"
+                            ValueChanged="VolumeSlider_ValueChanged" />
+                </StackPanel>
 
                 <Button x:Name="EqButton"
                         Style="{StaticResource Win10IconButtonStyle}"
@@ -191,7 +196,14 @@
                         Content="&#xE90B;"
                         ToolTip="{DynamicResource Str_FullPlayer_QueueTab}"
                         AutomationProperties.Name="{DynamicResource Str_FullPlayer_QueueTab}"
+                        Margin="0,0,2,0"
                         Click="Queue_Click" />
+                <Button x:Name="MiniPlayerButton"
+                        Style="{StaticResource Win10IconButtonStyle}"
+                        Content="&#xEE49;"
+                        ToolTip="{DynamicResource Str_PlayerBar_MiniPlayerTooltip}"
+                        AutomationProperties.Name="{DynamicResource Str_PlayerBar_MiniPlayerTooltip}"
+                        Click="MiniPlayer_Click" />
             </StackPanel>
         </Grid>
     </Border>

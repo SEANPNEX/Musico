@@ -3,6 +3,7 @@ package com.musico.ui.screens
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,6 +17,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
@@ -41,11 +43,13 @@ import androidx.compose.material3.ListItem
 import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,7 +72,9 @@ import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
 import com.musico.store.PlayHistoryUiState
 import com.musico.ui.LocalShowMessage
+import com.musico.ui.components.ArtworkImage
 import com.musico.ui.components.ConfirmDialog
+import com.musico.ui.components.DetailHeroHeader
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.SortOrderMenuButton
@@ -77,6 +83,7 @@ import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
 import com.musico.ui.components.dragHandle
+import com.musico.ui.components.formatTime
 import com.musico.ui.components.rememberDragReorderState
 import com.musico.ui.theme.musicoListItemColors
 import com.musico.ui.theme.musicoScaffoldContainerColor
@@ -315,6 +322,9 @@ fun PlaylistDetailScreen(
         }
     }
     val trackIds = remember(tracks) { tracks.map { it.id } }
+    val totalDuration = remember(tracks) { tracks.sumOf { it.durationSec } }
+    val heroArtworkKey = remember(tracks) { tracks.firstNotNullOfOrNull { it.artworkKey } }
+    val heroRemoteUrl = remember(tracks) { tracks.firstNotNullOfOrNull { it.remoteArtworkUrl } }
 
     LaunchedEffect(ref, trackIds) {
         if (trackIds.isNotEmpty()) {
@@ -323,10 +333,15 @@ fun PlaylistDetailScreen(
     }
 
     val listState = rememberLazyListState()
+    val showTopBarTitle by remember {
+        derivedStateOf {
+            listState.firstVisibleItemIndex > 0 || listState.firstVisibleItemScrollOffset > 120
+        }
+    }
     val dragState = rememberDragReorderState(
         items = tracks,
         listState = listState,
-        headerCount = if (tracks.isEmpty()) 0 else 1,
+        headerCount = if (tracks.isEmpty()) 1 else 2,
         scopeKey = ref,
         keyOf = { it.id },
         onCommit = { reordered ->
@@ -349,11 +364,13 @@ fun PlaylistDetailScreen(
                     }
                 },
                 title = {
-                    Text(
-                        text = title,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis
-                    )
+                    if (showTopBarTitle) {
+                        Text(
+                            text = title,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
                 },
                 actions = {
                     if (tracks.isNotEmpty()) {
@@ -390,6 +407,40 @@ fun PlaylistDetailScreen(
                 .padding(innerPadding),
             contentPadding = PaddingValues(bottom = 16.dp)
         ) {
+            item(key = "header") {
+                DetailHeroHeader(
+                    artworkKey = heroArtworkKey,
+                    artworkCache = libraryStore.artwork,
+                    title = title,
+                    subtitle = if (ref is PlaylistRef.User) strings.playlistFallbackTitle else null,
+                    metadata = "${strings.songCount(tracks.size)} · ${formatTime(totalDuration)}",
+                    remoteArtworkUrl = heroRemoteUrl,
+                ) {
+                    Surface(
+                        shape = RoundedCornerShape(18.dp),
+                        shadowElevation = 10.dp,
+                        tonalElevation = 2.dp,
+                        border = BorderStroke(
+                            1.dp,
+                            MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.25f),
+                        ),
+                    ) {
+                        ArtworkImage(
+                            artworkKey = heroArtworkKey,
+                            artworkCache = libraryStore.artwork,
+                            size = 180.dp,
+                            cornerRadius = 18.dp,
+                            remoteArtworkUrl = heroRemoteUrl,
+                            fallbackIcon = if (ref is PlaylistRef.Favourites) {
+                                Icons.Rounded.Favorite
+                            } else {
+                                Icons.AutoMirrored.Rounded.QueueMusic
+                            },
+                        )
+                    }
+                }
+            }
+
             if (tracks.isEmpty()) {
                 item(key = "empty_playlist") {
                     EmptyState(

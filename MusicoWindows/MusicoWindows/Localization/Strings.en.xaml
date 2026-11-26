@@ -325,4 +325,21 @@
     <sys:String x:Key="Str_Lyrics_OptionsTooltip">Lyrics display options</sys:String>
     <sys:String x:Key="Str_Lyrics_SyncToCurrent">Sync to current line</sys:String>
 
+    <!-- Wave B: Command Palette, Mini Player, Drop Overlay, Stats Insights -->
+    <sys:String x:Key="Str_CommandPalette_Title">Command Palette</sys:String>
+    <sys:String x:Key="Str_CommandPalette_Placeholder">Search songs, albums, artists, playlists, queues, or commands...</sys:String>
+    <sys:String x:Key="Str_CommandPalette_ResultsLabel">Command palette results</sys:String>
+    <sys:String x:Key="Str_CommandPalette_NoResults">No matching songs, items, or commands.</sys:String>
+    <sys:String x:Key="Str_CommandPalette_FooterHint">Up/Down to navigate · Enter to run · Esc to close</sys:String>
+    <sys:String x:Key="Str_MiniPlayer_Title">Mini Player</sys:String>
+    <sys:String x:Key="Str_MiniPlayer_PinTooltip">Toggle Always on Top</sys:String>
+    <sys:String x:Key="Str_MiniPlayer_RestoreTooltip">Restore Main Window</sys:String>
+    <sys:String x:Key="Str_PlayerBar_MiniPlayerTooltip">Mini Player (Ctrl+Shift+N)</sys:String>
+    <sys:String x:Key="Str_DropOverlay_Title">Drop music files or folders</sys:String>
+    <sys:String x:Key="Str_DropOverlay_Subtitle">Folders are added to your library; songs are imported and played</sys:String>
+    <sys:String x:Key="Str_Stats_InsightsTitle">Insights</sys:String>
+    <sys:String x:Key="Str_Stats_LibraryExplored">Library Explored</sys:String>
+    <sys:String x:Key="Str_Stats_TopArtists">Top Artists</sys:String>
+    <sys:String x:Key="Str_Stats_TopAlbums">Top Albums</sys:String>
+
 </ResourceDictionary>

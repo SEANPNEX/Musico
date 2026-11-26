@@ -23,7 +23,12 @@
                       UseAeroCaptionButtons="False" />
     </WindowChrome.WindowChrome>
 
-    <Grid x:Name="RootGrid">
+    <Grid x:Name="RootGrid"
+          AllowDrop="True"
+          DragEnter="RootGrid_DragEnter"
+          DragOver="RootGrid_DragOver"
+          DragLeave="RootGrid_DragLeave"
+          Drop="RootGrid_Drop">
         <Grid.RowDefinitions>
             <!-- Custom Windows 10 Title Bar -->
             <RowDefinition Height="32" />
@@ -420,7 +425,8 @@
             <!-- Non-Blocking Toast Notifications (Bottom-Right above PlayerBar) -->
             <controls:ToastHost x:Name="ToastHostOverlay" />
 
-            <!-- Windows 10 ContentDialog Modal Overlays -->
+            <!-- Windows 10 / Fluent 2 ContentDialog Modal Overlays -->
+            <controls:CommandPaletteDialog x:Name="CommandPaletteOverlay" />
             <controls:CloudLyricsDialog x:Name="CloudLyricsOverlay" />
             <controls:CloudCollectionPreviewDialog x:Name="CollectionPreviewOverlay" />
             <controls:EqualizerDialog x:Name="EqDialog" />
@@ -434,5 +440,41 @@
             <controls:TextInputDialog x:Name="PromptDialog" />
             <controls:ConfirmDialog x:Name="ConfirmOverlay" />
         </Grid>
+
+        <!-- File / Folder Drag-and-Drop Overlay -->
+        <Border x:Name="DropOverlay"
+                Grid.RowSpan="2"
+                Background="{DynamicResource DialogOverlayBrush}"
+                IsHitTestVisible="False"
+                Visibility="Collapsed">
+            <Border HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Background="{DynamicResource DialogSurfaceBrush}"
+                    BorderBrush="{DynamicResource AccentBrush}"
+                    BorderThickness="2"
+                    CornerRadius="8"
+                    Padding="36,28">
+                <StackPanel HorizontalAlignment="Center">
+                    <TextBlock Text="&#xE898;"
+                               FontFamily="{StaticResource Win10GlyphFont}"
+                               FontSize="34"
+                               Foreground="{DynamicResource AccentBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,0,0,10" />
+                    <TextBlock Text="{DynamicResource Str_DropOverlay_Title}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="17"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource TextPrimaryBrush}"
+                               HorizontalAlignment="Center" />
+                    <TextBlock Text="{DynamicResource Str_DropOverlay_Subtitle}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="12.5"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               HorizontalAlignment="Center"
+                               Margin="0,4,0,0" />
+                </StackPanel>
+            </Border>
+        </Border>
     </Grid>
 </Window>
