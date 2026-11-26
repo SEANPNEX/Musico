@@ -1194,7 +1194,7 @@ public partial class MainWindow : Window
             var resolvedPaths = new List<string>(audioFiles.Count);
             bool copiedAny = false;
 
-            var existingByPath = new Dictionary<string, Track>(StringComparer.OrdinalIgnoreCase);
+            var existingByPath = new Dictionary<string, MusicoWindows.Models.Track>(StringComparer.OrdinalIgnoreCase);
             foreach (var t in _services.Library.Tracks)
             {
                 if (_services.Library.GetFilePath(t) is { Length: > 0 } fp)
@@ -1239,7 +1239,7 @@ public partial class MainWindow : Window
                 }
             }
 
-            var refreshedByPath = new Dictionary<string, Track>(StringComparer.OrdinalIgnoreCase);
+            var refreshedByPath = new Dictionary<string, MusicoWindows.Models.Track>(StringComparer.OrdinalIgnoreCase);
             foreach (var t in _services.Library.Tracks)
             {
                 if (_services.Library.GetFilePath(t) is { Length: > 0 } fp)

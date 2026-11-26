@@ -1098,7 +1098,7 @@ public partial class ExtensionsView : UserControl
             Owner = Window.GetWindow(this)
         };
         win.ShowDialog();
-        RefreshExtensions();
+        Refresh();
     }
 
     private void ImportCookiesFileForExtension(InstalledExtension ext, ExtensionStore store, PasswordBox passwordBox)
