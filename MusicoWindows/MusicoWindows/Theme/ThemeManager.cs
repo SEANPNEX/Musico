@@ -223,7 +223,15 @@ public static class ThemeManager
     {
         ThemePalette palette = CurrentPalette ?? ColorMath.BuildPalette(CurrentSettings, ReadWindowsAppsUseLightTheme(), false);
         Color tintColor = Color.FromRgb(palette.AcrylicTintBase.R, palette.AcrylicTintBase.G, palette.AcrylicTintBase.B);
-        AcrylicBackdrop.Apply(window, palette.IsDark, tintColor, CurrentSettings.BackgroundOpacity);
+        bool hasCustomBg = AppearancePresets.ResolveBackgroundColor(CurrentSettings) is not null;
+        bool hasBgImage = !string.IsNullOrEmpty(ResolveBackgroundImagePath());
+        AcrylicBackdrop.Apply(
+            window,
+            palette.IsDark,
+            tintColor,
+            CurrentSettings.BackgroundOpacity,
+            hasCustomBg,
+            hasBgImage);
     }
 
     public static bool ReadWindowsAppsUseLightTheme()

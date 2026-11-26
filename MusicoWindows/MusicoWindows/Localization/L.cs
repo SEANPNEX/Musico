@@ -720,6 +720,24 @@ public static class L
         ["Lyrics_AlignmentHeader"] = "Alignment",
         ["Lyrics_AlignLeading"] = "Left",
         ["Lyrics_AlignCenter"] = "Center",
+
+        // Wave B: Command Palette, Mini Player, Shortcuts, Drop, Stats Insights
+        ["CommandPalette_CategoryAction"] = "Action",
+        ["CommandPalette_CategoryView"] = "View",
+        ["CommandPalette_CategoryQueue"] = "Queue",
+        ["CommandPalette_CategoryPlaylist"] = "Playlist",
+        ["CommandPalette_CategoryAlbum"] = "Album",
+        ["CommandPalette_CategoryArtist"] = "Artist",
+        ["CommandPalette_CategorySong"] = "Song",
+        ["MiniPlayer_Title"] = "Mini Player",
+        ["Drop_QueueName"] = "Dropped",
+        ["Toast_SwitchedQueue"] = "Switched to \"{0}\"",
+        ["Toast_VolumePercent"] = "Volume {0}%",
+        ["Toast_Muted"] = "Muted",
+        ["Toast_Unmuted"] = "Unmuted",
+        ["Toast_DroppedFilesPlayed"] = "Playing {0} dropped song(s)",
+        ["Toast_DroppedFoldersAdded"] = "Added {0} folder(s) to library",
+        ["Stats_LibraryExploredSummary"] = "{0}% · {1} / {2} songs",
     };
 
     private static readonly Dictionary<string, string> ZhHans = new(StringComparer.Ordinal)
@@ -1319,5 +1337,23 @@ public static class L
         ["Lyrics_AlignmentHeader"] = "对齐方式",
         ["Lyrics_AlignLeading"] = "左对齐",
         ["Lyrics_AlignCenter"] = "居中",
+
+        // Wave B: Command Palette, Mini Player, Shortcuts, Drop, Stats Insights
+        ["CommandPalette_CategoryAction"] = "操作",
+        ["CommandPalette_CategoryView"] = "视图",
+        ["CommandPalette_CategoryQueue"] = "队列",
+        ["CommandPalette_CategoryPlaylist"] = "播放列表",
+        ["CommandPalette_CategoryAlbum"] = "专辑",
+        ["CommandPalette_CategoryArtist"] = "艺术家",
+        ["CommandPalette_CategorySong"] = "歌曲",
+        ["MiniPlayer_Title"] = "迷你播放器",
+        ["Drop_QueueName"] = "拖放导入",
+        ["Toast_SwitchedQueue"] = "已切换到“{0}”",
+        ["Toast_VolumePercent"] = "音量 {0}%",
+        ["Toast_Muted"] = "已静音",
+        ["Toast_Unmuted"] = "已取消静音",
+        ["Toast_DroppedFilesPlayed"] = "正在播放 {0} 首拖放歌曲",
+        ["Toast_DroppedFoldersAdded"] = "已将 {0} 个文件夹添加到音乐库",
+        ["Stats_LibraryExploredSummary"] = "{0}% · {1} / {2} 首歌曲",
     };
 }

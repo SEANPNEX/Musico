@@ -1,9 +1,9 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
-    <!-- Typography Ramp (Segoe UI + Segoe MDL2 Assets) -->
+    <!-- Typography Ramp (Segoe UI + Segoe Fluent Icons / Segoe MDL2 Assets) -->
     <FontFamily x:Key="Win10Font">Segoe UI</FontFamily>
-    <FontFamily x:Key="Win10GlyphFont">Segoe MDL2 Assets</FontFamily>
+    <FontFamily x:Key="Win10GlyphFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
 
     <Style x:Key="Mdl2GlyphStyle" TargetType="TextBlock">
         <Setter Property="FontFamily" Value="{StaticResource Win10GlyphFont}" />
@@ -149,12 +149,12 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="0" />
+                                CornerRadius="4" />
                         <Border x:Name="HoverLayer"
                                 Background="{DynamicResource ControlHoverBrush}"
                                 BorderBrush="{DynamicResource RevealBorderBrush}"
                                 BorderThickness="1"
-                                CornerRadius="0"
+                                CornerRadius="4"
                                 Opacity="0"
                                 IsHitTestVisible="False" />
                         <ContentPresenter Margin="{TemplateBinding Padding}"
@@ -211,12 +211,12 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="1"
-                                CornerRadius="0" />
+                                CornerRadius="4" />
                         <Border x:Name="HoverLayer"
                                 Background="{DynamicResource AccentHoverBrush}"
                                 BorderBrush="{DynamicResource RevealBorderBrush}"
                                 BorderThickness="1"
-                                CornerRadius="0"
+                                CornerRadius="4"
                                 Opacity="0"
                                 IsHitTestVisible="False" />
                         <ContentPresenter Margin="{TemplateBinding Padding}"
@@ -277,12 +277,12 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="{TemplateBinding BorderBrush}"
                                 BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="0" />
+                                CornerRadius="4" />
                         <Border x:Name="HoverLayer"
                                 Background="{DynamicResource SubtleHoverBrush}"
                                 BorderBrush="{DynamicResource RevealBorderBrush}"
                                 BorderThickness="1"
-                                CornerRadius="0"
+                                CornerRadius="4"
                                 Opacity="0"
                                 IsHitTestVisible="False" />
                         <ContentPresenter Margin="{TemplateBinding Padding}"
@@ -353,12 +353,12 @@
                                 Background="{TemplateBinding Background}"
                                 BorderBrush="Transparent"
                                 BorderThickness="1"
-                                CornerRadius="0" />
+                                CornerRadius="4" />
                         <Border x:Name="HoverLayer"
                                 Background="{DynamicResource SubtleHoverBrush}"
                                 BorderBrush="{DynamicResource RevealBorderBrush}"
                                 BorderThickness="1"
-                                CornerRadius="0"
+                                CornerRadius="4"
                                 Opacity="0"
                                 IsHitTestVisible="False" />
                         <Rectangle x:Name="SelectionPill"
@@ -464,7 +464,7 @@
                             Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="0">
+                            CornerRadius="4">
                         <!-- <ScrollViewer x:Name="PART_ContentHost" Margin="{TemplateBinding Padding}" VerticalAlignment="Center" /> -->
                         <ScrollViewer x:Name="PART_ContentHost" />
                     </Border>
@@ -499,7 +499,7 @@
                             Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="0">
+                            CornerRadius="4">
                         <ScrollViewer x:Name="PART_ContentHost" />
                     </Border>
                     <ControlTemplate.Triggers>
@@ -539,7 +539,7 @@
                                             Background="{DynamicResource ControlFillBrush}"
                                             BorderBrush="{DynamicResource ControlBorderBrush}"
                                             BorderThickness="1"
-                                            CornerRadius="0">
+                                            CornerRadius="4">
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="*" />
@@ -749,8 +749,8 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ProgressBar">
                     <Grid>
-                        <Border x:Name="PART_Track" Background="{TemplateBinding Background}" CornerRadius="0" />
-                        <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" HorizontalAlignment="Left" CornerRadius="0" />
+                        <Border x:Name="PART_Track" Background="{TemplateBinding Background}" CornerRadius="4" />
+                        <Border x:Name="PART_Indicator" Background="{TemplateBinding Foreground}" HorizontalAlignment="Left" CornerRadius="4" />
                     </Grid>
                 </ControlTemplate>
             </Setter.Value>
@@ -772,7 +772,7 @@
                     <Border Background="{TemplateBinding Background}"
                             BorderBrush="{TemplateBinding BorderBrush}"
                             BorderThickness="{TemplateBinding BorderThickness}"
-                            CornerRadius="0"
+                            CornerRadius="4"
                             Padding="{TemplateBinding Padding}">
                         <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
                     </Border>
@@ -822,6 +822,7 @@
                             <Border Background="{DynamicResource MenuSurfaceBrush}"
                                     BorderBrush="{DynamicResource ControlBorderBrush}"
                                     BorderThickness="1"
+                                    CornerRadius="4"
                                     Padding="0,4">
                                 <StackPanel IsItemsHost="True" KeyboardNavigation.DirectionalNavigation="Cycle" />
                             </Border>
@@ -872,7 +873,7 @@
                                 Background="Transparent"
                                 BorderBrush="{DynamicResource TextSecondaryBrush}"
                                 BorderThickness="2"
-                                CornerRadius="0"
+                                CornerRadius="4"
                                 VerticalAlignment="Center">
                             <TextBlock x:Name="CheckGlyph"
                                        Text="&#xE73E;"

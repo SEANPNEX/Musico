@@ -25,11 +25,13 @@ public partial class PlayerBar : UserControl
     private bool _isScrubbing;
     private bool _updatingVolume;
     private SidePanelKind? _activeSidePanel;
+    private bool _miniPlayerOpen;
 
     public event Action? OpenFullPlayerRequested;
     public event Action? OpenEqualizerRequested;
     public event Action? OpenSleepTimerRequested;
     public event Action<SidePanelKind>? ToggleSidePanelRequested;
+    public event Action? ToggleMiniPlayerRequested;
 
     public PlayerBar()
     {
@@ -62,6 +64,12 @@ public partial class PlayerBar : UserControl
     {
         _activeSidePanel = panel;
         UpdateSidePanelButtons();
+    }
+
+    public void SetMiniPlayerOpen(bool isOpen)
+    {
+        _miniPlayerOpen = isOpen;
+        UpdateMiniPlayerButton();
     }
 
     private void OnPlayerChanged(object? sender, PropertyChangedEventArgs e)
@@ -124,6 +132,7 @@ public partial class PlayerBar : UserControl
 
         RefreshTransportState();
         UpdateSidePanelButtons();
+        UpdateMiniPlayerButton();
     }
 
     private void RefreshTransportState()
@@ -146,6 +155,12 @@ public partial class PlayerBar : UserControl
 
         QueueButton.SetResourceReference(ForegroundProperty, queueOn ? "AccentBrush" : "TextPrimaryBrush");
         QueueButton.SetResourceReference(BackgroundProperty, queueOn ? "AccentSubtleBrush" : "SubtleFillBrush");
+    }
+
+    private void UpdateMiniPlayerButton()
+    {
+        MiniPlayerButton.SetResourceReference(ForegroundProperty, _miniPlayerOpen ? "AccentBrush" : "TextPrimaryBrush");
+        MiniPlayerButton.SetResourceReference(BackgroundProperty, _miniPlayerOpen ? "AccentSubtleBrush" : "SubtleFillBrush");
     }
 
     private void UpdateTimeLabels(double current, double total)
@@ -197,6 +212,20 @@ public partial class PlayerBar : UserControl
     private void Sleep_Click(object sender, RoutedEventArgs e) => OpenSleepTimerRequested?.Invoke();
     private void Lyrics_Click(object sender, RoutedEventArgs e) => ToggleSidePanelRequested?.Invoke(SidePanelKind.Lyrics);
     private void Queue_Click(object sender, RoutedEventArgs e) => ToggleSidePanelRequested?.Invoke(SidePanelKind.Queue);
+    private void MiniPlayer_Click(object sender, RoutedEventArgs e) => ToggleMiniPlayerRequested?.Invoke();
+
+    private void VolumeArea_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        if (_services is null || e.Delta == 0) return;
+        float delta = e.Delta > 0 ? 0.05f : -0.05f;
+        float next = Math.Clamp(_services.Player.Volume + delta, 0f, 1f);
+        _services.Player.Volume = next;
+        if (_services.Player.IsMuted && next > 0f)
+        {
+            _services.Player.IsMuted = false;
+        }
+        e.Handled = true;
+    }
 
     private void Scrubber_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
     {

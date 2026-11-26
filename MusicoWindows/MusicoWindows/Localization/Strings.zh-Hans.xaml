@@ -325,4 +325,21 @@
     <sys:String x:Key="Str_Lyrics_OptionsTooltip">歌词显示选项</sys:String>
     <sys:String x:Key="Str_Lyrics_SyncToCurrent">回到当前歌词</sys:String>
 
+    <!-- Wave B: Command Palette, Mini Player, Drop Overlay, Stats Insights -->
+    <sys:String x:Key="Str_CommandPalette_Title">命令面板</sys:String>
+    <sys:String x:Key="Str_CommandPalette_Placeholder">搜索歌曲、专辑、艺术家、播放列表、队列或操作...</sys:String>
+    <sys:String x:Key="Str_CommandPalette_ResultsLabel">命令面板结果</sys:String>
+    <sys:String x:Key="Str_CommandPalette_NoResults">没有匹配的歌曲、项目或命令。</sys:String>
+    <sys:String x:Key="Str_CommandPalette_FooterHint">上下方向键选择 · Enter 执行 · Esc 关闭</sys:String>
+    <sys:String x:Key="Str_MiniPlayer_Title">迷你播放器</sys:String>
+    <sys:String x:Key="Str_MiniPlayer_PinTooltip">切换窗口置顶</sys:String>
+    <sys:String x:Key="Str_MiniPlayer_RestoreTooltip">恢复主窗口</sys:String>
+    <sys:String x:Key="Str_PlayerBar_MiniPlayerTooltip">迷你播放器 (Ctrl+Shift+N)</sys:String>
+    <sys:String x:Key="Str_DropOverlay_Title">拖放音乐文件或文件夹到此处</sys:String>
+    <sys:String x:Key="Str_DropOverlay_Subtitle">文件夹将添加到音乐库；歌曲将导入并立即播放</sys:String>
+    <sys:String x:Key="Str_Stats_InsightsTitle">收听洞察</sys:String>
+    <sys:String x:Key="Str_Stats_LibraryExplored">曲库探索进度</sys:String>
+    <sys:String x:Key="Str_Stats_TopArtists">最常听艺术家</sys:String>
+    <sys:String x:Key="Str_Stats_TopAlbums">最常听专辑</sys:String>
+
 </ResourceDictionary>

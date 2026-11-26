@@ -114,7 +114,7 @@ public partial class App : Application
                 LocalizationManager.Initialize(this, langPrefPath);
 
                 Services = new AppServices(stateDirectory: stateDir, musicDirectory: musicDir);
-                var window = new MainWindow(Services);
+                var window = new MainWindow(Services, isSmokeTest: true);
                 MainWindow = window;
                 window.Show();
 

@@ -25,64 +25,86 @@
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,20">
             <StackPanel Margin="0,0,0,32">
-                <!-- Album Header -->
-                <Grid Margin="0,0,0,22">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="180" />
-                        <ColumnDefinition Width="*" />
-                    </Grid.ColumnDefinitions>
+                <!-- Album Hero Header -->
+                <Border Background="{DynamicResource CardBackgroundBrush}"
+                        BorderBrush="{DynamicResource ControlBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="6"
+                        ClipToBounds="True"
+                        Margin="0,0,0,22">
+                    <Grid>
+                        <Image x:Name="HeroBackdropImage"
+                               Stretch="UniformToFill"
+                               Opacity="0.22"
+                               IsHitTestVisible="False"
+                               Visibility="Collapsed" />
+                        <Border IsHitTestVisible="False">
+                            <Border.Background>
+                                <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                                    <GradientStop Color="#14FFFFFF" Offset="0" />
+                                    <GradientStop Color="#44000000" Offset="1" />
+                                </LinearGradientBrush>
+                            </Border.Background>
+                        </Border>
+                        <Grid Margin="20">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="180" />
+                                <ColumnDefinition Width="*" />
+                            </Grid.ColumnDefinitions>
 
-                    <controls:ArtworkImage x:Name="AlbumArt"
-                                           Grid.Column="0"
-                                           Width="180"
-                                           Height="180"
-                                           GlyphSize="48"
-                                           DecodeSize="240" />
+                            <controls:ArtworkImage x:Name="AlbumArt"
+                                                   Grid.Column="0"
+                                                   Width="180"
+                                                   Height="180"
+                                                   GlyphSize="48"
+                                                   DecodeSize="240" />
 
-                    <StackPanel Grid.Column="1" Margin="24,0,0,0" VerticalAlignment="Bottom">
-                        <TextBlock x:Name="AlbumTitleText"
-                                   FontFamily="{StaticResource Win10Font}"
-                                   FontSize="24"
-                                   FontWeight="SemiBold"
-                                   Foreground="{DynamicResource TextPrimaryBrush}"
-                                   TextWrapping="Wrap" />
-                        <TextBlock x:Name="AlbumArtistText"
-                                   FontFamily="{StaticResource Win10Font}"
-                                   FontSize="15"
-                                   Foreground="{DynamicResource TextSecondaryBrush}"
-                                   Margin="0,4,0,0" />
-                        <TextBlock x:Name="AlbumMetaText"
-                                   FontFamily="{StaticResource Win10Font}"
-                                   FontSize="12"
-                                   Foreground="{DynamicResource TextTertiaryBrush}"
-                                   Margin="0,6,0,16" />
+                            <StackPanel Grid.Column="1" Margin="24,0,0,0" VerticalAlignment="Bottom">
+                                <TextBlock x:Name="AlbumTitleText"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="24"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           TextWrapping="Wrap" />
+                                <TextBlock x:Name="AlbumArtistText"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="15"
+                                           Foreground="{DynamicResource TextSecondaryBrush}"
+                                           Margin="0,4,0,0" />
+                                <TextBlock x:Name="AlbumMetaText"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="12"
+                                           Foreground="{DynamicResource TextTertiaryBrush}"
+                                           Margin="0,6,0,16" />
 
-                        <StackPanel Orientation="Horizontal">
-                            <Button Style="{StaticResource Win10PrimaryButtonStyle}"
-                                    Margin="0,0,8,0"
-                                    Click="PlayAll_Click">
                                 <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
-                                    <TextBlock Text="{DynamicResource Str_Common_Play}" VerticalAlignment="Center" />
+                                    <Button Style="{StaticResource Win10PrimaryButtonStyle}"
+                                            Margin="0,0,8,0"
+                                            Click="PlayAll_Click">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                            <TextBlock Text="{DynamicResource Str_Common_Play}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button Style="{StaticResource Win10ButtonStyle}"
+                                            Margin="0,0,8,0"
+                                            Click="ShuffleAll_Click">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                            <TextBlock Text="{DynamicResource Str_Common_Shuffle}" VerticalAlignment="Center" />
+                                        </StackPanel>
+                                    </Button>
+                                    <Button x:Name="MoreButton"
+                                            Style="{StaticResource Win10IconButtonStyle}"
+                                            Content="&#xE712;"
+                                            ToolTip="{DynamicResource Str_Common_MoreOptions}"
+                                            AutomationProperties.Name="{DynamicResource Str_Common_MoreOptions}"
+                                            Click="More_Click" />
                                 </StackPanel>
-                            </Button>
-                            <Button Style="{StaticResource Win10ButtonStyle}"
-                                    Margin="0,0,8,0"
-                                    Click="ShuffleAll_Click">
-                                <StackPanel Orientation="Horizontal">
-                                    <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
-                                    <TextBlock Text="{DynamicResource Str_Common_Shuffle}" VerticalAlignment="Center" />
-                                </StackPanel>
-                            </Button>
-                            <Button x:Name="MoreButton"
-                                    Style="{StaticResource Win10IconButtonStyle}"
-                                    Content="&#xE712;"
-                                    ToolTip="{DynamicResource Str_Common_MoreOptions}"
-                                    AutomationProperties.Name="{DynamicResource Str_Common_MoreOptions}"
-                                    Click="More_Click" />
-                        </StackPanel>
-                    </StackPanel>
-                </Grid>
+                            </StackPanel>
+                        </Grid>
+                    </Grid>
+                </Border>
 
                 <!-- Disc / Track ordered list -->
                 <StackPanel x:Name="TracksStack" />

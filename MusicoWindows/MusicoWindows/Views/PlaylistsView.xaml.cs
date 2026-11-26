@@ -97,7 +97,7 @@ public partial class PlaylistsView : UserControl
             Margin = new Thickness(0, 0, 0, 8),
             Padding = new Thickness(16, 12, 16, 12),
             BorderThickness = new Thickness(1),
-            CornerRadius = new CornerRadius(0),
+            CornerRadius = new CornerRadius(4),
             Cursor = Cursors.Hand
         };
         card.SetResourceReference(Border.BackgroundProperty, "CardBackgroundBrush");

@@ -284,6 +284,8 @@ public partial class SongsView : UserControl
         CloudActionBarGrid.Visibility = Visibility.Collapsed;
         CloudLoadingBanner.Visibility = Visibility.Collapsed;
         CloudErrorBanner.Visibility = Visibility.Collapsed;
+        CloudSkeletonScroll.Visibility = Visibility.Collapsed;
+        CloudSkeletonHost.Children.Clear();
         LoadMoreBar.Visibility = Visibility.Collapsed;
 
         bool showFieldChip = _searchField != SearchField.Keyword && !string.IsNullOrEmpty(query);
@@ -438,7 +440,21 @@ public partial class SongsView : UserControl
             SongsList.ItemsSource = null;
             SongsList.Visibility = Visibility.Collapsed;
 
-            if (_searchController.IsLoading || _searchController.Error is not null)
+            if (_searchController.IsLoading)
+            {
+                EmptyState.Visibility = Visibility.Collapsed;
+                if (CloudSkeletonHost.Children.Count == 0)
+                {
+                    SkeletonHelper.PopulateSongSkeletonRows(CloudSkeletonHost, 6);
+                }
+                CloudSkeletonScroll.Visibility = Visibility.Visible;
+                return;
+            }
+
+            CloudSkeletonScroll.Visibility = Visibility.Collapsed;
+            CloudSkeletonHost.Children.Clear();
+
+            if (_searchController.Error is not null)
             {
                 EmptyState.Visibility = Visibility.Collapsed;
                 return;
@@ -459,6 +475,8 @@ public partial class SongsView : UserControl
             return;
         }
 
+        CloudSkeletonScroll.Visibility = Visibility.Collapsed;
+        CloudSkeletonHost.Children.Clear();
         SongsList.Visibility = Visibility.Visible;
         EmptyState.Visibility = Visibility.Collapsed;
 

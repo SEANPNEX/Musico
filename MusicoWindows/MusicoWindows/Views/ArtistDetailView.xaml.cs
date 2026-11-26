@@ -5,6 +5,7 @@ using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using MusicoWindows.Controls;
+using MusicoWindows.Converters;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
@@ -64,8 +65,15 @@ public partial class ArtistDetailView : UserControl
         _tracks = lib.GetTracksByArtist(_artist);
         var albums = lib.GetAlbumsByArtist(_artist);
 
-        ArtistNameText.Text = L.DisplayArtist(_artist);
-        ArtistMetaText.Text = $"{L.AlbumsCount(albums.Count)} · {L.SongsCount(_tracks.Count)}";
+        string displayArtist = L.DisplayArtist(_artist);
+        string? heroArtKey = albums.Select(a => a.ArtworkKey).FirstOrDefault(k => !string.IsNullOrEmpty(k))
+            ?? _tracks.Select(t => t.ArtworkKey).FirstOrDefault(k => !string.IsNullOrEmpty(k));
+        double totalDuration = _tracks.Sum(t => t.DurationSeconds);
+
+        ArtistHeroAvatar.SetSource(lib.Artwork, heroArtKey, displayArtist, 240);
+        HeroBackdropHelper.ApplyArtworkWash(HeroBackdropImage, lib.Artwork, heroArtKey);
+        ArtistNameText.Text = displayArtist;
+        ArtistMetaText.Text = $"{L.AlbumsCount(albums.Count)} · {L.SongsCount(_tracks.Count)} · {TimeFormatter.Format(totalDuration)}";
 
         AlbumsWrap.Children.Clear();
         if (albums.Count > 0)

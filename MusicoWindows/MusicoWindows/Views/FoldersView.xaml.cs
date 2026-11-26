@@ -198,7 +198,7 @@ public partial class FoldersView : UserControl
                 Margin = new Thickness(0, 0, 0, 8),
                 Padding = new Thickness(16, 14, 16, 14),
                 BorderThickness = new Thickness(1),
-                CornerRadius = new CornerRadius(0),
+                CornerRadius = new CornerRadius(4),
                 Cursor = Cursors.Hand
             };
             card.SetResourceReference(Border.BackgroundProperty, "CardBackgroundBrush");

@@ -1,6 +1,7 @@
 <UserControl x:Class="MusicoWindows.Views.PlaylistDetailView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:controls="clr-namespace:MusicoWindows.Controls">
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -23,55 +24,87 @@
             </Button>
         </Border>
 
-        <!-- Playlist Header -->
+        <!-- Playlist Hero Header -->
         <Border Grid.Row="1"
-                Padding="24,18,24,14"
-                BorderBrush="{DynamicResource DividerBrush}"
-                BorderThickness="0,0,0,1">
+                Margin="20,14,20,6"
+                Background="{DynamicResource CardBackgroundBrush}"
+                BorderBrush="{DynamicResource ControlBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="6"
+                ClipToBounds="True">
             <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="Auto" />
-                </Grid.ColumnDefinitions>
-                <StackPanel Grid.Column="0" VerticalAlignment="Center">
-                    <TextBlock x:Name="TitleText" Style="{StaticResource Win10PageTitleStyle}" />
-                    <TextBlock x:Name="CountText"
-                               FontFamily="{StaticResource Win10Font}"
-                               FontSize="12"
-                               Foreground="{DynamicResource TextSecondaryBrush}"
-                               Margin="0,3,0,0" />
-                </StackPanel>
-                <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Center">
-                    <ComboBox x:Name="SortCombo"
-                              Style="{StaticResource Win10ComboBoxStyle}"
-                              Width="150"
-                              Margin="0,0,8,0"
-                              SelectionChanged="SortCombo_SelectionChanged" />
-                    <Button x:Name="PlayAllButton"
-                            Style="{StaticResource Win10PrimaryButtonStyle}"
-                            Margin="0,0,8,0"
-                            Click="PlayAll_Click">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBlock Text="{DynamicResource Str_Common_Play}" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-                    <Button x:Name="ShuffleAllButton"
-                            Style="{StaticResource Win10ButtonStyle}"
-                            Margin="0,0,8,0"
-                            Click="ShuffleAll_Click">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBlock Text="{DynamicResource Str_Common_Shuffle}" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-                    <Button x:Name="MoreButton"
-                            Style="{StaticResource Win10IconButtonStyle}"
-                            Content="&#xE712;"
-                            ToolTip="{DynamicResource Str_Common_MoreOptions}"
-                            AutomationProperties.Name="{DynamicResource Str_Common_MoreOptions}"
-                            Click="More_Click" />
-                </StackPanel>
+                <Image x:Name="HeroBackdropImage"
+                       Stretch="UniformToFill"
+                       Opacity="0.22"
+                       IsHitTestVisible="False"
+                       Visibility="Collapsed" />
+                <Border IsHitTestVisible="False">
+                    <Border.Background>
+                        <LinearGradientBrush StartPoint="0,0" EndPoint="1,1">
+                            <GradientStop Color="#14FFFFFF" Offset="0" />
+                            <GradientStop Color="#44000000" Offset="1" />
+                        </LinearGradientBrush>
+                    </Border.Background>
+                </Border>
+                <Grid Margin="20,16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <controls:ArtworkImage x:Name="PlaylistArt"
+                                           Grid.Column="0"
+                                           Width="76"
+                                           Height="76"
+                                           GlyphSize="26"
+                                           DecodeSize="160"
+                                           Margin="0,0,18,0"
+                                           VerticalAlignment="Center" />
+
+                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,16,0">
+                        <TextBlock x:Name="TitleText"
+                                   Style="{StaticResource Win10PageTitleStyle}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="CountText"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="12.5"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   Margin="0,4,0,0" />
+                    </StackPanel>
+
+                    <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center">
+                        <ComboBox x:Name="SortCombo"
+                                  Style="{StaticResource Win10ComboBoxStyle}"
+                                  Width="150"
+                                  Margin="0,0,8,0"
+                                  SelectionChanged="SortCombo_SelectionChanged" />
+                        <Button x:Name="PlayAllButton"
+                                Style="{StaticResource Win10PrimaryButtonStyle}"
+                                Margin="0,0,8,0"
+                                Click="PlayAll_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                <TextBlock Text="{DynamicResource Str_Common_Play}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="ShuffleAllButton"
+                                Style="{StaticResource Win10ButtonStyle}"
+                                Margin="0,0,8,0"
+                                Click="ShuffleAll_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                <TextBlock Text="{DynamicResource Str_Common_Shuffle}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="MoreButton"
+                                Style="{StaticResource Win10IconButtonStyle}"
+                                Content="&#xE712;"
+                                ToolTip="{DynamicResource Str_Common_MoreOptions}"
+                                AutomationProperties.Name="{DynamicResource Str_Common_MoreOptions}"
+                                Click="More_Click" />
+                    </StackPanel>
+                </Grid>
             </Grid>
         </Border>
 

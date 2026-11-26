@@ -76,29 +76,34 @@ public partial class ArtistsView : UserControl
                 Background = Brushes.Transparent,
                 BorderBrush = Brushes.Transparent,
                 BorderThickness = new Thickness(1),
-                Padding = new Thickness(12, 10, 12, 10),
+                CornerRadius = new CornerRadius(4),
+                Padding = new Thickness(12, 8, 12, 8),
                 Margin = new Thickness(0, 0, 0, 2),
                 Cursor = Cursors.Hand
             };
 
             var grid = new Grid();
-            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(36) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(52) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
             grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
 
-            var icon = new TextBlock
+            string? artKey = albums.Select(a => a.ArtworkKey).FirstOrDefault(k => !string.IsNullOrEmpty(k))
+                ?? tracks.Select(t => t.ArtworkKey).FirstOrDefault(k => !string.IsNullOrEmpty(k));
+            string displayArtist = L.DisplayArtist(artist);
+
+            var avatar = new ArtistAvatar
             {
-                Text = "\uE720",
-                FontFamily = (FontFamily)FindResource("Win10GlyphFont"),
-                FontSize = 16,
+                Width = 40,
+                Height = 40,
+                HorizontalAlignment = HorizontalAlignment.Left,
                 VerticalAlignment = VerticalAlignment.Center
             };
-            icon.SetResourceReference(TextBlock.ForegroundProperty, "AccentBrush");
-            Grid.SetColumn(icon, 0);
+            avatar.SetSource(lib.Artwork, artKey, displayArtist, 96);
+            Grid.SetColumn(avatar, 0);
 
             var nameTb = new TextBlock
             {
-                Text = L.DisplayArtist(artist),
+                Text = displayArtist,
                 FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = 14,
                 FontWeight = FontWeights.SemiBold,
@@ -117,7 +122,7 @@ public partial class ArtistsView : UserControl
             metaTb.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
             Grid.SetColumn(metaTb, 2);
 
-            grid.Children.Add(icon);
+            grid.Children.Add(avatar);
             grid.Children.Add(nameTb);
             grid.Children.Add(metaTb);
             row.Child = grid;
