@@ -122,11 +122,13 @@ final class PlayHistoryStore {
         let artworkKey: String?
     }
 
-    struct AlbumStat: Equatable {
+    struct AlbumStat: Equatable, Hashable, Identifiable {
         let album: String
         let artist: String
         let playCount: Int
         let artworkKey: String?
+
+        var id: String { "\(artist)\u{1F}\(album)" }
     }
 
     func topArtists(from tracks: [Track], limit: Int = 5) -> [ArtistStat] {

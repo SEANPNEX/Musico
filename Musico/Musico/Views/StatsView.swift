@@ -163,7 +163,7 @@ struct StatsView: View {
                         .font(.subheadline.weight(.semibold))
                         .foregroundStyle(.secondary)
 
-                    ForEach(topAlbums, id: \.album) { stat in
+                    ForEach(topAlbums) { stat in
                         let ratio = Double(stat.playCount) / Double(maxAlbumPlays)
                         let matchedAlbum = library.albums.first {
                             $0.title == stat.album && $0.artist == stat.artist
