@@ -56,7 +56,7 @@ public sealed class ExtensionWebLoginWindow : Window
             Padding = new Thickness(12, 8, 12, 8),
             BorderThickness = new Thickness(0, 0, 0, 1)
         };
-        headerBorder.SetResourceReference(Border.BackgroundProperty, "SurfaceSecondaryBrush");
+        headerBorder.SetResourceReference(Border.BackgroundProperty, "CardBackgroundBrush");
         headerBorder.SetResourceReference(Border.BorderBrushProperty, "DividerBrush");
 
         var headerGrid = new Grid();
@@ -150,7 +150,7 @@ public sealed class ExtensionWebLoginWindow : Window
         catch (Exception ex)
         {
             _statusText.Text = L.Format("Extensions_WebLoginUnavailable", ex.Message);
-            _statusText.SetResourceReference(TextBlock.ForegroundProperty, "ErrorTextBrush");
+            _statusText.SetResourceReference(TextBlock.ForegroundProperty, "DangerBrush");
         }
     }
 

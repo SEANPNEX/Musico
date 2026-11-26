@@ -773,7 +773,7 @@
                         <TextBlock x:Name="GDriveErrorText"
                                    FontFamily="{StaticResource Win10Font}"
                                    FontSize="12"
-                                   Foreground="{DynamicResource ErrorTextBrush}"
+                                   Foreground="{DynamicResource DangerBrush}"
                                    TextWrapping="Wrap"
                                    Visibility="Collapsed"
                                    Margin="0,0,0,6" />
