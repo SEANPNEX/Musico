@@ -67,6 +67,7 @@ import com.musico.model.sortTracks
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
 import com.musico.store.PlayHistoryUiState
+import com.musico.ui.LocalShowMessage
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.PlayShuffleButtons
@@ -280,6 +281,7 @@ fun PlaylistDetailScreen(
     modifier: Modifier = Modifier
 ) {
     val strings = LocalStrings.current
+    val showMessage = LocalShowMessage.current
     var editing by remember { mutableStateOf(false) }
 
     val playlist = remember(libraryState.playlists, ref) {
@@ -501,7 +503,16 @@ fun PlaylistDetailScreen(
                                     }
                                     IconButton(
                                         onClick = {
-                                            libraryStore.removeFromPlaylist(ref.playlistId, removeIndex)
+                                            val targetIndex = removeIndex
+                                            val removedId = playlist?.trackIds?.getOrNull(targetIndex) ?: track.id
+                                            libraryStore.removeFromPlaylist(ref.playlistId, targetIndex)
+                                            showMessage(
+                                                message = strings.removedFromPlaylistNotice,
+                                                actionLabel = strings.undo,
+                                                onAction = {
+                                                    libraryStore.restoreToPlaylist(ref.playlistId, removedId, targetIndex)
+                                                },
+                                            )
                                         }
                                     ) {
                                         Icon(
@@ -537,7 +548,16 @@ fun PlaylistDetailScreen(
                                         },
                                         onClick = {
                                             onDismiss()
-                                            libraryStore.removeFromPlaylist(ref.playlistId, removeIndex)
+                                            val targetIndex = removeIndex
+                                            val removedId = playlist?.trackIds?.getOrNull(targetIndex) ?: track.id
+                                            libraryStore.removeFromPlaylist(ref.playlistId, targetIndex)
+                                            showMessage(
+                                                message = strings.removedFromPlaylistNotice,
+                                                actionLabel = strings.undo,
+                                                onAction = {
+                                                    libraryStore.restoreToPlaylist(ref.playlistId, removedId, targetIndex)
+                                                },
+                                            )
                                         }
                                     )
                                 }

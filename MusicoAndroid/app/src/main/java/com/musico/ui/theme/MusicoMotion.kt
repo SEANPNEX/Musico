@@ -1,10 +1,15 @@
 package com.musico.ui.theme
 
+import android.content.Context
+import android.provider.Settings
 import androidx.compose.animation.ContentTransform
 import androidx.compose.animation.EnterTransition
 import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.AnimationSpec
 import androidx.compose.animation.core.CubicBezierEasing
+import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.snap
 import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandHorizontally
@@ -19,9 +24,15 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.animation.togetherWith
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
+
+val LocalReduceMotion = staticCompositionLocalOf { false }
 
 /**
  * Material 3 expressive motion tokens and transition specs for Musico.
@@ -61,7 +72,33 @@ object MusicoMotion {
         stiffness = Spring.StiffnessMedium,
     )
 
-    fun fadeThroughTransform(): ContentTransform {
+    fun isReduceMotionEnabled(context: Context): Boolean {
+        val scale = runCatching {
+            Settings.Global.getFloat(
+                context.contentResolver,
+                Settings.Global.ANIMATOR_DURATION_SCALE,
+                1.0f,
+            )
+        }.getOrDefault(1.0f)
+        return scale == 0f
+    }
+
+    @Composable
+    fun rememberReduceMotion(): Boolean {
+        val context = LocalContext.current
+        return remember(context) { isReduceMotionEnabled(context) }
+    }
+
+    fun <T> motionSpec(reduceMotion: Boolean, normal: AnimationSpec<T>): AnimationSpec<T> =
+        if (reduceMotion) snap() else normal
+
+    fun <T> finiteMotionSpec(reduceMotion: Boolean, normal: FiniteAnimationSpec<T>): FiniteAnimationSpec<T> =
+        if (reduceMotion) snap() else normal
+
+    fun fadeThroughTransform(reduceMotion: Boolean = false): ContentTransform {
+        if (reduceMotion) {
+            return EnterTransition.None togetherWith ExitTransition.None
+        }
         val enter = fadeIn(
             animationSpec = tween(
                 durationMillis = ENTER_DURATION_MS,
@@ -85,7 +122,10 @@ object MusicoMotion {
         return enter togetherWith exit
     }
 
-    fun sharedAxisXTransform(forward: Boolean): ContentTransform {
+    fun sharedAxisXTransform(forward: Boolean, reduceMotion: Boolean = false): ContentTransform {
+        if (reduceMotion) {
+            return EnterTransition.None togetherWith ExitTransition.None
+        }
         val sign = if (forward) 1 else -1
         val enter = slideInHorizontally(
             animationSpec = tween(
@@ -114,6 +154,24 @@ object MusicoMotion {
         )
         return enter togetherWith exit
     }
+
+    fun miniPlayerEnter(reduceMotion: Boolean): EnterTransition =
+        if (reduceMotion) EnterTransition.None else miniPlayerEnter
+
+    fun miniPlayerExit(reduceMotion: Boolean): ExitTransition =
+        if (reduceMotion) ExitTransition.None else miniPlayerExit
+
+    fun fullPlayerEnter(reduceMotion: Boolean): EnterTransition =
+        if (reduceMotion) EnterTransition.None else fullPlayerEnter
+
+    fun fullPlayerExit(reduceMotion: Boolean): ExitTransition =
+        if (reduceMotion) ExitTransition.None else fullPlayerExit
+
+    fun sidePanelEnter(reduceMotion: Boolean): EnterTransition =
+        if (reduceMotion) EnterTransition.None else sidePanelEnter
+
+    fun sidePanelExit(reduceMotion: Boolean): ExitTransition =
+        if (reduceMotion) ExitTransition.None else sidePanelExit
 
     val miniPlayerVisibilityTransition: Pair<EnterTransition, ExitTransition> =
         (slideInVertically(

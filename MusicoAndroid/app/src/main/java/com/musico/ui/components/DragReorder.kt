@@ -17,8 +17,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.input.pointer.PointerInputChange
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalHapticFeedback
 import kotlinx.coroutines.delay
 
 data class DragReorderItem<T>(
@@ -33,6 +35,8 @@ class DragReorderState<T>(
     private val headerCountProvider: () -> Int,
     private val keyOfProvider: () -> ((T) -> String),
     private val onCommitProvider: () -> ((List<DragReorderItem<T>>) -> Unit),
+    private val onStartHaptic: (() -> Unit)? = null,
+    private val onSwapHaptic: (() -> Unit)? = null,
 ) {
     var items by mutableStateOf<List<DragReorderItem<T>>>(emptyList())
         private set
@@ -132,6 +136,7 @@ class DragReorderState<T>(
         settlingOffsetY = 0f
         activeUid = uid
         draggingOffsetY = 0f
+        onStartHaptic?.invoke()
     }
 
     fun onDrag(change: PointerInputChange, deltaY: Float) {
@@ -160,6 +165,7 @@ class DragReorderState<T>(
                     mutable.add(curIdx + 1, moved)
                     items = mutable
                     draggingOffsetY -= (nextInfo.offset - currentInfo.offset).toFloat()
+                    onSwapHaptic?.invoke()
                 }
             }
         } else if (draggingOffsetY < 0f && curIdx > 0) {
@@ -173,6 +179,7 @@ class DragReorderState<T>(
                     mutable.add(curIdx - 1, moved)
                     items = mutable
                     draggingOffsetY += (currentInfo.offset - prevInfo.offset).toFloat()
+                    onSwapHaptic?.invoke()
                 }
             }
         }
@@ -279,6 +286,8 @@ fun <T> rememberDragReorderState(
     val currentHeaderCount by rememberUpdatedState(headerCount)
     val currentKeyOf by rememberUpdatedState(keyOf)
     val currentOnCommit by rememberUpdatedState(onCommit)
+    val haptic = LocalHapticFeedback.current
+    val currentHaptic by rememberUpdatedState(haptic)
 
     val state = remember(listState, scopeKey) {
         DragReorderState<T>(
@@ -286,6 +295,8 @@ fun <T> rememberDragReorderState(
             headerCountProvider = { currentHeaderCount },
             keyOfProvider = { currentKeyOf },
             onCommitProvider = { currentOnCommit },
+            onStartHaptic = { currentHaptic.performHapticFeedback(HapticFeedbackType.LongPress) },
+            onSwapHaptic = { currentHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove) },
         )
     }
 

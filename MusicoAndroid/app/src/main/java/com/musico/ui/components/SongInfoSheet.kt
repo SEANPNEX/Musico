@@ -41,6 +41,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.musico.core.AudioFileInfo
@@ -332,7 +333,12 @@ fun SongInfoSheet(
             )
 
             val info = audioInfo
+            val fileLocation = remember(track.id, track.rootId, track.relativePath) {
+                libraryStore.displayLocation(track)
+            }
             Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                InfoRow(strings.infoFileName, track.fileName, multiline = true)
+                InfoRow(strings.infoFileLocation, fileLocation, multiline = true)
                 InfoRow(strings.infoPrecision, info?.bitDepth?.let { strings.bitDepthFormat(it) } ?: strings.notAvailable)
                 InfoRow(strings.infoFrequency, formatSampleRate(info?.sampleRateHz, strings))
                 InfoRow(strings.infoBitRate, info?.bitRateBps?.let { "${(it + 500L) / 1000L} kbps" } ?: strings.notAvailable)
@@ -351,11 +357,15 @@ fun SongInfoSheet(
 }
 
 @Composable
-private fun InfoRow(label: String, value: String) {
+private fun InfoRow(
+    label: String,
+    value: String,
+    multiline: Boolean = false,
+) {
     Row(
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.CenterVertically,
+        verticalAlignment = if (multiline) Alignment.Top else Alignment.CenterVertically,
     ) {
         Text(
             text = label,
@@ -366,8 +376,10 @@ private fun InfoRow(label: String, value: String) {
         Text(
             text = value,
             style = MaterialTheme.typography.bodyMedium.copy(fontFeatureSettings = "tnum"),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.End,
+            maxLines = if (multiline) Int.MAX_VALUE else 1,
+            overflow = if (multiline) TextOverflow.Clip else TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f, fill = false),
         )
     }
 }

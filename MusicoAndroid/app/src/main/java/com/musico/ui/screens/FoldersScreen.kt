@@ -94,7 +94,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
@@ -128,9 +130,11 @@ import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
 import com.musico.store.PlayHistoryUiState
 import com.musico.ui.ExtensionsScreen
+import com.musico.ui.LocalShowMessage
 import com.musico.ui.components.CloudTransferProgressSection
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
+import com.musico.ui.components.LocalDeleteOptionsDialog
 import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.SortOrderMenuButton
 import com.musico.ui.components.TrackActionState
@@ -146,7 +150,9 @@ import com.musico.ui.theme.musicoTopAppBarColors
 import com.musico.update.UpdateManager
 import com.musico.update.hasAvailableUpdate
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.File
 import kotlin.random.Random
 
@@ -242,6 +248,8 @@ fun FoldersScreen(
     modifier: Modifier = Modifier
 ) {
     val strings = LocalStrings.current
+    val showMessage = LocalShowMessage.current
+    val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val downloadJobs by cloudDownloadManager.jobs.collectAsStateWithLifecycle()
@@ -283,6 +291,7 @@ fun FoldersScreen(
 
     var currentFolder by remember { mutableStateOf<FolderRef?>(null) }
     var importError by remember { mutableStateOf<String?>(null) }
+    var deleteError by remember { mutableStateOf<String?>(null) }
     var removingRoot by remember { mutableStateOf<LibraryRoot?>(null) }
     var removingSubfolder by remember { mutableStateOf<FolderRef?>(null) }
     var savingCloudTarget by remember { mutableStateOf<Pair<LibraryRoot, List<Track>>?>(null) }
@@ -829,47 +838,156 @@ fun FoldersScreen(
 
     val pendingRemove = removingRoot
     if (pendingRemove != null) {
-        ConfirmDialog(
-            title = strings.removeFolderConfirmTitle(displayRootName(pendingRemove, strings)),
-            message = if (pendingRemove.kind.isCloud) {
-                strings.removeCloudFolderConfirmMessage
-            } else {
-                strings.removeLocalFolderConfirmMessage
-            },
-            confirmLabel = strings.removeFolder,
-            onDismiss = { removingRoot = null },
-            onConfirm = {
-                libraryStore.removeRoot(pendingRemove.id)
-                if (currentFolder?.rootId == pendingRemove.id) {
-                    currentFolder = null
+        val rootDisplayName = displayRootName(pendingRemove, strings)
+        if (pendingRemove.kind.isCloud) {
+            ConfirmDialog(
+                title = strings.removeFolderConfirmTitle(rootDisplayName),
+                message = strings.removeCloudFolderConfirmMessage,
+                confirmLabel = strings.removeFromLibrary,
+                onDismiss = { removingRoot = null },
+                onConfirm = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    libraryStore.removeRoot(pendingRemove.id)
+                    if (currentFolder?.rootId == pendingRemove.id) {
+                        currentFolder = null
+                    }
+                    showMessage(strings.removedFromLibraryNotice)
                 }
+            )
+        } else {
+            val songCount = remember(libraryState.tracks, pendingRemove.id) {
+                libraryState.tracks.count { it.rootId == pendingRemove.id }
             }
-        )
+            val locationPath = remember(pendingRemove.id, pendingRemove.treeUri) {
+                libraryStore.displayFolderLocation(pendingRemove.id, "")
+            }
+            LocalDeleteOptionsDialog(
+                title = strings.deleteFolderDialogTitle,
+                itemName = rootDisplayName,
+                locationPath = locationPath,
+                songCountLabel = strings.songCount(songCount),
+                message = strings.deleteLocalFolderMessage,
+                onRemoveFromLibrary = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    libraryStore.removeRoot(pendingRemove.id)
+                    if (currentFolder?.rootId == pendingRemove.id) {
+                        currentFolder = null
+                    }
+                    showMessage(strings.removedFromLibraryNotice)
+                },
+                onDeleteFromDevice = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    val affectedIds = libraryStore.tracksUnder(pendingRemove.id, "").map { it.id }
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            libraryStore.deleteFolderFiles(pendingRemove.id, "")
+                        }
+                        result.onSuccess {
+                            affectedIds.forEach { trackActions.lyricsStore?.removeImported(it) }
+                            if (currentFolder?.rootId == pendingRemove.id) {
+                                currentFolder = null
+                            }
+                            showMessage(strings.deletedFromDeviceNotice)
+                        }.onFailure { err ->
+                            deleteError = err.message ?: strings.deleteFailedFallback
+                        }
+                    }
+                },
+                onDismiss = { removingRoot = null },
+            )
+        }
     }
 
     val pendingSubfolder = removingSubfolder
     if (pendingSubfolder != null) {
         val folderTitle = pendingSubfolder.path.substringAfterLast('/')
         val parentIsCloud = libraryState.roots.firstOrNull { it.id == pendingSubfolder.rootId }?.kind?.isCloud == true
-        ConfirmDialog(
-            title = strings.removeFolderConfirmTitle(folderTitle),
-            message = if (parentIsCloud) {
-                strings.removeCloudFolderConfirmMessage
-            } else {
-                strings.removeLocalFolderConfirmMessage
-            },
-            confirmLabel = strings.removeFolder,
-            onDismiss = { removingSubfolder = null },
-            onConfirm = {
-                libraryStore.removeSubfolder(pendingSubfolder.rootId, pendingSubfolder.path)
-                val open = currentFolder
-                if (open != null && open.rootId == pendingSubfolder.rootId &&
-                    (open.path == pendingSubfolder.path || open.path.startsWith("${pendingSubfolder.path}/"))
-                ) {
-                    currentFolder = FolderRef(
-                        pendingSubfolder.rootId,
-                        pendingSubfolder.path.substringBeforeLast('/', "")
-                    )
+        if (parentIsCloud) {
+            ConfirmDialog(
+                title = strings.removeFolderConfirmTitle(folderTitle),
+                message = strings.removeCloudFolderConfirmMessage,
+                confirmLabel = strings.removeFromLibrary,
+                onDismiss = { removingSubfolder = null },
+                onConfirm = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    libraryStore.removeSubfolder(pendingSubfolder.rootId, pendingSubfolder.path)
+                    val open = currentFolder
+                    if (open != null && open.rootId == pendingSubfolder.rootId &&
+                        (open.path == pendingSubfolder.path || open.path.startsWith("${pendingSubfolder.path}/"))
+                    ) {
+                        currentFolder = FolderRef(
+                            pendingSubfolder.rootId,
+                            pendingSubfolder.path.substringBeforeLast('/', "")
+                        )
+                    }
+                    showMessage(strings.removedFromLibraryNotice)
+                }
+            )
+        } else {
+            val affectedTracks = remember(libraryState.tracks, pendingSubfolder) {
+                libraryStore.tracksUnder(pendingSubfolder.rootId, pendingSubfolder.path)
+            }
+            val locationPath = remember(pendingSubfolder) {
+                libraryStore.displayFolderLocation(pendingSubfolder.rootId, pendingSubfolder.path)
+            }
+            LocalDeleteOptionsDialog(
+                title = strings.deleteFolderDialogTitle,
+                itemName = folderTitle,
+                locationPath = locationPath,
+                songCountLabel = strings.songCount(affectedTracks.size),
+                message = strings.deleteLocalFolderMessage,
+                onRemoveFromLibrary = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    libraryStore.removeSubfolder(pendingSubfolder.rootId, pendingSubfolder.path)
+                    val open = currentFolder
+                    if (open != null && open.rootId == pendingSubfolder.rootId &&
+                        (open.path == pendingSubfolder.path || open.path.startsWith("${pendingSubfolder.path}/"))
+                    ) {
+                        currentFolder = FolderRef(
+                            pendingSubfolder.rootId,
+                            pendingSubfolder.path.substringBeforeLast('/', "")
+                        )
+                    }
+                    showMessage(strings.removedFromLibraryNotice)
+                },
+                onDeleteFromDevice = {
+                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                    val affectedIds = affectedTracks.map { it.id }
+                    scope.launch {
+                        val result = withContext(Dispatchers.IO) {
+                            libraryStore.deleteFolderFiles(pendingSubfolder.rootId, pendingSubfolder.path)
+                        }
+                        result.onSuccess {
+                            affectedIds.forEach { trackActions.lyricsStore?.removeImported(it) }
+                            val open = currentFolder
+                            if (open != null && open.rootId == pendingSubfolder.rootId &&
+                                (open.path == pendingSubfolder.path || open.path.startsWith("${pendingSubfolder.path}/"))
+                            ) {
+                                currentFolder = FolderRef(
+                                    pendingSubfolder.rootId,
+                                    pendingSubfolder.path.substringBeforeLast('/', "")
+                                )
+                            }
+                            showMessage(strings.deletedFromDeviceNotice)
+                        }.onFailure { err ->
+                            deleteError = err.message ?: strings.deleteFailedFallback
+                        }
+                    }
+                },
+                onDismiss = { removingSubfolder = null },
+            )
+        }
+    }
+
+    val delErr = deleteError
+    if (delErr != null) {
+        AlertDialog(
+            onDismissRequest = { deleteError = null },
+            title = { Text(strings.deleteFailedTitle) },
+            text = { Text(delErr) },
+            confirmButton = {
+                TextButton(onClick = { deleteError = null }) {
+                    Text(strings.ok)
                 }
             }
         )
@@ -898,6 +1016,8 @@ private fun AddCloudFolderDialog(
     onAdd: suspend (url: String, cookie: String?, providerIdHint: String?) -> Result<Unit>
 ) {
     val strings = LocalStrings.current
+    val showMessage = LocalShowMessage.current
+    val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     var url by remember { mutableStateOf("") }
     var cookie by remember { mutableStateOf("") }
@@ -1801,6 +1921,8 @@ private fun EditCloudSourceDialog(
     onSaved: () -> Unit,
 ) {
     val strings = LocalStrings.current
+    val showMessage = LocalShowMessage.current
+    val haptic = LocalHapticFeedback.current
     val scope = rememberCoroutineScope()
     val collectionProviders = remember(activeProviders) {
         activeProviders.filter { it.supportsCollections }

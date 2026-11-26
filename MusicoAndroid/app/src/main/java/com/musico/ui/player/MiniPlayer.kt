@@ -22,6 +22,8 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -42,6 +44,7 @@ fun MiniPlayer(
     applyNavBarPadding: Boolean = false
 ) {
     val strings = LocalStrings.current
+    val haptic = LocalHapticFeedback.current
     val track = playerState.currentTrack ?: return
     val duration = playerState.durationSec.coerceAtLeast(0.01)
     val progress = (playerState.currentTimeSec / duration).toFloat().coerceIn(0f, 1f)
@@ -104,7 +107,12 @@ fun MiniPlayer(
                         overflow = TextOverflow.Ellipsis
                     )
                 }
-                IconButton(onClick = onTogglePlayPause) {
+                IconButton(
+                    onClick = {
+                        haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        onTogglePlayPause()
+                    }
+                ) {
                     Icon(
                         imageVector = if (playerState.isPlaying) Icons.Rounded.Pause else Icons.Rounded.PlayArrow,
                         contentDescription = if (playerState.isPlaying) strings.pause else strings.play

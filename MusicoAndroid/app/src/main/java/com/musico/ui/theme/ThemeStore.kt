@@ -3,6 +3,7 @@ package com.musico.ui.theme
 import android.content.Context
 import android.net.Uri
 import android.webkit.MimeTypeMap
+import androidx.compose.runtime.staticCompositionLocalOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -10,6 +11,8 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.util.Locale
+
+val LocalThemeStore = staticCompositionLocalOf<ThemeStore?> { null }
 
 class ThemeStore(
     private val context: Context? = null,
@@ -111,6 +114,22 @@ class ThemeStore(
 
     fun setBackgroundImageOpacity(opacity: Float) {
         updateSettings { it.copy(backgroundImageOpacity = clampBackgroundImageOpacity(opacity)) }
+    }
+
+    fun setBackgroundImageBlurDp(blurDp: Float) {
+        updateSettings { it.copy(backgroundImageBlurDp = clampBackgroundImageBlurDp(blurDp)) }
+    }
+
+    fun setLyricsFontSize(fontSize: LyricsFontSize) {
+        updateSettings { it.copy(lyricsFontSize = fontSize) }
+    }
+
+    fun setLyricsAlignment(alignment: LyricsAlignment) {
+        updateSettings { it.copy(lyricsAlignment = alignment) }
+    }
+
+    fun autoFixContrast(systemDark: Boolean = false) {
+        updateSettings { it.autoFixContrast(systemDark) }
     }
 
     fun importBackgroundImage(uri: Uri): Result<File> = runCatching {

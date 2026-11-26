@@ -214,4 +214,65 @@ class ThemeStoreTest {
         assertEquals(AppearanceSettings(), store.settings.value)
         assertNotNull(store.settings.value)
     }
+
+    @Test
+    fun wcagContrastRatioAndAutoFixContrastWork() {
+        val black = RgbColor(0, 0, 0)
+        val white = RgbColor(255, 255, 255)
+        assertEquals(21.0f, contrastRatio(black, white), 0.01f)
+        assertEquals(1.0f, contrastRatio(white, white), 0.001f)
+
+        val stateDir = tempFolder.newFolder("contrast")
+        val store = ThemeStore(context = null, stateDir = stateDir)
+        store.setBackgroundPreset(BackgroundColorPreset.PAPER)
+        store.setCustomForegroundHex("#E5E5E5")
+        store.setCustomAccentHex("#F2EFE9")
+
+        val broken = store.settings.value
+        val bg = broken.effectiveBackgroundRgb(systemDark = false)
+        assertTrue(contrastRatio(bg, broken.effectiveForegroundRgb(false)) < AppearanceSettings.MIN_TEXT_CONTRAST)
+        assertTrue(contrastRatio(bg, broken.effectiveAccentRgb(false)) < AppearanceSettings.MIN_ACCENT_CONTRAST)
+
+        store.autoFixContrast(systemDark = false)
+        val fixed = store.settings.value
+        val fixedBg = fixed.effectiveBackgroundRgb(systemDark = false)
+        assertTrue(contrastRatio(fixedBg, fixed.effectiveForegroundRgb(false)) >= AppearanceSettings.MIN_TEXT_CONTRAST)
+        assertTrue(contrastRatio(fixedBg, fixed.effectiveAccentRgb(false)) >= AppearanceSettings.MIN_ACCENT_CONTRAST)
+
+        val reloaded = ThemeStore(context = null, stateDir = stateDir).settings.value
+        assertEquals(fixed, reloaded)
+    }
+
+    @Test
+    fun backgroundBlurAndLyricsPreferencesClampPersistAndReset() {
+        val stateDir = tempFolder.newFolder("blur_lyrics")
+        val store = ThemeStore(context = null, stateDir = stateDir)
+
+        assertEquals(0f, store.settings.value.backgroundImageBlurDp, 0.0001f)
+        assertEquals(LyricsFontSize.MEDIUM, store.settings.value.lyricsFontSize)
+        assertEquals(LyricsAlignment.START, store.settings.value.lyricsAlignment)
+
+        store.setBackgroundImageBlurDp(-4f)
+        assertEquals(0f, store.settings.value.backgroundImageBlurDp, 0.0001f)
+
+        store.setBackgroundImageBlurDp(42f)
+        assertEquals(24f, store.settings.value.backgroundImageBlurDp, 0.0001f)
+
+        store.setBackgroundImageBlurDp(Float.NaN)
+        assertEquals(0f, store.settings.value.backgroundImageBlurDp, 0.0001f)
+
+        store.setBackgroundImageBlurDp(12.5f)
+        store.setLyricsFontSize(LyricsFontSize.LARGE)
+        store.setLyricsAlignment(LyricsAlignment.CENTER)
+
+        val reloaded = ThemeStore(context = null, stateDir = stateDir).settings.value
+        assertEquals(12.5f, reloaded.backgroundImageBlurDp, 0.0001f)
+        assertEquals(LyricsFontSize.LARGE, reloaded.lyricsFontSize)
+        assertEquals(LyricsAlignment.CENTER, reloaded.lyricsAlignment)
+
+        store.resetToDefaults()
+        assertEquals(0f, store.settings.value.backgroundImageBlurDp, 0.0001f)
+        assertEquals(LyricsFontSize.MEDIUM, store.settings.value.lyricsFontSize)
+        assertEquals(LyricsAlignment.START, store.settings.value.lyricsAlignment)
+    }
 }

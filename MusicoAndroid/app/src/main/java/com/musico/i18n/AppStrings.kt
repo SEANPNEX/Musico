@@ -471,6 +471,8 @@ interface AppStrings {
     val infoTimeEdited: String
     val infoLastPlayed: String
     val infoPlayedTimes: String
+    val infoFileName: String
+    val infoFileLocation: String
     val notAvailable: String
     val neverLabel: String
     val channelsMono: String
@@ -657,6 +659,42 @@ interface AppStrings {
     val rescanLibraryAction: String
     val rescanningLibrary: String
     val appVersionLabel: String
+
+    // Wave A: Deletion, Snackbars, Appearance & Lyrics Upgrades
+    val removeOrDeleteEllipsis: String
+    val removeFromLibrary: String
+    val deleteFromDevice: String
+    val deleteSongDialogTitle: String
+    val deleteFolderDialogTitle: String
+    val deleteLocalTrackMessage: String
+    val deleteLocalFolderMessage: String
+    val deleteFailedTitle: String
+    val deleteFailedFallback: String
+    val removeSongConfirmMessage: String
+    val undo: String
+    val addedToQueueNotice: String
+    val playingNextNotice: String
+    val removedFromLibraryNotice: String
+    val deletedFromDeviceNotice: String
+    val clearedQueueNotice: String
+    val removedFromPlaylistNotice: String
+    val appearancePreviewLabel: String
+    val previewTrackTitle: String
+    val previewTrackArtist: String
+    val previewSampleButton: String
+    val imageBlurLabel: String
+    val lowContrastWarningText: String
+    val lowContrastWarningAccent: String
+    val lowContrastWarningBoth: String
+    val autoFixContrastAction: String
+    val syncToCurrentLine: String
+    val lyricsFontSizeLabel: String
+    val lyricsFontSizeSmall: String
+    val lyricsFontSizeMedium: String
+    val lyricsFontSizeLarge: String
+    val lyricsAlignmentLabel: String
+    val lyricsAlignmentLeft: String
+    val lyricsAlignmentCenter: String
 
     fun themeModeLabel(mode: AppThemeMode): String = when (mode) {
         AppThemeMode.SYSTEM -> themeModeSystem
@@ -1166,6 +1204,8 @@ object EnStrings : AppStrings {
     override val infoTimeEdited = "Time Edited"
     override val infoLastPlayed = "Last Played"
     override val infoPlayedTimes = "Played Times"
+    override val infoFileName = "File Name"
+    override val infoFileLocation = "File Location"
     override val notAvailable = "N/A"
     override val neverLabel = "Never"
     override val channelsMono = "1 (Mono)"
@@ -1326,6 +1366,41 @@ object EnStrings : AppStrings {
     override val rescanLibraryAction = "Rescan Library"
     override val rescanningLibrary = "Scanning library…"
     override val appVersionLabel = "Version"
+
+    override val removeOrDeleteEllipsis = "Remove or Delete…"
+    override val removeFromLibrary = "Remove from Library"
+    override val deleteFromDevice = "Delete from Device"
+    override val deleteSongDialogTitle = "Remove or Delete Song?"
+    override val deleteFolderDialogTitle = "Remove or Delete Folder?"
+    override val deleteLocalTrackMessage = "“Remove from Library” hides this song from Musico without deleting the file. “Delete from Device” permanently deletes the audio file."
+    override val deleteLocalFolderMessage = "“Remove from Library” hides this folder and its songs from Musico without deleting files. “Delete from Device” permanently deletes the folder and its contents."
+    override val deleteFailedTitle = "Could Not Delete"
+    override val deleteFailedFallback = "Could not delete from device."
+    override val removeSongConfirmMessage = "This song leaves your library, playlists, and queues."
+    override val undo = "Undo"
+    override val addedToQueueNotice = "Added to Queue"
+    override val playingNextNotice = "Playing Next"
+    override val removedFromLibraryNotice = "Removed from Library"
+    override val deletedFromDeviceNotice = "Deleted from Device"
+    override val clearedQueueNotice = "Cleared queue"
+    override val removedFromPlaylistNotice = "Removed from playlist"
+    override val appearancePreviewLabel = "Preview"
+    override val previewTrackTitle = "Midnight Reverie"
+    override val previewTrackArtist = "Musico Studio"
+    override val previewSampleButton = "Play"
+    override val imageBlurLabel = "Background Blur"
+    override val lowContrastWarningText = "Text contrast is low and may be hard to read."
+    override val lowContrastWarningAccent = "Accent contrast is low against this background."
+    override val lowContrastWarningBoth = "Text and accent contrast are low against this background."
+    override val autoFixContrastAction = "Auto-fix Contrast"
+    override val syncToCurrentLine = "Sync to current line"
+    override val lyricsFontSizeLabel = "Font Size"
+    override val lyricsFontSizeSmall = "Small"
+    override val lyricsFontSizeMedium = "Medium"
+    override val lyricsFontSizeLarge = "Large"
+    override val lyricsAlignmentLabel = "Alignment"
+    override val lyricsAlignmentLeft = "Left"
+    override val lyricsAlignmentCenter = "Center"
 
     override fun formatListeningTime(totalSeconds: Double): String {
         if (!totalSeconds.isFinite() || totalSeconds <= 0.0) return "0 min"
@@ -1815,6 +1890,8 @@ object ZhHansStrings : AppStrings {
     override val infoTimeEdited = "修改时间"
     override val infoLastPlayed = "最近播放"
     override val infoPlayedTimes = "播放次数"
+    override val infoFileName = "文件名"
+    override val infoFileLocation = "文件位置"
     override val notAvailable = "暂无"
     override val neverLabel = "从未"
     override val channelsMono = "1（单声道）"
@@ -1971,6 +2048,41 @@ object ZhHansStrings : AppStrings {
     override val rescanLibraryAction = "重新扫描音乐库"
     override val rescanningLibrary = "正在扫描音乐库…"
     override val appVersionLabel = "版本"
+
+    override val removeOrDeleteEllipsis = "移除或删除…"
+    override val removeFromLibrary = "从音乐库移除"
+    override val deleteFromDevice = "从设备删除"
+    override val deleteSongDialogTitle = "移除或删除歌曲？"
+    override val deleteFolderDialogTitle = "移除或删除文件夹？"
+    override val deleteLocalTrackMessage = "“从音乐库移除”仅将其从 Musico 中隐藏，不会删除文件；“从设备删除”将永久删除该音频文件。"
+    override val deleteLocalFolderMessage = "“从音乐库移除”仅将此文件夹及其歌曲从 Musico 中隐藏，不会删除文件；“从设备删除”将永久删除该文件夹及其全部内容。"
+    override val deleteFailedTitle = "删除失败"
+    override val deleteFailedFallback = "无法从设备删除。"
+    override val removeSongConfirmMessage = "该歌曲将从你的音乐库、歌单和队列中移除。"
+    override val undo = "撤销"
+    override val addedToQueueNotice = "已添加到队列"
+    override val playingNextNotice = "已设为下一首播放"
+    override val removedFromLibraryNotice = "已从音乐库移除"
+    override val deletedFromDeviceNotice = "已从设备删除"
+    override val clearedQueueNotice = "已清空队列"
+    override val removedFromPlaylistNotice = "已从歌单移除"
+    override val appearancePreviewLabel = "效果预览"
+    override val previewTrackTitle = "午夜遐想"
+    override val previewTrackArtist = "Musico 工作室"
+    override val previewSampleButton = "播放"
+    override val imageBlurLabel = "背景模糊"
+    override val lowContrastWarningText = "文字对比度偏低，可能影响阅读清晰度。"
+    override val lowContrastWarningAccent = "强调色与当前背景对比度偏低。"
+    override val lowContrastWarningBoth = "文字与强调色在当前背景下的对比度偏低。"
+    override val autoFixContrastAction = "自动修复对比度"
+    override val syncToCurrentLine = "同步到当前行"
+    override val lyricsFontSizeLabel = "字体大小"
+    override val lyricsFontSizeSmall = "小"
+    override val lyricsFontSizeMedium = "中"
+    override val lyricsFontSizeLarge = "大"
+    override val lyricsAlignmentLabel = "对齐方式"
+    override val lyricsAlignmentLeft = "左对齐"
+    override val lyricsAlignmentCenter = "居中"
 
     private val defaultQueueRegex = Regex("^Queue (\\d+)$")
 

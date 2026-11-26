@@ -3,6 +3,8 @@ package com.musico.audio
 import android.content.ComponentName
 import android.content.Context
 import android.net.Uri
+import android.os.Handler
+import android.os.Looper
 import androidx.media3.common.MediaMetadata
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
@@ -14,6 +16,7 @@ import com.musico.cloud.CloudStreamResolver
 import com.musico.cloud.ResolvedStream
 import com.musico.core.Persistence
 import com.musico.model.EqSettings
+import com.musico.model.PlayQueue
 import com.musico.model.RepeatMode
 import com.musico.model.SleepMode
 import com.musico.model.Track
@@ -137,6 +140,7 @@ class PlayerController(
                 stopTicker()
             }
         }
+        library.onBeforeDeletingTracks = { ids -> prepareForDeletingTracks(ids) }
         library.onTracksRemoved = { ids -> tracksRemoved(ids) }
         library.onTracksRemapped = { idMap -> tracksRemapped(idMap) }
         library.onFolderAdded = { name, trackIds -> onFolderAdded(name, trackIds) }
@@ -898,6 +902,49 @@ class PlayerController(
         if (isActiveQueue) {
             clearPlayback()
         }
+    }
+
+    fun restoreQueueSnapshot(snapshot: PlayQueue) {
+        val existing = queues.state.value.queues.firstOrNull { it.id == snapshot.id } ?: return
+        if (existing.trackIds.isNotEmpty()) return
+        queues.update(snapshot.id) { snapshot }
+        if (snapshot.id == queues.state.value.activeId && snapshot.currentTrackId != null) {
+            startCurrent(autoplay = false, positionSec = snapshot.positionSec)
+        }
+    }
+
+    private fun prepareForDeletingTracks(ids: Set<String>) {
+        if (ids.isEmpty()) return
+        val currentId = _state.value.currentTrack?.id ?: queues.active.currentTrackId
+        if (currentId == null || currentId !in ids) return
+
+        val mainLooper = Looper.getMainLooper()
+        if (context != null && mainLooper != null && Looper.myLooper() != mainLooper) {
+            val latch = java.util.concurrent.CountDownLatch(1)
+            Handler(mainLooper).post {
+                try {
+                    unloadForDeletion()
+                } finally {
+                    latch.countDown()
+                }
+            }
+            runCatching { latch.await(2, java.util.concurrent.TimeUnit.SECONDS) }
+        } else {
+            unloadForDeletion()
+        }
+    }
+
+    private fun unloadForDeletion() {
+        loadGeneration += 1
+        cloudLoadJob?.cancel()
+        cloudLoadJob = null
+        engine.unload()
+        stopTicker()
+        isLoaded = false
+        _state.value = _state.value.copy(
+            isPlaying = false,
+            isLoadingCloud = false,
+        )
     }
 
     private fun tracksRemoved(ids: Set<String>) {

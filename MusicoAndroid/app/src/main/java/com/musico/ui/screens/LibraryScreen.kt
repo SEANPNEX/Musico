@@ -7,11 +7,7 @@ import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.rounded.Language
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
@@ -29,19 +25,17 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.musico.audio.PlayerUiState
 import com.musico.extensions.ExtensionStore
 import com.musico.i18n.AppStrings
-import com.musico.i18n.LanguageStore
 import com.musico.i18n.LocalStrings
 import com.musico.model.Album
 import com.musico.model.PlayQueue
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
 import com.musico.store.PlayHistoryUiState
-import com.musico.ui.components.LanguageDialog
 import com.musico.ui.components.TrackActionState
+import com.musico.ui.theme.LocalReduceMotion
 import com.musico.ui.theme.MusicoMotion
 import com.musico.ui.theme.musicoScaffoldContainerColor
 import com.musico.ui.theme.musicoTopAppBarColors
@@ -77,13 +71,12 @@ fun LibraryScreen(
     activeQueue: PlayQueue,
     trackActions: TrackActionState,
     extensionStore: ExtensionStore? = null,
-    languageStore: LanguageStore? = null,
     pendingSearchRequest: SearchRequest? = null,
     onConsumeSearchRequest: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val strings = LocalStrings.current
-    var showLanguageDialog by remember { mutableStateOf(false) }
+    val reduceMotion = LocalReduceMotion.current
     var section by rememberSaveable { mutableStateOf(LibrarySection.SONGS) }
     val detailStack = remember { mutableStateListOf<LibraryDetail>() }
 
@@ -104,7 +97,7 @@ fun LibraryScreen(
         targetState = stackSnapshot,
         transitionSpec = {
             val forward = targetState.size >= initialState.size
-            MusicoMotion.sharedAxisXTransform(forward = forward)
+            MusicoMotion.sharedAxisXTransform(forward = forward, reduceMotion = reduceMotion)
         },
         label = "library_drill_in",
         modifier = modifier
@@ -164,16 +157,6 @@ fun LibraryScreen(
                     TopAppBar(
                         title = { Text(strings.libraryTitle) },
                         colors = musicoTopAppBarColors(),
-                        actions = {
-                            if (languageStore != null) {
-                                IconButton(onClick = { showLanguageDialog = true }) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Language,
-                                        contentDescription = strings.languageTitle,
-                                    )
-                                }
-                            }
-                        }
                     )
                 }
             ) { innerPadding ->
@@ -210,7 +193,8 @@ fun LibraryScreen(
                         targetState = section,
                         transitionSpec = {
                             MusicoMotion.sharedAxisXTransform(
-                                forward = targetState.ordinal >= initialState.ordinal
+                                forward = targetState.ordinal >= initialState.ordinal,
+                                reduceMotion = reduceMotion,
                             )
                         },
                         label = "library_section_switch",
@@ -261,14 +245,5 @@ fun LibraryScreen(
                 }
             }
         }
-    }
-
-    if (showLanguageDialog && languageStore != null) {
-        val currentLanguage by languageStore.language.collectAsStateWithLifecycle()
-        LanguageDialog(
-            current = currentLanguage,
-            onSelect = { languageStore.setLanguage(it) },
-            onDismiss = { showLanguageDialog = false },
-        )
     }
 }

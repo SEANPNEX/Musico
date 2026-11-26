@@ -130,6 +130,7 @@ class LibraryStore(
         val favouritesSortOrder: TrackSortOrder = TrackSortOrder.NAME_ASC,
     )
 
+    var onBeforeDeletingTracks: ((Set<String>) -> Unit)? = null
     var onTracksRemoved: ((Set<String>) -> Unit)? = null
     var onTracksRemapped: ((Map<String, String>) -> Unit)? = null
     var onFolderAdded: ((folderName: String, trackIds: List<String>) -> Unit)? = null
@@ -1587,6 +1588,381 @@ class LibraryStore(
         _state.value = current.copy(roots = updatedRoots)
         saveLibrary()
         rescan()
+    }
+
+    fun displayLocation(track: Track): String {
+        if (track.isEphemeral) {
+            return track.relativePath
+        }
+        val root = _state.value.roots.firstOrNull { it.id == track.rootId }
+            ?: return track.relativePath
+        val normRel = LibraryRoot.normalizeFolderPath(track.relativePath)
+        return when {
+            root.kind.isCloud -> {
+                if (normRel.isEmpty()) root.name else "${root.name}/$normRel"
+            }
+            root.kind == RootKind.APP_FOLDER -> {
+                if (normRel.isEmpty()) appFolderDir.absolutePath
+                else FolderScanner.fileFor(appFolderDir, normRel).absolutePath
+            }
+            else -> {
+                val baseDir = fileFromUriString(root.treeUri)
+                if (baseDir != null) {
+                    if (normRel.isEmpty()) baseDir.absolutePath
+                    else FolderScanner.fileFor(baseDir, normRel).absolutePath
+                } else {
+                    formatSafDisplayPath(root, normRel)
+                }
+            }
+        }
+    }
+
+    fun displayFolderLocation(rootId: String, path: String): String {
+        val normPath = LibraryRoot.normalizeFolderPath(path)
+        val root = _state.value.roots.firstOrNull { it.id == rootId }
+            ?: return normPath
+        return when {
+            root.kind.isCloud -> {
+                root.trackingFor(normPath)?.sourceUrl
+                    ?: root.sourceUrl
+                    ?: if (normPath.isEmpty()) root.name else "${root.name}/$normPath"
+            }
+            root.kind == RootKind.APP_FOLDER -> {
+                if (normPath.isEmpty()) appFolderDir.absolutePath
+                else FolderScanner.fileFor(appFolderDir, normPath).absolutePath
+            }
+            else -> {
+                val baseDir = fileFromUriString(root.treeUri)
+                if (baseDir != null) {
+                    if (normPath.isEmpty()) baseDir.absolutePath
+                    else FolderScanner.fileFor(baseDir, normPath).absolutePath
+                } else {
+                    formatSafDisplayPath(root, normPath)
+                }
+            }
+        }
+    }
+
+    private fun formatSafDisplayPath(root: LibraryRoot, normRel: String): String {
+        val treeUri = root.treeUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+        val docId = if (treeUri != null) {
+            runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
+        } else {
+            null
+        }
+        val decodedBase = if (!docId.isNullOrBlank()) {
+            when {
+                docId.startsWith("raw:") -> docId.removePrefix("raw:").trimEnd('/')
+                ':' in docId -> {
+                    val volume = docId.substringBefore(':')
+                    val sub = docId.substringAfter(':').trim('/')
+                    when {
+                        volume.equals("primary", ignoreCase = true) && sub.isNotEmpty() -> "/storage/emulated/0/$sub"
+                        volume.equals("primary", ignoreCase = true) -> "/storage/emulated/0"
+                        sub.isNotEmpty() -> "$volume/$sub"
+                        else -> root.name
+                    }
+                }
+                else -> root.name
+            }
+        } else {
+            root.name
+        }
+        return if (normRel.isEmpty()) decodedBase else "$decodedBase/$normRel"
+    }
+
+    /** Excludes an individual track from the library without deleting its file on disk. */
+    fun removeTrackFromLibrary(trackId: String) {
+        val removedSet = setOf(trackId)
+        synchronized(stateLock) {
+            val current = _state.value
+            val track = current.tracks.firstOrNull { it.id == trackId } ?: return
+            val rootIndex = current.roots.indexOfFirst { it.id == track.rootId }
+            val normRel = LibraryRoot.normalizeFolderPath(track.relativePath)
+
+            val updatedRoots = if (rootIndex >= 0 && normRel.isNotEmpty()) {
+                val root = current.roots[rootIndex]
+                val existingExcluded = root.excludedPaths
+                    .map { LibraryRoot.normalizeFolderPath(it) }
+                    .filter { it.isNotEmpty() }
+                val alreadyCovered = existingExcluded.any { ex -> normRel == ex || normRel.startsWith("$ex/") }
+                if (alreadyCovered) {
+                    current.roots
+                } else {
+                    val nextExcluded = (existingExcluded + normRel).distinct().sorted()
+                    current.roots.toMutableList().apply {
+                        this[rootIndex] = root.copy(excludedPaths = nextExcluded)
+                    }
+                }
+            } else {
+                current.roots
+            }
+
+            val keptTracks = current.tracks.filter { it.id != trackId }
+            trackUris.remove(trackId)
+            metadataOverrides.remove(trackId)
+            val (albums, artists, idMap) = buildIndices(keptTracks)
+            byId = idMap
+
+            _state.value = current.copy(
+                roots = updatedRoots,
+                tracks = keptTracks,
+                albums = albums,
+                artists = artists,
+            )
+        }
+        forget(removedSet)
+        saveLibrary()
+    }
+
+    /** Permanently deletes a local track file from disk and removes it from the library. */
+    fun deleteTrackFile(trackId: String): Result<Unit> {
+        val current = _state.value
+        val track = current.tracks.firstOrNull { it.id == trackId }
+            ?: return Result.failure(IllegalArgumentException("Track not found."))
+        if (track.isCloud || track.isEphemeral) {
+            return Result.failure(IllegalStateException("Cloud tracks cannot be deleted from device."))
+        }
+        val root = current.roots.firstOrNull { it.id == track.rootId }
+            ?: return Result.failure(IllegalStateException("Folder could not be found."))
+        if (root.kind.isCloud) {
+            return Result.failure(IllegalStateException("Cloud tracks cannot be deleted from device."))
+        }
+
+        val normRel = LibraryRoot.normalizeFolderPath(track.relativePath)
+        if (normRel.isEmpty()) {
+            return Result.failure(IllegalArgumentException("Track path is empty."))
+        }
+
+        onBeforeDeletingTracks?.invoke(setOf(trackId))
+
+        val deleteResult = deleteTrackOnDisk(root, normRel, track.fileName)
+        if (deleteResult.isFailure) {
+            return deleteResult
+        }
+
+        synchronized(stateLock) {
+            val latest = _state.value
+            val keptTracks = latest.tracks.filter { it.id != trackId }
+            trackUris.remove(trackId)
+            metadataOverrides.remove(trackId)
+            val (albums, artists, idMap) = buildIndices(keptTracks)
+            byId = idMap
+            _state.value = latest.copy(
+                tracks = keptTracks,
+                albums = albums,
+                artists = artists,
+            )
+        }
+        forget(setOf(trackId))
+        saveLibrary()
+        val keysToKeep = _state.value.tracks.mapNotNull { it.artworkKey }.toSet() +
+            metadataOverrides.values.mapNotNull { it.artworkKey }
+        artwork.prune(keysToKeep)
+        return Result.success(Unit)
+    }
+
+    private fun deleteTrackOnDisk(root: LibraryRoot, normRel: String, fileName: String): Result<Unit> {
+        val baseDir: File? = when (root.kind) {
+            RootKind.APP_FOLDER -> appFolderDir
+            RootKind.PICKED -> fileFromUriString(root.treeUri)
+            else -> null
+        }
+        if (baseDir != null) {
+            return runCatching {
+                val baseCanonical = baseDir.canonicalFile
+                val targetFile = FolderScanner.fileFor(baseDir, normRel)
+                val targetCanonical = targetFile.canonicalFile
+                val prefix = baseCanonical.path.let { if (it.endsWith(File.separator)) it else "$it${File.separator}" }
+                if (!targetCanonical.path.startsWith(prefix)) {
+                    throw SecurityException("Refusing to delete file outside folder root.")
+                }
+                if (!targetFile.exists()) {
+                    throw IllegalStateException("File does not exist on device: $fileName")
+                }
+                if (!targetFile.delete()) {
+                    throw IllegalStateException("Could not delete file: $fileName")
+                }
+            }
+        }
+
+        val ctx = context ?: return Result.failure(IllegalStateException("Android context unavailable."))
+        val treeUri = root.treeUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+            ?: return Result.failure(IllegalStateException("Folder URI is missing."))
+        return runCatching {
+            val folderPath = normRel.substringBeforeLast('/', "")
+            val dirDoc = resolveSafFolderDoc(ctx, treeUri, folderPath)
+                ?: throw IllegalStateException("Could not open folder on device.")
+            val targetDoc = dirDoc.findFile(fileName)?.takeIf { !it.isDirectory }
+                ?: dirDoc.listFiles().firstOrNull { !it.isDirectory && it.name.equals(fileName, ignoreCase = true) }
+                ?: throw IllegalStateException("File does not exist on device: $fileName")
+            if (!targetDoc.canWrite() || !dirDoc.canWrite()) {
+                throw IllegalStateException("Folder or file is read-only.")
+            }
+            if (!targetDoc.delete()) {
+                throw IllegalStateException("Could not delete file: $fileName")
+            }
+        }
+    }
+
+    /** Permanently deletes a local subfolder or picked root on disk and removes affected tracks from library. */
+    fun deleteFolderFiles(rootId: String, path: String): Result<Unit> {
+        val normPath = LibraryRoot.normalizeFolderPath(path)
+        val current = _state.value
+        val root = current.roots.firstOrNull { it.id == rootId }
+            ?: return Result.failure(IllegalStateException("Folder could not be found."))
+
+        if (root.kind == RootKind.APP_FOLDER && normPath.isEmpty()) {
+            return Result.failure(IllegalStateException("The Musico app folder cannot be deleted."))
+        }
+        if (root.kind.isCloud) {
+            return Result.failure(IllegalStateException("Cloud folders cannot be deleted from device."))
+        }
+
+        val affectedIds = if (normPath.isEmpty()) {
+            current.tracks.filter { it.rootId == rootId }.map { it.id }.toSet()
+        } else {
+            current.tracks.filter { it.rootId == rootId && LibraryRoot.folderContains(normPath, it.relativePath) }
+                .map { it.id }
+                .toSet()
+        }
+
+        if (affectedIds.isNotEmpty()) {
+            onBeforeDeletingTracks?.invoke(affectedIds)
+        }
+
+        val deleteResult = deleteFolderOnDisk(root, normPath)
+        if (deleteResult.isFailure) {
+            return deleteResult
+        }
+
+        if (normPath.isEmpty()) {
+            activeCloudSyncJobs.remove(rootId)?.cancel()
+            cloudPriorityPaths.remove(rootId)
+            knownCloudSubfolders.remove(rootId)
+            synchronized(stateLock) {
+                val latest = _state.value
+                if (root.kind == RootKind.PICKED) {
+                    releasePersistableReadPermission(root.treeUri)
+                }
+                val updatedRoots = latest.roots.filterNot { it.id == rootId }
+                val allRootTrackIds = latest.tracks.filter { it.rootId == rootId }.map { it.id }.toSet()
+                val keptTracks = latest.tracks.filter { it.rootId != rootId }
+                for (id in allRootTrackIds) {
+                    trackUris.remove(id)
+                    metadataOverrides.remove(id)
+                }
+                val rootPrefix = "$rootId\u001F"
+                folderSortOrders.keys.removeAll { it.startsWith(rootPrefix) }
+                folderTrackOrders.keys.removeAll { it.startsWith(rootPrefix) }
+                val (albums, artists, idMap) = buildIndices(keptTracks)
+                byId = idMap
+                _state.value = latest.copy(
+                    roots = updatedRoots,
+                    availableRootIds = latest.availableRootIds - rootId,
+                    tracks = keptTracks,
+                    albums = albums,
+                    artists = artists,
+                    folderSortOrders = folderSortOrders.toMap(),
+                    folderTrackOrders = folderTrackOrders.toMap(),
+                    cloudSyncProgress = latest.cloudSyncProgress - rootId,
+                )
+            }
+            forget(affectedIds)
+            saveLibrary()
+        } else {
+            synchronized(stateLock) {
+                val latest = _state.value
+                val rootIndex = latest.roots.indexOfFirst { it.id == rootId }
+                val updatedRoots = if (rootIndex >= 0) {
+                    val r = latest.roots[rootIndex]
+                    val nextExcluded = r.excludedPaths.filterNot { ex ->
+                        val normEx = LibraryRoot.normalizeFolderPath(ex)
+                        normEx == normPath || normEx.startsWith("$normPath/")
+                    }
+                    val nextTracked = r.trackedSubfolders.filterKeys { k ->
+                        val normK = LibraryRoot.normalizeFolderPath(k)
+                        normK != normPath && !normK.startsWith("$normPath/")
+                    }
+                    latest.roots.toMutableList().apply {
+                        this[rootIndex] = r.copy(
+                            excludedPaths = nextExcluded,
+                            trackedSubfolders = nextTracked,
+                        )
+                    }
+                } else {
+                    latest.roots
+                }
+                val keptTracks = latest.tracks.filter { it.id !in affectedIds }
+                for (id in affectedIds) {
+                    trackUris.remove(id)
+                    metadataOverrides.remove(id)
+                }
+                val exactFolderKey = "$rootId\u001F$normPath"
+                val subFolderPrefix = "$rootId\u001F$normPath/"
+                folderSortOrders.keys.removeAll { it == exactFolderKey || it.startsWith(subFolderPrefix) }
+                folderTrackOrders.keys.removeAll { it == exactFolderKey || it.startsWith(subFolderPrefix) }
+
+                val (albums, artists, idMap) = buildIndices(keptTracks)
+                byId = idMap
+                _state.value = latest.copy(
+                    roots = updatedRoots,
+                    tracks = keptTracks,
+                    albums = albums,
+                    artists = artists,
+                    folderSortOrders = folderSortOrders.toMap(),
+                    folderTrackOrders = folderTrackOrders.toMap(),
+                )
+            }
+            forget(affectedIds)
+            saveLibrary()
+        }
+
+        val keysToKeep = _state.value.tracks.mapNotNull { it.artworkKey }.toSet() +
+            metadataOverrides.values.mapNotNull { it.artworkKey }
+        artwork.prune(keysToKeep)
+        return Result.success(Unit)
+    }
+
+    private fun deleteFolderOnDisk(root: LibraryRoot, normPath: String): Result<Unit> {
+        val baseDir: File? = when (root.kind) {
+            RootKind.APP_FOLDER -> appFolderDir
+            RootKind.PICKED -> fileFromUriString(root.treeUri)
+            else -> null
+        }
+        if (baseDir != null) {
+            return runCatching {
+                val baseCanonical = baseDir.canonicalFile
+                val targetDir = if (normPath.isEmpty()) baseDir else FolderScanner.fileFor(baseDir, normPath)
+                val targetCanonical = targetDir.canonicalFile
+                if (normPath.isNotEmpty()) {
+                    val prefix = baseCanonical.path.let { if (it.endsWith(File.separator)) it else "$it${File.separator}" }
+                    if (!targetCanonical.path.startsWith(prefix)) {
+                        throw SecurityException("Refusing to delete folder outside root.")
+                    }
+                }
+                if (!targetDir.exists()) {
+                    throw IllegalStateException("Folder does not exist on device.")
+                }
+                if (!targetDir.deleteRecursively()) {
+                    throw IllegalStateException("Could not delete folder: ${targetDir.name}")
+                }
+            }
+        }
+
+        val ctx = context ?: return Result.failure(IllegalStateException("Android context unavailable."))
+        val treeUri = root.treeUri?.let { runCatching { Uri.parse(it) }.getOrNull() }
+            ?: return Result.failure(IllegalStateException("Folder URI is missing."))
+        return runCatching {
+            val targetDoc = resolveSafFolderDoc(ctx, treeUri, normPath)
+                ?: throw IllegalStateException("Folder does not exist on device.")
+            if (!targetDoc.canWrite()) {
+                throw IllegalStateException("Folder is read-only.")
+            }
+            if (!targetDoc.delete()) {
+                throw IllegalStateException("Could not delete folder.")
+            }
+        }
     }
 
     suspend fun rescan() {
@@ -3365,6 +3741,16 @@ class LibraryStore(
         updatePlaylist(playlistId) { pl ->
             if (index !in pl.trackIds.indices) pl
             else pl.copy(trackIds = pl.trackIds.toMutableList().apply { removeAt(index) })
+        }
+    }
+
+    fun restoreToPlaylist(playlistId: String, trackId: String, index: Int) {
+        if (Track.isEphemeralId(trackId) || track(trackId)?.isEphemeral == true) return
+        updatePlaylist(playlistId) { pl ->
+            val mutable = pl.trackIds.toMutableList()
+            val clampedIndex = index.coerceIn(0, mutable.size)
+            mutable.add(clampedIndex, trackId)
+            pl.copy(trackIds = mutable)
         }
     }
 

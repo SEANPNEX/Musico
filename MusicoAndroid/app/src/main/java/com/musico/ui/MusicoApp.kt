@@ -42,6 +42,10 @@ import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailDefaults
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -49,11 +53,14 @@ import androidx.compose.material3.VerticalDivider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
@@ -70,7 +77,9 @@ import com.musico.model.SearchField
 import java.util.Locale
 import com.musico.store.AppContainer
 import com.musico.ui.components.LocalThumbnailCache
+import com.musico.ui.components.LocalTrackSwipeActions
 import com.musico.ui.components.TrackActionDialogs
+import com.musico.ui.components.TrackSwipeActions
 import com.musico.ui.components.rememberTrackActionState
 import com.musico.ui.player.FullPlayerScreen
 import com.musico.ui.player.LyricsContent
@@ -85,10 +94,44 @@ import com.musico.ui.screens.SearchRequest
 import com.musico.ui.screens.SettingsScreen
 import com.musico.ui.screens.StatsScreen
 import com.musico.ui.theme.LocalHasBackgroundImage
+import com.musico.ui.theme.LocalReduceMotion
+import com.musico.ui.theme.LocalThemeStore
 import com.musico.ui.theme.MusicoMotion
 import com.musico.ui.theme.ThemeBackgroundLayer
 import com.musico.ui.theme.musicoScaffoldContainerColor
 import com.musico.update.hasAvailableUpdate
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.launch
+
+@Stable
+class MusicoMessageDispatcher(
+    private val hostState: SnackbarHostState?,
+    private val scope: CoroutineScope?,
+) {
+    operator fun invoke(
+        message: String,
+        actionLabel: String? = null,
+        duration: SnackbarDuration = if (actionLabel != null) SnackbarDuration.Long else SnackbarDuration.Short,
+        onAction: (() -> Unit)? = null,
+    ) {
+        val host = hostState ?: return
+        val coroutineScope = scope ?: return
+        coroutineScope.launch {
+            host.currentSnackbarData?.dismiss()
+            val result = host.showSnackbar(
+                message = message,
+                actionLabel = actionLabel,
+                duration = duration,
+            )
+            if (result == SnackbarResult.ActionPerformed) {
+                onAction?.invoke()
+            }
+        }
+    }
+}
+
+val LocalSnackbarHost = staticCompositionLocalOf<SnackbarHostState?> { null }
+val LocalShowMessage = staticCompositionLocalOf { MusicoMessageDispatcher(null, null) }
 
 enum class TopDestination(
     val icon: ImageVector
@@ -128,16 +171,40 @@ fun MusicoApp(
     val backgroundImageFile = remember(appearance.backgroundImageFileName) {
         appContainer.themeStore.resolveBackgroundImageFile()
     }
+    val snackbarHostState = remember { SnackbarHostState() }
+    val snackbarScope = rememberCoroutineScope()
+    val messageDispatcher = remember(snackbarHostState, snackbarScope) {
+        MusicoMessageDispatcher(snackbarHostState, snackbarScope)
+    }
+    val reduceMotion = MusicoMotion.rememberReduceMotion()
+    val trackSwipeActions = remember(appContainer.playerController, messageDispatcher, strings) {
+        TrackSwipeActions(
+            onPlayNext = { track ->
+                appContainer.playerController.playNext(listOf(track.id))
+                messageDispatcher(strings.playingNextNotice)
+            },
+            onAddToQueue = { track ->
+                appContainer.playerController.addToQueue(listOf(track.id))
+                messageDispatcher(strings.addedToQueueNotice)
+            },
+        )
+    }
 
     CompositionLocalProvider(
         LocalStrings provides strings,
         LocalThumbnailCache provides appContainer.cloudThumbnailCache,
         LocalHasBackgroundImage provides (backgroundImageFile != null),
+        LocalThemeStore provides appContainer.themeStore,
+        LocalSnackbarHost provides snackbarHostState,
+        LocalShowMessage provides messageDispatcher,
+        LocalReduceMotion provides reduceMotion,
+        LocalTrackSwipeActions provides trackSwipeActions,
     ) {
         MusicoAppContent(
             appContainer = appContainer,
             backgroundImageFile = backgroundImageFile,
             backgroundImageOpacity = appearance.backgroundImageOpacity,
+            backgroundImageBlurDp = appearance.backgroundImageBlurDp,
             onPickFolder = onPickFolder,
             onPickLyricsFile = onPickLyricsFile,
             onPickImage = onPickImage,
@@ -151,6 +218,7 @@ private fun MusicoAppContent(
     appContainer: AppContainer,
     backgroundImageFile: java.io.File?,
     backgroundImageOpacity: Float,
+    backgroundImageBlurDp: Float,
     onPickFolder: ((Uri) -> Unit) -> Unit,
     onPickLyricsFile: ((Uri) -> Unit) -> Unit,
     onPickImage: ((Uri) -> Unit) -> Unit,
@@ -181,6 +249,8 @@ private fun MusicoAppContent(
     val pendingExtensionUpdates by extensionStore.pendingUpdates.collectAsStateWithLifecycle()
     val updateState by updateManager.state.collectAsStateWithLifecycle()
     val hasBackgroundImage = LocalHasBackgroundImage.current
+    val snackbarHostState = LocalSnackbarHost.current
+    val reduceMotion = LocalReduceMotion.current
 
     var selectedDestination by rememberSaveable { mutableStateOf(TopDestination.QUEUES) }
     var showSettingsWide by rememberSaveable { mutableStateOf(false) }
@@ -202,6 +272,7 @@ private fun MusicoAppContent(
             selectedDestination = TopDestination.LIBRARY
             pendingSearchRequest = SearchRequest(query = query, field = field, token = System.nanoTime())
         },
+        lyricsStore = lyricsStore,
     )
     var lastTrack by remember { mutableStateOf(playerState.currentTrack) }
     if (playerState.currentTrack != null) {
@@ -230,18 +301,24 @@ private fun MusicoAppContent(
         ThemeBackgroundLayer(
             imageFile = backgroundImageFile,
             imageOpacity = backgroundImageOpacity,
+            imageBlurDp = backgroundImageBlurDp,
         )
 
         if (isCompact) {
             Scaffold(
                 containerColor = musicoScaffoldContainerColor(),
                 contentWindowInsets = WindowInsets(0),
+                snackbarHost = {
+                    if (!showFullPlayer && snackbarHostState != null) {
+                        SnackbarHost(hostState = snackbarHostState)
+                    }
+                },
                 bottomBar = {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         AnimatedVisibility(
                             visible = playerState.currentTrack != null,
-                            enter = MusicoMotion.miniPlayerEnter,
-                            exit = MusicoMotion.miniPlayerExit
+                            enter = MusicoMotion.miniPlayerEnter(reduceMotion),
+                            exit = MusicoMotion.miniPlayerExit(reduceMotion)
                         ) {
                             Column(modifier = Modifier.fillMaxWidth()) {
                                 MiniPlayer(
@@ -350,30 +427,42 @@ private fun MusicoAppContent(
 
                     VerticalDivider()
 
-                    DestinationContent(
-                        destination = selectedDestination,
-                        showSettings = showSettingsWide,
-                        appContainer = appContainer,
-                        libraryState = libraryState,
-                        queueState = queueState,
-                        historyState = historyState,
-                        playerState = playerState,
-                        trackActions = trackActions,
-                        pendingSearchRequest = pendingSearchRequest,
-                        onConsumeSearchRequest = { pendingSearchRequest = null },
-                        onPickFolder = onPickFolder,
-                        onPickImage = onPickImage,
-                        onPickExtensionFiles = onPickExtensionFiles,
-                        isCompact = isCompact,
+                    Box(
                         modifier = Modifier
                             .weight(1f)
                             .fillMaxHeight()
-                    )
+                    ) {
+                        DestinationContent(
+                            destination = selectedDestination,
+                            showSettings = showSettingsWide,
+                            appContainer = appContainer,
+                            libraryState = libraryState,
+                            queueState = queueState,
+                            historyState = historyState,
+                            playerState = playerState,
+                            trackActions = trackActions,
+                            pendingSearchRequest = pendingSearchRequest,
+                            onConsumeSearchRequest = { pendingSearchRequest = null },
+                            onPickFolder = onPickFolder,
+                            onPickImage = onPickImage,
+                            onPickExtensionFiles = onPickExtensionFiles,
+                            isCompact = isCompact,
+                            modifier = Modifier.fillMaxSize()
+                        )
+                        if (!showFullPlayer && snackbarHostState != null) {
+                            SnackbarHost(
+                                hostState = snackbarHostState,
+                                modifier = Modifier
+                                    .align(Alignment.BottomCenter)
+                                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                            )
+                        }
+                    }
 
                     AnimatedVisibility(
                         visible = isWide && sidePanel != null,
-                        enter = MusicoMotion.sidePanelEnter,
-                        exit = MusicoMotion.sidePanelExit
+                        enter = MusicoMotion.sidePanelEnter(reduceMotion),
+                        exit = MusicoMotion.sidePanelExit(reduceMotion)
                     ) {
                         Row(modifier = Modifier.fillMaxHeight()) {
                             VerticalDivider()
@@ -458,8 +547,8 @@ private fun MusicoAppContent(
                 } else {
                     AnimatedVisibility(
                         visible = playerState.currentTrack != null,
-                        enter = MusicoMotion.miniPlayerEnter,
-                        exit = MusicoMotion.miniPlayerExit
+                        enter = MusicoMotion.miniPlayerEnter(reduceMotion),
+                        exit = MusicoMotion.miniPlayerExit(reduceMotion)
                     ) {
                         MiniPlayer(
                             playerState = miniPlayerState,
@@ -476,8 +565,8 @@ private fun MusicoAppContent(
 
         AnimatedVisibility(
             visible = showFullPlayer,
-            enter = MusicoMotion.fullPlayerEnter,
-            exit = MusicoMotion.fullPlayerExit
+            enter = MusicoMotion.fullPlayerEnter(reduceMotion),
+            exit = MusicoMotion.fullPlayerExit(reduceMotion)
         ) {
             FullPlayerScreen(
                 libraryStore = libraryStore,
@@ -494,6 +583,7 @@ private fun MusicoAppContent(
                 extensionStore = extensionStore,
                 backgroundImageFile = backgroundImageFile,
                 backgroundImageOpacity = backgroundImageOpacity,
+                backgroundImageBlurDp = backgroundImageBlurDp,
                 onClose = { showFullPlayer = false }
             )
         }
@@ -566,10 +656,11 @@ private fun DestinationContent(
     modifier: Modifier = Modifier
 ) {
     val activeKey: TopDestination? = if (showSettings) null else destination
+    val reduceMotion = LocalReduceMotion.current
     Box(modifier = modifier) {
         AnimatedContent(
             targetState = activeKey,
-            transitionSpec = { MusicoMotion.fadeThroughTransform() },
+            transitionSpec = { MusicoMotion.fadeThroughTransform(reduceMotion) },
             label = "top_destination"
         ) { dest ->
             when (dest) {
@@ -615,7 +706,6 @@ private fun DestinationContent(
                     activeQueue = queueState.active,
                     trackActions = trackActions,
                     extensionStore = appContainer.extensionStore,
-                    languageStore = appContainer.languageStore,
                     pendingSearchRequest = pendingSearchRequest,
                     onConsumeSearchRequest = onConsumeSearchRequest,
                     modifier = Modifier.fillMaxSize()
@@ -640,7 +730,6 @@ private fun DestinationContent(
                     queues = queueState.queues,
                     activeQueue = queueState.active,
                     trackActions = trackActions,
-                    languageStore = appContainer.languageStore,
                     modifier = Modifier.fillMaxSize()
                 )
             }
