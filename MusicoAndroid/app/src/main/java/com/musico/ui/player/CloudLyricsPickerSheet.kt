@@ -499,6 +499,11 @@ private fun CandidateListPane(
                 } else {
                     MaterialTheme.colorScheme.surface
                 },
+                contentColor = if (isSelected) {
+                    MaterialTheme.colorScheme.onSecondaryContainer
+                } else {
+                    MaterialTheme.colorScheme.onSurface
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .clickable { onSelect(candidate.id) },

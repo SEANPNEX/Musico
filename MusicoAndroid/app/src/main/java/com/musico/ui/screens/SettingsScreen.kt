@@ -11,9 +11,8 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -110,6 +109,7 @@ import com.musico.ui.theme.clampBackgroundImageOpacity
 import com.musico.ui.theme.contrastRatio
 import com.musico.ui.theme.isLightColor
 import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoScaffoldContentColor
 import com.musico.ui.theme.musicoTopAppBarColors
 import com.musico.ui.theme.normalizeHexOrNull
 import com.musico.ui.theme.parseHexRgb
@@ -130,7 +130,7 @@ private enum class ActiveColorDialog {
     TEXT,
 }
 
-@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     themeStore: ThemeStore,
@@ -188,6 +188,7 @@ fun SettingsScreen(
     Scaffold(
         modifier = modifier,
         containerColor = musicoScaffoldContainerColor(),
+        contentColor = musicoScaffoldContentColor(),
         contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(
@@ -221,7 +222,10 @@ fun SettingsScreen(
                 Spacer(Modifier.height(8.dp))
                 ElevatedCard(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.elevatedCardColors(containerColor = cardContainerColor),
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = cardContainerColor,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
                 ) {
                     Column(
                         modifier = Modifier
@@ -419,37 +423,36 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Medium,
                             )
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                BackgroundColorPreset.entries.forEach { preset ->
-                                    val selected = appearance.backgroundPreset == preset
-                                    val swatchColor = when (preset) {
-                                        BackgroundColorPreset.DEFAULT -> MaterialTheme.colorScheme.surfaceContainerHighest
-                                        BackgroundColorPreset.CUSTOM ->
-                                            appearance.customBackgroundHex?.toComposeColorOrNull()
-                                                ?: MaterialTheme.colorScheme.surfaceContainerHighest
-                                        else -> preset.hex?.toComposeColorOrNull()
-                                            ?: MaterialTheme.colorScheme.surface
-                                    }
-                                    val isDefault = preset == BackgroundColorPreset.DEFAULT
-                                    val isCustom = preset == BackgroundColorPreset.CUSTOM
-                                    ColorPresetSwatch(
-                                        label = strings.backgroundPresetLabel(preset),
-                                        color = swatchColor,
-                                        selected = selected,
-                                        showAutoIcon = isDefault,
-                                        showCustomIcon = isCustom && appearance.customBackgroundHex == null,
-                                        onClick = {
-                                            if (isCustom) {
-                                                activeColorDialog = ActiveColorDialog.BACKGROUND
-                                            } else {
-                                                themeStore.setBackgroundPreset(preset)
-                                            }
-                                        },
-                                    )
+                            CenteredPresetGrid(
+                                items = BackgroundColorPreset.entries,
+                                phoneColumns = 3,
+                            ) { preset, itemModifier ->
+                                val selected = appearance.backgroundPreset == preset
+                                val swatchColor = when (preset) {
+                                    BackgroundColorPreset.DEFAULT -> MaterialTheme.colorScheme.surfaceContainerHighest
+                                    BackgroundColorPreset.CUSTOM ->
+                                        appearance.customBackgroundHex?.toComposeColorOrNull()
+                                            ?: MaterialTheme.colorScheme.surfaceContainerHighest
+                                    else -> preset.hex?.toComposeColorOrNull()
+                                        ?: MaterialTheme.colorScheme.surface
                                 }
+                                val isDefault = preset == BackgroundColorPreset.DEFAULT
+                                val isCustom = preset == BackgroundColorPreset.CUSTOM
+                                ColorPresetSwatch(
+                                    label = strings.backgroundPresetLabel(preset),
+                                    color = swatchColor,
+                                    selected = selected,
+                                    showAutoIcon = isDefault,
+                                    showCustomIcon = isCustom && appearance.customBackgroundHex == null,
+                                    onClick = {
+                                        if (isCustom) {
+                                            activeColorDialog = ActiveColorDialog.BACKGROUND
+                                        } else {
+                                            themeStore.setBackgroundPreset(preset)
+                                        }
+                                    },
+                                    modifier = itemModifier,
+                                )
                             }
                         }
 
@@ -462,35 +465,34 @@ fun SettingsScreen(
                                 style = MaterialTheme.typography.titleSmall,
                                 fontWeight = FontWeight.Medium,
                             )
-                            FlowRow(
-                                horizontalArrangement = Arrangement.spacedBy(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(12.dp),
-                            ) {
-                                ForegroundColorPreset.entries.forEach { preset ->
-                                    val selected = appearance.foregroundPreset == preset
-                                    val isCustom = preset == ForegroundColorPreset.CUSTOM
-                                    val swatchColor = if (isCustom) {
-                                        appearance.customAccentHex?.toComposeColorOrNull()
-                                            ?: MaterialTheme.colorScheme.primary
-                                    } else {
-                                        preset.hex?.toComposeColorOrNull()
-                                            ?: MaterialTheme.colorScheme.primary
-                                    }
-                                    ColorPresetSwatch(
-                                        label = strings.foregroundPresetLabel(preset),
-                                        color = swatchColor,
-                                        selected = selected,
-                                        showAutoIcon = false,
-                                        showCustomIcon = isCustom && appearance.customAccentHex == null,
-                                        onClick = {
-                                            if (isCustom) {
-                                                activeColorDialog = ActiveColorDialog.ACCENT
-                                            } else {
-                                                themeStore.setForegroundPreset(preset)
-                                            }
-                                        },
-                                    )
+                            CenteredPresetGrid(
+                                items = ForegroundColorPreset.entries,
+                                phoneColumns = 4,
+                            ) { preset, itemModifier ->
+                                val selected = appearance.foregroundPreset == preset
+                                val isCustom = preset == ForegroundColorPreset.CUSTOM
+                                val swatchColor = if (isCustom) {
+                                    appearance.customAccentHex?.toComposeColorOrNull()
+                                        ?: MaterialTheme.colorScheme.primary
+                                } else {
+                                    preset.hex?.toComposeColorOrNull()
+                                        ?: MaterialTheme.colorScheme.primary
                                 }
+                                ColorPresetSwatch(
+                                    label = strings.foregroundPresetLabel(preset),
+                                    color = swatchColor,
+                                    selected = selected,
+                                    showAutoIcon = false,
+                                    showCustomIcon = isCustom && appearance.customAccentHex == null,
+                                    onClick = {
+                                        if (isCustom) {
+                                            activeColorDialog = ActiveColorDialog.ACCENT
+                                        } else {
+                                            themeStore.setForegroundPreset(preset)
+                                        }
+                                    },
+                                    modifier = itemModifier,
+                                )
                             }
 
                             // Optional Custom Text Color row
@@ -500,6 +502,7 @@ fun SettingsScreen(
                                 color = MaterialTheme.colorScheme.surfaceContainerHigh.copy(
                                     alpha = if (hasBackgroundImage) 0.72f else 1f
                                 ),
+                                contentColor = MaterialTheme.colorScheme.onSurface,
                             ) {
                                 Row(
                                     modifier = Modifier
@@ -590,41 +593,73 @@ fun SettingsScreen(
                                         }
                                     }
 
-                                    Row(
+                                    Column(
                                         modifier = Modifier.weight(1f),
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                        verticalArrangement = Arrangement.spacedBy(2.dp),
                                     ) {
-                                        FilledTonalButton(
-                                            onClick = {
-                                                onPickImage { uri ->
-                                                    scope.launch {
-                                                        val result = withContext(Dispatchers.IO) {
-                                                            themeStore.importBackgroundImage(uri)
-                                                        }
-                                                        result.onFailure {
-                                                            imageError = strings.couldNotLoadSelectedImage
-                                                        }
+                                        Text(
+                                            text = strings.backgroundImageLabel,
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            fontWeight = FontWeight.Medium,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                        Text(
+                                            text = "${(appearance.backgroundImageOpacity * 100f).roundToInt()}% · ${appearance.backgroundImageBlurDp.roundToInt()} dp",
+                                            style = MaterialTheme.typography.bodySmall.copy(
+                                                fontFeatureSettings = "tnum",
+                                            ),
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                }
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    FilledTonalButton(
+                                        onClick = {
+                                            onPickImage { uri ->
+                                                scope.launch {
+                                                    val result = withContext(Dispatchers.IO) {
+                                                        themeStore.importBackgroundImage(uri)
+                                                    }
+                                                    result.onFailure {
+                                                        imageError = strings.couldNotLoadSelectedImage
                                                     }
                                                 }
-                                            },
-                                        ) {
-                                            Text(
-                                                text = strings.changeImageAction,
-                                                maxLines = 1,
-                                                overflow = TextOverflow.Ellipsis,
-                                            )
-                                        }
-                                        OutlinedButton(
-                                            onClick = { themeStore.clearBackgroundImage() },
-                                        ) {
-                                            Icon(
-                                                imageVector = Icons.Rounded.Delete,
-                                                contentDescription = null,
-                                                modifier = Modifier.size(18.dp),
-                                            )
-                                            Spacer(Modifier.width(4.dp))
-                                            Text(strings.remove)
-                                        }
+                                            }
+                                        },
+                                        modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                                    ) {
+                                        Text(
+                                            text = strings.changeImageAction,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
+                                    OutlinedButton(
+                                        onClick = { themeStore.clearBackgroundImage() },
+                                        modifier = Modifier.weight(1f),
+                                        contentPadding = PaddingValues(horizontal = 12.dp, vertical = 10.dp),
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Rounded.Delete,
+                                            contentDescription = null,
+                                            modifier = Modifier.size(18.dp),
+                                        )
+                                        Spacer(Modifier.width(4.dp))
+                                        Text(
+                                            text = strings.remove,
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
                                     }
                                 }
 
@@ -732,7 +767,10 @@ fun SettingsScreen(
                 Spacer(Modifier.height(8.dp))
                 ElevatedCard(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.elevatedCardColors(containerColor = cardContainerColor),
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = cardContainerColor,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
                 ) {
                     Row(
                         modifier = Modifier
@@ -771,7 +809,10 @@ fun SettingsScreen(
                     Spacer(Modifier.height(8.dp))
                     ElevatedCard(
                         modifier = Modifier.fillMaxWidth(),
-                        colors = CardDefaults.elevatedCardColors(containerColor = cardContainerColor),
+                        colors = CardDefaults.elevatedCardColors(
+                        containerColor = cardContainerColor,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
                     ) {
                         Column(
                             modifier = Modifier
@@ -882,7 +923,10 @@ fun SettingsScreen(
                 Spacer(Modifier.height(8.dp))
                 ElevatedCard(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.elevatedCardColors(containerColor = cardContainerColor),
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = cardContainerColor,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
                 ) {
                     Row(
                         modifier = Modifier
@@ -930,7 +974,10 @@ fun SettingsScreen(
                 Spacer(Modifier.height(8.dp))
                 ElevatedCard(
                     modifier = Modifier.fillMaxWidth(),
-                    colors = CardDefaults.elevatedCardColors(containerColor = cardContainerColor),
+                    colors = CardDefaults.elevatedCardColors(
+                        containerColor = cardContainerColor,
+                        contentColor = MaterialTheme.colorScheme.onSurface,
+                    ),
                 ) {
                     Column(modifier = Modifier.fillMaxWidth()) {
                         Row(
@@ -1078,6 +1125,54 @@ private fun SettingsSectionHeader(title: String) {
 }
 
 @Composable
+private fun <T> CenteredPresetGrid(
+    items: List<T>,
+    phoneColumns: Int,
+    itemContent: @Composable (T, Modifier) -> Unit,
+) {
+    if (items.isEmpty()) return
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val columns = if (maxWidth < 460.dp) {
+            phoneColumns.coerceAtLeast(1)
+        } else {
+            minOf(items.size, 5).coerceAtLeast(1)
+        }
+        val rows = items.chunked(columns)
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            rows.forEach { rowItems ->
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    val missing = columns - rowItems.size
+                    if (missing > 0) {
+                        if (missing % 2 == 0) {
+                            repeat(missing / 2) { Spacer(Modifier.weight(1f)) }
+                        } else {
+                            Spacer(Modifier.weight(missing / 2f))
+                        }
+                    }
+                    rowItems.forEach { item ->
+                        itemContent(item, Modifier.weight(1f))
+                    }
+                    if (missing > 0) {
+                        if (missing % 2 == 0) {
+                            repeat(missing / 2) { Spacer(Modifier.weight(1f)) }
+                        } else {
+                            Spacer(Modifier.weight(missing / 2f))
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun ColorPresetSwatch(
     label: String,
     color: Color,
@@ -1085,6 +1180,7 @@ private fun ColorPresetSwatch(
     showAutoIcon: Boolean,
     showCustomIcon: Boolean,
     onClick: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     val borderColor = if (selected) {
         MaterialTheme.colorScheme.primary
@@ -1099,8 +1195,7 @@ private fun ColorPresetSwatch(
     val iconTint = if (isLightColor(swatchRgb)) Color(0xFF141416) else Color(0xFFF5F5F7)
 
     Column(
-        modifier = Modifier
-            .width(68.dp)
+        modifier = modifier
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
             .padding(vertical = 4.dp, horizontal = 2.dp),

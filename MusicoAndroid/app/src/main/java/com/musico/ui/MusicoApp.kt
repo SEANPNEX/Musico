@@ -99,6 +99,7 @@ import com.musico.ui.theme.LocalThemeStore
 import com.musico.ui.theme.MusicoMotion
 import com.musico.ui.theme.ThemeBackgroundLayer
 import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoScaffoldContentColor
 import com.musico.update.hasAvailableUpdate
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.launch
@@ -307,6 +308,7 @@ private fun MusicoAppContent(
         if (isCompact) {
             Scaffold(
                 containerColor = musicoScaffoldContainerColor(),
+                contentColor = musicoScaffoldContentColor(),
                 contentWindowInsets = WindowInsets(0),
                 snackbarHost = {
                     if (!showFullPlayer && snackbarHostState != null) {
@@ -337,6 +339,7 @@ private fun MusicoAppContent(
                             } else {
                                 NavigationBarDefaults.containerColor
                             },
+                            contentColor = MaterialTheme.colorScheme.onSurface,
                         ) {
                             TopDestination.entries.forEach { dest ->
                                 val destLabel = dest.label(strings)
@@ -387,6 +390,7 @@ private fun MusicoAppContent(
                         } else {
                             NavigationRailDefaults.ContainerColor
                         },
+                        contentColor = MaterialTheme.colorScheme.onSurface,
                         modifier = Modifier
                             .fillMaxHeight()
                             .statusBarsPadding()
@@ -475,7 +479,8 @@ private fun MusicoAppContent(
                                     MaterialTheme.colorScheme.surface.copy(alpha = 0.84f)
                                 } else {
                                     MaterialTheme.colorScheme.surface
-                                }
+                                },
+                                contentColor = MaterialTheme.colorScheme.onSurface,
                             ) {
                                 val displayedPanel = sidePanel ?: lastSidePanel ?: SidePanel.QUEUE
                                 Column(modifier = Modifier.fillMaxSize()) {

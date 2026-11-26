@@ -57,6 +57,7 @@ import com.musico.ui.components.TrackRow
 import com.musico.ui.components.formatTime
 import com.musico.ui.theme.musicoListItemColors
 import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoScaffoldContentColor
 import com.musico.ui.theme.musicoTopAppBarColors
 import kotlin.random.Random
 
@@ -195,6 +196,7 @@ fun ArtistDetailScreen(
     Scaffold(
         modifier = modifier,
         containerColor = musicoScaffoldContainerColor(),
+        contentColor = musicoScaffoldContentColor(),
         contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(

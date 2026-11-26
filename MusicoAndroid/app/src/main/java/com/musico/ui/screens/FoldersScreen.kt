@@ -147,6 +147,7 @@ import com.musico.ui.theme.MusicoMotion
 import com.musico.ui.theme.ThemeStore
 import com.musico.ui.theme.musicoListItemColors
 import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoScaffoldContentColor
 import com.musico.ui.theme.musicoTopAppBarColors
 import com.musico.update.UpdateManager
 import com.musico.update.hasAvailableUpdate
@@ -345,6 +346,7 @@ fun FoldersScreen(
     Scaffold(
         modifier = modifier,
         containerColor = musicoScaffoldContainerColor(),
+        contentColor = musicoScaffoldContentColor(),
         contentWindowInsets = WindowInsets(0),
         topBar = {
             if (activeRef == null) {

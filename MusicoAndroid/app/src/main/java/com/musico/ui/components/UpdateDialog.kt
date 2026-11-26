@@ -356,6 +356,7 @@ private fun ReleaseNotesBox(notes: String) {
     val strings = LocalStrings.current
     Surface(
         color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f),
+        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         shape = MaterialTheme.shapes.small,
         modifier = Modifier.fillMaxWidth(),
     ) {

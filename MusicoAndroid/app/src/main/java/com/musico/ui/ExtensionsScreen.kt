@@ -106,6 +106,7 @@ import com.musico.ui.components.EmptyState
 import com.musico.ui.components.QrCodeCanvas
 import com.musico.ui.components.QrCodeEncoder
 import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoScaffoldContentColor
 import com.musico.ui.theme.musicoTopAppBarColors
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
@@ -196,6 +197,7 @@ fun ExtensionsScreen(
     Scaffold(
         modifier = modifier,
         containerColor = musicoScaffoldContainerColor(),
+        contentColor = musicoScaffoldContentColor(),
         contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(

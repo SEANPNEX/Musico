@@ -36,6 +36,9 @@ val LocalHasBackgroundImage = staticCompositionLocalOf { false }
 fun musicoScaffoldContainerColor(): Color =
     if (LocalHasBackgroundImage.current) Color.Transparent else MaterialTheme.colorScheme.background
 
+@Composable
+fun musicoScaffoldContentColor(): Color = MaterialTheme.colorScheme.onBackground
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun musicoTopAppBarColors(): TopAppBarColors {

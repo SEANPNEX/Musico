@@ -38,6 +38,7 @@ import com.musico.ui.components.TrackActionState
 import com.musico.ui.theme.LocalReduceMotion
 import com.musico.ui.theme.MusicoMotion
 import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoScaffoldContentColor
 import com.musico.ui.theme.musicoTopAppBarColors
 
 enum class LibrarySection {
@@ -152,6 +153,7 @@ fun LibraryScreen(
             Scaffold(
                 modifier = Modifier.fillMaxSize(),
                 containerColor = musicoScaffoldContainerColor(),
+                contentColor = musicoScaffoldContentColor(),
                 contentWindowInsets = WindowInsets(0),
                 topBar = {
                     TopAppBar(

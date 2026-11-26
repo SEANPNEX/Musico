@@ -73,6 +73,7 @@ fun PlayerBar(
         } else {
             MaterialTheme.colorScheme.surfaceContainerHigh
         },
+        contentColor = MaterialTheme.colorScheme.onSurface,
         tonalElevation = if (LocalHasBackgroundImage.current) 0.dp else 3.dp
     ) {
         Column {

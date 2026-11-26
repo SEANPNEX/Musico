@@ -87,6 +87,7 @@ import com.musico.ui.components.formatTime
 import com.musico.ui.components.rememberDragReorderState
 import com.musico.ui.theme.musicoListItemColors
 import com.musico.ui.theme.musicoScaffoldContainerColor
+import com.musico.ui.theme.musicoScaffoldContentColor
 import com.musico.ui.theme.musicoTopAppBarColors
 import kotlin.random.Random
 
@@ -113,6 +114,7 @@ fun PlaylistsScreen(
     Scaffold(
         modifier = modifier,
         containerColor = musicoScaffoldContainerColor(),
+        contentColor = musicoScaffoldContentColor(),
         contentWindowInsets = WindowInsets(0),
         floatingActionButton = {
             FloatingActionButton(onClick = { showCreateDialog = true }) {
@@ -354,6 +356,7 @@ fun PlaylistDetailScreen(
     Scaffold(
         modifier = modifier,
         containerColor = musicoScaffoldContainerColor(),
+        contentColor = musicoScaffoldContentColor(),
         contentWindowInsets = WindowInsets(0),
         topBar = {
             TopAppBar(
