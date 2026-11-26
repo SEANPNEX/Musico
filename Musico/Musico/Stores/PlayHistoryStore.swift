@@ -113,4 +113,105 @@ final class PlayHistoryStore {
         return started(tracks).filter { $0.entry.lastPlayed < cutoff }
             .sorted { $0.entry.lastPlayed < $1.entry.lastPlayed }.map(\.track)
     }
+
+    // MARK: Insights
+
+    struct ArtistStat: Equatable {
+        let artist: String
+        let playCount: Int
+        let artworkKey: String?
+    }
+
+    struct AlbumStat: Equatable {
+        let album: String
+        let artist: String
+        let playCount: Int
+        let artworkKey: String?
+    }
+
+    func topArtists(from tracks: [Track], limit: Int = 5) -> [ArtistStat] {
+        guard limit > 0 else { return [] }
+        struct Accumulator {
+            var playCount: Int = 0
+            var artworkKey: String?
+            var latestPlay: Date = .distantPast
+        }
+        var byArtist: [String: Accumulator] = [:]
+        for (track, entry) in played(tracks) {
+            var acc = byArtist[track.artist] ?? Accumulator()
+            acc.playCount += entry.count
+            if acc.artworkKey == nil, let key = track.artworkKey {
+                acc.artworkKey = key
+            }
+            if entry.lastPlayed > acc.latestPlay {
+                acc.latestPlay = entry.lastPlayed
+            }
+            byArtist[track.artist] = acc
+        }
+        let sorted = byArtist.sorted { lhs, rhs in
+            if lhs.value.playCount != rhs.value.playCount {
+                return lhs.value.playCount > rhs.value.playCount
+            }
+            if lhs.value.latestPlay != rhs.value.latestPlay {
+                return lhs.value.latestPlay > rhs.value.latestPlay
+            }
+            return lhs.key.localizedStandardCompare(rhs.key) == .orderedAscending
+        }
+        return sorted.prefix(limit).map {
+            ArtistStat(artist: $0.key, playCount: $0.value.playCount, artworkKey: $0.value.artworkKey)
+        }
+    }
+
+    func topAlbums(from tracks: [Track], limit: Int = 5) -> [AlbumStat] {
+        guard limit > 0 else { return [] }
+        struct GroupKey: Hashable {
+            let album: String
+            let artist: String
+        }
+        struct Accumulator {
+            var playCount: Int = 0
+            var artworkKey: String?
+            var latestPlay: Date = .distantPast
+        }
+        var byAlbum: [GroupKey: Accumulator] = [:]
+        for (track, entry) in played(tracks) {
+            let key = GroupKey(album: track.album, artist: track.albumArtist)
+            var acc = byAlbum[key] ?? Accumulator()
+            acc.playCount += entry.count
+            if acc.artworkKey == nil, let art = track.artworkKey {
+                acc.artworkKey = art
+            }
+            if entry.lastPlayed > acc.latestPlay {
+                acc.latestPlay = entry.lastPlayed
+            }
+            byAlbum[key] = acc
+        }
+        let sorted = byAlbum.sorted { lhs, rhs in
+            if lhs.value.playCount != rhs.value.playCount {
+                return lhs.value.playCount > rhs.value.playCount
+            }
+            if lhs.value.latestPlay != rhs.value.latestPlay {
+                return lhs.value.latestPlay > rhs.value.latestPlay
+            }
+            let titleCmp = lhs.key.album.localizedStandardCompare(rhs.key.album)
+            if titleCmp != .orderedSame {
+                return titleCmp == .orderedAscending
+            }
+            return lhs.key.artist.localizedStandardCompare(rhs.key.artist) == .orderedAscending
+        }
+        return sorted.prefix(limit).map {
+            AlbumStat(album: $0.key.album, artist: $0.key.artist, playCount: $0.value.playCount, artworkKey: $0.value.artworkKey)
+        }
+    }
+
+    func playedLibraryFraction(from tracks: [Track]) -> Double {
+        let eligible = tracks.filter { !$0.isEphemeral && !Self.isEphemeralTrackID($0.id) }
+        guard !eligible.isEmpty else { return 0 }
+        let playedCount = eligible.reduce(into: 0) { count, track in
+            if self.count(for: track.id) > 0 {
+                count += 1
+            }
+        }
+        return Double(playedCount) / Double(eligible.count)
+    }
 }

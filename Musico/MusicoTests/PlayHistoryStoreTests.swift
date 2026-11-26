@@ -90,4 +90,84 @@ final class PlayHistoryStoreTests: XCTestCase {
         XCTAssertEqual(store.totalPlays, 2)
         XCTAssertEqual(PlayHistoryStore(directory: dir).count(for: "x"), 0)
     }
+
+    func testTopArtistsAggregationSortingAndLimit() {
+        var t1 = makeTrack("1.mp3", root: root, title: "S1", artist: "Artist A", album: "Alb1")
+        t1.artworkKey = "artA1"
+        var t2 = makeTrack("2.mp3", root: root, title: "S2", artist: "Artist A", album: "Alb2")
+        t2.artworkKey = "artA2"
+        var t3 = makeTrack("3.mp3", root: root, title: "S3", artist: "Artist B", album: "Alb3")
+        t3.artworkKey = "artB"
+        let t4 = makeTrack("4.mp3", root: root, title: "S4", artist: "Artist C", album: "Alb4")
+        let t5 = makeTrack("5.mp3", root: root, title: "S5", artist: "Never Played", album: "Alb5")
+        let ephemeral = Track.makeEphemeral(
+            extensionID: "demo",
+            info: CloudTrackInfo(remoteTrackID: "r1", relativePath: "r1.mp3", title: "Cloud", artist: "Cloud Artist", album: "Cloud Alb", trackNumber: nil, duration: 10, artworkURL: nil)
+        )
+        let all = [t1, t2, t3, t4, t5, ephemeral]
+
+        let store = PlayHistoryStore(directory: dir)
+        store.recordPlay(t1.id, at: now - 3 * day)
+        store.recordPlay(t1.id, at: now - 2 * day)
+        store.recordPlay(t2.id, at: now - day)
+        store.recordPlay(t3.id, at: now)
+        store.recordPlay(t3.id, at: now)
+        store.recordPlay(t3.id, at: now)
+        store.recordPlay(t3.id, at: now)
+        store.recordPlay(t4.id, at: now - 4 * day)
+        store.markStarted(t5.id, at: now)
+
+        let topAll = store.topArtists(from: all, limit: 5)
+        XCTAssertEqual(topAll, [
+            PlayHistoryStore.ArtistStat(artist: "Artist B", playCount: 4, artworkKey: "artB"),
+            PlayHistoryStore.ArtistStat(artist: "Artist A", playCount: 3, artworkKey: "artA1"),
+            PlayHistoryStore.ArtistStat(artist: "Artist C", playCount: 1, artworkKey: nil)
+        ])
+
+        let topTwo: [PlayHistoryStore.ArtistStat] = store.topArtists(from: all, limit: 2)
+        XCTAssertEqual(topTwo.map(\.artist), ["Artist B", "Artist A"])
+    }
+
+    func testTopAlbumsAggregationSortingAndLimit() {
+        var t1 = makeTrack("1.mp3", root: root, title: "S1", artist: "Artist A", album: "Debut")
+        t1.artworkKey = "cover1"
+        var t2 = makeTrack("2.mp3", root: root, title: "S2", artist: "Artist A", album: "Debut")
+        t2.artworkKey = "cover1"
+        var t3 = makeTrack("3.mp3", root: root, title: "S3", artist: "Artist B", album: "Encore")
+        t3.artworkKey = "cover2"
+        let t4 = makeTrack("4.mp3", root: root, title: "S4", artist: "Artist C", album: "Unplayed")
+        let all = [t1, t2, t3, t4]
+
+        let store = PlayHistoryStore(directory: dir)
+        store.recordPlay(t1.id, at: now - 2 * day)
+        store.recordPlay(t2.id, at: now - day)
+        store.recordPlay(t2.id, at: now)
+        store.recordPlay(t3.id, at: now - day)
+        store.recordPlay(t3.id, at: now)
+
+        let top = store.topAlbums(from: all, limit: 5)
+        XCTAssertEqual(top, [
+            PlayHistoryStore.AlbumStat(album: "Debut", artist: "Artist A", playCount: 3, artworkKey: "cover1"),
+            PlayHistoryStore.AlbumStat(album: "Encore", artist: "Artist B", playCount: 2, artworkKey: "cover2")
+        ])
+        XCTAssertEqual(store.topAlbums(from: all, limit: 1).count, 1)
+    }
+
+    func testPlayedLibraryFraction() {
+        let store = PlayHistoryStore(directory: dir)
+        XCTAssertEqual(store.playedLibraryFraction(from: []), 0, accuracy: 0.0001)
+
+        let all = tracks("a", "b", "c", "d")
+        let ephemeral = Track.makeEphemeral(
+            extensionID: "demo",
+            info: CloudTrackInfo(remoteTrackID: "r1", relativePath: "r1.mp3", title: "Cloud", artist: "A", album: "B", trackNumber: nil, duration: 10, artworkURL: nil)
+        )
+        store.recordPlay(all[0].id, at: now)
+        store.markStarted(all[1].id, at: now) // 0 counted plays
+
+        XCTAssertEqual(store.playedLibraryFraction(from: all + [ephemeral]), 0.25, accuracy: 0.0001)
+
+        store.recordPlay(all[2].id, at: now)
+        XCTAssertEqual(store.playedLibraryFraction(from: all + [ephemeral]), 0.5, accuracy: 0.0001)
+    }
 }

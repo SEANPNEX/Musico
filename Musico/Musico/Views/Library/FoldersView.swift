@@ -111,6 +111,9 @@ struct FoldersView: View {
                              : L10n.tr("Looking for music…"))
                             .foregroundStyle(.secondary)
                     }
+                    if library.tracks.isEmpty && library.roots.contains(where: { $0.kind.isCloud }) {
+                        SkeletonTrackListPlaceholder(count: 4)
+                    }
                 }
             }
         }
@@ -742,6 +745,9 @@ struct FolderDetailView: View {
                     .foregroundStyle(.secondary)
                 }
                 .padding(.vertical, 2)
+                if everything.isEmpty && contents.folders.isEmpty {
+                    SkeletonTrackListPlaceholder(count: 6)
+                }
             }
             if everything.isEmpty && contents.folders.isEmpty && syncProgress == nil {
                 ContentUnavailableView(

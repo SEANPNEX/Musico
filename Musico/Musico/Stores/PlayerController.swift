@@ -785,9 +785,15 @@ final class PlayerController {
 
     func seek(to time: TimeInterval) {
         guard isLoaded else { return }
-        engine.seek(to: time)
+        let clamped = min(max(time, 0), max(duration, 0))
+        engine.seek(to: clamped)
         currentTime = engine.currentTime
         updateNowPlaying()
+    }
+
+    func seek(by delta: TimeInterval) {
+        let base = isLoaded ? engine.currentTime : currentTime
+        seek(to: base + delta)
     }
 
     func jump(to index: Int) {

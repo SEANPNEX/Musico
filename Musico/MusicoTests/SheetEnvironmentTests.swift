@@ -283,17 +283,30 @@ final class SheetEnvironmentTests: XCTestCase {
         let queues = QueueStore(directory: state)
         let extraQueue = queues.addQueue(name: "Queue 2")
         let history = PlayHistoryStore(directory: state)
+        if let first = ids.first {
+            history.recordPlay(first)
+        }
         let player = PlayerController(library: library, queues: queues, history: history, engine: AudioEngine(),
                                       settingsURL: state.appendingPathComponent("settings.json"))
         defer { player.shutdown() }
         player.addToQueue(ids, queue: extraQueue)
+
+        let firstAlbum = try XCTUnwrap(library.albums.first)
+        let firstArtist = try XCTUnwrap(library.artists.first)
 
         let viewsToMount: [(String, AnyView)] = [
             ("PlaylistsView", AnyView(NavigationStack { PlaylistsView() })),
             ("PlaylistDetailView.favourites", AnyView(NavigationStack { PlaylistDetailView(ref: .favourites) })),
             ("PlaylistDetailView.user", AnyView(NavigationStack { PlaylistDetailView(ref: .user(playlistID)) })),
             ("QueuesView", AnyView(NavigationStack { QueuesView() })),
-            ("SidebarRootView", AnyView(SidebarRootView(openPlayer: {})))
+            ("SidebarRootView", AnyView(SidebarRootView(openPlayer: {}))),
+            ("CommandPaletteView", AnyView(CommandPaletteView())),
+            ("CompactMiniWindowView", AnyView(CompactMiniWindowView())),
+            ("StatsView", AnyView(NavigationStack { StatsView() })),
+            ("ArtistsView", AnyView(NavigationStack { ArtistsView() })),
+            ("ArtistDetailView", AnyView(NavigationStack { ArtistDetailView(artist: firstArtist) })),
+            ("AlbumDetailView", AnyView(NavigationStack { AlbumDetailView(album: firstAlbum) })),
+            ("SkeletonViews", AnyView(List { SkeletonTrackListPlaceholder(count: 3) }))
         ]
 
         let scene = try XCTUnwrap(UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.first)

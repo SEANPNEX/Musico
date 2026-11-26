@@ -613,93 +613,100 @@ struct PlaylistDetailView: View {
 
     @ViewBuilder
     private func heroHeader(tracks: [Track], trackIDs: [String], totalDuration: TimeInterval) -> some View {
-        if usesWideHero {
-            HStack(alignment: .bottom, spacing: 22) {
-                PlaylistArtworkView(tracks: tracks, isFavourites: isFavourites, size: 172, cornerRadius: 14)
-                    .shadow(color: .black.opacity(0.14), radius: 14, y: 6)
+        let heroArtworkKey = tracks.lazy.compactMap(\.artworkKey).first
+        let fallbackColor = isFavourites ? Color.pink : themeManager.accentColor
+        Group {
+            if usesWideHero {
+                HStack(alignment: .bottom, spacing: 22) {
+                    PlaylistArtworkView(tracks: tracks, isFavourites: isFavourites, size: 172, cornerRadius: 14)
+                        .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
 
-                VStack(alignment: .leading, spacing: 10) {
-                    Text(isFavourites ? L10n.tr("Favourites") : L10n.tr("Playlist"))
-                        .font(.caption.weight(.semibold))
-                        .foregroundStyle(isFavourites ? Color.pink : themeManager.accentColor)
-                        .textCase(.uppercase)
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(isFavourites ? L10n.tr("Favourites") : L10n.tr("Playlist"))
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(isFavourites ? Color.pink : themeManager.accentColor)
+                            .textCase(.uppercase)
 
+                        Text(title)
+                            .font(.title.bold())
+                            .lineLimit(2)
+
+                        Text(formatPlaylistSummary(count: tracks.count, duration: totalDuration))
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 10) {
+                            Button {
+                                player.playInNamedQueue(trackIDs, name: title, startAt: 0, shuffle: false)
+                            } label: {
+                                Label(L10n.tr("Play"), systemImage: "play.fill")
+                            }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(trackIDs.isEmpty)
+
+                            Button {
+                                let start = Int.random(in: 0..<max(trackIDs.count, 1))
+                                player.playInNamedQueue(trackIDs, name: title, startAt: start, shuffle: true)
+                            } label: {
+                                Label(L10n.tr("Shuffle"), systemImage: "shuffle")
+                            }
+                            .buttonStyle(.bordered)
+                            .disabled(trackIDs.isEmpty)
+
+                            if playlistID != nil {
+                                Button {
+                                    showAddSongs = true
+                                } label: {
+                                    Label(L10n.tr("Add Songs"), systemImage: "plus")
+                                }
+                                .buttonStyle(.bordered)
+                            }
+
+                            if playlistID != nil || !trackIDs.isEmpty {
+                                Menu {
+                                    detailMoreMenu(trackIDs: trackIDs)
+                                } label: {
+                                    Image(systemName: "ellipsis")
+                                        .frame(width: 24, height: 20)
+                                }
+                                .buttonStyle(.bordered)
+                                .accessibilityLabel(L10n.tr("More"))
+                            }
+                        }
+                        .controlSize(.regular)
+                        .padding(.top, 2)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                VStack(spacing: 12) {
+                    PlaylistArtworkView(tracks: tracks, isFavourites: isFavourites, size: 180, cornerRadius: 14)
+                        .shadow(color: .black.opacity(0.22), radius: 18, y: 8)
                     Text(title)
-                        .font(.title.bold())
-                        .lineLimit(2)
-
+                        .font(.title2.weight(.bold))
+                        .multilineTextAlignment(.center)
                     Text(formatPlaylistSummary(count: tracks.count, duration: totalDuration))
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
-
-                    HStack(spacing: 10) {
+                    PlayShuffleButtons(ids: trackIDs, queueName: title)
+                    if playlistID != nil {
                         Button {
-                            player.playInNamedQueue(trackIDs, name: title, startAt: 0, shuffle: false)
+                            showAddSongs = true
                         } label: {
-                            Label(L10n.tr("Play"), systemImage: "play.fill")
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(trackIDs.isEmpty)
-
-                        Button {
-                            let start = Int.random(in: 0..<max(trackIDs.count, 1))
-                            player.playInNamedQueue(trackIDs, name: title, startAt: start, shuffle: true)
-                        } label: {
-                            Label(L10n.tr("Shuffle"), systemImage: "shuffle")
+                            Label(L10n.tr("Add Songs"), systemImage: "plus")
+                                .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(.bordered)
-                        .disabled(trackIDs.isEmpty)
-
-                        if playlistID != nil {
-                            Button {
-                                showAddSongs = true
-                            } label: {
-                                Label(L10n.tr("Add Songs"), systemImage: "plus")
-                            }
-                            .buttonStyle(.bordered)
-                        }
-
-                        if playlistID != nil || !trackIDs.isEmpty {
-                            Menu {
-                                detailMoreMenu(trackIDs: trackIDs)
-                            } label: {
-                                Image(systemName: "ellipsis")
-                                    .frame(width: 24, height: 20)
-                            }
-                            .buttonStyle(.bordered)
-                            .accessibilityLabel(L10n.tr("More"))
-                        }
                     }
-                    .controlSize(.regular)
-                    .padding(.top, 2)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(maxWidth: .infinity)
             }
-            .padding(.vertical, 8)
-        } else {
-            VStack(spacing: 12) {
-                PlaylistArtworkView(tracks: tracks, isFavourites: isFavourites, size: 180, cornerRadius: 14)
-                    .shadow(color: .black.opacity(0.14), radius: 12, y: 5)
-                Text(title)
-                    .font(.title2.weight(.bold))
-                    .multilineTextAlignment(.center)
-                Text(formatPlaylistSummary(count: tracks.count, duration: totalDuration))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                PlayShuffleButtons(ids: trackIDs, queueName: title)
-                if playlistID != nil {
-                    Button {
-                        showAddSongs = true
-                    } label: {
-                        Label(L10n.tr("Add Songs"), systemImage: "plus")
-                            .frame(maxWidth: .infinity)
-                    }
-                    .buttonStyle(.bordered)
-                }
-            }
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 6)
         }
+        .padding(16)
+        .background {
+            HeroHeaderBackdrop(artworkKey: heroArtworkKey, fallbackColor: fallbackColor)
+        }
+        .padding(.vertical, 4)
     }
 
     private var emptyStateView: some View {

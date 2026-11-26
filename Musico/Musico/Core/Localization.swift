@@ -210,6 +210,16 @@ enum L10n {
     }
 
     @MainActor
+    static func albumCount(_ count: Int) -> String {
+        switch resolved {
+        case .en:
+            return count == 1 ? "1 album" : "\(count) albums"
+        case .zhHans:
+            return "\(count) 张专辑"
+        }
+    }
+
+    @MainActor
     static func addSongsCount(_ count: Int) -> String {
         switch resolved {
         case .en:
@@ -1057,5 +1067,37 @@ enum L10n {
         "Mute": "静音",
         "Unmute": "取消静音",
         "Volume": "音量",
+
+        // Wave B: Command Palette, Desktop Shortcuts, Drag & Drop, Mini Window, Visual Polish
+        "Actions": "操作",
+        "Now Playing": "正在播放",
+        "Quick Jump": "快速跳转",
+        "Quick Jump…": "快速跳转…",
+        "Jump to songs, albums, artists, playlists, queues, or actions…": "跳转到歌曲、专辑、艺术家、歌单、队列或操作…",
+        "Try another keyword to jump to songs, albums, artists, or actions.": "请尝试其他关键词以跳转到歌曲、专辑、艺术家或操作。",
+        "Navigate": "选择",
+        "Open": "打开",
+        "Esc to close": "按 Esc 关闭",
+        "Switched to %@": "已切换到 %@",
+        "Rescanning library…": "正在重新扫描资料库…",
+        "Toggle Lyrics Panel": "切换歌词面板",
+        "Toggle Queue Panel": "切换队列面板",
+        "Mini Player": "迷你播放器",
+        "Open Main Window": "打开主窗口",
+        "Seek Backward 10s": "快退 10 秒",
+        "Seek Forward 10s": "快进 10 秒",
+        "Volume Up": "增大音量",
+        "Volume Down": "减小音量",
+        "Volume: %@": "音量：%@",
+        "Muted": "已静音",
+        "Unmuted": "已取消静音",
+        "Drop folders or audio files to add to Musico": "拖放文件夹或音频文件以添加到 Musico",
+        "Added folder “%@”": "已添加文件夹“%@”",
+        "Added and playing %@": "已添加并播放 %@",
+        "Playing %@": "正在播放 %@",
+        "Insights": "洞察",
+        "Library Explored": "资料库探索度",
+        "Top Artists": "常听艺术家",
+        "Top Albums": "常听专辑",
     ]
 }

@@ -101,5 +101,36 @@ final class QueueStoreTests: XCTestCase {
         let nav = AppNavigation()
         XCTAssertEqual(nav.selectedTab, .queues)
         XCTAssertEqual(nav.sidebarSelection, .queues)
+        XCTAssertNil(nav.sidePanel)
+        XCTAssertFalse(nav.showCommandPalette)
+    }
+
+    func testAppNavigationPersistsSidebarAndSidePanelAndTogglesPanel() {
+        let suiteName = "AppNavigationTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let nav = AppNavigation(defaults: defaults)
+        nav.selectSidebar(.albums)
+        nav.toggleSidePanel(.lyrics)
+        XCTAssertEqual(nav.sidebarSelection, .albums)
+        XCTAssertEqual(nav.sidePanel, .lyrics)
+
+        // Playlist UUID selection should not overwrite top-level persistence.
+        nav.selectSidebar(.playlist(UUID()))
+
+        let reloaded = AppNavigation(defaults: defaults)
+        XCTAssertEqual(reloaded.sidebarSelection, .albums)
+        XCTAssertEqual(reloaded.sidePanel, .lyrics)
+
+        reloaded.toggleSidePanel(.lyrics)
+        XCTAssertNil(reloaded.sidePanel)
+        reloaded.toggleSidePanel(.queue)
+        XCTAssertEqual(reloaded.sidePanel, .queue)
+
+        // Queue panel is suppressed when main selection is .queues.
+        reloaded.selectSidebar(.queues)
+        reloaded.toggleSidePanel(.queue)
+        XCTAssertNil(reloaded.sidePanel)
     }
 }

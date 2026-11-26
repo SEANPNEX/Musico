@@ -352,16 +352,7 @@ struct SongsView: View {
         cloudSearch: CloudSearchController
     ) -> some View {
         if cloudSearch.isLoading && cloudSearch.results.isEmpty {
-            HStack(spacing: 12) {
-                Spacer()
-                ProgressView()
-                Text(L10n.tr("Searching…"))
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
-                Spacer()
-            }
-            .padding(.vertical, 36)
-            .listRowSeparator(.hidden)
+            SkeletonTrackListPlaceholder(count: 6)
         } else if let error = cloudSearch.error, cloudSearch.results.isEmpty {
             cloudErrorView(error: error, ext: ext, cloudSearch: cloudSearch)
                 .listRowSeparator(.hidden)

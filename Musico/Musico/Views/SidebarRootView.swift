@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 enum SidebarItem: Hashable {
     case folders, extensions, songs, albums, artists, playlists, favourites, playlist(UUID), queues, stats, settings
@@ -22,31 +23,44 @@ struct SidebarRootView: View {
     @Environment(\.lyricsStore) private var lyricsStore
     @Environment(\.languageManager) private var languageManager
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.toastManager) private var toastManager
     #if targetEnvironment(macCatalyst)
     @Environment(\.updateManager) private var updateManager
     #endif
-    @State private var sidePanel: SidePanel?
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var lastValidSelection: SidebarItem = .queues
     @State private var showDownloadsSheet = false
     @State private var renamingPlaylist: Playlist?
+    @State private var isDropTargeted = false
 
     private var activeSelection: SidebarItem {
         navigation.sidebarSelection ?? lastValidSelection
     }
 
     var body: some View {
+        @Bindable var navigation = navigation
         VStack(spacing: 0) {
             splitView
             PlayerBar(
-                sidePanel: $sidePanel,
+                sidePanel: $navigation.sidePanel,
                 isQueueMainActive: activeSelection == .queues,
                 onOpen: openPlayer
             )
         }
         .background { ThemeBackdropView() }
+        .overlay {
+            if isDropTargeted {
+                dropOverlayBanner
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            handleDroppedProviders(providers)
+        }
         .onAppear {
             lastValidSelection = navigation.sidebarSelection ?? .queues
+            if activeSelection == .queues && navigation.sidePanel == .queue {
+                navigation.sidePanel = nil
+            }
         }
         .onChange(of: navigation.sidebarSelection) { oldValue, newValue in
             guard let newValue else {
@@ -58,12 +72,9 @@ struct SidebarRootView: View {
                 if oldValue == .songs && navigation.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                     navigation.isSearchPresented = false
                 }
-                if !navigation.sidebarDetailPath.isEmpty {
-                    navigation.sidebarDetailPath = NavigationPath()
-                }
-                if newValue == .queues && sidePanel == .queue {
+                if newValue == .queues && navigation.sidePanel == .queue {
                     withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
-                        sidePanel = nil
+                        navigation.sidePanel = nil
                     }
                 }
             }
@@ -86,9 +97,9 @@ struct SidebarRootView: View {
         if activeSelection == .songs && navigation.searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             navigation.isSearchPresented = false
         }
-        if item == .queues && sidePanel == .queue {
+        if item == .queues && navigation.sidePanel == .queue {
             withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
-                sidePanel = nil
+                navigation.sidePanel = nil
             }
         }
         navigation.selectSidebar(item)
@@ -106,10 +117,10 @@ struct SidebarRootView: View {
             }
         }
         .navigationSplitViewStyle(.balanced)
-        .inspector(isPresented: Binding(get: { sidePanel != nil }, set: {
+        .inspector(isPresented: Binding(get: { navigation.sidePanel != nil }, set: {
             let show = $0
             withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
-                if !show { sidePanel = nil }
+                if !show { navigation.sidePanel = nil }
             }
         })) {
             inspectorContent
@@ -330,15 +341,184 @@ struct SidebarRootView: View {
     private var panel: some View {
         let closePanel = {
             withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
-                sidePanel = nil
+                navigation.sidePanel = nil
             }
         }
-        switch sidePanel {
+        switch navigation.sidePanel {
         case .lyrics: LyricsView(onDone: closePanel)
         case .queue, nil:
             NavigationStack {
                 QueuesView(embeddedInInspector: true, onDone: closePanel)
                     .navigationBarTitleDisplayMode(.inline)
+            }
+        }
+    }
+
+    private var dropOverlayBanner: some View {
+        ZStack {
+            Color.black.opacity(0.24)
+            VStack(spacing: 12) {
+                Image(systemName: "arrow.down.doc.fill")
+                    .font(.system(size: 36, weight: .semibold))
+                    .foregroundStyle(themeManager.accentColor)
+                Text(L10n.tr("Drop folders or audio files to add to Musico"))
+                    .font(.headline)
+                    .multilineTextAlignment(.center)
+            }
+            .padding(.horizontal, 28)
+            .padding(.vertical, 22)
+            .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 18, style: .continuous)
+                    .strokeBorder(
+                        themeManager.accentColor.opacity(0.65),
+                        style: StrokeStyle(lineWidth: 2, dash: [8, 6])
+                    )
+            }
+            .shadow(color: .black.opacity(0.22), radius: 20, y: 8)
+        }
+        .ignoresSafeArea()
+        .allowsHitTesting(false)
+    }
+
+    private func handleDroppedProviders(_ providers: [NSItemProvider]) -> Bool {
+        let validProviders = providers.filter { $0.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) }
+        guard !validProviders.isEmpty else { return false }
+        Task { @MainActor in
+            var urls: [URL] = []
+            for provider in validProviders {
+                if let url = await Self.loadDroppedFileURL(from: provider) {
+                    urls.append(url)
+                }
+            }
+            guard !urls.isEmpty else { return }
+            await processDroppedURLs(urls)
+        }
+        return true
+    }
+
+    private func processDroppedURLs(_ urls: [URL]) async {
+        var matchedTrackIDs: [String] = []
+        var audioURLsToImport: [URL] = []
+
+        for url in urls {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+
+            var isDir: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { continue }
+
+            if isDir.boolValue {
+                do {
+                    try await library.addRoot(url: url)
+                    toastManager.show(
+                        L10n.tr("Added folder “%@”", url.lastPathComponent),
+                        systemImage: "folder.badge.plus"
+                    )
+                } catch LibraryError.duplicateRoot {
+                    toastManager.show(
+                        L10n.tr("That location is already in your library."),
+                        systemImage: "folder"
+                    )
+                } catch {
+                    toastManager.show(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                }
+            } else if FolderScanner.audioExtensions.contains(url.pathExtension.lowercased()) {
+                if let existing = findExistingTrack(for: url) {
+                    matchedTrackIDs.append(existing.id)
+                } else {
+                    audioURLsToImport.append(url)
+                }
+            }
+        }
+
+        var importedTrackIDs: [String] = []
+        if !audioURLsToImport.isEmpty {
+            if library.appFolderRemoved {
+                await library.restoreAppFolder()
+            }
+            let targetDir = library.defaultLocalSaveDirectory
+            let fm = FileManager.default
+            try? fm.createDirectory(at: targetDir, withIntermediateDirectories: true)
+
+            var copiedURLs: [URL] = []
+            for srcURL in audioURLsToImport {
+                let scoped = srcURL.startAccessingSecurityScopedResource()
+                defer { if scoped { srcURL.stopAccessingSecurityScopedResource() } }
+
+                let destURL = Self.uniqueDestinationURL(in: targetDir, fileName: srcURL.lastPathComponent)
+                do {
+                    try fm.copyItem(at: srcURL, to: destURL)
+                    copiedURLs.append(destURL)
+                } catch {
+                    toastManager.show(error.localizedDescription, systemImage: "exclamationmark.triangle.fill")
+                }
+            }
+
+            if !copiedURLs.isEmpty {
+                await library.rescan()
+                for copiedURL in copiedURLs {
+                    if let imported = findExistingTrack(for: copiedURL) {
+                        importedTrackIDs.append(imported.id)
+                    }
+                }
+            }
+        }
+
+        let playIDs = matchedTrackIDs + importedTrackIDs
+        guard !playIDs.isEmpty else { return }
+        player.play(playIDs, startAt: 0)
+        if !importedTrackIDs.isEmpty {
+            toastManager.show(
+                L10n.tr("Added and playing %@", L10n.songCount(importedTrackIDs.count)),
+                systemImage: "play.circle.fill"
+            )
+        } else {
+            toastManager.show(
+                L10n.tr("Playing %@", L10n.songCount(matchedTrackIDs.count)),
+                systemImage: "play.circle.fill"
+            )
+        }
+    }
+
+    private func findExistingTrack(for url: URL) -> Track? {
+        guard let match = library.containingLocalRoot(for: url) else { return nil }
+        let targetRel = LibraryRoot.normalizeFolderPath(match.relativePath)
+        return library.tracks.first {
+            $0.rootID == match.root.id && LibraryRoot.normalizeFolderPath($0.relativePath) == targetRel
+        }
+    }
+
+    private static func uniqueDestinationURL(in directory: URL, fileName: String) -> URL {
+        let fm = FileManager.default
+        let initial = directory.appendingPathComponent(fileName, isDirectory: false)
+        guard fm.fileExists(atPath: initial.path) else { return initial }
+        let base = initial.deletingPathExtension().lastPathComponent
+        let ext = initial.pathExtension
+        for index in 1...999 {
+            let candidateName = ext.isEmpty ? "\(base)-\(index)" : "\(base)-\(index).\(ext)"
+            let candidate = directory.appendingPathComponent(candidateName, isDirectory: false)
+            if !fm.fileExists(atPath: candidate.path) {
+                return candidate
+            }
+        }
+        return directory.appendingPathComponent("\(UUID().uuidString)-\(fileName)", isDirectory: false)
+    }
+
+    private nonisolated static func loadDroppedFileURL(from provider: NSItemProvider) async -> URL? {
+        await withCheckedContinuation { continuation in
+            provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { item, _ in
+                if let url = item as? URL {
+                    continuation.resume(returning: url)
+                } else if let data = item as? Data,
+                          let url = URL(dataRepresentation: data, relativeTo: nil) {
+                    continuation.resume(returning: url)
+                } else if let str = item as? String,
+                          let url = URL(string: str) {
+                    continuation.resume(returning: url)
+                } else {
+                    continuation.resume(returning: nil)
+                }
             }
         }
     }

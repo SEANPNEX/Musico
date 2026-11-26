@@ -82,8 +82,24 @@ struct RootView: View {
                     ToastOverlayView(bottomPadding: toastPadding)
                         .zIndex(2)
                 }
+                if navigation.showCommandPalette {
+                    Color.black.opacity(0.28)
+                        .ignoresSafeArea()
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            navigation.showCommandPalette = false
+                        }
+                        .zIndex(4)
+
+                    CommandPaletteView()
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .padding(.top, 72)
+                        .transition(reduceMotion ? .opacity : .scale(scale: 0.96, anchor: .top).combined(with: .opacity))
+                        .zIndex(5)
+                }
             }
             .animation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.88), value: localShowPlayer && layout == .sidebar)
+            .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.88), value: navigation.showCommandPalette)
             // The full player is a sheet over the tabs and an in-window overlay over the sidebar layout.
             .sheet(isPresented: playerShown(when: layout == .tabs)) {
                 fullPlayerView()

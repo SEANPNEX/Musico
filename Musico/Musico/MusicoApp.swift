@@ -12,7 +12,7 @@ final class AppModel {
     let player: PlayerController
     let lyrics: LyricsStore
     let history: PlayHistoryStore
-    let navigation = AppNavigation()
+    let navigation = AppNavigation(defaults: .standard)
     let language = LanguageManager.shared
     let theme = ThemeManager.shared
     let downloadManager = DownloadManager()
@@ -54,9 +54,19 @@ extension EnvironmentValues {
 struct MusicoApp: App {
     @State private var model = AppModel()
     @Environment(\.scenePhase) private var scenePhase
+    #if targetEnvironment(macCatalyst)
+    @Environment(\.openWindow) private var openWindow
+    #endif
 
     var body: some Scene {
-        WindowGroup {
+        mainWindowScene
+        #if targetEnvironment(macCatalyst)
+        miniPlayerScene
+        #endif
+    }
+
+    private var mainWindowScene: some Scene {
+        WindowGroup(id: "main") {
             RootView()
                 .environment(model.library)
                 .environment(model.queues)
@@ -68,6 +78,7 @@ struct MusicoApp: App {
                 .environment(\.extensionStore, model.extensions)
                 .environment(\.languageManager, model.language)
                 .environment(\.locale, model.language.effectiveLocale)
+                .environment(\.toastManager, ToastManager.shared)
                 .applyTheme(model.theme)
                 #if targetEnvironment(macCatalyst)
                 .environment(\.updateManager, model.updateManager)
@@ -115,6 +126,11 @@ struct MusicoApp: App {
             }
 
             CommandMenu(L10n.tr("Library")) {
+                Button(L10n.tr("Quick Jump…")) {
+                    model.navigation.showCommandPalette.toggle()
+                }
+                .keyboardShortcut("k", modifiers: .command)
+
                 Button(L10n.tr("Find Songs")) {
                     model.navigation.openSearchFocus()
                 }
@@ -144,6 +160,23 @@ struct MusicoApp: App {
                     .keyboardShortcut("7", modifiers: .command)
                 Button(L10n.tr("Extensions")) { model.navigation.selectSidebar(.extensions) }
                     .keyboardShortcut("8", modifiers: .command)
+
+                Divider()
+
+                Button(L10n.tr("Toggle Lyrics Panel")) {
+                    model.navigation.toggleSidePanel(.lyrics)
+                }
+                .keyboardShortcut("l", modifiers: [.command, .shift])
+
+                Button(L10n.tr("Toggle Queue Panel")) {
+                    model.navigation.toggleSidePanel(.queue)
+                }
+                .keyboardShortcut("q", modifiers: [.command, .shift])
+
+                Button(L10n.tr("Mini Player")) {
+                    openWindow(id: "mini-player")
+                }
+                .keyboardShortcut("n", modifiers: [.command, .shift])
             }
 
             CommandMenu(L10n.tr("Playback")) {
@@ -164,6 +197,55 @@ struct MusicoApp: App {
                 }
                 .keyboardShortcut(.rightArrow, modifiers: .command)
                 .disabled(model.player.currentTrack == nil)
+
+                Button(L10n.tr("Seek Backward 10s")) {
+                    model.player.seek(by: -10)
+                }
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .shift])
+                .disabled(model.player.currentTrack == nil)
+
+                Button(L10n.tr("Seek Forward 10s")) {
+                    model.player.seek(by: 10)
+                }
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .shift])
+                .disabled(model.player.currentTrack == nil)
+
+                Divider()
+
+                Button(L10n.tr("Volume Up")) {
+                    let next = min(1.0, model.player.volume + 0.05)
+                    model.player.volume = next
+                    if model.player.isMuted { model.player.isMuted = false }
+                    let pct = Int((model.player.volume * 100).rounded())
+                    ToastManager.shared.show(
+                        L10n.tr("Volume: %@", "\(pct)%"),
+                        systemImage: "speaker.wave.2.fill",
+                        duration: 1.5
+                    )
+                }
+                .keyboardShortcut(.upArrow, modifiers: .command)
+
+                Button(L10n.tr("Volume Down")) {
+                    let next = max(0.0, model.player.volume - 0.05)
+                    model.player.volume = next
+                    let pct = Int(((model.player.isMuted ? 0 : model.player.volume) * 100).rounded())
+                    ToastManager.shared.show(
+                        L10n.tr("Volume: %@", "\(pct)%"),
+                        systemImage: next <= 0.001 ? "speaker.slash.fill" : "speaker.wave.1.fill",
+                        duration: 1.5
+                    )
+                }
+                .keyboardShortcut(.downArrow, modifiers: .command)
+
+                Button(model.player.isMuted ? L10n.tr("Unmute") : L10n.tr("Mute")) {
+                    model.player.toggleMute()
+                    ToastManager.shared.show(
+                        model.player.isMuted ? L10n.tr("Muted") : L10n.tr("Unmuted"),
+                        systemImage: model.player.isMuted ? "speaker.slash.fill" : "speaker.wave.2.fill",
+                        duration: 1.5
+                    )
+                }
+                .keyboardShortcut("m", modifiers: [.command, .shift])
 
                 Divider()
 
@@ -187,4 +269,23 @@ struct MusicoApp: App {
         }
         #endif
     }
+
+    #if targetEnvironment(macCatalyst)
+    private var miniPlayerScene: some Scene {
+        WindowGroup(L10n.tr("Mini Player"), id: "mini-player") {
+            CompactMiniWindowView()
+                .environment(model.library)
+                .environment(model.queues)
+                .environment(model.player)
+                .environment(model.history)
+                .environment(\.appNavigation, model.navigation)
+                .environment(\.languageManager, model.language)
+                .environment(\.locale, model.language.effectiveLocale)
+                .environment(\.toastManager, ToastManager.shared)
+                .applyTheme(model.theme)
+        }
+        .defaultSize(width: 360, height: 116)
+        .windowResizability(.contentSize)
+    }
+    #endif
 }

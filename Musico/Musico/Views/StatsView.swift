@@ -57,6 +57,10 @@ struct StatsView: View {
         let tracks = self.tracks
         List {
             totals.listRowSeparator(.hidden)
+            if history.totalPlays > 0 {
+                insightsCard
+                    .listRowSeparator(.hidden)
+            }
             if section == .counts {
                 // In the list rather than the bar, so the switcher above keeps the full width.
                 Menu {
@@ -81,6 +85,8 @@ struct StatsView: View {
         .hiddenScrollBackgroundIfThemed(themeManager)
         .navigationTitle(L10n.tr("Stats"))
         .navigationBarTitleDisplayMode(.inline)
+        .navigationDestination(for: String.self) { ArtistDetailView(artist: $0) }
+        .navigationDestination(for: LibraryStore.Album.self) { AlbumDetailView(album: $0) }
         .animation(.easeInOut(duration: 0.18), value: section)
         .animation(.easeInOut(duration: 0.18), value: order)
         .toolbar {
@@ -90,6 +96,143 @@ struct StatsView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 340)
+            }
+        }
+    }
+
+    private var insightsCard: some View {
+        let eligible = library.tracks.filter { !$0.isEphemeral && !PlayHistoryStore.isEphemeralTrackID($0.id) }
+        let playedCount = eligible.filter { history.count(for: $0.id) > 0 }.count
+        let fraction = history.playedLibraryFraction(from: library.tracks)
+        let topArtists = history.topArtists(from: library.tracks, limit: 5)
+        let topAlbums = history.topAlbums(from: library.tracks, limit: 5)
+        let maxArtistPlays = max(topArtists.first?.playCount ?? 1, 1)
+        let maxAlbumPlays = max(topAlbums.first?.playCount ?? 1, 1)
+
+        return VStack(alignment: .leading, spacing: 16) {
+            Text(L10n.tr("Insights"))
+                .font(.headline)
+
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(L10n.tr("Library Explored"))
+                        .font(.subheadline.weight(.medium))
+                    Spacer()
+                    Text("\(Int((fraction * 100).rounded()))% · \(playedCount) / \(eligible.count)")
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.primary.opacity(0.10))
+                        Capsule()
+                            .fill(themeManager.accentColor)
+                            .frame(width: proxy.size.width * min(max(fraction, 0), 1))
+                    }
+                }
+                .frame(height: 7)
+            }
+
+            if !topArtists.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(L10n.tr("Top Artists"))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    ForEach(topArtists, id: \.artist) { stat in
+                        let ratio = Double(stat.playCount) / Double(maxArtistPlays)
+                        NavigationLink(value: stat.artist) {
+                            insightBarRow(
+                                title: L10n.displayArtist(stat.artist),
+                                subtitle: nil,
+                                playCount: stat.playCount,
+                                ratio: ratio
+                            ) {
+                                ArtistAvatarView(artist: stat.artist, artworkKey: stat.artworkKey, size: 32)
+                            }
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            if !topAlbums.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(L10n.tr("Top Albums"))
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.secondary)
+
+                    ForEach(topAlbums, id: \.album) { stat in
+                        let ratio = Double(stat.playCount) / Double(maxAlbumPlays)
+                        let matchedAlbum = library.albums.first {
+                            $0.title == stat.album && $0.artist == stat.artist
+                        }
+                        let row = insightBarRow(
+                            title: L10n.displayAlbum(stat.album),
+                            subtitle: L10n.displayArtist(stat.artist),
+                            playCount: stat.playCount,
+                            ratio: ratio
+                        ) {
+                            ArtworkView(artworkKey: stat.artworkKey, size: 32, cornerRadius: 6)
+                        }
+                        if let matchedAlbum {
+                            NavigationLink(value: matchedAlbum) {
+                                row
+                            }
+                            .buttonStyle(.plain)
+                        } else {
+                            row
+                        }
+                    }
+                }
+            }
+        }
+        .padding(14)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.75)
+                .allowsHitTesting(false)
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func insightBarRow<Thumb: View>(
+        title: String,
+        subtitle: String?,
+        playCount: Int,
+        ratio: Double,
+        @ViewBuilder thumbnail: () -> Thumb
+    ) -> some View {
+        HStack(spacing: 10) {
+            thumbnail()
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 8) {
+                    Text(title)
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(1)
+                    if let subtitle, !subtitle.isEmpty {
+                        Text(subtitle)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                    }
+                    Spacer(minLength: 4)
+                    Text(L10n.playCount(playCount))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                GeometryReader { proxy in
+                    ZStack(alignment: .leading) {
+                        Capsule()
+                            .fill(Color.primary.opacity(0.08))
+                        Capsule()
+                            .fill(themeManager.accentColor.opacity(0.85))
+                            .frame(width: max(6, proxy.size.width * min(max(ratio, 0), 1)))
+                    }
+                }
+                .frame(height: 5)
             }
         }
     }

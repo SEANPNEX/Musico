@@ -9,6 +9,9 @@ struct PlayerBar: View {
     @Environment(QueueStore.self) private var queues
     @Environment(\.themeManager) private var themeManager
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    #if targetEnvironment(macCatalyst)
+    @Environment(\.openWindow) private var openWindow
+    #endif
     @State private var isTrackHovered = false
     @State private var isMoreHovered = false
     @State private var playFeedbackTrigger = 0
@@ -96,6 +99,17 @@ struct PlayerBar: View {
                 }
                 panelToggle(L10n.tr("Lyrics"), "quote.bubble", .lyrics)
                 panelToggle(L10n.tr("Queue"), "list.bullet", .queue)
+                #if targetEnvironment(macCatalyst)
+                DockIconButton(
+                    title: L10n.tr("Mini Player"),
+                    systemImage: "pip.enter",
+                    foreground: .secondary,
+                    width: 34,
+                    height: 32
+                ) {
+                    openWindow(id: "mini-player")
+                }
+                #endif
             }
             .frame(minWidth: 112, maxWidth: .infinity, alignment: .trailing)
         }
