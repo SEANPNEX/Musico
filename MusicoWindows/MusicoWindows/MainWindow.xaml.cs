@@ -8,6 +8,7 @@ using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using MusicoWindows.Controls;
 using MusicoWindows.Localization;
@@ -42,6 +43,8 @@ public partial class MainWindow : Window
             Services = _services,
             OpenTextPrompt = ShowTextPrompt,
             OpenConfirm = ShowConfirmDialog,
+            OpenDeleteChoice = ShowDeleteChoice,
+            ShowToast = ShowToastMessage,
             OpenAlbum = ShowAlbumDetail,
             OpenArtist = ShowArtistDetail,
             OpenPlaylist = ShowPlaylistDetail,
@@ -79,13 +82,13 @@ public partial class MainWindow : Window
         FullPlayer.OpenSleepTimerRequested += () => SleepDialog.Show(_services);
         FullPlayer.SearchOnlineLyricsRequested += track => CloudLyricsOverlay.Show(_services, track);
         FullPlayer.ErrorOccurred += (title, msg) => ShowConfirmDialog(title, msg, L.Get("Common_OK"), null, false);
-        FullPlayer.InfoOccurred += (title, msg) => ShowConfirmDialog(title, msg, L.Get("Common_OK"), null, false);
+        FullPlayer.InfoOccurred += (_, msg) => ShowToastMessage(msg);
 
         SideLyricsPanel.Initialize(_services);
         SideLyricsPanel.CloseRequested += () => ToggleSidePanel(_sidePanel ?? SidePanelKind.Lyrics);
         SideLyricsPanel.SearchOnlineRequested += track => CloudLyricsOverlay.Show(_services, track);
         SideLyricsPanel.ErrorOccurred += (title, msg) => ShowConfirmDialog(title, msg, L.Get("Common_OK"), null, false);
-        SideLyricsPanel.InfoOccurred += (title, msg) => ShowConfirmDialog(title, msg, L.Get("Common_OK"), null, false);
+        SideLyricsPanel.InfoOccurred += (_, msg) => ShowToastMessage(msg);
         SideQueuesView.Bind(_ctx);
 
         _services.Library.PropertyChanged += OnLibraryChanged;
@@ -163,6 +166,13 @@ public partial class MainWindow : Window
 
             AppearanceSettings settings = ThemeManager.CurrentSettings;
             WindowBackgroundImage.Opacity = settings.BackgroundImageOpacity;
+            WindowBackgroundImage.Effect = settings.BackgroundImageBlur > 0.05
+                ? new BlurEffect
+                {
+                    Radius = settings.BackgroundImageBlur,
+                    KernelType = KernelType.Gaussian
+                }
+                : null;
             WindowBackgroundImage.Visibility = Visibility.Visible;
 
             ThemePalette? palette = ThemeManager.CurrentPalette;
@@ -189,7 +199,9 @@ public partial class MainWindow : Window
         bool maximized = WindowState == WindowState.Maximized;
         RootGrid.Margin = maximized ? new Thickness(7) : new Thickness(0);
         MaxRestoreButton.Content = maximized ? "\uE923" : "\uE922";
-        MaxRestoreButton.ToolTip = maximized ? L.Get("Window_Restore") : L.Get("Window_Maximize");
+        string maxTooltip = maximized ? L.Get("Window_Restore") : L.Get("Window_Maximize");
+        MaxRestoreButton.ToolTip = maxTooltip;
+        System.Windows.Automation.AutomationProperties.SetName(MaxRestoreButton, maxTooltip);
     }
 
     private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e)
@@ -588,6 +600,21 @@ public partial class MainWindow : Window
     private void ShowConfirmDialog(string title, string message, string confirmLabel, Action? onConfirm, bool showCancel)
     {
         ConfirmOverlay.Show(title, message, confirmLabel, onConfirm, showCancel);
+    }
+
+    internal void ShowDeleteChoice(DeleteChoiceRequest request)
+    {
+        ConfirmOverlay.ShowDeleteChoice(request);
+    }
+
+    internal void ShowToastMessage(string message, string? actionLabel = null, Action? onAction = null)
+    {
+        ToastHostOverlay.ShowToast(message, actionLabel, onAction);
+    }
+
+    internal void ShowErrorDialog(string title, string message)
+    {
+        ShowConfirmDialog(title, message, L.Get("Common_OK"), null, false);
     }
 
     private void NavItem_Checked(object sender, RoutedEventArgs e)

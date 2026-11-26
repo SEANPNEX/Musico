@@ -72,16 +72,19 @@
                         Style="{StaticResource Win10CaptionButtonStyle}"
                         Content="&#xE921;"
                         ToolTip="{DynamicResource Str_Window_Minimize}"
+                        AutomationProperties.Name="{DynamicResource Str_Window_Minimize}"
                         Click="Minimize_Click" />
                 <Button x:Name="MaxRestoreButton"
                         Style="{StaticResource Win10CaptionButtonStyle}"
                         Content="&#xE922;"
                         ToolTip="{DynamicResource Str_Window_Maximize}"
+                        AutomationProperties.Name="{DynamicResource Str_Window_Maximize}"
                         Click="MaxRestore_Click" />
                 <Button x:Name="CloseButton"
                         Style="{StaticResource Win10CloseButtonStyle}"
                         Content="&#xE8BB;"
                         ToolTip="{DynamicResource Str_Window_Close}"
+                        AutomationProperties.Name="{DynamicResource Str_Window_Close}"
                         Click="Close_Click" />
             </StackPanel>
         </Grid>
@@ -121,6 +124,7 @@
                                     HorizontalContentAlignment="Left"
                                     Padding="15,0"
                                     ToolTip="{DynamicResource Str_Nav_TogglePane}"
+                                    AutomationProperties.Name="{DynamicResource Str_Nav_TogglePane}"
                                     Click="Hamburger_Click">
                                 <TextBlock Text="&#xE700;"
                                            FontFamily="{StaticResource Win10GlyphFont}"
@@ -336,6 +340,7 @@
                                                         Height="22"
                                                         FontSize="10"
                                                         ToolTip="{DynamicResource Str_Common_Cancel}"
+                                                        AutomationProperties.Name="{DynamicResource Str_Common_Cancel}"
                                                         Margin="4,0,0,0"
                                                         Click="DownloadsFooterCancel_Click" />
                                             </Grid>
@@ -411,6 +416,9 @@
 
             <!-- Full-Window Now Playing Overlay -->
             <controls:FullPlayerView x:Name="FullPlayer" />
+
+            <!-- Non-Blocking Toast Notifications (Bottom-Right above PlayerBar) -->
+            <controls:ToastHost x:Name="ToastHostOverlay" />
 
             <!-- Windows 10 ContentDialog Modal Overlays -->
             <controls:CloudLyricsDialog x:Name="CloudLyricsOverlay" />

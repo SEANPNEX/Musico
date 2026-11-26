@@ -6,23 +6,28 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Threading;
 using Microsoft.Win32;
 using MusicoWindows.Cloud;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
+using MusicoWindows.Theme;
 
 namespace MusicoWindows.Controls;
 
 public partial class LyricsPanel : UserControl
 {
     private readonly List<TextBlock> _lineBlocks = new();
+    private readonly DispatcherTimer _manualScrollGraceTimer;
     private AppServices? _services;
     private Lyrics? _lyrics;
     private LyricsSource? _source;
     private int? _activeLineIndex;
     private string? _loadedTrackId;
     private bool _embedded;
+    private bool _isManualScrolling;
+    private int _programmaticScrollDepth;
 
     public event Action? CloseRequested;
     public event Action<Track>? SearchOnlineRequested;
@@ -32,7 +37,27 @@ public partial class LyricsPanel : UserControl
     public LyricsPanel()
     {
         InitializeComponent();
-        LocalizationManager.LanguageChanged += _ => RefreshLocalizedText();
+        _manualScrollGraceTimer = new DispatcherTimer
+        {
+            Interval = TimeSpan.FromSeconds(3.5)
+        };
+        _manualScrollGraceTimer.Tick += (_, _) => EndManualScrollGracePeriod(scrollToActive: true);
+
+        LocalizationManager.LanguageChanged += OnLanguageChanged;
+        ThemeManager.AppearanceChanged += OnAppearanceChanged;
+        Unloaded += (_, _) =>
+        {
+            _manualScrollGraceTimer.Stop();
+            LocalizationManager.LanguageChanged -= OnLanguageChanged;
+            ThemeManager.AppearanceChanged -= OnAppearanceChanged;
+        };
+    }
+
+    private void OnLanguageChanged(ResolvedLanguage _) => RefreshLocalizedText();
+
+    private void OnAppearanceChanged(AppearanceSettings _)
+    {
+        Dispatcher.BeginInvoke(ApplyLyricsTypography);
     }
 
     private void RefreshLocalizedText()
@@ -121,6 +146,7 @@ public partial class LyricsPanel : UserControl
 
         _loadedTrackId = track?.Id;
         _activeLineIndex = null;
+        EndManualScrollGracePeriod(scrollToActive: false);
         HeaderTitleText.Text = track?.Title ?? L.Get("Lyrics_Title");
         SearchOnlineButton.IsEnabled = track != null;
         EmptySearchOnlineButton.IsEnabled = track != null;
@@ -150,10 +176,50 @@ public partial class LyricsPanel : UserControl
         RenderLyrics();
     }
 
+    private (double TimedSize, double UntimedSize, TextAlignment Alignment) ResolveTypography()
+    {
+        AppearanceSettings settings = ThemeManager.CurrentSettings;
+        double timed = settings.LyricsFontSize switch
+        {
+            LyricsFontSize.Compact => 14,
+            LyricsFontSize.Large => 20,
+            _ => 16
+        };
+        double untimed = settings.LyricsFontSize switch
+        {
+            LyricsFontSize.Compact => 12.5,
+            LyricsFontSize.Large => 17,
+            _ => 14
+        };
+        TextAlignment align = settings.LyricsAlignment == LyricsAlignment.Center
+            ? TextAlignment.Center
+            : TextAlignment.Left;
+        return (timed, untimed, align);
+    }
+
+    private void ApplyLyricsTypography()
+    {
+        if (_lyrics is null || _lineBlocks.Count == 0) return;
+        var (timed, untimed, align) = ResolveTypography();
+        double baseSize = _lyrics.IsTimed ? timed : untimed;
+        for (int i = 0; i < _lineBlocks.Count; i++)
+        {
+            var tb = _lineBlocks[i];
+            bool isActive = _lyrics.IsTimed && _activeLineIndex == i;
+            tb.FontSize = isActive ? baseSize + 2 : baseSize;
+            tb.TextAlignment = align;
+        }
+        if (!_isManualScrolling && _activeLineIndex is int activeIdx)
+        {
+            ScrollToLine(activeIdx);
+        }
+    }
+
     private void RenderLyrics()
     {
         LinesStack.Children.Clear();
         _lineBlocks.Clear();
+        EndManualScrollGracePeriod(scrollToActive: false);
 
         bool hasTrack = _services?.Player.CurrentTrack != null;
         bool hasImported = hasTrack && _services!.Lyrics.HasImported(_services.Player.CurrentTrack!.Id);
@@ -174,13 +240,17 @@ public partial class LyricsPanel : UserControl
         LyricsScroll.Visibility = Visibility.Visible;
         EmptyState.Visibility = Visibility.Collapsed;
 
+        var (timedSize, untimedSize, align) = ResolveTypography();
+        double fontSize = _lyrics.IsTimed ? timedSize : untimedSize;
+
         foreach (var line in _lyrics.Lines)
         {
             var tb = new TextBlock
             {
                 Text = string.IsNullOrEmpty(line.Text) ? "♪" : line.Text,
                 FontFamily = (System.Windows.Media.FontFamily)FindResource("Win10Font"),
-                FontSize = _lyrics.IsTimed ? 16 : 14,
+                FontSize = fontSize,
+                TextAlignment = align,
                 TextWrapping = TextWrapping.Wrap,
                 Margin = new Thickness(0, 0, 0, _lyrics.IsTimed ? 16 : 10)
             };
@@ -188,11 +258,17 @@ public partial class LyricsPanel : UserControl
             if (_lyrics.IsTimed && line.TimeSeconds is double seekTime)
             {
                 tb.Cursor = Cursors.Hand;
+                tb.Opacity = 0.72;
                 tb.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
-                tb.MouseLeftButtonUp += (_, _) => _services?.Player.Seek(seekTime);
+                tb.MouseLeftButtonUp += (_, _) =>
+                {
+                    EndManualScrollGracePeriod(scrollToActive: false);
+                    _services?.Player.Seek(seekTime);
+                };
             }
             else
             {
+                tb.Opacity = 1.0;
                 tb.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
             }
 
@@ -200,6 +276,7 @@ public partial class LyricsPanel : UserControl
             _lineBlocks.Add(tb);
         }
 
+        _activeLineIndex = null;
         UpdateActiveLine();
     }
 
@@ -210,37 +287,156 @@ public partial class LyricsPanel : UserControl
         int? nextIndex = _lyrics.LineIndexAt(_services.Player.CurrentTimeSeconds);
         if (nextIndex == _activeLineIndex) return;
 
-        if (_activeLineIndex is int oldIdx && oldIdx >= 0 && oldIdx < _lineBlocks.Count)
+        _activeLineIndex = nextIndex;
+        var (timedSize, _, _) = ResolveTypography();
+
+        for (int i = 0; i < _lineBlocks.Count; i++)
         {
-            _lineBlocks[oldIdx].FontWeight = FontWeights.Normal;
-            _lineBlocks[oldIdx].SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+            var block = _lineBlocks[i];
+            if (nextIndex is int activeIdx)
+            {
+                int distance = Math.Abs(i - activeIdx);
+                if (distance == 0)
+                {
+                    block.FontWeight = FontWeights.SemiBold;
+                    block.FontSize = timedSize + 2;
+                    block.Opacity = 1.0;
+                    block.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
+                }
+                else
+                {
+                    block.FontWeight = FontWeights.Normal;
+                    block.FontSize = timedSize;
+                    block.Opacity = distance switch
+                    {
+                        1 => 0.72,
+                        2 => 0.50,
+                        _ => 0.34
+                    };
+                    block.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+                }
+            }
+            else
+            {
+                block.FontWeight = FontWeights.Normal;
+                block.FontSize = timedSize;
+                block.Opacity = 0.78;
+                block.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+            }
         }
 
-        _activeLineIndex = nextIndex;
-
-        if (nextIndex is int newIdx && newIdx >= 0 && newIdx < _lineBlocks.Count)
+        if (nextIndex is int targetIdx && !_isManualScrolling)
         {
-            var activeBlock = _lineBlocks[newIdx];
-            activeBlock.FontWeight = FontWeights.SemiBold;
-            activeBlock.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
+            ScrollToLine(targetIdx);
+        }
+    }
 
-            // Smoothly scroll the active lyric line toward the vertical center of the scroll viewport
-            Dispatcher.BeginInvoke(() =>
+    private void ScrollToLine(int lineIndex)
+    {
+        if (lineIndex < 0 || lineIndex >= _lineBlocks.Count) return;
+        var activeBlock = _lineBlocks[lineIndex];
+
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (LyricsScroll.ViewportHeight <= 0) return;
+            try
             {
-                if (LyricsScroll.ViewportHeight <= 0) return;
+                var transform = activeBlock.TransformToAncestor(LinesStack);
+                var point = transform.Transform(new Point(0, 0));
+                double targetOffset = point.Y - (LyricsScroll.ViewportHeight / 2.0) + (activeBlock.ActualHeight / 2.0);
+                _programmaticScrollDepth++;
                 try
                 {
-                    var transform = activeBlock.TransformToAncestor(LinesStack);
-                    var point = transform.Transform(new Point(0, 0));
-                    double targetOffset = point.Y - (LyricsScroll.ViewportHeight / 2.0) + (activeBlock.ActualHeight / 2.0);
                     LyricsScroll.ScrollToVerticalOffset(Math.Max(0, targetOffset));
                 }
-                catch
+                finally
                 {
-                    // Element not yet measured
+                    Dispatcher.BeginInvoke(
+                        () => _programmaticScrollDepth = Math.Max(0, _programmaticScrollDepth - 1),
+                        DispatcherPriority.Background);
                 }
-            });
+            }
+            catch
+            {
+                // Element not yet measured
+            }
+        });
+    }
+
+    private void BeginManualScrollGracePeriod()
+    {
+        if (_lyrics is not { IsTimed: true } || _activeLineIndex is null) return;
+        _isManualScrolling = true;
+        SyncToCurrentButton.Visibility = Visibility.Visible;
+        _manualScrollGraceTimer.Stop();
+        _manualScrollGraceTimer.Start();
+    }
+
+    private void EndManualScrollGracePeriod(bool scrollToActive)
+    {
+        _manualScrollGraceTimer.Stop();
+        _isManualScrolling = false;
+        SyncToCurrentButton.Visibility = Visibility.Collapsed;
+        if (scrollToActive && _activeLineIndex is int activeIdx)
+        {
+            ScrollToLine(activeIdx);
         }
+    }
+
+    private void LyricsScroll_PreviewMouseWheel(object sender, MouseWheelEventArgs e)
+    {
+        BeginManualScrollGracePeriod();
+    }
+
+    private void LyricsScroll_ScrollChanged(object sender, ScrollChangedEventArgs e)
+    {
+        if (_programmaticScrollDepth > 0 || Math.Abs(e.VerticalChange) < 0.5) return;
+        BeginManualScrollGracePeriod();
+    }
+
+    private void SyncToCurrent_Click(object sender, RoutedEventArgs e)
+    {
+        EndManualScrollGracePeriod(scrollToActive: true);
+    }
+
+    private void Options_Click(object sender, RoutedEventArgs e)
+    {
+        AppearanceSettings current = ThemeManager.CurrentSettings;
+        var menu = new ContextMenu();
+
+        var fontSizeHeader = new MenuItem
+        {
+            Header = L.Get("Lyrics_FontSizeHeader"),
+            IsEnabled = false
+        };
+        menu.Items.Add(fontSizeHeader);
+        AddCheckableItem(menu, L.Get("Lyrics_SizeCompact"), current.LyricsFontSize == LyricsFontSize.Compact,
+            () => ThemeManager.SetLyricsFontSize(Application.Current, LyricsFontSize.Compact));
+        AddCheckableItem(menu, L.Get("Lyrics_SizeMedium"), current.LyricsFontSize == LyricsFontSize.Medium,
+            () => ThemeManager.SetLyricsFontSize(Application.Current, LyricsFontSize.Medium));
+        AddCheckableItem(menu, L.Get("Lyrics_SizeLarge"), current.LyricsFontSize == LyricsFontSize.Large,
+            () => ThemeManager.SetLyricsFontSize(Application.Current, LyricsFontSize.Large));
+
+        menu.Items.Add(new Separator());
+
+        var alignHeader = new MenuItem
+        {
+            Header = L.Get("Lyrics_AlignmentHeader"),
+            IsEnabled = false
+        };
+        menu.Items.Add(alignHeader);
+        AddCheckableItem(menu, L.Get("Lyrics_AlignLeading"), current.LyricsAlignment == LyricsAlignment.Leading,
+            () => ThemeManager.SetLyricsAlignment(Application.Current, LyricsAlignment.Leading));
+        AddCheckableItem(menu, L.Get("Lyrics_AlignCenter"), current.LyricsAlignment == LyricsAlignment.Center,
+            () => ThemeManager.SetLyricsAlignment(Application.Current, LyricsAlignment.Center));
+
+        menu.PlacementTarget = OptionsButton;
+        menu.IsOpen = true;
+    }
+
+    private static void AddCheckableItem(ContextMenu menu, string label, bool isSelected, Action onClick)
+    {
+        menu.Items.Add(TrackMenuHelper.CreateItem(label, isSelected ? "\uE73E" : null, onClick));
     }
 
     private void SearchOnline_Click(object sender, RoutedEventArgs e)

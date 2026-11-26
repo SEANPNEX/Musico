@@ -6,7 +6,7 @@
           Background="{DynamicResource DialogOverlayBrush}"
           MouseDown="Overlay_MouseDown">
         <Border x:Name="DialogCard"
-                Width="400"
+                Width="440"
                 HorizontalAlignment="Center"
                 VerticalAlignment="Center"
                 Background="{DynamicResource DialogSurfaceBrush}"
@@ -29,9 +29,41 @@
                            FontSize="13"
                            Foreground="{DynamicResource TextSecondaryBrush}"
                            TextWrapping="Wrap"
-                           Margin="0,0,0,22" />
+                           Margin="0,0,0,16" />
 
-                <Grid>
+                <!-- Exact item & path details (used by delete choice prompt) -->
+                <Border x:Name="DetailsPanel"
+                        Background="{DynamicResource CardBackgroundBrush}"
+                        BorderBrush="{DynamicResource DividerBrush}"
+                        BorderThickness="1"
+                        Padding="12,10"
+                        Margin="0,0,0,18"
+                        Visibility="Collapsed">
+                    <StackPanel>
+                        <TextBlock x:Name="ItemNameText"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="13"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}"
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="ItemCountText"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="11.5"
+                                   Foreground="{DynamicResource AccentBrush}"
+                                   Margin="0,3,0,0"
+                                   Visibility="Collapsed" />
+                        <TextBlock x:Name="ItemPathText"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="11.5"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   TextWrapping="Wrap"
+                                   Margin="0,4,0,0"
+                                   Visibility="Collapsed" />
+                    </StackPanel>
+                </Border>
+
+                <!-- Standard 2-button footer -->
+                <Grid x:Name="StandardButtonsGrid">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="8" />
@@ -48,6 +80,25 @@
                             Content="{DynamicResource Str_Common_Cancel}"
                             Click="Cancel_Click" />
                 </Grid>
+
+                <!-- 3-choice delete footer -->
+                <StackPanel x:Name="DeleteChoiceButtonsPanel" Visibility="Collapsed">
+                    <Button x:Name="RemoveFromLibraryButton"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            HorizontalAlignment="Stretch"
+                            Margin="0,0,0,8"
+                            Click="RemoveFromLibrary_Click" />
+                    <Button x:Name="MoveToRecycleBinButton"
+                            Style="{StaticResource Win10PrimaryButtonStyle}"
+                            HorizontalAlignment="Stretch"
+                            Margin="0,0,0,8"
+                            Click="MoveToRecycleBin_Click" />
+                    <Button x:Name="DeleteCancelButton"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            HorizontalAlignment="Stretch"
+                            Content="{DynamicResource Str_Common_Cancel}"
+                            Click="Cancel_Click" />
+                </StackPanel>
             </StackPanel>
         </Border>
     </Grid>

@@ -10,12 +10,13 @@ using MusicoWindows.Extensions;
 using MusicoWindows.Localization;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
+using MusicoWindows.Views;
 
 namespace MusicoWindows.Controls;
 
 /// <summary>
 /// Builds authentic Windows 10 ContextMenus for single tracks or track collections
-/// (Play Next, Add to Queue, Add to Another Queue, Play in New Queue, Add to Playlist, Toggle Favourite).
+/// (Play Next, Add to Queue, Add to Another Queue, Play in New Queue, Add to Playlist, Toggle Favourite, Delete).
 /// </summary>
 public static class TrackMenuHelper
 {
@@ -28,7 +29,9 @@ public static class TrackMenuHelper
         Action<Track, string>? openSaveCloudTrack = null,
         Action<Track>? openSongInfo = null,
         Track? explicitTrack = null,
-        Guid? targetQueueId = null)
+        Guid? targetQueueId = null,
+        Action<DeleteChoiceRequest>? openDeleteChoice = null,
+        Action<string, string?, Action?>? showToast = null)
     {
         var menu = new ContextMenu();
         var ids = trackIds.ToList();
@@ -44,17 +47,35 @@ public static class TrackMenuHelper
             }
         }
 
+        void NotifyToast(string message)
+        {
+            if (showToast is not null)
+            {
+                showToast(message, null, null);
+            }
+            else if (Application.Current?.MainWindow is MainWindow mw)
+            {
+                mw.ShowToastMessage(message);
+            }
+        }
+
         Guid resolvedTargetQueueId = targetQueueId ?? services.Queues.ActiveId;
 
         var playNext = CreateItem(L.Get("Menu_PlayNext"), "\uE8B2", () =>
         {
             EnsureEphemeralRegistered();
             services.Player.PlayNext(ids);
+            NotifyToast(ids.Count == 1
+                ? L.Get("Toast_AddedPlayNext")
+                : L.Format("Toast_AddedPlayNextCount", ids.Count));
         }, hasTracks);
         var addToQueue = CreateItem(L.Get("Menu_AddToQueue"), "\uE710", () =>
         {
             EnsureEphemeralRegistered();
             services.Player.AddToQueue(ids, targetQueueId);
+            NotifyToast(ids.Count == 1
+                ? L.Get("Toast_AddedToQueue")
+                : L.Format("Toast_AddedToQueueCount", ids.Count));
         }, hasTracks);
         menu.Items.Add(playNext);
         menu.Items.Add(addToQueue);
@@ -70,10 +91,12 @@ public static class TrackMenuHelper
             foreach (var queue in services.Queues.Queues.Where(q => q.Id != resolvedTargetQueueId))
             {
                 Guid queueId = queue.Id;
-                otherQueues.Items.Add(CreateItem(queue.Name, null, () =>
+                string queueName = queue.Name;
+                otherQueues.Items.Add(CreateItem(queueName, null, () =>
                 {
                     EnsureEphemeralRegistered();
                     services.Player.AddToQueue(ids, queueId);
+                    NotifyToast(L.Format("Toast_AddedToNamedQueue", queueName));
                 }, hasTracks));
             }
             menu.Items.Add(otherQueues);
@@ -158,8 +181,71 @@ public static class TrackMenuHelper
                 () => PromptAndExportCloudTrack(services, cloudTrack, openSaveCloudTrack)));
         }
 
+        if (ids.Count == 1 &&
+            singleTrack is { IsCloud: false, IsEphemeral: false } localTrack &&
+            !Track.HasEphemeralIdPrefix(localTrack.Id))
+        {
+            menu.Items.Add(new Separator());
+            menu.Items.Add(CreateItem(
+                L.Get("Menu_DeleteSongEllipsis"),
+                "\uE74D",
+                () => PromptDeleteLocalTrack(services, localTrack, openDeleteChoice, showToast)));
+        }
+
         appendExtra?.Invoke(menu);
         return menu;
+    }
+
+    private static void PromptDeleteLocalTrack(
+        AppServices services,
+        Track track,
+        Action<DeleteChoiceRequest>? openDeleteChoice,
+        Action<string, string?, Action?>? showToast)
+    {
+        string? fullPath = services.Library.GetFilePath(track);
+        var request = new DeleteChoiceRequest(
+            Title: L.Format("Delete_SongConfirmTitle", track.Title),
+            Message: L.Get("Delete_SongConfirmMessage"),
+            ItemName: track.FileName,
+            ExactPath: fullPath,
+            SongCountText: null,
+            RemoveFromLibraryLabel: L.Get("Delete_RemoveFromLibrary"),
+            OnRemoveFromLibrary: () =>
+            {
+                services.Library.RemoveTrackFromLibrary(track.Id);
+                services.Lyrics.RemoveImported(track.Id);
+                string msg = L.Format("Toast_RemovedFromLibrary", track.Title);
+                if (showToast is not null) showToast(msg, null, null);
+                else if (Application.Current?.MainWindow is MainWindow mw) mw.ShowToastMessage(msg);
+            },
+            MoveToRecycleBinLabel: !string.IsNullOrWhiteSpace(fullPath) ? L.Get("Delete_MoveToRecycleBin") : null,
+            OnMoveToRecycleBin: !string.IsNullOrWhiteSpace(fullPath) ? () =>
+            {
+                try
+                {
+                    services.Library.DeleteTrackFile(track.Id);
+                    services.Lyrics.RemoveImported(track.Id);
+                    string msg = L.Format("Toast_MovedToRecycleBin", track.Title);
+                    if (showToast is not null) showToast(msg, null, null);
+                    else if (Application.Current?.MainWindow is MainWindow mw) mw.ShowToastMessage(msg);
+                }
+                catch (Exception ex)
+                {
+                    if (Application.Current?.MainWindow is MainWindow mw)
+                    {
+                        mw.ShowErrorDialog(L.Get("Delete_FailedTitle"), ex.Message);
+                    }
+                }
+            } : null);
+
+        if (openDeleteChoice is not null)
+        {
+            openDeleteChoice(request);
+        }
+        else if (Application.Current?.MainWindow is MainWindow mw)
+        {
+            mw.ShowDeleteChoice(request);
+        }
     }
 
     public static bool CanExportCloudTrack(AppServices services, Track track)

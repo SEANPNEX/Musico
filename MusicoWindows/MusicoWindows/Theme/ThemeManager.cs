@@ -159,6 +159,45 @@ public static class ThemeManager
             save: true);
     }
 
+    public static void SetBackgroundImageBlur(Application app, double blur)
+    {
+        ApplyAppearance(
+            app,
+            CurrentSettings with { BackgroundImageBlur = AppearanceSettings.ClampBackgroundImageBlur(blur) },
+            save: true);
+    }
+
+    public static void SetLyricsFontSize(Application app, LyricsFontSize fontSize)
+    {
+        ApplyAppearance(
+            app,
+            CurrentSettings with { LyricsFontSize = fontSize },
+            save: true);
+    }
+
+    public static void SetLyricsAlignment(Application app, LyricsAlignment alignment)
+    {
+        ApplyAppearance(
+            app,
+            CurrentSettings with { LyricsAlignment = alignment },
+            save: true);
+    }
+
+    public static void ApplyContrastFix(Application app, string? fixedForegroundHex, string? fixedAccentHex)
+    {
+        var next = CurrentSettings;
+        if (!string.IsNullOrWhiteSpace(fixedForegroundHex) || !string.IsNullOrWhiteSpace(fixedAccentHex))
+        {
+            next = next with
+            {
+                ForegroundPreset = ForegroundColorPreset.Custom,
+                CustomAccentHex = fixedAccentHex ?? ColorMath.ToHex(AppearancePresets.ResolveAccentColor(CurrentSettings)),
+                CustomForegroundHex = fixedForegroundHex ?? next.CustomForegroundHex
+            };
+        }
+        ApplyAppearance(app, next, save: true);
+    }
+
     public static void ImportBackgroundImage(Application app, string sourceFilePath)
     {
         string fileName = EnsureStore().ImportBackgroundImage(sourceFilePath);

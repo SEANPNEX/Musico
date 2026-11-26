@@ -527,4 +527,112 @@ public sealed class LibraryStoreTests
         Assert.Equal(2, store.Tracks.Count);
         Assert.Contains(store.Tracks, t => t.Title == "Beta" && t.RelativePath.EndsWith(".mp3", StringComparison.Ordinal));
     }
+
+    [Fact]
+    public async Task RemoveTrackFromLibraryExcludesTrackWithoutDeletingDiskFile()
+    {
+        TestHelpers.TouchFile(_musicDir, "keep.mp3");
+        TestHelpers.TouchFile(_musicDir, "hide.mp3");
+
+        var store = MakeStore();
+        await store.RescanAsync();
+        var hide = store.Tracks.First(t => t.RelativePath == "hide.mp3");
+        var plId = store.CreatePlaylist("Mix");
+        store.AddToPlaylist([hide.Id], plId);
+        store.ToggleFavourite(hide.Id);
+
+        var removedCallbacks = new HashSet<string>();
+        store.OnTracksRemoved = ids => removedCallbacks.UnionWith(ids);
+
+        store.RemoveTrackFromLibrary(hide.Id);
+
+        Assert.True(File.Exists(Path.Combine(_musicDir, "hide.mp3")));
+        Assert.Equal(["keep.mp3"], store.Tracks.Select(t => t.RelativePath));
+        Assert.Equal(new HashSet<string>([hide.Id]), removedCallbacks);
+        Assert.Empty(store.Playlists[0].TrackIds);
+        Assert.False(store.IsFavourite(hide.Id));
+        Assert.Contains("hide.mp3", store.GetRoot(LibraryRoot.AppFolderId)!.ExcludedPaths!);
+
+        // Rescan keeps track excluded; restoring excluded paths brings it back.
+        await store.RescanAsync();
+        Assert.Equal(["keep.mp3"], store.Tracks.Select(t => t.RelativePath));
+
+        await store.RestoreExcludedFoldersAsync(LibraryRoot.AppFolderId);
+        Assert.Equal(["hide.mp3", "keep.mp3"], store.Tracks.Select(t => t.RelativePath).OrderBy(x => x));
+    }
+
+    [Fact]
+    public async Task DeleteTrackFileUnloadsBeforeDeletingAndLeavesLibraryIntactOnFailure()
+    {
+        TestHelpers.TouchFile(_musicDir, "a.mp3");
+        TestHelpers.TouchFile(_musicDir, "b.mp3");
+
+        var store = MakeStore();
+        await store.RescanAsync();
+        var trackA = store.Tracks.First(t => t.RelativePath == "a.mp3");
+        var trackB = store.Tracks.First(t => t.RelativePath == "b.mp3");
+
+        var beforeDeleteCalls = new List<string>();
+        var removedCalls = new List<string>();
+        store.OnBeforeDeletingTracks = ids =>
+        {
+            // File must still exist when OnBeforeDeletingTracks runs (unloading NAudio lock first).
+            Assert.True(File.Exists(Path.Combine(_musicDir, "a.mp3")));
+            beforeDeleteCalls.AddRange(ids);
+        };
+        store.OnTracksRemoved = ids => removedCalls.AddRange(ids);
+
+        store.DeleteTrackFile(trackA.Id);
+
+        Assert.Equal([trackA.Id], beforeDeleteCalls);
+        Assert.Equal([trackA.Id], removedCalls);
+        Assert.False(File.Exists(Path.Combine(_musicDir, "a.mp3")));
+        Assert.Equal(["b.mp3"], store.Tracks.Select(t => t.RelativePath));
+
+        // If disk deletion fails (file already missing), DeleteTrackFile throws and leaves library intact.
+        store.OnBeforeDeletingTracks = null;
+        File.Delete(Path.Combine(_musicDir, "b.mp3"));
+        Assert.Throws<FileNotFoundException>(() => store.DeleteTrackFile(trackB.Id));
+        Assert.Single(store.Tracks);
+        Assert.Equal(trackB.Id, store.Tracks[0].Id);
+    }
+
+    [Fact]
+    public async Task DeleteFolderFilesDeletesSubfolderAndPickedRootWhileGuardingAppFolderRoot()
+    {
+        TestHelpers.TouchFile(_musicDir, "Sub/song1.mp3");
+        TestHelpers.TouchFile(_musicDir, "keep.mp3");
+
+        string picked = TestHelpers.MakeTempDir();
+        TestHelpers.TouchFile(picked, "picked1.mp3");
+
+        var store = MakeStore();
+        await store.RescanAsync();
+        await store.AddRootAsync(picked);
+        var pickedRoot = store.Roots.First(r => r.Kind == RootKind.Picked);
+
+        var beforeDelete = new HashSet<string>();
+        store.OnBeforeDeletingTracks = ids => beforeDelete.UnionWith(ids);
+
+        // AppFolder root disk deletion must always be blocked.
+        Assert.Throws<InvalidOperationException>(() => store.DeleteFolderFiles(LibraryRoot.AppFolderId, string.Empty));
+        Assert.True(Directory.Exists(_musicDir));
+        Assert.NotNull(store.GetRoot(LibraryRoot.AppFolderId));
+
+        // AppFolder subfolder deletion is allowed.
+        var subTrack = store.Tracks.First(t => t.RelativePath == "Sub/song1.mp3");
+        store.DeleteFolderFiles(LibraryRoot.AppFolderId, "Sub");
+        Assert.False(Directory.Exists(Path.Combine(_musicDir, "Sub")));
+        Assert.Contains(subTrack.Id, beforeDelete);
+        Assert.DoesNotContain(store.Tracks, t => t.Id == subTrack.Id);
+        Assert.True(File.Exists(Path.Combine(_musicDir, "keep.mp3")));
+
+        // Picked root deletion removes folder on disk and root from library.
+        var pickedTrack = store.Tracks.First(t => t.RootId == pickedRoot.Id);
+        store.DeleteFolderFiles(pickedRoot.Id, string.Empty);
+        Assert.False(Directory.Exists(picked));
+        Assert.Contains(pickedTrack.Id, beforeDelete);
+        Assert.Null(store.GetRoot(pickedRoot.Id));
+        Assert.Equal(["keep.mp3"], store.Tracks.Select(t => t.RelativePath));
+    }
 }

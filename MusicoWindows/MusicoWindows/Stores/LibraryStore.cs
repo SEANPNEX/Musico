@@ -196,6 +196,7 @@ public sealed class LibraryStore : ObservableStore
     public bool AppFolderRemoved { get => _appFolderRemoved; private set => SetProperty(ref _appFolderRemoved, value); }
     public ArtworkCache Artwork { get; }
     public CloudProviderRegistry CloudProviders => _providerRegistry;
+    public Action<ISet<string>>? OnBeforeDeletingTracks { get; set; }
     public Action<ISet<string>>? OnTracksRemoved { get; set; }
     public Action<IReadOnlyDictionary<string, string>>? OnTracksMigrated { get; set; }
     public Action<string, IReadOnlyList<string>>? OnFolderAdded { get; set; }
@@ -1687,6 +1688,175 @@ public sealed class LibraryStore : ObservableStore
         SaveLibrary();
     }
 
+    public void RemoveTrackFromLibrary(string trackId)
+    {
+        if (string.IsNullOrWhiteSpace(trackId)) return;
+        var track = GetTrack(trackId);
+        if (track is null || track.IsEphemeral || Track.HasEphemeralIdPrefix(track.Id)) return;
+
+        string normRel = LibraryRoot.NormalizeFolderPath(track.RelativePath);
+        int rootIndex = _roots.FindIndex(r => r.Id == track.RootId);
+        if (rootIndex >= 0 && normRel.Length > 0)
+        {
+            var currentExcluded = (_roots[rootIndex].ExcludedPaths ?? Array.Empty<string>())
+                .Select(LibraryRoot.NormalizeFolderPath)
+                .Where(p => p.Length > 0)
+                .ToList();
+
+            bool alreadyCovered = currentExcluded.Any(ex =>
+                string.Equals(normRel, ex, StringComparison.Ordinal) ||
+                normRel.StartsWith(ex + "/", StringComparison.Ordinal));
+
+            if (!alreadyCovered)
+            {
+                var nextExcluded = currentExcluded
+                    .Append(normRel)
+                    .OrderBy(p => p, StringComparer.Ordinal)
+                    .ToList();
+                var updatedRoots = new List<LibraryRoot>(_roots);
+                updatedRoots[rootIndex] = updatedRoots[rootIndex] with { ExcludedPaths = nextExcluded };
+                _roots = updatedRoots;
+                OnPropertyChanged(nameof(Roots));
+            }
+        }
+
+        var removedIds = new HashSet<string>(StringComparer.Ordinal) { track.Id };
+        _tracks = _tracks.Where(t => !string.Equals(t.Id, track.Id, StringComparison.Ordinal)).ToList();
+        RebuildIndex();
+        OnPropertyChanged(nameof(Tracks));
+        Forget(removedIds);
+        _cloudCache?.RemoveForTracks(removedIds);
+        var keepKeys = new HashSet<string>(_tracks.Select(t => t.ArtworkKey).Where(k => k is not null)!);
+        _ = Task.Run(() => Artwork.Prune(keepKeys));
+        SaveLibrary();
+    }
+
+    public void DeleteTrackFile(string trackId)
+    {
+        var track = GetTrack(trackId);
+        if (track is null || track.IsEphemeral || Track.HasEphemeralIdPrefix(track.Id) || track.IsCloud)
+        {
+            throw new InvalidOperationException("Only local library tracks can be deleted from disk.");
+        }
+
+        string? filePath = GetFilePath(track);
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            throw new InvalidOperationException("Could not resolve the local file path for this song.");
+        }
+
+        var ids = new HashSet<string>(StringComparer.Ordinal) { track.Id };
+        OnBeforeDeletingTracks?.Invoke(ids);
+
+        // Move to Recycle Bin first; if it fails, throw and leave library state intact.
+        FileDeletionHelper.MoveToRecycleBin(filePath);
+
+        _tracks = _tracks.Where(t => !string.Equals(t.Id, track.Id, StringComparison.Ordinal)).ToList();
+        RebuildIndex();
+        OnPropertyChanged(nameof(Tracks));
+        Forget(ids);
+        var keepKeys = new HashSet<string>(_tracks.Select(t => t.ArtworkKey).Where(k => k is not null)!);
+        _ = Task.Run(() => Artwork.Prune(keepKeys));
+        SaveLibrary();
+    }
+
+    public void DeleteFolderFiles(Guid rootId, string relativePath)
+    {
+        var root = GetRoot(rootId);
+        if (root is null || !root.IsLocal || !_rootPaths.TryGetValue(rootId, out string? rootPath))
+        {
+            throw new InvalidOperationException("Only available local folders can be deleted from disk.");
+        }
+
+        string norm = LibraryRoot.NormalizeFolderPath(relativePath);
+        if (root.Kind == RootKind.AppFolder && string.IsNullOrEmpty(norm))
+        {
+            throw new InvalidOperationException("Cannot delete the default Music Folder from disk.");
+        }
+
+        string targetPath = string.IsNullOrEmpty(norm)
+            ? rootPath
+            : FolderScanner.CombinePath(rootPath, norm);
+
+        var affectedIds = string.IsNullOrEmpty(norm)
+            ? new HashSet<string>(_tracks.Where(t => t.RootId == rootId).Select(t => t.Id), StringComparer.Ordinal)
+            : new HashSet<string>(_tracks
+                .Where(t => t.RootId == rootId && LibraryRoot.FolderContains(norm, t.RelativePath))
+                .Select(t => t.Id), StringComparer.Ordinal);
+
+        if (affectedIds.Count > 0)
+        {
+            OnBeforeDeletingTracks?.Invoke(affectedIds);
+        }
+
+        // Move folder to Recycle Bin first; if it fails, throw and leave library state intact.
+        FileDeletionHelper.MoveToRecycleBin(targetPath);
+
+        if (string.IsNullOrEmpty(norm))
+        {
+            RemoveRoot(rootId);
+            var keepAll = new HashSet<string>(_tracks.Select(t => t.ArtworkKey).Where(k => k is not null)!);
+            _ = Task.Run(() => Artwork.Prune(keepAll));
+            return;
+        }
+
+        int index = _roots.FindIndex(r => r.Id == rootId);
+        if (index >= 0)
+        {
+            var currentRoot = _roots[index];
+            var nextExcluded = currentRoot.ExcludedPaths?
+                .Select(LibraryRoot.NormalizeFolderPath)
+                .Where(ex => ex.Length > 0 && !string.Equals(ex, norm, StringComparison.Ordinal) && !ex.StartsWith(norm + "/", StringComparison.Ordinal))
+                .ToList();
+
+            Dictionary<string, CloudTrackingInfo>? nextTracked = null;
+            if (currentRoot.TrackedSubfolders is { Count: > 0 })
+            {
+                nextTracked = new Dictionary<string, CloudTrackingInfo>(StringComparer.Ordinal);
+                foreach (var kvp in currentRoot.TrackedSubfolders)
+                {
+                    string keyNorm = LibraryRoot.NormalizeFolderPath(kvp.Key);
+                    if (!string.Equals(keyNorm, norm, StringComparison.Ordinal) &&
+                        !keyNorm.StartsWith(norm + "/", StringComparison.Ordinal))
+                    {
+                        nextTracked[kvp.Key] = kvp.Value;
+                    }
+                }
+                if (nextTracked.Count == 0) nextTracked = null;
+            }
+
+            var updatedRoots = new List<LibraryRoot>(_roots);
+            updatedRoots[index] = currentRoot with
+            {
+                ExcludedPaths = nextExcluded is { Count: > 0 } ? nextExcluded : null,
+                TrackedSubfolders = nextTracked
+            };
+            _roots = updatedRoots;
+            OnPropertyChanged(nameof(Roots));
+        }
+
+        string prefPrefix = $"{rootId:D}:{norm}";
+        foreach (string key in _folderPrefs.Keys
+            .Where(k => string.Equals(k, prefPrefix, StringComparison.OrdinalIgnoreCase) ||
+                        k.StartsWith(prefPrefix + "/", StringComparison.OrdinalIgnoreCase))
+            .ToList())
+        {
+            _folderPrefs.Remove(key);
+        }
+
+        if (affectedIds.Count > 0)
+        {
+            _tracks = _tracks.Where(t => !affectedIds.Contains(t.Id)).ToList();
+            RebuildIndex();
+            OnPropertyChanged(nameof(Tracks));
+            Forget(affectedIds);
+            var keepKeys = new HashSet<string>(_tracks.Select(t => t.ArtworkKey).Where(k => k is not null)!);
+            _ = Task.Run(() => Artwork.Prune(keepKeys));
+        }
+
+        SaveLibrary();
+    }
+
     public async Task RestoreExcludedFoldersAsync(Guid rootId)
     {
         int index = _roots.FindIndex(r => r.Id == rootId);
@@ -3051,6 +3221,15 @@ public sealed class LibraryStore : ObservableStore
             if (index < 0 || index >= next.Count) return pl;
             next.RemoveAt(index);
             return pl with { TrackIds = next };
+        });
+    }
+
+    public void RestorePlaylistTracks(Guid playlistId, IReadOnlyList<string> trackIds, TrackSortMode sortMode)
+    {
+        UpdatePlaylist(playlistId, pl => pl with
+        {
+            TrackIds = trackIds.ToList(),
+            SortMode = sortMode
         });
     }
 

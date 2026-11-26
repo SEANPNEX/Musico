@@ -105,6 +105,7 @@ public sealed class PlayerController : ObservableStore, IDisposable
         ApplyEffectiveVolume();
 
         _engine.TrackEnded += OnEngineTrackEnded;
+        Library.OnBeforeDeletingTracks = OnBeforeDeletingTracks;
         Library.OnTracksRemoved = OnLibraryTracksRemoved;
         Library.OnTracksMigrated = OnLibraryTracksMigrated;
         Library.OnFolderAdded = OnLibraryFolderAdded;
@@ -1009,6 +1010,17 @@ public sealed class PlayerController : ObservableStore, IDisposable
         if (queueId == Queues.ActiveId)
         {
             ClearPlayback();
+        }
+    }
+
+    private void OnBeforeDeletingTracks(ISet<string> ids)
+    {
+        if (CurrentTrack is not null && ids.Contains(CurrentTrack.Id))
+        {
+            CancelPendingCloudLoad();
+            _engine.Unload();
+            _isLoaded = false;
+            IsPlaying = false;
         }
     }
 

@@ -41,6 +41,19 @@ namespace MusicoWindows.Models
         Custom
     }
 
+    public enum LyricsFontSize
+    {
+        Compact,
+        Medium,
+        Large
+    }
+
+    public enum LyricsAlignment
+    {
+        Leading,
+        Center
+    }
+
     public readonly record struct RgbColor(byte R, byte G, byte B);
 
     public readonly record struct ArgbColor(byte A, byte R, byte G, byte B);
@@ -55,6 +68,10 @@ namespace MusicoWindows.Models
         public const double MaxBackgroundImageOpacity = 1.0;
         public const double DefaultBackgroundImageOpacity = 0.35;
 
+        public const double MinBackgroundImageBlur = 0.0;
+        public const double MaxBackgroundImageBlur = 24.0;
+        public const double DefaultBackgroundImageBlur = 0.0;
+
         public AppThemeMode ThemeMode { get; init; } = AppThemeMode.System;
         public BackgroundColorPreset BackgroundPreset { get; init; } = BackgroundColorPreset.Default;
         public string? CustomBackgroundHex { get; init; }
@@ -64,6 +81,9 @@ namespace MusicoWindows.Models
         public double BackgroundOpacity { get; init; } = DefaultBackgroundOpacity;
         public string? BackgroundImageFileName { get; init; }
         public double BackgroundImageOpacity { get; init; } = DefaultBackgroundImageOpacity;
+        public double BackgroundImageBlur { get; init; } = DefaultBackgroundImageBlur;
+        public LyricsFontSize LyricsFontSize { get; init; } = LyricsFontSize.Medium;
+        public LyricsAlignment LyricsAlignment { get; init; } = LyricsAlignment.Leading;
 
         public static double ClampBackgroundOpacity(double value) =>
             double.IsNaN(value) || double.IsInfinity(value)
@@ -75,6 +95,11 @@ namespace MusicoWindows.Models
                 ? DefaultBackgroundImageOpacity
                 : Math.Clamp(value, MinBackgroundImageOpacity, MaxBackgroundImageOpacity);
 
+        public static double ClampBackgroundImageBlur(double value) =>
+            double.IsNaN(value) || double.IsInfinity(value)
+                ? DefaultBackgroundImageBlur
+                : Math.Clamp(value, MinBackgroundImageBlur, MaxBackgroundImageBlur);
+
         public AppearanceSettings Normalize() => this with
         {
             CustomBackgroundHex = ColorMath.NormalizeHexOrNull(CustomBackgroundHex),
@@ -84,7 +109,10 @@ namespace MusicoWindows.Models
             BackgroundImageFileName = string.IsNullOrWhiteSpace(BackgroundImageFileName)
                 ? null
                 : Path.GetFileName(BackgroundImageFileName.Trim()),
-            BackgroundImageOpacity = ClampBackgroundImageOpacity(BackgroundImageOpacity)
+            BackgroundImageOpacity = ClampBackgroundImageOpacity(BackgroundImageOpacity),
+            BackgroundImageBlur = ClampBackgroundImageBlur(BackgroundImageBlur),
+            LyricsFontSize = Enum.IsDefined(LyricsFontSize) ? LyricsFontSize : LyricsFontSize.Medium,
+            LyricsAlignment = Enum.IsDefined(LyricsAlignment) ? LyricsAlignment : LyricsAlignment.Leading
         };
     }
 
@@ -276,6 +304,89 @@ namespace MusicoWindows.Models
 
         public static double RelativeLuminance(RgbColor color) =>
             (0.2126 * color.R + 0.7152 * color.G + 0.0722 * color.B) / 255.0;
+
+        public static double LinearRelativeLuminance(RgbColor color)
+        {
+            static double Linearize(byte channel)
+            {
+                double s = channel / 255.0;
+                return s <= 0.04045
+                    ? s / 12.92
+                    : Math.Pow((s + 0.055) / 1.055, 2.4);
+            }
+
+            return 0.2126 * Linearize(color.R) +
+                   0.7152 * Linearize(color.G) +
+                   0.0722 * Linearize(color.B);
+        }
+
+        public static double ContrastRatio(RgbColor a, RgbColor b)
+        {
+            double la = LinearRelativeLuminance(a);
+            double lb = LinearRelativeLuminance(b);
+            double lighter = Math.Max(la, lb);
+            double darker = Math.Min(la, lb);
+            return (lighter + 0.05) / (darker + 0.05);
+        }
+
+        public static RgbColor AutoFixForeground(RgbColor bg, RgbColor fg) =>
+            AutoFixContrast(bg, fg, minimumRatio: 4.5);
+
+        public static RgbColor AutoFixAccent(RgbColor bg, RgbColor accent) =>
+            AutoFixContrast(bg, accent, minimumRatio: 3.0);
+
+        private static RgbColor AutoFixContrast(RgbColor bg, RgbColor color, double minimumRatio)
+        {
+            if (ContrastRatio(bg, color) >= minimumRatio)
+                return color;
+
+            double whiteContrast = ContrastRatio(bg, White);
+            double blackContrast = ContrastRatio(bg, Black);
+            RgbColor primaryTarget = whiteContrast >= blackContrast ? White : Black;
+            RgbColor secondaryTarget = whiteContrast >= blackContrast ? Black : White;
+
+            if (TryFindMinimumBlend(bg, color, primaryTarget, minimumRatio, out var fixedPrimary))
+                return fixedPrimary;
+            if (TryFindMinimumBlend(bg, color, secondaryTarget, minimumRatio, out var fixedSecondary))
+                return fixedSecondary;
+
+            return primaryTarget;
+        }
+
+        private static bool TryFindMinimumBlend(
+            RgbColor bg,
+            RgbColor color,
+            RgbColor target,
+            double minimumRatio,
+            out RgbColor result)
+        {
+            if (ContrastRatio(bg, target) < minimumRatio)
+            {
+                result = default;
+                return false;
+            }
+
+            double lo = 0.0;
+            double hi = 1.0;
+            RgbColor best = target;
+            for (int i = 0; i < 24; i++)
+            {
+                double mid = (lo + hi) * 0.5;
+                RgbColor candidate = Blend(color, target, mid);
+                if (ContrastRatio(bg, candidate) >= minimumRatio)
+                {
+                    best = candidate;
+                    hi = mid;
+                }
+                else
+                {
+                    lo = mid;
+                }
+            }
+
+            result = best;
+            return true;
+        }
 
         public static bool IsLight(RgbColor color) =>
             RelativeLuminance(color) >= 0.5;

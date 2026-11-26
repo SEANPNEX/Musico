@@ -43,6 +43,122 @@
                         Margin="0,0,0,22">
                     <StackPanel>
 
+                        <!-- Live Preview Card -->
+                        <TextBlock Text="{DynamicResource Str_Settings_LivePreview}"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="12"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   Margin="0,0,0,8" />
+                        <Border x:Name="LivePreviewCard"
+                                Background="{DynamicResource ContentBackgroundBrush}"
+                                BorderBrush="{DynamicResource ControlBorderBrush}"
+                                BorderThickness="1"
+                                Margin="0,0,0,14"
+                                ClipToBounds="True">
+                            <Grid>
+                                <Image x:Name="LivePreviewBgImage"
+                                       Stretch="UniformToFill"
+                                       IsHitTestVisible="False"
+                                       Visibility="Collapsed" />
+                                <Border x:Name="LivePreviewBgScrim"
+                                        IsHitTestVisible="False"
+                                        Visibility="Collapsed" />
+                                <Grid Margin="16,14">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Border Grid.Column="0"
+                                            Width="42"
+                                            Height="42"
+                                            Background="{DynamicResource AccentSubtleBrush}"
+                                            BorderBrush="{DynamicResource AccentBrush}"
+                                            BorderThickness="1"
+                                            Margin="0,0,12,0">
+                                        <TextBlock Text="&#xE8D6;"
+                                                   FontFamily="{StaticResource Win10GlyphFont}"
+                                                   FontSize="18"
+                                                   Foreground="{DynamicResource AccentBrush}"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,16,0">
+                                        <TextBlock Text="{DynamicResource Str_Settings_LivePreviewTitle}"
+                                                   FontFamily="{StaticResource Win10Font}"
+                                                   FontSize="14"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                                        <TextBlock Text="{DynamicResource Str_Settings_LivePreviewSubtitle}"
+                                                   FontFamily="{StaticResource Win10Font}"
+                                                   FontSize="12"
+                                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                                   Margin="0,2,0,6" />
+                                        <Grid Height="4">
+                                            <Border Background="{DynamicResource SliderTrackBrush}" />
+                                            <Border Background="{DynamicResource AccentBrush}"
+                                                    HorizontalAlignment="Left"
+                                                    Width="110" />
+                                        </Grid>
+                                    </StackPanel>
+                                    <Border Grid.Column="2"
+                                            Background="{DynamicResource AccentBrush}"
+                                            Padding="12,6"
+                                            VerticalAlignment="Center">
+                                        <TextBlock Text="{DynamicResource Str_Common_Play}"
+                                                   FontFamily="{StaticResource Win10Font}"
+                                                   FontSize="12"
+                                                   FontWeight="SemiBold"
+                                                   Foreground="{DynamicResource TextOnAccentBrush}" />
+                                    </Border>
+                                </Grid>
+                            </Grid>
+                        </Border>
+
+                        <!-- Inline Low Contrast Warning + Auto-Fix -->
+                        <Border x:Name="ContrastWarningBanner"
+                                Background="{DynamicResource WarningBannerBrush}"
+                                BorderBrush="{DynamicResource WarningTextBrush}"
+                                BorderThickness="1"
+                                Padding="12,10"
+                                Margin="0,0,0,16"
+                                Visibility="Collapsed">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="Auto" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="&#xE7BA;"
+                                           FontFamily="{StaticResource Win10GlyphFont}"
+                                           FontSize="16"
+                                           Foreground="{DynamicResource WarningTextBrush}"
+                                           VerticalAlignment="Center"
+                                           Margin="0,0,10,0" />
+                                <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="0,0,12,0">
+                                    <TextBlock Text="{DynamicResource Str_Settings_LowContrastTitle}"
+                                               FontFamily="{StaticResource Win10Font}"
+                                               FontSize="12.5"
+                                               FontWeight="SemiBold"
+                                               Foreground="{DynamicResource TextPrimaryBrush}" />
+                                    <TextBlock x:Name="ContrastWarningText"
+                                               FontFamily="{StaticResource Win10Font}"
+                                               FontSize="11.5"
+                                               Foreground="{DynamicResource TextSecondaryBrush}"
+                                               TextWrapping="Wrap"
+                                               Margin="0,2,0,0" />
+                                </StackPanel>
+                                <Button x:Name="AutoFixContrastButton"
+                                        Grid.Column="2"
+                                        Style="{StaticResource Win10PrimaryButtonStyle}"
+                                        Content="{DynamicResource Str_Settings_AutoFixContrast}"
+                                        VerticalAlignment="Center"
+                                        Click="AutoFixContrast_Click" />
+                            </Grid>
+                        </Border>
+
                         <!-- Theme Mode -->
                         <Grid Margin="0,0,0,16">
                             <Grid.ColumnDefinitions>
@@ -473,6 +589,38 @@
                                         VerticalAlignment="Center"
                                         ValueChanged="ImageOpacitySlider_ValueChanged" />
                                 <TextBlock x:Name="ImageOpacityValueText"
+                                           Grid.Column="2"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="13"
+                                           FontWeight="SemiBold"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           HorizontalAlignment="Right"
+                                           VerticalAlignment="Center" />
+                            </Grid>
+
+                            <!-- Image Blur Slider (when image active) -->
+                            <Grid x:Name="ImageBlurRow" Margin="0,12,0,0" Visibility="Collapsed">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="220" />
+                                    <ColumnDefinition Width="48" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock Grid.Column="0"
+                                           Text="{DynamicResource Str_Settings_ImageBlur}"
+                                           FontFamily="{StaticResource Win10Font}"
+                                           FontSize="13"
+                                           Foreground="{DynamicResource TextPrimaryBrush}"
+                                           VerticalAlignment="Center" />
+                                <Slider x:Name="ImageBlurSlider"
+                                        Grid.Column="1"
+                                        Style="{StaticResource Win10SliderStyle}"
+                                        Minimum="0"
+                                        Maximum="24"
+                                        TickFrequency="1"
+                                        IsSnapToTickEnabled="True"
+                                        VerticalAlignment="Center"
+                                        ValueChanged="ImageBlurSlider_ValueChanged" />
+                                <TextBlock x:Name="ImageBlurValueText"
                                            Grid.Column="2"
                                            FontFamily="{StaticResource Win10Font}"
                                            FontSize="13"

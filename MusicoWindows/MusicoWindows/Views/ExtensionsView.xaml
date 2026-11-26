@@ -131,6 +131,8 @@
                             Width="26"
                             Height="26"
                             FontSize="11"
+                            ToolTip="{DynamicResource Str_Common_Close}"
+                            AutomationProperties.Name="{DynamicResource Str_Common_Close}"
                             Click="DismissUpdateStatus_Click" />
                 </Grid>
             </Border>
@@ -158,6 +160,8 @@
                             Width="26"
                             Height="26"
                             FontSize="11"
+                            ToolTip="{DynamicResource Str_Common_Close}"
+                            AutomationProperties.Name="{DynamicResource Str_Common_Close}"
                             Click="DismissError_Click" />
                 </Grid>
             </Border>
@@ -240,6 +244,8 @@
                                         Width="28"
                                         Height="28"
                                         FontSize="11"
+                                        ToolTip="{DynamicResource Str_Common_Close}"
+                                        AutomationProperties.Name="{DynamicResource Str_Common_Close}"
                                         Click="CloseLogs_Click" />
                             </StackPanel>
                         </Grid>
@@ -298,6 +304,8 @@
                             <Button Style="{StaticResource Win10IconButtonStyle}"
                                     Content="&#xE711;"
                                     HorizontalAlignment="Right"
+                                    ToolTip="{DynamicResource Str_Common_Close}"
+                                    AutomationProperties.Name="{DynamicResource Str_Common_Close}"
                                     Click="KeepDisabledReview_Click" />
                         </Grid>
                         <TextBlock x:Name="ReviewSubtitleText"
@@ -443,6 +451,8 @@
                             <Button Style="{StaticResource Win10IconButtonStyle}"
                                     Content="&#xE711;"
                                     HorizontalAlignment="Right"
+                                    ToolTip="{DynamicResource Str_Common_Close}"
+                                    AutomationProperties.Name="{DynamicResource Str_Common_Close}"
                                     Click="CloseQrLogin_Click" />
                         </Grid>
                         <TextBlock x:Name="QrSubtitleText"

@@ -18,11 +18,24 @@ public sealed record PlaylistRef(PlaylistKind Kind, Guid? Id = null)
     public static PlaylistRef User(Guid id) => new(PlaylistKind.User, id);
 }
 
+public sealed record DeleteChoiceRequest(
+    string Title,
+    string Message,
+    string ItemName,
+    string? ExactPath,
+    string? SongCountText,
+    string RemoveFromLibraryLabel,
+    Action OnRemoveFromLibrary,
+    string? MoveToRecycleBinLabel = null,
+    Action? OnMoveToRecycleBin = null);
+
 public sealed class ViewContext
 {
     public required AppServices Services { get; init; }
     public required Action<string, string, string, string, Action<string>> OpenTextPrompt { get; init; }
     public required Action<string, string, string, Action?, bool> OpenConfirm { get; init; }
+    public Action<DeleteChoiceRequest>? OpenDeleteChoice { get; init; }
+    public Action<string, string?, Action?>? ShowToast { get; init; }
     public required Action<AlbumInfo> OpenAlbum { get; init; }
     public required Action<string> OpenArtist { get; init; }
     public required Action<PlaylistRef> OpenPlaylist { get; init; }

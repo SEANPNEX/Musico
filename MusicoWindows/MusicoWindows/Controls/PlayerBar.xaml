@@ -72,12 +72,14 @@
                             Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE8B1;"
                             ToolTip="{DynamicResource Str_Common_Shuffle}"
+                            AutomationProperties.Name="{DynamicResource Str_Common_Shuffle}"
                             Margin="0,0,10,0"
                             Click="Shuffle_Click" />
                     <Button x:Name="PrevButton"
                             Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE892;"
                             ToolTip="{DynamicResource Str_PlayerBar_PrevTooltip}"
+                            AutomationProperties.Name="{DynamicResource Str_PlayerBar_PrevTooltip}"
                             Margin="0,0,8,0"
                             Click="Prev_Click" />
                     <Button x:Name="PlayPauseButton"
@@ -87,17 +89,20 @@
                             FontSize="17"
                             Content="&#xE768;"
                             ToolTip="{DynamicResource Str_PlayerBar_PlayPauseTooltip}"
+                            AutomationProperties.Name="{DynamicResource Str_PlayerBar_PlayPauseTooltip}"
                             Click="PlayPause_Click" />
                     <Button x:Name="NextButton"
                             Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE893;"
                             ToolTip="{DynamicResource Str_PlayerBar_NextTooltip}"
+                            AutomationProperties.Name="{DynamicResource Str_PlayerBar_NextTooltip}"
                             Margin="8,0,10,0"
                             Click="Next_Click" />
                     <Button x:Name="RepeatButton"
                             Style="{StaticResource Win10IconButtonStyle}"
                             Content="&#xE8EE;"
                             ToolTip="{DynamicResource Str_PlayerBar_RepeatTooltip}"
+                            AutomationProperties.Name="{DynamicResource Str_PlayerBar_RepeatTooltip}"
                             Click="Repeat_Click" />
                 </StackPanel>
 
@@ -147,6 +152,7 @@
                         Style="{StaticResource Win10IconButtonStyle}"
                         Content="&#xE767;"
                         ToolTip="{DynamicResource Str_PlayerBar_MuteTooltip}"
+                        AutomationProperties.Name="{DynamicResource Str_PlayerBar_MuteTooltip}"
                         Click="Mute_Click" />
                 <Slider x:Name="VolumeSlider"
                         Style="{StaticResource Win10SliderStyle}"
@@ -156,30 +162,35 @@
                         Value="1"
                         Margin="2,0,8,0"
                         ToolTip="{DynamicResource Str_PlayerBar_VolumeTooltip}"
+                        AutomationProperties.Name="{DynamicResource Str_PlayerBar_VolumeTooltip}"
                         ValueChanged="VolumeSlider_ValueChanged" />
 
                 <Button x:Name="EqButton"
                         Style="{StaticResource Win10IconButtonStyle}"
                         Content="&#xE9E9;"
                         ToolTip="{DynamicResource Str_Equalizer_Title}"
+                        AutomationProperties.Name="{DynamicResource Str_Equalizer_Title}"
                         Margin="0,0,2,0"
                         Click="Eq_Click" />
                 <Button x:Name="SleepButton"
                         Style="{StaticResource Win10IconButtonStyle}"
                         Content="&#xE708;"
                         ToolTip="{DynamicResource Str_SleepTimer_Title}"
+                        AutomationProperties.Name="{DynamicResource Str_SleepTimer_Title}"
                         Margin="0,0,2,0"
                         Click="Sleep_Click" />
                 <Button x:Name="LyricsButton"
                         Style="{StaticResource Win10IconButtonStyle}"
                         Content="&#xE90A;"
                         ToolTip="{DynamicResource Str_Lyrics_Title}"
+                        AutomationProperties.Name="{DynamicResource Str_Lyrics_Title}"
                         Margin="0,0,2,0"
                         Click="Lyrics_Click" />
                 <Button x:Name="QueueButton"
                         Style="{StaticResource Win10IconButtonStyle}"
                         Content="&#xE90B;"
                         ToolTip="{DynamicResource Str_FullPlayer_QueueTab}"
+                        AutomationProperties.Name="{DynamicResource Str_FullPlayer_QueueTab}"
                         Click="Queue_Click" />
             </StackPanel>
         </Grid>

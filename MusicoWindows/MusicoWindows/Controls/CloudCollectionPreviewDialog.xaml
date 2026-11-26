@@ -74,6 +74,7 @@
                             Content="&#xE711;"
                             VerticalAlignment="Top"
                             ToolTip="{DynamicResource Str_Common_Close}"
+                            AutomationProperties.Name="{DynamicResource Str_Common_Close}"
                             Click="Close_Click" />
                 </Grid>
 
