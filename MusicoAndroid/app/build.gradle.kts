@@ -13,8 +13,8 @@ android {
         applicationId = "com.musico"
         minSdk = 26
         targetSdk = 35
-        versionCode = 32
-        versionName = "1.3.4"
+        versionCode = 33
+        versionName = "1.4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
