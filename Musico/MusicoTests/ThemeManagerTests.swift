@@ -275,28 +275,24 @@ final class ThemeManagerTests: XCTestCase {
         let dir = makeTempDir()
         let manager = ThemeManager(directory: dir)
 
-        // Default follows main
+        // Default follows main; sidebar itself stays opaque (1.0) on Apple platforms
         XCTAssertEqual(manager.settings.sidebarBackgroundPreset, .default)
         XCTAssertNil(manager.activeSidebarBackgroundHex)
         XCTAssertNil(manager.sidebarColorSchemeOverride)
-        XCTAssertEqual(manager.effectiveSidebarOpacity, manager.effectiveBackgroundOpacity, accuracy: 0.0001)
-
-        // When sidebarOpacity is nil, effectiveSidebarOpacity follows effectiveBackgroundOpacity
-        manager.setBackgroundOpacity(0.5)
-        #if targetEnvironment(macCatalyst)
-        XCTAssertEqual(manager.effectiveSidebarOpacity, 0.5, accuracy: 0.0001)
-        #else
+        XCTAssertFalse(manager.hasCustomSidebarBackdrop)
         XCTAssertEqual(manager.effectiveSidebarOpacity, 1.0, accuracy: 0.0001)
-        #endif
 
-        // Setting sidebarOpacity overrides independently
+        // Adjusting main backgroundOpacity does not make the sidebar translucent
+        manager.setBackgroundOpacity(0.5)
+        XCTAssertEqual(manager.effectiveSidebarOpacity, 1.0, accuracy: 0.0001)
+        XCTAssertFalse(manager.hasCustomSidebarBackdrop)
+
+        // Legacy sidebarOpacity field still clamps/persists without making window or sidebar translucent
+        manager.setBackgroundOpacity(1.0)
         manager.setSidebarOpacity(0.35)
         XCTAssertEqual(manager.settings.sidebarOpacity ?? -1, 0.35, accuracy: 0.0001)
-        #if targetEnvironment(macCatalyst)
-        XCTAssertEqual(manager.effectiveSidebarOpacity, 0.35, accuracy: 0.0001)
-        #else
         XCTAssertEqual(manager.effectiveSidebarOpacity, 1.0, accuracy: 0.0001)
-        #endif
+        XCTAssertFalse(manager.isWindowTranslucent)
 
         // Preset sidebar colors drive sidebarColorSchemeOverride and sidebarPrimaryForegroundColor
         manager.setSidebarBackgroundPreset(.midnight)
@@ -322,6 +318,7 @@ final class ThemeManagerTests: XCTestCase {
         XCTAssertEqual(reloaded.settings.sidebarBackgroundPreset, .custom)
         XCTAssertEqual(reloaded.settings.customSidebarBackgroundHex, "#102A43")
         XCTAssertEqual(reloaded.settings.sidebarOpacity ?? -1, 0.35, accuracy: 0.0001)
+        XCTAssertEqual(reloaded.effectiveSidebarOpacity, 1.0, accuracy: 0.0001)
         XCTAssertEqual(reloaded.sidebarColorSchemeOverride, .dark)
     }
 }

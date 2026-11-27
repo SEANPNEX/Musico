@@ -149,13 +149,15 @@ struct SettingsView: View {
                         selection: customTextColorBinding,
                         supportsOpacity: false
                     )
-                    Button(L10n.tr("Clear")) {
+                    Button {
                         themeManager.setCustomForegroundHex(nil)
+                    } label: {
+                        Text(L10n.tr("Clear"))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.borderless)
                     .font(.subheadline)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
                 }
             }
 
@@ -172,13 +174,15 @@ struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                         }
                     }
-                    Button(L10n.tr("Auto-fix Contrast")) {
+                    Button {
                         themeManager.autoFixContrast(fallbackScheme: effectiveScheme)
+                    } label: {
+                        Text(L10n.tr("Auto-fix Contrast"))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
                 }
                 .padding(.vertical, 4)
             }
@@ -218,24 +222,6 @@ struct SettingsView: View {
                     supportsOpacity: false
                 )
             }
-
-            VStack(alignment: .leading, spacing: 6) {
-                HStack {
-                    Text(L10n.tr("Sidebar Opacity"))
-                    Spacer()
-                    Text("\(Int((themeManager.effectiveSidebarOpacity * 100).rounded()))%")
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
-                }
-                Slider(
-                    value: Binding(
-                        get: { themeManager.effectiveSidebarOpacity },
-                        set: { themeManager.setSidebarOpacity($0) }
-                    ),
-                    in: AppearanceSettings.sidebarOpacityRange
-                )
-            }
-            .padding(.vertical, 2)
             #endif
 
             Button(L10n.tr("Reset to Default"), role: .destructive) {
@@ -312,10 +298,9 @@ struct SettingsView: View {
 
         return Group {
             #if targetEnvironment(macCatalyst)
-            let sidebarColor = (themeManager.activeSidebarBackgroundColor
+            let sidebarColor = themeManager.activeSidebarBackgroundColor
                 ?? themeManager.activeBackgroundColor
-                ?? Color(.tertiarySystemBackground))
-                .opacity(themeManager.effectiveSidebarOpacity)
+                ?? Color(.tertiarySystemBackground)
             let sidebarFg = themeManager.sidebarPrimaryForegroundColor ?? fgPrimary
 
             HStack(spacing: 0) {
@@ -521,13 +506,15 @@ struct SettingsView: View {
                 Spacer()
 
                 if themeManager.hasBackgroundImage {
-                    Button(L10n.tr("Remove"), role: .destructive) {
+                    Button(role: .destructive) {
                         themeManager.clearBackgroundImage()
+                    } label: {
+                        Text(L10n.tr("Remove"))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.borderless)
                     .font(.subheadline)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
                     .layoutPriority(1)
                 }
             }

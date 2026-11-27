@@ -962,27 +962,31 @@ struct FolderDetailView: View {
     }
 
     private func switchSourceBannerButton(root: LibraryRoot, currentName: String, suggestedID: String) -> some View {
-        Button(L10n.tr("Switch Source…")) {
+        Button {
             editingTarget = FolderTrackingTarget(
                 root: root,
                 path: "",
                 displayName: currentName,
                 preselectedProviderID: suggestedID
             )
+        } label: {
+            Text(L10n.tr("Switch Source…"))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.borderedProminent)
         .controlSize(.small)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var manageExtensionsBannerButton: some View {
-        Button(L10n.tr("Manage Extensions")) {
+        Button {
             showExtensionsSheet = true
+        } label: {
+            Text(L10n.tr("Manage Extensions"))
+                .font(.subheadline.weight(.medium))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
-        .font(.subheadline.weight(.medium))
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func confirmRemoveFolder(
@@ -1297,12 +1301,14 @@ struct UpdateTrackedFolderSheet: View {
                                 .foregroundStyle(.secondary)
                                 .textSelection(.enabled)
                             Spacer(minLength: 8)
-                            Button(L10n.tr("Edit")) {
+                            Button {
                                 showEditSheet = true
+                            } label: {
+                                Text(L10n.tr("Edit"))
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                             }
                             .buttonStyle(.borderless)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
                             .layoutPriority(1)
                             .disabled(library == nil)
                         }

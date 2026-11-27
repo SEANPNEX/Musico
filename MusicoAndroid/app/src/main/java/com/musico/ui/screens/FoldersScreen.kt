@@ -7,6 +7,7 @@ import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -2366,17 +2367,27 @@ private fun FolderRootList(
                         state = dismissState,
                         enableDismissFromStartToEnd = false,
                         backgroundContent = {
+                            val isSwipingEndToStart = dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart
                             Box(
                                 modifier = Modifier
                                     .fillMaxSize()
+                                    .background(
+                                        if (isSwipingEndToStart) {
+                                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
+                                        } else {
+                                            Color.Transparent
+                                        }
+                                    )
                                     .padding(horizontal = 20.dp),
                                 contentAlignment = Alignment.CenterEnd
                             ) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Delete,
-                                    contentDescription = strings.removeFolder,
-                                    tint = MaterialTheme.colorScheme.error
-                                )
+                                if (isSwipingEndToStart) {
+                                    Icon(
+                                        imageVector = Icons.Rounded.Delete,
+                                        contentDescription = strings.removeFolder,
+                                        tint = MaterialTheme.colorScheme.error
+                                    )
+                                }
                             }
                         }
                     ) {
@@ -2972,17 +2983,27 @@ private fun FolderDetailContent(
                     state = dismissState,
                     enableDismissFromStartToEnd = false,
                     backgroundContent = {
+                        val isSwipingEndToStart = dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart
                         Box(
                             modifier = Modifier
                                 .fillMaxSize()
+                                .background(
+                                    if (isSwipingEndToStart) {
+                                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
+                                    } else {
+                                        Color.Transparent
+                                    }
+                                )
                                 .padding(horizontal = 20.dp),
                             contentAlignment = Alignment.CenterEnd
                         ) {
-                            Icon(
-                                imageVector = Icons.Rounded.Delete,
-                                contentDescription = strings.removeFolder,
-                                tint = MaterialTheme.colorScheme.error
-                            )
+                            if (isSwipingEndToStart) {
+                                Icon(
+                                    imageVector = Icons.Rounded.Delete,
+                                    contentDescription = strings.removeFolder,
+                                    tint = MaterialTheme.colorScheme.error
+                                )
+                            }
                         }
                     }
                 ) {

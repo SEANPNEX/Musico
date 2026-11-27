@@ -86,7 +86,6 @@ struct MacWindowTransparencyApplier: UIViewRepresentable {
                         || typeName.contains("Navigation")
                         || typeName.contains("TransitionView")
                         || typeName.contains("WrapperView")
-                        || typeName.contains("Sidebar")
                         || typeName.contains("Column")
                         || typeName.contains("Hosting")
                         || typeName.contains("Backdrop") {
@@ -96,10 +95,10 @@ struct MacWindowTransparencyApplier: UIViewRepresentable {
                 }
             }
 
-            // Neutralize default sidebar/navigation chrome UIVisualEffectView backdrops inside containers
-            // while preserving SwiftUI's interactive glass effects (which live inside UIHostingView leaves).
+            // Neutralize default navigation chrome UIVisualEffectView backdrops inside containers
+            // while preserving the native sidebar material and SwiftUI's interactive glass effects.
             if let effectView = view as? UIVisualEffectView,
-               typeName.contains("BarBackground") || typeName.contains("Navigation") || typeName.contains("Sidebar") {
+               typeName.contains("BarBackground") || typeName.contains("Navigation") {
                 effectView.isHidden = true
             }
 

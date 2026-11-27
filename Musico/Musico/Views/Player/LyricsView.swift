@@ -40,16 +40,24 @@ struct LyricsView: View {
                     } description: {
                         Text(L10n.tr("Import a .lrc or .txt file for this song, or put one with the same name next to it."))
                     } actions: {
-                        Button(L10n.tr("Search Online…")) { showCloudSearch = true }
-                            .buttonStyle(.borderedProminent)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .disabled(player?.currentTrack == nil)
-                        Button(L10n.tr("Import from File…")) { showImporter = true }
-                            .buttonStyle(.bordered)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .disabled(player?.currentTrack == nil)
+                        Button {
+                            showCloudSearch = true
+                        } label: {
+                            Text(L10n.tr("Search Online…"))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(player?.currentTrack == nil)
+                        Button {
+                            showImporter = true
+                        } label: {
+                            Text(L10n.tr("Import from File…"))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        .buttonStyle(.bordered)
+                        .disabled(player?.currentTrack == nil)
                     }
                 }
             }

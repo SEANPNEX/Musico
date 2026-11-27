@@ -406,13 +406,15 @@ struct SongsView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                     Spacer()
-                    Button(L10n.tr("Retry")) {
+                    Button {
                         cloudSearch.retry(currentQuery: trimmedQuery, descriptor: ext, extensionStore: extensionStore)
+                    } label: {
+                        Text(L10n.tr("Retry"))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
                     .layoutPriority(1)
                 }
                 .padding(.vertical, 8)
@@ -469,25 +471,29 @@ struct SongsView: View {
     }
 
     private func cloudErrorAuthButton(ext: CloudSearchExtensionDescriptor) -> some View {
-        Button(ext.supportsCookie ? L10n.tr("Configure Cookie…") : L10n.tr("Open Extension Manager")) {
+        Button {
             extensionManagerTargetID = ext.id
             showExtensionManager = true
+        } label: {
+            Text(ext.supportsCookie ? L10n.tr("Configure Cookie…") : L10n.tr("Open Extension Manager"))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.bordered)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func cloudErrorRetryButton(
         ext: CloudSearchExtensionDescriptor,
         cloudSearch: CloudSearchController
     ) -> some View {
-        Button(L10n.tr("Retry")) {
+        Button {
             cloudSearch.retry(currentQuery: trimmedQuery, descriptor: ext, extensionStore: extensionStore)
+        } label: {
+            Text(L10n.tr("Retry"))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.borderedProminent)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     @ViewBuilder

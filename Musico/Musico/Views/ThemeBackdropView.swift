@@ -3,7 +3,7 @@ import UIKit
 
 /// Renders per-region theme backdrops:
 /// - `mainContent`: full-bleed color and optional blurred background image scaled together by window opacity.
-/// - `sidebar`: clean sidebar background color + independent sidebar opacity (never renders background images).
+/// - `sidebar`: solid sidebar background color (never renders background images or window transparency).
 /// - `playerBar`: clean player bar base color + window opacity (never renders background images).
 struct ThemeBackdropView: View {
     enum Role {
@@ -83,11 +83,10 @@ struct ThemeBackdropView: View {
 
     @ViewBuilder
     private var sidebarBackdrop: some View {
-        if themeManager.hasCustomSidebarBackdrop {
-            let base = themeManager.activeSidebarBackgroundColor
-                ?? themeManager.activeBackgroundColor
-                ?? defaultSidebarBaseColor
-            base.opacity(themeManager.effectiveSidebarOpacity)
+        if let sidebarColor = themeManager.activeSidebarBackgroundColor {
+            sidebarColor
+        } else if let mainColor = themeManager.activeBackgroundColor {
+            mainColor
         } else {
             Color.clear
         }
@@ -106,11 +105,6 @@ struct ThemeBackdropView: View {
     private var defaultMainBaseColor: Color {
         let scheme = themeManager.preferredColorScheme ?? colorScheme
         return scheme == .dark ? Color(red: 0.09, green: 0.09, blue: 0.10) : Color.white
-    }
-
-    private var defaultSidebarBaseColor: Color {
-        let scheme = themeManager.sidebarColorSchemeOverride ?? themeManager.preferredColorScheme ?? colorScheme
-        return scheme == .dark ? Color(red: 0.11, green: 0.11, blue: 0.12) : Color(red: 0.95, green: 0.95, blue: 0.96)
     }
 
     private var defaultPlayerBarBaseColor: Color {

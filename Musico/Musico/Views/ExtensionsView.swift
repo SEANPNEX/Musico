@@ -199,21 +199,25 @@ struct ExtensionsView: View {
     }
 
     private var emptyImportFileButton: some View {
-        Button(L10n.tr("Import File…")) {
+        Button {
             showFileImporter = true
+        } label: {
+            Text(L10n.tr("Import File…"))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.borderedProminent)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var emptyImportURLButton: some View {
-        Button(L10n.tr("Import URL…")) {
+        Button {
             showURLImporter = true
+        } label: {
+            Text(L10n.tr("Import URL…"))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.bordered)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func presentImportedExtensions(_ installed: [InstalledExtension]) {
@@ -253,13 +257,15 @@ struct ExtensionsView: View {
             }
             Spacer()
             if let pending = extensionStore.pendingUpdates[ext.id] {
-                Button(L10n.tr("Review Update")) {
+                Button {
                     updateReviewTarget = pending
+                } label: {
+                    Text(L10n.tr("Review Update"))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
                 .buttonStyle(.borderedProminent)
                 .controlSize(.small)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
                 .layoutPriority(1)
             }
             Toggle(

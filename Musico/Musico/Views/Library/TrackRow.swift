@@ -470,20 +470,24 @@ struct NamePromptSheet: View {
 
             HStack(spacing: 10) {
                 Spacer()
-                Button(L10n.tr("Cancel"), role: .cancel) {
+                Button(role: .cancel) {
                     dismiss()
+                } label: {
+                    Text(L10n.tr("Cancel"))
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
                 .buttonStyle(.bordered)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
                 .keyboardShortcut(.cancelAction)
 
-                Button(confirmLabel) {
+                Button {
                     submit()
+                } label: {
+                    Text(confirmLabel)
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                 }
                 .buttonStyle(.borderedProminent)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
                 .keyboardShortcut(.defaultAction)
                 .disabled(trimmed.isEmpty)
             }

@@ -79,22 +79,26 @@ struct DownloadsListView: View {
                 }
                 Spacer()
                 if job.state == .running {
-                    Button(L10n.tr("Cancel"), role: .cancel) {
+                    Button(role: .cancel) {
                         manager.cancel(jobID: job.id)
+                    } label: {
+                        Text(L10n.tr("Cancel"))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
                     .layoutPriority(1)
                 } else {
-                    Button(L10n.tr("Dismiss")) {
+                    Button {
                         manager.dismiss(jobID: job.id)
+                    } label: {
+                        Text(L10n.tr("Dismiss"))
+                            .font(.caption)
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
                     }
                     .buttonStyle(.borderless)
-                    .font(.caption)
-                    .lineLimit(1)
-                    .fixedSize(horizontal: true, vertical: false)
                     .layoutPriority(1)
                 }
             }

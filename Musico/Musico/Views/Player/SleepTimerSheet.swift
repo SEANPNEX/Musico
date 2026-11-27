@@ -35,11 +35,15 @@ struct SleepTimerSheet: View {
                         Image(systemName: "moon.zzz.fill").foregroundStyle(themeManager.accentColor)
                         status(for: player)
                         Spacer()
-                        Button(L10n.tr("Cancel Timer"), role: .destructive) { player.setSleep(.off) }
-                            .buttonStyle(.borderless)
-                            .lineLimit(1)
-                            .fixedSize(horizontal: true, vertical: false)
-                            .layoutPriority(1)
+                        Button(role: .destructive) {
+                            player.setSleep(.off)
+                        } label: {
+                            Text(L10n.tr("Cancel Timer"))
+                                .lineLimit(1)
+                                .fixedSize(horizontal: true, vertical: false)
+                        }
+                        .buttonStyle(.borderless)
+                        .layoutPriority(1)
                     }
                 }
             }
@@ -49,11 +53,15 @@ struct SleepTimerSheet: View {
                 }
                 HStack {
                     Stepper(L10n.tr("%@ minutes", String(customMinutes)), value: $customMinutes, in: 1...240)
-                    Button(L10n.tr("Start")) { start(customMinutes, player: player) }
-                        .buttonStyle(.borderedProminent)
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
-                        .layoutPriority(1)
+                    Button {
+                        start(customMinutes, player: player)
+                    } label: {
+                        Text(L10n.tr("Start"))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .layoutPriority(1)
                 }
                 Button(L10n.tr("End of current song")) {
                     player.setSleep(.endOfTrack)

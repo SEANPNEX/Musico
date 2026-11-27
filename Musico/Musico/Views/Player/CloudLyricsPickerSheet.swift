@@ -102,12 +102,16 @@ struct CloudLyricsPickerSheet: View {
             TextField(L10n.tr("Artist"), text: $queryArtist)
                 .textFieldStyle(.roundedBorder)
                 .onSubmit { triggerSearch() }
-            Button(L10n.tr("Search")) { triggerSearch() }
-                .buttonStyle(.borderedProminent)
-                .lineLimit(1)
-                .fixedSize(horizontal: true, vertical: false)
-                .layoutPriority(1)
-                .disabled(isSearching || (queryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && queryArtist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
+            Button {
+                triggerSearch()
+            } label: {
+                Text(L10n.tr("Search"))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .buttonStyle(.borderedProminent)
+            .layoutPriority(1)
+            .disabled(isSearching || (queryTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && queryArtist.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
         }
         .padding(.horizontal, 16)
         .padding(.top, 12)

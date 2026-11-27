@@ -461,11 +461,7 @@ final class ThemeManager {
     }
 
     var effectiveSidebarOpacity: Double {
-        #if targetEnvironment(macCatalyst)
-        settings.sidebarOpacity.map(AppearanceSettings.clampSidebarOpacity) ?? effectiveBackgroundOpacity
-        #else
         1.0
-        #endif
     }
 
     var activeSidebarBackgroundHex: String? {
@@ -505,7 +501,7 @@ final class ThemeManager {
 
     var isWindowTranslucent: Bool {
         #if targetEnvironment(macCatalyst)
-        effectiveBackgroundOpacity < 0.999 || effectiveSidebarOpacity < 0.999
+        effectiveBackgroundOpacity < 0.999
         #else
         false
         #endif
@@ -516,7 +512,7 @@ final class ThemeManager {
     }
 
     var hasCustomSidebarBackdrop: Bool {
-        activeSidebarBackgroundColor != nil || activeBackgroundColor != nil || isWindowTranslucent
+        activeSidebarBackgroundColor != nil || activeBackgroundColor != nil
     }
 
     var translucentSurfaceOpacity: Double {

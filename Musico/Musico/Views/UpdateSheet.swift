@@ -7,7 +7,7 @@ struct UpdateSheet: View {
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        NavigationStack {
+        let sheet = NavigationStack {
             VStack(alignment: .leading, spacing: 16) {
                 content
                 Spacer(minLength: 0)
@@ -19,13 +19,23 @@ struct UpdateSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(L10n.tr("Done")) { dismiss() }
-                        .lineLimit(1)
-                        .fixedSize(horizontal: true, vertical: false)
+                    Button {
+                        dismiss()
+                    } label: {
+                        Text(L10n.tr("Done"))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
                 }
             }
         }
-        .frame(minWidth: 540, idealWidth: 560, minHeight: 380, idealHeight: 420)
+        .frame(minWidth: 580, idealWidth: 600, minHeight: 400, idealHeight: 440)
+
+        if #available(iOS 18.0, macCatalyst 18.0, *) {
+            sheet.presentationSizing(.fitted)
+        } else {
+            sheet
+        }
     }
 
     @ViewBuilder
@@ -78,6 +88,11 @@ struct UpdateSheet: View {
                         downloadAndInstallButton(disabled: release.dmgAsset == nil)
                         skipVersionButton(release: release)
                     }
+                    openReleasePageButton
+                }
+                VStack(alignment: .leading, spacing: 10) {
+                    downloadAndInstallButton(disabled: release.dmgAsset == nil)
+                    skipVersionButton(release: release)
                     openReleasePageButton
                 }
             }
@@ -154,50 +169,60 @@ struct UpdateSheet: View {
     }
 
     private var checkAgainButton: some View {
-        Button(L10n.tr("Check Again")) {
+        Button {
             Task { await updateManager.checkForUpdates(manual: true) }
+        } label: {
+            Text(L10n.tr("Check Again"))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.borderedProminent)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func downloadAndInstallButton(disabled: Bool) -> some View {
-        Button(L10n.tr("Download & Install Update")) {
+        Button {
             Task { await updateManager.downloadAndOpenUpdate() }
+        } label: {
+            Text(L10n.tr("Download & Install Update"))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.borderedProminent)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
         .disabled(disabled)
     }
 
     private func skipVersionButton(release: ReleaseInfo) -> some View {
-        Button(L10n.tr("Skip Version")) {
+        Button {
             updateManager.skipVersion(release.version)
             dismiss()
+        } label: {
+            Text(L10n.tr("Skip Version"))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.bordered)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var installAndRelaunchButton: some View {
-        Button(L10n.tr("Install & Relaunch")) {
+        Button {
             Task { await updateManager.downloadAndOpenUpdate() }
+        } label: {
+            Text(L10n.tr("Install & Relaunch"))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.borderedProminent)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private var openReleasePageButton: some View {
-        Button(L10n.tr("Open Release Page")) {
+        Button {
             Task { await updateManager.openReleasePage() }
+        } label: {
+            Text(L10n.tr("Open Release Page"))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
         }
         .buttonStyle(.bordered)
-        .lineLimit(1)
-        .fixedSize(horizontal: true, vertical: false)
     }
 
     private func releaseHeader(_ release: ReleaseInfo, subtitle: String) -> some View {
