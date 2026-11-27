@@ -16,9 +16,7 @@ struct AlbumsView: View {
             }
         }
         .navigationTitle(L10n.tr("Albums"))
-        #if targetEnvironment(macCatalyst)
         .navigationBarTitleDisplayMode(.inline)
-        #endif
         .navigationDestination(for: LibraryStore.Album.self) { AlbumDetailView(album: $0) }
     }
 }
@@ -53,7 +51,7 @@ private struct AlbumGridCard: View {
                 Text(L10n.displayArtist(album.artist)).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
             }
             .scaleEffect(!reduceMotion && isHovered ? 1.025 : 1.0)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.16), value: isHovered)
+            .animation(MusicoMotion.microInteraction(reduceMotion: reduceMotion), value: isHovered)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
@@ -98,7 +96,7 @@ struct HeroHeaderBackdrop: View {
         .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
         .allowsHitTesting(false)
         .accessibilityHidden(true)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.35), value: image != nil)
+        .animation(MusicoMotion.contentChange(reduceMotion: reduceMotion), value: image != nil)
         .task(id: artworkKey) {
             guard let artworkKey else {
                 image = nil
@@ -324,9 +322,7 @@ struct ArtistsView: View {
         .listStyle(.plain)
         .hiddenScrollBackgroundIfThemed(themeManager)
         .navigationTitle(L10n.tr("Artists"))
-        #if targetEnvironment(macCatalyst)
         .navigationBarTitleDisplayMode(.inline)
-        #endif
         .navigationDestination(for: String.self) { ArtistDetailView(artist: $0) }
         .navigationDestination(for: LibraryStore.Album.self) { AlbumDetailView(album: $0) }
     }

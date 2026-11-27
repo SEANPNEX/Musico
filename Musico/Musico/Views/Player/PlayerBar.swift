@@ -24,7 +24,7 @@ struct PlayerBar: View {
                     ArtworkView(artworkKey: track?.artworkKey, remoteArtworkURL: track?.remoteArtworkURL, size: 46)
                         .id(track?.id)
                         .transition(.opacity)
-                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: track?.id)
+                        .animation(MusicoMotion.contentChange(reduceMotion: reduceMotion), value: track?.id)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(track?.title ?? L10n.tr("Not Playing"))
                             .font(.subheadline.weight(.medium))
@@ -43,7 +43,7 @@ struct PlayerBar: View {
                                 .contentTransition(.opacity)
                         }
                     }
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: track?.id)
+                    .animation(MusicoMotion.contentChange(reduceMotion: reduceMotion), value: track?.id)
                 }
                 .padding(.horizontal, 6)
                 .padding(.vertical, 4)
@@ -53,7 +53,7 @@ struct PlayerBar: View {
             }
             .buttonStyle(.plain)
             .onHover { isTrackHovered = $0 }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isTrackHovered)
+            .animation(MusicoMotion.microInteraction(reduceMotion: reduceMotion), value: isTrackHovered)
             .accessibilityLabel(L10n.tr("Open Now Playing"))
             .contextMenu {
                 if let track {
@@ -88,7 +88,7 @@ struct PlayerBar: View {
                     }
                     .buttonStyle(.borderless)
                     .onHover { isMoreHovered = $0 }
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isMoreHovered)
+                    .animation(MusicoMotion.microInteraction(reduceMotion: reduceMotion), value: isMoreHovered)
                     .help(L10n.tr("Song options"))
                     .accessibilityLabel(L10n.tr("Song options"))
                 }
@@ -211,7 +211,7 @@ struct PlayerBar: View {
                 width: 32,
                 height: 30
             ) {
-                withAnimation(reduceMotion ? nil : .spring(duration: 0.25)) { player.toggleShuffle() }
+                withAnimation(MusicoMotion.symbolToggle(reduceMotion: reduceMotion)) { player.toggleShuffle() }
             }
 
             DockIconButton(
@@ -240,7 +240,7 @@ struct PlayerBar: View {
                     playFeedbackTrigger += 1
                 }
                 .contentTransition(.symbolEffect(.replace))
-                .animation(reduceMotion ? nil : .spring(duration: 0.25), value: player.isPlaying)
+                .animation(MusicoMotion.symbolToggle(reduceMotion: reduceMotion), value: player.isPlaying)
                 #if !targetEnvironment(macCatalyst)
                 .sensoryFeedback(.impact(flexibility: .soft), trigger: playFeedbackTrigger)
                 #endif
@@ -263,7 +263,7 @@ struct PlayerBar: View {
                 width: 32,
                 height: 30
             ) {
-                withAnimation(reduceMotion ? nil : .spring(duration: 0.25)) { player.cycleRepeat() }
+                withAnimation(MusicoMotion.symbolToggle(reduceMotion: reduceMotion)) { player.cycleRepeat() }
             }
             .contentTransition(.symbolEffect(.replace))
         }
@@ -280,7 +280,7 @@ struct PlayerBar: View {
             width: 36,
             height: 32
         ) {
-            withAnimation(reduceMotion ? nil : .spring(response: 0.30, dampingFraction: 0.86)) {
+            withAnimation(MusicoMotion.panelToggle(reduceMotion: reduceMotion)) {
                 if panel == .queue && isQueueMainActive {
                     sidePanel = nil
                 } else {
@@ -289,7 +289,7 @@ struct PlayerBar: View {
             }
         }
         .contentTransition(.symbolEffect(.replace))
-        .animation(reduceMotion ? nil : .spring(duration: 0.25), value: isOn)
+        .animation(MusicoMotion.symbolToggle(reduceMotion: reduceMotion), value: isOn)
         .accessibilityAddTraits(isOn ? .isSelected : [])
     }
 }
@@ -323,7 +323,7 @@ private struct DockIconButton: View {
             reduceMotion: reduceMotion
         ))
         .onHover { isHovered = $0 }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isHovered)
+        .animation(MusicoMotion.microInteraction(reduceMotion: reduceMotion), value: isHovered)
         .accessibilityLabel(title)
         .help(title)
     }

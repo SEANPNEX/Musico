@@ -111,7 +111,7 @@ struct FullPlayerView: View {
     /// With two columns, Queue and Lyrics switch the right-hand column instead of opening a sheet.
     private var columnPanel: Binding<Panel?> {
         Binding(get: { panel }, set: { target in
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+            withAnimation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion)) {
                 switch target {
                 case .queue: sidePane = .queue
                 case .lyrics: sidePane = .lyrics
@@ -123,25 +123,43 @@ struct FullPlayerView: View {
 
     private var sideColumn: some View {
         VStack(spacing: 0) {
-            Picker(L10n.tr("Show"), selection: $sidePane.animation(reduceMotion ? nil : .easeInOut(duration: 0.2))) {
+            Picker(
+                L10n.tr("Show"),
+                selection: Binding(
+                    get: { sidePane },
+                    set: { newValue in
+                        guard newValue != sidePane else { return }
+                        withAnimation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion)) {
+                            sidePane = newValue
+                        }
+                    }
+                )
+            ) {
                 ForEach(SidePane.allCases) { Text($0.localizedTitle).tag($0) }
             }
             .pickerStyle(.segmented)
             .frame(maxWidth: 320)
             .padding(.top, 20)
             .padding(.bottom, 8)
-            Group {
-                switch sidePane {
-                case .lyrics: LyricsView(embedded: true)
-                case .queue:
-                    NavigationStack {
-                        QueuesView(embeddedInInspector: true).navigationBarTitleDisplayMode(.inline)
-                    }
+
+            ZStack {
+                LyricsView(embedded: true)
+                    .opacity(sidePane == .lyrics ? 1 : 0)
+                    .offset(x: reduceMotion ? 0 : (sidePane == .lyrics ? 0 : -MusicoMotion.peerSlideOffset))
+                    .allowsHitTesting(sidePane == .lyrics)
+                    .accessibilityHidden(sidePane != .lyrics)
+
+                NavigationStack {
+                    QueuesView(embeddedInInspector: true).navigationBarTitleDisplayMode(.inline)
                 }
+                .opacity(sidePane == .queue ? 1 : 0)
+                .offset(x: reduceMotion ? 0 : (sidePane == .queue ? 0 : MusicoMotion.peerSlideOffset))
+                .allowsHitTesting(sidePane == .queue)
+                .accessibilityHidden(sidePane != .queue)
             }
-            .id(sidePane)
-            .transition(.opacity)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: sidePane)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .clipped()
+            .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: sidePane)
         }
     }
 }
@@ -178,7 +196,7 @@ private struct PlayerPage: View {
                 ArtworkView(artworkKey: track.artworkKey, remoteArtworkURL: track.remoteArtworkURL)
                     .id(track.id)
                     .transition(.opacity)
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: track.id)
+                    .animation(MusicoMotion.contentChange(reduceMotion: reduceMotion), value: track.id)
                     .padding(.horizontal, 12)
                     .shadow(color: .black.opacity(player.isPlaying ? 0.28 : 0.14),
                             radius: player.isPlaying ? 22 : 12,
@@ -202,7 +220,7 @@ private struct PlayerPage: View {
                                         player.previous()
                                     }
                                 }
-                                withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.78)) {
+                                withAnimation(MusicoMotion.panelToggle(reduceMotion: reduceMotion)) {
                                     artworkDragOffset = 0
                                 }
                             }
@@ -234,7 +252,7 @@ private struct PlayerPage: View {
                             }
                         }
                     }
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: track.id)
+                    .animation(MusicoMotion.contentChange(reduceMotion: reduceMotion), value: track.id)
                     Spacer(minLength: 4)
                     if !track.isEphemeral {
                         let isFavourite = library.isFavourite(track.id)
@@ -341,7 +359,7 @@ private struct PlayerPage: View {
             .accessibilityLabel(L10n.tr("Close"))
             .help(L10n.tr("Close"))
             .onHover { isCloseHovered = $0 }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isCloseHovered)
+            .animation(MusicoMotion.microInteraction(reduceMotion: reduceMotion), value: isCloseHovered)
         }
     }
 
@@ -551,7 +569,7 @@ private struct PlayerPanelButton: View {
         }
         .shadow(color: .black.opacity(0.06), radius: 3, y: 1)
         .onHover { isHovered = $0 }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.14), value: isHovered)
+        .animation(MusicoMotion.microInteraction(reduceMotion: reduceMotion), value: isHovered)
     }
 }
 

@@ -24,11 +24,13 @@ struct SidebarRootView: View {
     @Environment(\.languageManager) private var languageManager
     @Environment(\.themeManager) private var themeManager
     @Environment(\.toastManager) private var toastManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     #if targetEnvironment(macCatalyst)
     @Environment(\.updateManager) private var updateManager
     #endif
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
     @State private var lastValidSelection: SidebarItem = .queues
+    @State private var lastSidePanel: SidePanel = .queue
     @State private var showDownloadsSheet = false
     @State private var renamingPlaylist: Playlist?
     @State private var isDropTargeted = false
@@ -57,8 +59,16 @@ struct SidebarRootView: View {
         }
         .onAppear {
             lastValidSelection = navigation.sidebarSelection ?? .queues
+            if let sidePanel = navigation.sidePanel {
+                lastSidePanel = sidePanel
+            }
             if activeSelection == .queues && navigation.sidePanel == .queue {
                 navigation.sidePanel = nil
+            }
+        }
+        .onChange(of: navigation.sidePanel) { _, newValue in
+            if let newValue {
+                lastSidePanel = newValue
             }
         }
         .onChange(of: navigation.sidebarSelection) { oldValue, newValue in
@@ -72,7 +82,7 @@ struct SidebarRootView: View {
                     navigation.isSearchPresented = false
                 }
                 if newValue == .queues && navigation.sidePanel == .queue {
-                    withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+                    withAnimation(MusicoMotion.panelToggle(reduceMotion: reduceMotion)) {
                         navigation.sidePanel = nil
                     }
                 }
@@ -97,7 +107,7 @@ struct SidebarRootView: View {
             navigation.isSearchPresented = false
         }
         if item == .queues && navigation.sidePanel == .queue {
-            withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+            withAnimation(MusicoMotion.panelToggle(reduceMotion: reduceMotion)) {
                 navigation.sidePanel = nil
             }
         }
@@ -118,7 +128,7 @@ struct SidebarRootView: View {
         .navigationSplitViewStyle(.balanced)
         .inspector(isPresented: Binding(get: { navigation.sidePanel != nil }, set: {
             let show = $0
-            withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+            withAnimation(MusicoMotion.panelToggle(reduceMotion: reduceMotion)) {
                 if !show { navigation.sidePanel = nil }
             }
         })) {
@@ -336,21 +346,32 @@ struct SidebarRootView: View {
         }
     }
 
-    @ViewBuilder
     private var panel: some View {
         let closePanel = {
-            withAnimation(.spring(response: 0.30, dampingFraction: 0.86)) {
+            withAnimation(MusicoMotion.panelToggle(reduceMotion: reduceMotion)) {
                 navigation.sidePanel = nil
             }
         }
-        switch navigation.sidePanel {
-        case .lyrics: LyricsView(onDone: closePanel)
-        case .queue, nil:
+        let activePanel = navigation.sidePanel ?? lastSidePanel
+        return ZStack {
+            LyricsView(onDone: closePanel)
+                .opacity(activePanel == .lyrics ? 1 : 0)
+                .offset(x: reduceMotion ? 0 : (activePanel == .lyrics ? 0 : -MusicoMotion.peerSlideOffset))
+                .allowsHitTesting(activePanel == .lyrics)
+                .accessibilityHidden(activePanel != .lyrics)
+
             NavigationStack {
                 QueuesView(embeddedInInspector: true, onDone: closePanel)
                     .navigationBarTitleDisplayMode(.inline)
             }
+            .opacity(activePanel == .queue ? 1 : 0)
+            .offset(x: reduceMotion ? 0 : (activePanel == .queue ? 0 : MusicoMotion.peerSlideOffset))
+            .allowsHitTesting(activePanel == .queue)
+            .accessibilityHidden(activePanel != .queue)
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .clipped()
+        .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: activePanel)
     }
 
     private var dropOverlayBanner: some View {
@@ -532,6 +553,7 @@ private struct SidebarRowButton: View {
     let action: () -> Void
 
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
 
     var body: some View {
@@ -562,7 +584,7 @@ private struct SidebarRowButton: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .contentShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
-        .buttonStyle(SidebarPillButtonStyle(isSelected: isSelected, isHovered: isHovered, accentColor: themeManager.accentColor))
+        .buttonStyle(SidebarPillButtonStyle(isSelected: isSelected, isHovered: isHovered, accentColor: themeManager.accentColor, reduceMotion: reduceMotion))
         .onHover { isHovered = $0 }
         .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
@@ -572,6 +594,7 @@ private struct SidebarPillButtonStyle: ButtonStyle {
     let isSelected: Bool
     let isHovered: Bool
     let accentColor: Color
+    let reduceMotion: Bool
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
@@ -579,8 +602,8 @@ private struct SidebarPillButtonStyle: ButtonStyle {
                 backgroundColor(isPressed: configuration.isPressed),
                 in: RoundedRectangle(cornerRadius: 8, style: .continuous)
             )
-            .scaleEffect(configuration.isPressed ? 0.99 : 1.0)
-            .animation(.easeOut(duration: 0.1), value: configuration.isPressed)
+            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.99 : 1.0)
+            .animation(MusicoMotion.microInteraction(reduceMotion: reduceMotion), value: configuration.isPressed)
     }
 
     private func backgroundColor(isPressed: Bool) -> Color {

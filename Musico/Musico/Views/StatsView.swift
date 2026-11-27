@@ -41,6 +41,7 @@ struct StatsView: View {
     @Environment(PlayHistoryStore.self) private var history
     @Environment(LibraryStore.self) private var library
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("statsSection") private var section: Section = .recent
     @AppStorage("statsCountOrder") private var order: CountOrder = .most
 
@@ -87,11 +88,18 @@ struct StatsView: View {
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(for: String.self) { ArtistDetailView(artist: $0) }
         .navigationDestination(for: LibraryStore.Album.self) { AlbumDetailView(album: $0) }
-        .animation(.easeInOut(duration: 0.18), value: section)
-        .animation(.easeInOut(duration: 0.18), value: order)
+        .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: section)
+        .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: order)
         .toolbar {
             ToolbarItem(placement: .principal) {
-                Picker(L10n.tr("Show"), selection: $section) {
+                Picker(L10n.tr("Show"), selection: Binding(
+                    get: { section },
+                    set: { newValue in
+                        withAnimation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion)) {
+                            section = newValue
+                        }
+                    }
+                )) {
                     ForEach(Section.allCases) { Text($0.localizedTitle).tag($0) }
                 }
                 .pickerStyle(.segmented)

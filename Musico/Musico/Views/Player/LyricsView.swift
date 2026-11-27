@@ -343,7 +343,7 @@ struct LyricsView: View {
                     Button {
                         scrollGraceTask?.cancel()
                         isManualScrolling = false
-                        withAnimation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.85)) {
+                        withAnimation(MusicoMotion.panelToggle(reduceMotion: reduceMotion)) {
                             proxy.scrollTo(current, anchor: .center)
                         }
                     } label: {
@@ -361,10 +361,10 @@ struct LyricsView: View {
                     .buttonStyle(.plain)
                     .foregroundStyle(themeManager.accentColor)
                     .padding(.bottom, 20)
-                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                    .transition(MusicoMotion.overlayBottomTransition(reduceMotion: reduceMotion))
                 }
             }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: isManualScrolling)
+            .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: isManualScrolling)
         }
     }
 

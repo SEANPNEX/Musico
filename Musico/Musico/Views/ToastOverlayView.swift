@@ -46,13 +46,13 @@ struct ToastOverlayView: View {
                 .onTapGesture {
                     toastManager.dismiss()
                 }
-                .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                .transition(MusicoMotion.overlayBottomTransition(reduceMotion: reduceMotion))
                 .id(toast.id)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
         .allowsHitTesting(toastManager.currentToast != nil)
-        .animation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.86), value: toastManager.currentToast?.id)
+        .animation(MusicoMotion.panelToggle(reduceMotion: reduceMotion), value: toastManager.currentToast?.id)
         .accessibilityElement(children: .contain)
     }
 }

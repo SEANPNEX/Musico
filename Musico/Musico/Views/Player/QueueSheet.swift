@@ -244,7 +244,7 @@ struct QueuesView: View {
             }
             .padding(16)
         }
-        .background(themeManager.hasCustomBackdrop ? Color.clear : Color(.systemGroupedBackground))
+        .background((themeManager.hasCustomBackdrop || embeddedInInspector) ? Color.clear : Color(.systemGroupedBackground))
     }
     #endif
 

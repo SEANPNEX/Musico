@@ -7,6 +7,7 @@ struct MiniPlayerView: View {
     var isGlassAccessory: Bool = false
     let onOpen: () -> Void
     @Environment(PlayerController.self) private var player
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         if let track = player.currentTrack {
@@ -17,7 +18,7 @@ struct MiniPlayerView: View {
                         ArtworkView(artworkKey: track.artworkKey, remoteArtworkURL: track.remoteArtworkURL, size: isGlassAccessory ? 34 : 40)
                             .id(track.id)
                             .transition(.opacity)
-                            .animation(.easeInOut(duration: 0.2), value: track.id)
+                            .animation(MusicoMotion.contentChange(reduceMotion: reduceMotion), value: track.id)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(track.title).font(.subheadline.weight(.medium)).lineLimit(1)
                             Text(L10n.displayArtist(track.artist)).font(.footnote).foregroundStyle(.secondary).lineLimit(1)
@@ -42,7 +43,7 @@ struct MiniPlayerView: View {
                     .font(.title3)
                     .buttonStyle(.plain)
                     .contentTransition(.symbolEffect(.replace))
-                    .animation(.spring(duration: 0.25), value: player.isPlaying)
+                    .animation(MusicoMotion.symbolToggle(reduceMotion: reduceMotion), value: player.isPlaying)
                     .frame(width: buttonSize, height: buttonSize)
                     .contentShape(Rectangle())
                 }

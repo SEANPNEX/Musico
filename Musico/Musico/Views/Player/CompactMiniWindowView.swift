@@ -66,7 +66,7 @@ struct CompactMiniWindowView: View {
                         .buttonStyle(.borderless)
                         .disabled(track == nil)
                         .contentTransition(.symbolEffect(.replace))
-                        .animation(reduceMotion ? nil : .spring(duration: 0.25), value: player.isPlaying)
+                        .animation(MusicoMotion.symbolToggle(reduceMotion: reduceMotion), value: player.isPlaying)
                         .accessibilityLabel(L10n.tr("Play or Pause"))
                         .help(L10n.tr("Play or Pause"))
                     }

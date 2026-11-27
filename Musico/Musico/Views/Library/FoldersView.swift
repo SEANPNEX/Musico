@@ -14,6 +14,7 @@ struct FoldersView: View {
     @Environment(\.lyricsStore) private var lyricsStore
     @Environment(\.languageManager) private var languageManager
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(DeleteItemPrompt.self) private var deletePrompt: DeleteItemPrompt?
     @State private var showImporter = false
     @State private var showCloudSheet = false
@@ -124,8 +125,8 @@ struct FoldersView: View {
         #endif
         .navigationDestination(for: FolderRef.self) { FolderDetailView(ref: $0) }
         .refreshable { await library.rescan() }
-        .animation(.easeInOut(duration: 0.2), value: library.isScanning)
-        .animation(.easeInOut(duration: 0.2), value: library.roots.map(\.id))
+        .animation(MusicoMotion.contentChange(reduceMotion: reduceMotion), value: library.isScanning)
+        .animation(MusicoMotion.contentChange(reduceMotion: reduceMotion), value: library.roots.map(\.id))
         .toolbar {
             ToolbarItem(placement: .topBarLeading) {
                 Button(L10n.tr("Rescan"), systemImage: "arrow.clockwise") { Task { await library.rescan() } }

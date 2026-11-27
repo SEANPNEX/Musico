@@ -105,7 +105,9 @@ final class CloudSearchController {
             let wasCloud = oldSource.isCloud
             cancelAndClear()
             activeExtensionID = extID
+            #if targetEnvironment(macCatalyst)
             navigation.isSearchPresented = true
+            #endif
             let descriptor = activeExtensions.first { $0.id == extID }
             if let descriptor, descriptor.searchKinds.count == 1, let only = descriptor.searchKinds.first {
                 selectedKind = CloudSearchKindFilter(searchKind: only)

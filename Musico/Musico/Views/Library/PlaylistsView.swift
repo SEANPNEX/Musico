@@ -178,9 +178,7 @@ struct PlaylistsView: View {
             .padding(.vertical, 14)
         }
         .navigationTitle(L10n.tr("Playlists"))
-        #if targetEnvironment(macCatalyst)
         .navigationBarTitleDisplayMode(.inline)
-        #endif
         .navigationDestination(for: PlaylistRef.self) { PlaylistDetailView(ref: $0) }
         .toolbar {
             Button(L10n.tr("New Playlist"), systemImage: "plus") {
@@ -231,6 +229,7 @@ private struct PlaylistGridCard: View {
     var onDelete: (() -> Void)? = nil
 
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
     @State private var isPlayHovered = false
 
@@ -309,8 +308,8 @@ private struct PlaylistGridCard: View {
                 }
             }
         }
-        .scaleEffect(isHovered ? 1.02 : 1.0)
-        .animation(.easeOut(duration: 0.16), value: isHovered)
+        .scaleEffect(!reduceMotion && isHovered ? 1.02 : 1.0)
+        .animation(MusicoMotion.microInteraction(reduceMotion: reduceMotion), value: isHovered)
         .onHover { isHovered = $0 }
         .contextMenu { cardMenuItems }
     }
@@ -338,6 +337,7 @@ private struct PlaylistGridCard: View {
 private struct NewPlaylistGridCard: View {
     let action: () -> Void
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isHovered = false
 
     var body: some View {
@@ -375,7 +375,7 @@ private struct NewPlaylistGridCard: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovered = $0 }
-        .animation(.easeOut(duration: 0.16), value: isHovered)
+        .animation(MusicoMotion.microInteraction(reduceMotion: reduceMotion), value: isHovered)
     }
 }
 

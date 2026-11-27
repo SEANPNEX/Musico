@@ -24,12 +24,16 @@ struct SongsView: View {
     @Environment(\.downloadManager) private var downloadManager
     @Environment(\.languageManager) private var languageManager
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("songSort") private var sort: SongSort = .title
 
     @State private var previewTarget: PreviewTarget?
     @State private var showExtensionManager = false
     @State private var extensionManagerTargetID: String?
     @State private var addFolderError: String?
+    #if !targetEnvironment(macCatalyst)
+    @FocusState private var isSearchFieldFocused: Bool
+    #endif
 
     private var activeSearchExtensions: [CloudSearchExtensionDescriptor] {
         extensionStore.activeSearchExtensions
@@ -83,10 +87,20 @@ struct SongsView: View {
         )
 
         VStack(spacing: 0) {
+            #if !targetEnvironment(macCatalyst)
+            iosSearchHeader(
+                extensions: searchExtensions,
+                selectedExtension: selectedExt,
+                cloudSearch: cloudSearch,
+                searchText: searchTextBinding
+            )
+            Divider()
+            #else
             if !searchExtensions.isEmpty {
                 searchControlsHeader(extensions: searchExtensions, selectedExtension: selectedExt, cloudSearch: cloudSearch)
                 Divider()
             }
+            #endif
 
             List {
                 if let selectedExt {
@@ -97,6 +111,9 @@ struct SongsView: View {
             }
             .listStyle(.plain)
             .hiddenScrollBackgroundIfThemed(themeManager)
+            #if !targetEnvironment(macCatalyst)
+            .scrollDismissesKeyboard(.interactively)
+            #endif
             .refreshable {
                 if let selectedExt {
                     if !trimmedQuery.isEmpty {
@@ -109,18 +126,29 @@ struct SongsView: View {
             }
         }
         .navigationTitle(L10n.tr("Songs"))
-        #if targetEnvironment(macCatalyst)
         .navigationBarTitleDisplayMode(.inline)
-        #endif
+        #if targetEnvironment(macCatalyst)
         .searchable(text: searchTextBinding, isPresented: $navigation.isSearchPresented, prompt: searchPrompt)
         .onSubmit(of: .search) {
             if let selectedExt {
                 cloudSearch.submitSearch(query: trimmedQuery, descriptor: selectedExt, extensionStore: extensionStore)
             }
         }
-        .animation(.easeInOut(duration: 0.18), value: sort)
-        .animation(.easeInOut(duration: 0.18), value: trimmedQuery)
-        .animation(.easeInOut(duration: 0.18), value: navigation.searchSource)
+        #else
+        .onChange(of: navigation.isSearchPresented) { _, presented in
+            if isSearchFieldFocused != presented {
+                isSearchFieldFocused = presented
+            }
+        }
+        .onChange(of: isSearchFieldFocused) { _, focused in
+            if navigation.isSearchPresented != focused {
+                navigation.isSearchPresented = focused
+            }
+        }
+        #endif
+        .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: sort)
+        .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: trimmedQuery)
+        .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: navigation.searchSource)
         .toolbar {
             if !isCloudMode {
                 Menu(L10n.tr("Sort"), systemImage: "arrow.up.arrow.down") {
@@ -132,6 +160,11 @@ struct SongsView: View {
         }
         .onAppear {
             cloudSearch.reconcileActiveExtensions(searchExtensions, navigation: navigation)
+            #if !targetEnvironment(macCatalyst)
+            if navigation.isSearchPresented {
+                isSearchFieldFocused = true
+            }
+            #endif
         }
         .onChange(of: searchExtensions) { _, updated in
             cloudSearch.reconcileActiveExtensions(updated, navigation: navigation)
@@ -183,6 +216,88 @@ struct SongsView: View {
 
     // MARK: - Search Source Switcher & Kind Pills
 
+    #if !targetEnvironment(macCatalyst)
+    @ViewBuilder
+    private func iosSearchHeader(
+        extensions: [CloudSearchExtensionDescriptor],
+        selectedExtension: CloudSearchExtensionDescriptor?,
+        cloudSearch: CloudSearchController,
+        searchText: Binding<String>
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                HStack(spacing: 8) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+
+                    TextField(searchPrompt, text: searchText)
+                        .focused($isSearchFieldFocused)
+                        .textInputAutocapitalization(.never)
+                        .autocorrectionDisabled(true)
+                        .submitLabel(.search)
+                        .accessibilityIdentifier("ios-songs-search-field")
+                        .onSubmit {
+                            if let selectedExtension {
+                                cloudSearch.submitSearch(
+                                    query: trimmedQuery,
+                                    descriptor: selectedExtension,
+                                    extensionStore: extensionStore
+                                )
+                            }
+                        }
+
+                    if !navigation.searchQuery.isEmpty {
+                        Button {
+                            navigation.updateSearchQueryFromUser("")
+                        } label: {
+                            Image(systemName: "xmark.circle.fill")
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                        }
+                        .buttonStyle(.borderless)
+                        .accessibilityLabel(L10n.tr("Clear Filter"))
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background(Color(.secondarySystemFill), in: Capsule())
+
+                if isSearchFieldFocused {
+                    Button(L10n.tr("Cancel")) {
+                        navigation.updateSearchQueryFromUser("")
+                        isSearchFieldFocused = false
+                        navigation.isSearchPresented = false
+                    }
+                    .foregroundStyle(themeManager.accentColor)
+                    .transition(reduceMotion ? .opacity : .move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+
+            if !extensions.isEmpty {
+                sourceChipsRow(
+                    extensions: extensions,
+                    selectedExtension: selectedExtension,
+                    cloudSearch: cloudSearch
+                )
+            }
+
+            if let selectedExtension {
+                kindFilterRow(
+                    selectedExtension: selectedExtension,
+                    cloudSearch: cloudSearch
+                )
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: isSearchFieldFocused)
+        .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: navigation.searchSource)
+    }
+    #endif
+
+    #if targetEnvironment(macCatalyst)
     @ViewBuilder
     private func searchControlsHeader(
         extensions: [CloudSearchExtensionDescriptor],
@@ -190,103 +305,128 @@ struct SongsView: View {
         cloudSearch: CloudSearchController
     ) -> some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
+            sourceChipsRow(
+                extensions: extensions,
+                selectedExtension: selectedExtension,
+                cloudSearch: cloudSearch
+            )
+
+            if let selectedExtension {
+                kindFilterRow(
+                    selectedExtension: selectedExtension,
+                    cloudSearch: cloudSearch
+                )
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .background(.bar)
+    }
+    #endif
+
+    @ViewBuilder
+    private func sourceChipsRow(
+        extensions: [CloudSearchExtensionDescriptor],
+        selectedExtension: CloudSearchExtensionDescriptor?,
+        cloudSearch: CloudSearchController
+    ) -> some View {
+        HStack(spacing: 8) {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    sourceChip(
+                        title: L10n.tr("Local"),
+                        isSelected: navigation.searchSource == .local
+                    ) {
+                        cloudSearch.switchSource(
+                            to: .local,
+                            currentQuery: trimmedQuery,
+                            activeExtensions: extensions,
+                            navigation: navigation,
+                            extensionStore: extensionStore
+                        )
+                    }
+
+                    ForEach(extensions) { ext in
+                        let source = SongsSearchSource.cloud(extensionID: ext.id)
                         sourceChip(
-                            title: L10n.tr("Local"),
-                            isSelected: navigation.searchSource == .local
+                            title: ext.badgeLabel,
+                            isSelected: navigation.searchSource == source
                         ) {
                             cloudSearch.switchSource(
-                                to: .local,
+                                to: source,
                                 currentQuery: trimmedQuery,
                                 activeExtensions: extensions,
                                 navigation: navigation,
                                 extensionStore: extensionStore
                             )
                         }
-
-                        ForEach(extensions) { ext in
-                            let source = SongsSearchSource.cloud(extensionID: ext.id)
-                            sourceChip(
-                                title: ext.badgeLabel,
-                                isSelected: navigation.searchSource == source
-                            ) {
-                                cloudSearch.switchSource(
-                                    to: source,
-                                    currentQuery: trimmedQuery,
-                                    activeExtensions: extensions,
-                                    navigation: navigation,
-                                    extensionStore: extensionStore
-                                )
-                            }
-                        }
                     }
-                    .padding(.vertical, 2)
                 }
-
-                if let selectedExtension {
-                    Button {
-                        cloudSearch.submitSearch(
-                            query: trimmedQuery,
-                            descriptor: selectedExtension,
-                            extensionStore: extensionStore
-                        )
-                    } label: {
-                        if cloudSearch.isLoading {
-                            ProgressView()
-                                .controlSize(.small)
-                                .padding(.horizontal, 8)
-                        } else {
-                            Text(L10n.tr("Search"))
-                                .font(.subheadline.weight(.semibold))
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .controlSize(.small)
-                    .fixedSize(horizontal: true, vertical: false)
-                    .layoutPriority(1)
-                    .disabled(trimmedQuery.isEmpty || cloudSearch.isLoading)
-                }
+                .padding(.vertical, 2)
             }
 
             if let selectedExtension {
-                let kindOptions = cloudSearch.kindOptions(for: selectedExtension)
-                if !kindOptions.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 6) {
-                            ForEach(kindOptions) { kind in
-                                let isSelected = cloudSearch.selectedKind == kind
-                                Button {
-                                    cloudSearch.selectKind(
-                                        kind,
-                                        currentQuery: trimmedQuery,
-                                        descriptor: selectedExtension,
-                                        extensionStore: extensionStore
-                                    )
-                                } label: {
-                                    Text(kind.localizedTitle)
-                                        .font(.caption.weight(isSelected ? .semibold : .medium))
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 4)
-                                        .background(
-                                            isSelected ? themeManager.accentColor.opacity(0.18) : Color(.secondarySystemFill),
-                                            in: Capsule()
-                                        )
-                                        .foregroundStyle(isSelected ? themeManager.accentColor : Color.primary)
-                                }
-                                .buttonStyle(.plain)
-                            }
+                Button {
+                    cloudSearch.submitSearch(
+                        query: trimmedQuery,
+                        descriptor: selectedExtension,
+                        extensionStore: extensionStore
+                    )
+                } label: {
+                    if cloudSearch.isLoading {
+                        ProgressView()
+                            .controlSize(.small)
+                            .padding(.horizontal, 8)
+                    } else {
+                        Text(L10n.tr("Search"))
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .fixedSize(horizontal: true, vertical: false)
+                .layoutPriority(1)
+                .disabled(trimmedQuery.isEmpty || cloudSearch.isLoading)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func kindFilterRow(
+        selectedExtension: CloudSearchExtensionDescriptor,
+        cloudSearch: CloudSearchController
+    ) -> some View {
+        let kindOptions = cloudSearch.kindOptions(for: selectedExtension)
+        if !kindOptions.isEmpty {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(kindOptions) { kind in
+                        let isSelected = cloudSearch.selectedKind == kind
+                        Button {
+                            cloudSearch.selectKind(
+                                kind,
+                                currentQuery: trimmedQuery,
+                                descriptor: selectedExtension,
+                                extensionStore: extensionStore
+                            )
+                        } label: {
+                            Text(kind.localizedTitle)
+                                .font(.caption.weight(isSelected ? .semibold : .medium))
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 4)
+                                .background(
+                                    isSelected ? themeManager.accentColor.opacity(0.18) : Color(.secondarySystemFill),
+                                    in: Capsule()
+                                )
+                                .foregroundStyle(isSelected ? themeManager.accentColor : Color.primary)
                         }
+                        .buttonStyle(.plain)
                     }
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
-        .background(.bar)
     }
 
     private func sourceChip(title: String, isSelected: Bool, action: @escaping () -> Void) -> some View {

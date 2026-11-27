@@ -164,12 +164,21 @@ struct ReorderableTrackRow: View {
     var removeHelp: String? = nil
 
     @Environment(\.themeManager) private var themeManager
+    #if !targetEnvironment(macCatalyst)
+    @Environment(\.editMode) private var editMode
+    #endif
     @State private var isDropTargeted = false
     @State private var isRowHovered = false
     @State private var isRemoveHovered = false
     @State private var dropFeedbackTrigger = 0
 
     var body: some View {
+        #if !targetEnvironment(macCatalyst)
+        let isEditing = editMode?.wrappedValue.isEditing == true
+        #else
+        let isEditing = false
+        #endif
+
         HStack(spacing: 8) {
             Button(action: onTap) {
                 HStack(spacing: 10) {
@@ -187,7 +196,7 @@ struct ReorderableTrackRow: View {
             .buttonStyle(.borderless)
             .disabled(!isAvailable)
 
-            if let onRemove {
+            if let onRemove, !isEditing {
                 let helpLabel = removeHelp ?? L10n.tr("Remove")
                 Button {
                     onRemove()
@@ -212,6 +221,7 @@ struct ReorderableTrackRow: View {
                 #endif
             }
 
+            #if targetEnvironment(macCatalyst)
             Image(systemName: "line.3.horizontal")
                 .font(.body)
                 .foregroundStyle(.tertiary)
@@ -225,6 +235,19 @@ struct ReorderableTrackRow: View {
                         .padding(.vertical, 8)
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
                 }
+            #else
+            if !isEditing {
+                Image(systemName: "line.3.horizontal")
+                    .font(.body)
+                    .foregroundStyle(.tertiary)
+                    .frame(width: 36, height: 44)
+                    .contentShape(Rectangle())
+                    .overlay {
+                        IOSListReorderHandleOverlay()
+                    }
+                    .accessibilityLabel(L10n.tr("Reorder %@", track.title))
+            }
+            #endif
         }
         .onHover { isRowHovered = $0 }
         .listRowBackground(
@@ -234,6 +257,7 @@ struct ReorderableTrackRow: View {
                     ? themeManager.accentColor.opacity(0.12)
                     : (isRowHovered ? Color.primary.opacity(0.04) : nil))
         )
+        #if targetEnvironment(macCatalyst)
         .dropDestination(for: String.self) { items, _ in
             guard let payload = items.first,
                   let sourceIndex = Self.parseSourceIndex(payload, scopeID: scopeID),
@@ -247,8 +271,6 @@ struct ReorderableTrackRow: View {
         } isTargeted: { targeted in
             isDropTargeted = targeted
         }
-        #if !targetEnvironment(macCatalyst)
-        .sensoryFeedback(.impact(weight: .light), trigger: dropFeedbackTrigger)
         #endif
     }
 

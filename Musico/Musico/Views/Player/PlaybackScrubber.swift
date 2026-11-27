@@ -34,7 +34,7 @@ struct PlaybackScrubber: View {
         }
         .tint(themeManager.accentColor)
         .scaleEffect(y: (!reduceMotion && isScrubbing) ? 1.08 : 1.0)
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: isScrubbing)
+        .animation(MusicoMotion.microInteraction(reduceMotion: reduceMotion), value: isScrubbing)
 
         let elapsed = Text(formatTime(shown))
             .fontWeight(isScrubbing ? .semibold : .regular)

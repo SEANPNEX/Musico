@@ -49,7 +49,7 @@ struct RootView: View {
                         tabs
                     case .sidebar:
                         SidebarRootView {
-                            withAnimation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.88)) {
+                            withAnimation(MusicoMotion.playerPresentation(reduceMotion: reduceMotion)) {
                                 localShowPlayer = true
                                 navigation.showPlayer = true
                             }
@@ -61,7 +61,7 @@ struct RootView: View {
                 .accessibilityHidden(layout == .sidebar && localShowPlayer)
                 if layout == .sidebar && localShowPlayer {
                     fullPlayerView {
-                        withAnimation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.88)) {
+                        withAnimation(MusicoMotion.playerPresentation(reduceMotion: reduceMotion)) {
                             localShowPlayer = false
                             navigation.showPlayer = false
                         }
@@ -72,7 +72,7 @@ struct RootView: View {
                             Color(.systemBackground)
                         }
                     }
-                    .transition(reduceMotion ? .opacity : .move(edge: .bottom).combined(with: .opacity))
+                    .transition(MusicoMotion.overlayBottomTransition(reduceMotion: reduceMotion))
                     .zIndex(1)
                 }
                 if !(layout == .sidebar && localShowPlayer) {
@@ -94,12 +94,12 @@ struct RootView: View {
                     CommandPaletteView()
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .padding(.top, 72)
-                        .transition(reduceMotion ? .opacity : .scale(scale: 0.96, anchor: .top).combined(with: .opacity))
+                        .transition(MusicoMotion.overlayTopScaleTransition(reduceMotion: reduceMotion))
                         .zIndex(5)
                 }
             }
-            .animation(reduceMotion ? nil : .spring(response: 0.36, dampingFraction: 0.88), value: localShowPlayer && layout == .sidebar)
-            .animation(reduceMotion ? nil : .spring(response: 0.24, dampingFraction: 0.88), value: navigation.showCommandPalette)
+            .animation(MusicoMotion.playerPresentation(reduceMotion: reduceMotion), value: localShowPlayer && layout == .sidebar)
+            .animation(MusicoMotion.panelToggle(reduceMotion: reduceMotion), value: navigation.showCommandPalette)
             // The full player is a sheet over the tabs and an in-window overlay over the sidebar layout.
             .sheet(isPresented: playerShown(when: layout == .tabs)) {
                 fullPlayerView()
