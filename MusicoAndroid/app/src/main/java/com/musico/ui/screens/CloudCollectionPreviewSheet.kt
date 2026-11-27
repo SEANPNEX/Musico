@@ -59,6 +59,7 @@ import com.musico.i18n.LocalStrings
 import com.musico.model.PlayQueue
 import com.musico.model.Track
 import com.musico.store.LibraryStore
+import com.musico.ui.LocalShowMessage
 import com.musico.ui.components.ArtworkImage
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.PlayShuffleButtons
@@ -84,6 +85,7 @@ fun CloudCollectionPreviewSheet(
     onDismiss: () -> Unit,
 ) {
     val strings = LocalStrings.current
+    val showMessage = LocalShowMessage.current
     val scope = rememberCoroutineScope()
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     val sourceUrl = collectionItem.sourceUrl?.trim()?.takeIf { it.isNotEmpty() }
@@ -384,6 +386,11 @@ fun CloudCollectionPreviewSheet(
                                         startAt = index,
                                         shuffle = false,
                                     )
+                                },
+                                onSwipePlayNext = {
+                                    libraryStore.registerEphemeralTrack(track)
+                                    trackActions.playerController.playNext(listOf(track.id))
+                                    showMessage(strings.playingNextNotice)
                                 },
                                 menuContent = { onMenuDismiss ->
                                     remember(track) {

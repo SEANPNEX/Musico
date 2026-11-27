@@ -445,7 +445,7 @@ struct FoldersView: View {
                 }
             }
         }
-        .swipeActions(edge: .trailing) {
+        .swipeActions(edge: .trailing, allowsFullSwipe: false) {
             if removable {
                 Button(L10n.tr("Remove"), systemImage: "trash", role: .destructive) { confirmRemoveRoot(root) }
             }
@@ -794,7 +794,7 @@ struct FolderDetailView: View {
                         .accessibilityLabel(L10n.tr("Remove Folder"))
                     }
                 }
-                .swipeActions(edge: .trailing) {
+                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                     Button(L10n.tr("Remove"), systemImage: "trash", role: .destructive) {
                         confirmRemoveFolder(rootID: child.root, path: child.path, name: name, root: root)
                     }

@@ -46,7 +46,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -85,9 +84,11 @@ import com.musico.model.SearchField
 import com.musico.model.Track
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
+import com.musico.ui.LocalShowMessage
 import com.musico.ui.components.ArtworkImage
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.PlayShuffleButtons
+import com.musico.ui.components.MusicoSnackbarHost
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
@@ -130,6 +131,7 @@ fun SongsScreen(
     modifier: Modifier = Modifier
 ) {
     val strings = LocalStrings.current
+    val showMessage = LocalShowMessage.current
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
     val snackbarHostState = remember { SnackbarHostState() }
@@ -490,6 +492,11 @@ fun SongsScreen(
                                             isAvailable = libraryStore.isAvailable(ephemeralTrack),
                                             subtitle = subtitle,
                                             onClick = { searchController?.playTrackResult(item) },
+                                            onSwipePlayNext = {
+                                                libraryStore.registerEphemeralTrack(ephemeralTrack)
+                                                trackActions.playerController.playNext(listOf(ephemeralTrack.id))
+                                                showMessage(strings.playingNextNotice)
+                                            },
                                             menuContent = { onMenuDismiss ->
                                                 remember(ephemeralTrack) {
                                                     libraryStore.registerEphemeralTrack(ephemeralTrack)
@@ -658,7 +665,7 @@ fun SongsScreen(
             }
         }
 
-        SnackbarHost(
+        MusicoSnackbarHost(
             hostState = snackbarHostState,
             modifier = Modifier.align(Alignment.BottomCenter),
         )

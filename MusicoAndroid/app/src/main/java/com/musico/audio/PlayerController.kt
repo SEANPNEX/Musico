@@ -49,6 +49,15 @@ sealed interface PlaybackError {
     data object ExtensionUnavailable : PlaybackError
 }
 
+data class RemovedQueueEntry(
+    val queueId: String,
+    val trackId: String,
+    val index: Int,
+    val wasCurrent: Boolean,
+    val positionSec: Double,
+    val wasPlaying: Boolean,
+)
+
 data class PlayerUiState(
     val currentTrack: Track? = null,
     val isPlaying: Boolean = false,
@@ -863,6 +872,39 @@ class PlayerController(
         queues.update(queueId) { it.removeAt(index) }
         if (removingCurrent) {
             startCurrent(autoplay = wasPlaying)
+        }
+    }
+
+    fun removeFromQueueWithUndo(index: Int, queueId: String = queues.state.value.activeId): RemovedQueueEntry? {
+        val targetQueue = queues.state.value.queues.firstOrNull { it.id == queueId } ?: return null
+        val trackId = targetQueue.trackIds.getOrNull(index) ?: return null
+        val wasCurrent = queueId == queues.state.value.activeId && index == targetQueue.currentIndex
+        val wasPlaying = isActiveOrLoadingToPlay
+        val posSec = if (wasCurrent && isLoaded) engine.currentTimeSec else targetQueue.positionSec
+        val entry = RemovedQueueEntry(
+            queueId = queueId,
+            trackId = trackId,
+            index = index,
+            wasCurrent = wasCurrent,
+            positionSec = posSec,
+            wasPlaying = wasPlaying,
+        )
+        removeFromQueue(index, queueId)
+        return entry
+    }
+
+    fun restoreToQueue(entry: RemovedQueueEntry) {
+        queues.state.value.queues.firstOrNull { it.id == entry.queueId } ?: return
+        queues.update(entry.queueId) {
+            it.restoreAt(
+                index = entry.index,
+                trackId = entry.trackId,
+                makeCurrent = entry.wasCurrent,
+                restoredPositionSec = entry.positionSec,
+            )
+        }
+        if (entry.wasCurrent && entry.queueId == queues.state.value.activeId) {
+            startCurrent(autoplay = entry.wasPlaying, positionSec = entry.positionSec)
         }
     }
 

@@ -591,6 +591,64 @@ final class PlayerControllerTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: docs.appendingPathComponent("a.mp3").path))
         XCTAssertNotEqual(player.currentTrack?.id, trackA)
     }
+
+    func testRemoveFromQueueWithUndoAndRestoreToQueue() throws {
+        let aID = id("a.mp3")
+        let bID = id("b.mp3")
+
+        // Out-of-bounds removal returns nil.
+        XCTAssertNil(player.removeFromQueueWithUndo(at: 99))
+
+        // Removing non-current track preserves playback and restores at exact index.
+        player.play([aID, bID], startAt: 0)
+        XCTAssertTrue(player.isPlaying)
+        let removedNonCurrent = try XCTUnwrap(player.removeFromQueueWithUndo(at: 1))
+        XCTAssertEqual(queues.active.trackIDs, [aID])
+        XCTAssertEqual(player.currentTrack?.id, aID)
+        XCTAssertFalse(removedNonCurrent.wasCurrent)
+
+        player.restoreToQueue(removedNonCurrent)
+        XCTAssertEqual(queues.active.trackIDs, [aID, bID])
+        XCTAssertEqual(player.currentTrack?.id, aID)
+        XCTAssertTrue(player.isPlaying)
+
+        // Removing currently playing track captures position & playing state, and restore resumes at that position.
+        player.seek(to: 14)
+        let removedCurrent = try XCTUnwrap(player.removeFromQueueWithUndo(at: 0))
+        XCTAssertTrue(removedCurrent.wasCurrent)
+        XCTAssertTrue(removedCurrent.wasPlaying)
+        XCTAssertEqual(removedCurrent.position, 14, accuracy: 0.6)
+        XCTAssertEqual(player.currentTrack?.id, bID)
+
+        player.restoreToQueue(removedCurrent)
+        XCTAssertEqual(queues.active.trackIDs, [aID, bID])
+        XCTAssertEqual(queues.active.currentIndex, 0)
+        XCTAssertEqual(player.currentTrack?.id, aID)
+        XCTAssertEqual(player.currentTime, 14, accuracy: 0.6)
+        XCTAssertTrue(player.isPlaying)
+
+        // Removing paused current track restores it paused.
+        player.pause()
+        let removedPaused = try XCTUnwrap(player.removeFromQueueWithUndo(at: 0))
+        XCTAssertFalse(removedPaused.wasPlaying)
+        player.restoreToQueue(removedPaused)
+        XCTAssertEqual(player.currentTrack?.id, aID)
+        XCTAssertFalse(player.isPlaying)
+
+        // Removing and restoring in an inactive queue leaves active playback undisturbed.
+        let otherID = queues.addQueue(name: "Other", trackIDs: [bID, aID], startAt: 0)
+        let removedOther = try XCTUnwrap(player.removeFromQueueWithUndo(at: 1, inQueue: otherID))
+        XCTAssertEqual(queues.queues.first { $0.id == otherID }?.trackIDs, [bID])
+        XCTAssertEqual(player.currentTrack?.id, aID)
+        player.restoreToQueue(removedOther)
+        XCTAssertEqual(queues.queues.first { $0.id == otherID }?.trackIDs, [bID, aID])
+        XCTAssertEqual(player.currentTrack?.id, aID)
+
+        // Restoring into a deleted queue is a safe no-op.
+        player.deleteQueue(otherID)
+        player.restoreToQueue(removedOther)
+        XCTAssertFalse(queues.queues.contains { $0.id == otherID })
+    }
 }
 
 private struct QualityAwareTestCloudResolver: CloudStreamResolving {

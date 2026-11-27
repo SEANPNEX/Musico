@@ -95,16 +95,55 @@ struct PlayQueue: Codable, Identifiable, Hashable, Sendable {
     }
 
     mutating func insertNext(_ ids: [String]) {
-        guard !ids.isEmpty else { return }
+        var seen = Set<String>()
+        let dedup = ids.filter { seen.insert($0).inserted }
+        guard !dedup.isEmpty else { return }
+
+        if trackIDs.isEmpty {
+            trackIDs = dedup
+            currentIndex = 0
+            position = 0
+            shuffleOrder = shuffle ? Array(0..<dedup.count) : []
+            return
+        }
+
+        let activeID = currentTrackID
+        let filtered = dedup.filter { $0 != activeID }
+        guard !filtered.isEmpty else { return }
+
+        let filteredSet = Set(filtered)
+        for index in trackIDs.indices.reversed() where filteredSet.contains(trackIDs[index]) && index != currentIndex {
+            remove(at: index)
+        }
+
         let insertAt = currentIndex.map { $0 + 1 } ?? 0
         let orderPos = orderPosition
-        trackIDs.insert(contentsOf: ids, at: insertAt)
-        let newIndices = Array(insertAt..<(insertAt + ids.count))
+        trackIDs.insert(contentsOf: filtered, at: insertAt)
+        let newIndices = Array(insertAt..<(insertAt + filtered.count))
         if shuffle {
-            shuffleOrder = shuffleOrder.map { $0 >= insertAt ? $0 + ids.count : $0 }
+            shuffleOrder = shuffleOrder.map { $0 >= insertAt ? $0 + filtered.count : $0 }
             shuffleOrder.insert(contentsOf: newIndices, at: orderPos.map { $0 + 1 } ?? 0)
         }
         if currentIndex == nil { currentIndex = 0; position = 0 }
+    }
+
+    mutating func restore(at index: Int, trackID: String, makeCurrent: Bool, restoredPosition: TimeInterval = 0) {
+        let insertAt = min(max(index, 0), trackIDs.count)
+        let orderPos = orderPosition
+        trackIDs.insert(trackID, at: insertAt)
+        if shuffle {
+            shuffleOrder = shuffleOrder.map { $0 >= insertAt ? $0 + 1 : $0 }
+            shuffleOrder.insert(insertAt, at: orderPos.map { $0 + 1 } ?? 0)
+        }
+        if makeCurrent {
+            currentIndex = insertAt
+            position = restoredPosition
+        } else if let current = currentIndex, current >= insertAt {
+            currentIndex = current + 1
+        } else if currentIndex == nil {
+            currentIndex = 0
+            position = 0
+        }
     }
 
     mutating func append(_ ids: [String]) {

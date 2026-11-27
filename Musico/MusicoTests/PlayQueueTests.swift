@@ -207,4 +207,115 @@ final class PlayQueueTests: XCTestCase {
         let decoded = try JSONDecoder().decode(PlayQueue.self, from: JSONEncoder().encode(q))
         XCTAssertEqual(decoded, q)
     }
+
+    // MARK: - Deduplicated insertNext
+
+    func testInsertNextMovesExistingLaterTrackWithoutDuplication() {
+        var q = queue(["a", "b", "c", "d"], at: 0)
+        q.insertNext(["c"])
+        XCTAssertEqual(q.trackIDs, ["a", "c", "b", "d"])
+        XCTAssertEqual(q.currentIndex, 0)
+        XCTAssertEqual(q.currentTrackID, "a")
+        XCTAssertEqual(q.next(auto: true), "c")
+    }
+
+    func testInsertNextMovesEarlierTrackPreservingCurrentAndPosition() {
+        var q = queue(["a", "b", "c", "d"], at: 2)
+        q.position = 42.5
+        q.insertNext(["a"])
+        XCTAssertEqual(q.trackIDs, ["b", "c", "a", "d"])
+        XCTAssertEqual(q.currentIndex, 1)
+        XCTAssertEqual(q.currentTrackID, "c")
+        XCTAssertEqual(q.position, 42.5)
+        XCTAssertEqual(q.next(auto: true), "a")
+    }
+
+    func testInsertNextWithCurrentTrackAloneIsNoOp() {
+        var q = queue(["a", "b", "c"], at: 1)
+        var rng = SeededRNG(state: 4)
+        q.setShuffle(true, using: &rng)
+        q.position = 19
+        let beforeOrder = q.shuffleOrder
+
+        q.insertNext(["b", "b"])
+        XCTAssertEqual(q.trackIDs, ["a", "b", "c"])
+        XCTAssertEqual(q.currentIndex, 1)
+        XCTAssertEqual(q.position, 19)
+        XCTAssertEqual(q.shuffleOrder, beforeOrder)
+    }
+
+    func testInsertNextMixedBatchPreservesOrderAndDeduplicates() {
+        var q = queue(["a", "b", "c", "d"], at: 1) // current: "b"
+        q.insertNext(["b", "d", "x", "d", "a"])
+        XCTAssertEqual(q.trackIDs, ["b", "d", "x", "a", "c"])
+        XCTAssertEqual(q.currentIndex, 0)
+        XCTAssertEqual(q.currentTrackID, "b")
+        XCTAssertEqual(q.next(auto: true), "d")
+        XCTAssertEqual(q.next(auto: true), "x")
+        XCTAssertEqual(q.next(auto: true), "a")
+    }
+
+    func testInsertNextMovesExistingTracksInShuffleMode() {
+        var q = queue(["a", "b", "c", "d", "e"], at: 2) // current: "c"
+        var rng = SeededRNG(state: 17)
+        q.setShuffle(true, using: &rng)
+        q.position = 11
+
+        q.insertNext(["a", "z", "e"])
+        XCTAssertEqual(q.currentTrackID, "c")
+        XCTAssertEqual(q.position, 11)
+        XCTAssertEqual(q.shuffleOrder.sorted(), Array(0..<q.trackIDs.count))
+        XCTAssertEqual(Set(q.trackIDs), ["a", "b", "c", "d", "z", "e"])
+        XCTAssertEqual(q.trackIDs.count, 6)
+        XCTAssertEqual(q.next(auto: true), "a")
+        XCTAssertEqual(q.next(auto: true), "z")
+        XCTAssertEqual(q.next(auto: true), "e")
+    }
+
+    func testInsertNextRemovesLegacyNonCurrentDuplicates() {
+        var q = queue(["a", "d", "b", "d", "c", "d"], at: 2) // current: "b"
+        q.insertNext(["d"])
+        XCTAssertEqual(q.trackIDs, ["a", "b", "d", "c"])
+        XCTAssertEqual(q.currentIndex, 1)
+        XCTAssertEqual(q.currentTrackID, "b")
+    }
+
+    // MARK: - Restore for Queue Undo
+
+    func testRestoreBeforeAndAfterCurrentPreservesPlaybackState() {
+        var q = queue(["a", "b", "c"], at: 1)
+        q.position = 24
+        q.remove(at: 0) // ["b", "c"], currentIndex = 0, position = 24
+        q.restore(at: 0, trackID: "a", makeCurrent: false)
+        XCTAssertEqual(q.trackIDs, ["a", "b", "c"])
+        XCTAssertEqual(q.currentIndex, 1)
+        XCTAssertEqual(q.currentTrackID, "b")
+        XCTAssertEqual(q.position, 24)
+
+        q.remove(at: 2) // ["a", "b"], currentIndex = 1
+        q.restore(at: 2, trackID: "c", makeCurrent: false)
+        XCTAssertEqual(q.trackIDs, ["a", "b", "c"])
+        XCTAssertEqual(q.currentIndex, 1)
+        XCTAssertEqual(q.position, 24)
+    }
+
+    func testRestoreCurrentAndEmptyAndShuffle() {
+        var q = queue(["a", "b", "c"], at: 1)
+        var rng = SeededRNG(state: 21)
+        q.setShuffle(true, using: &rng)
+        q.position = 17
+        q.remove(at: 1)
+        q.restore(at: 1, trackID: "b", makeCurrent: true, restoredPosition: 17)
+        XCTAssertEqual(q.trackIDs, ["a", "b", "c"])
+        XCTAssertEqual(q.currentIndex, 1)
+        XCTAssertEqual(q.currentTrackID, "b")
+        XCTAssertEqual(q.position, 17)
+        XCTAssertEqual(q.shuffleOrder.sorted(), [0, 1, 2])
+
+        var empty = PlayQueue(name: "Empty")
+        empty.restore(at: 5, trackID: "x", makeCurrent: false)
+        XCTAssertEqual(empty.trackIDs, ["x"])
+        XCTAssertEqual(empty.currentIndex, 0)
+        XCTAssertEqual(empty.position, 0)
+    }
 }

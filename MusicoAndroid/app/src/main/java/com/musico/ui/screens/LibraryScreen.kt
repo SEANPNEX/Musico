@@ -180,10 +180,12 @@ fun LibraryScreen(
                                     index = index,
                                     count = LibrarySection.entries.size
                                 ),
+                                icon = {},
                                 label = {
                                     Text(
                                         text = item.label(strings),
                                         maxLines = 1,
+                                        softWrap = false,
                                         overflow = TextOverflow.Ellipsis
                                     )
                                 }

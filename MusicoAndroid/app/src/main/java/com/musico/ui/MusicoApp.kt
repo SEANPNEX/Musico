@@ -43,7 +43,6 @@ import androidx.compose.material3.NavigationRailDefaults
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarDuration
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Surface
@@ -78,6 +77,7 @@ import java.util.Locale
 import com.musico.store.AppContainer
 import com.musico.ui.components.LocalThumbnailCache
 import com.musico.ui.components.LocalTrackSwipeActions
+import com.musico.ui.components.MusicoSnackbarHost
 import com.musico.ui.components.TrackActionDialogs
 import com.musico.ui.components.TrackSwipeActions
 import com.musico.ui.components.rememberTrackActionState
@@ -178,18 +178,6 @@ fun MusicoApp(
         MusicoMessageDispatcher(snackbarHostState, snackbarScope)
     }
     val reduceMotion = MusicoMotion.rememberReduceMotion()
-    val trackSwipeActions = remember(appContainer.playerController, messageDispatcher, strings) {
-        TrackSwipeActions(
-            onPlayNext = { track ->
-                appContainer.playerController.playNext(listOf(track.id))
-                messageDispatcher(strings.playingNextNotice)
-            },
-            onAddToQueue = { track ->
-                appContainer.playerController.addToQueue(listOf(track.id))
-                messageDispatcher(strings.addedToQueueNotice)
-            },
-        )
-    }
 
     CompositionLocalProvider(
         LocalStrings provides strings,
@@ -199,7 +187,6 @@ fun MusicoApp(
         LocalSnackbarHost provides snackbarHostState,
         LocalShowMessage provides messageDispatcher,
         LocalReduceMotion provides reduceMotion,
-        LocalTrackSwipeActions provides trackSwipeActions,
     ) {
         MusicoAppContent(
             appContainer = appContainer,
@@ -275,6 +262,18 @@ private fun MusicoAppContent(
         },
         lyricsStore = lyricsStore,
     )
+    val messageDispatcher = LocalShowMessage.current
+    val trackSwipeActions = remember(playerController, messageDispatcher, strings, trackActions) {
+        TrackSwipeActions(
+            onPlayNext = { track ->
+                playerController.playNext(listOf(track.id))
+                messageDispatcher(strings.playingNextNotice)
+            },
+            onDelete = { track ->
+                trackActions.deleteTargetTrack = track
+            },
+        )
+    }
     var lastTrack by remember { mutableStateOf(playerState.currentTrack) }
     if (playerState.currentTrack != null) {
         lastTrack = playerState.currentTrack
@@ -291,6 +290,7 @@ private fun MusicoAppContent(
         showFullPlayer = false
     }
 
+    CompositionLocalProvider(LocalTrackSwipeActions provides trackSwipeActions) {
     BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
         val isCompact = maxWidth < 600.dp
         val isWide = maxWidth >= 840.dp
@@ -312,7 +312,7 @@ private fun MusicoAppContent(
                 contentWindowInsets = WindowInsets(0),
                 snackbarHost = {
                     if (!showFullPlayer && snackbarHostState != null) {
-                        SnackbarHost(hostState = snackbarHostState)
+                        MusicoSnackbarHost(hostState = snackbarHostState)
                     }
                 },
                 bottomBar = {
@@ -454,7 +454,7 @@ private fun MusicoAppContent(
                             modifier = Modifier.fillMaxSize()
                         )
                         if (!showFullPlayer && snackbarHostState != null) {
-                            SnackbarHost(
+                            MusicoSnackbarHost(
                                 hostState = snackbarHostState,
                                 modifier = Modifier
                                     .align(Alignment.BottomCenter)
@@ -592,6 +592,7 @@ private fun MusicoAppContent(
                 onClose = { showFullPlayer = false }
             )
         }
+    }
     }
 
     TrackActionDialogs(

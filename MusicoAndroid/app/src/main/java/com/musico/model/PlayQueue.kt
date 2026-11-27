@@ -108,22 +108,43 @@ data class PlayQueue(
     }
 
     fun insertNext(ids: List<String>): PlayQueue {
-        if (ids.isEmpty()) return this
-        val insertAt = currentIndex?.let { it + 1 } ?: 0
-        val orderPos = orderPosition
-        val nextTracks = trackIds.toMutableList().apply { addAll(insertAt, ids) }
-        val newIndices = (insertAt until (insertAt + ids.size)).toList()
-        val nextShuffleOrder = if (shuffle) {
-            val shifted = shuffleOrder.map { if (it >= insertAt) it + ids.size else it }.toMutableList()
+        val dedup = ids.distinct()
+        if (dedup.isEmpty()) return this
+        if (trackIds.isEmpty()) {
+            return copy(
+                trackIds = dedup,
+                currentIndex = 0,
+                positionSec = 0.0,
+                shuffleOrder = if (shuffle) (0 until dedup.size).toList() else emptyList(),
+            )
+        }
+        val activeId = currentTrackId
+        val filtered = dedup.filter { it != activeId }
+        if (filtered.isEmpty()) return this
+
+        val filteredSet = filtered.toSet()
+        var working = this
+        for (idx in working.trackIds.indices.reversed()) {
+            if (working.trackIds[idx] in filteredSet && idx != working.currentIndex) {
+                working = working.removeAt(idx)
+            }
+        }
+
+        val insertAt = working.currentIndex?.let { it + 1 } ?: 0
+        val orderPos = working.orderPosition
+        val nextTracks = working.trackIds.toMutableList().apply { addAll(insertAt, filtered) }
+        val newIndices = (insertAt until (insertAt + filtered.size)).toList()
+        val nextShuffleOrder = if (working.shuffle) {
+            val shifted = working.shuffleOrder.map { if (it >= insertAt) it + filtered.size else it }.toMutableList()
             val shuffleInsertAt = orderPos?.let { it + 1 } ?: 0
             shifted.addAll(shuffleInsertAt, newIndices)
             shifted
         } else {
             emptyList()
         }
-        val nextCurrent = currentIndex ?: 0
-        val nextPos = if (currentIndex == null) 0.0 else positionSec
-        return copy(
+        val nextCurrent = working.currentIndex ?: 0
+        val nextPos = if (working.currentIndex == null) 0.0 else working.positionSec
+        return working.copy(
             trackIds = nextTracks,
             currentIndex = nextCurrent,
             positionSec = nextPos,
@@ -177,6 +198,41 @@ data class PlayQueue(
             else -> currentIndex
         }
         val nextPos = if (removingCurrent) 0.0 else positionSec
+        return copy(
+            trackIds = nextTracks,
+            currentIndex = nextCurrent,
+            positionSec = nextPos,
+            shuffleOrder = nextShuffleOrder,
+        )
+    }
+
+    fun restoreAt(
+        index: Int,
+        trackId: String,
+        makeCurrent: Boolean,
+        restoredPositionSec: Double = 0.0,
+    ): PlayQueue {
+        val insertAt = index.coerceIn(0, trackIds.size)
+        val nextTracks = trackIds.toMutableList().apply { add(insertAt, trackId) }
+        val nextShuffleOrder = if (shuffle) {
+            val shifted = shuffleOrder.map { if (it >= insertAt) it + 1 else it }.toMutableList()
+            val shuffleInsertAt = orderPosition?.let { it + 1 } ?: 0
+            shifted.add(shuffleInsertAt.coerceIn(0, shifted.size), insertAt)
+            shifted
+        } else {
+            emptyList()
+        }
+        val nextCurrent = when {
+            makeCurrent -> insertAt
+            currentIndex == null -> 0
+            currentIndex >= insertAt -> currentIndex + 1
+            else -> currentIndex
+        }
+        val nextPos = when {
+            makeCurrent -> restoredPositionSec
+            currentIndex == null -> 0.0
+            else -> positionSec
+        }
         return copy(
             trackIds = nextTracks,
             currentIndex = nextCurrent,
