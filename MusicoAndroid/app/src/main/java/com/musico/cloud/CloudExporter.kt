@@ -1335,15 +1335,8 @@ class CloudExporter(
     private fun inferCloudKindFromUrl(rawUrl: String): RootKind? =
         providerRegistry.classifyUrl(rawUrl)?.provider?.rootKind
 
-    private fun downloadHeadersFor(track: Track, stream: ResolvedStream): Map<String, String> {
-        val provider = providerRegistry.providerForTrack(track, null)
-        if (provider != null) {
-            return provider.downloadHeaders(stream)
-        }
-        if (track.cloudSource != CloudSource.YOUTUBE) return stream.headers
-        val hasRange = stream.headers.keys.any { it.equals("Range", ignoreCase = true) }
-        return if (hasRange) stream.headers else stream.headers + ("Range" to "bytes=0-")
-    }
+    private fun downloadHeadersFor(track: Track, stream: ResolvedStream): Map<String, String> =
+        providerRegistry.providerForTrack(track, null)?.downloadHeaders(stream) ?: stream.headers
 
     private suspend fun <T> withStreamRetry(
         track: Track,
@@ -1479,7 +1472,7 @@ class CloudExporter(
             source == CloudSource.BILIBILI -> RootKind.CLOUD_BILIBILI
             source == CloudSource.GOOGLE_DRIVE -> RootKind.CLOUD_GOOGLE_DRIVE
             source.startsWith("ext.") -> RootKind.CLOUD_EXTENSION
-            else -> RootKind.CLOUD_BILIBILI
+            else -> RootKind.CLOUD_EXTENSION
         }
 
         internal fun sourceSlugForKind(kind: RootKind): String = when (kind) {

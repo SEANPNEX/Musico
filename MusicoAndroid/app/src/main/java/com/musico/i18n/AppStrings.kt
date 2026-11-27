@@ -577,6 +577,10 @@ interface AppStrings {
     fun cloudSearchPlaceholder(sourceName: String): String
     fun cloudSearchIdleTitle(sourceName: String): String
     fun addedFolderNotice(name: String): String
+    fun cloudUrlSupportingTextFor(extensionNames: List<String>): String
+    fun addYourMusicFoldersDescFor(extensionNames: List<String>): String
+    fun foldersFooterHintFor(extensionNames: List<String>): String
+    fun errorUnsupportedCloudUrlFor(extensionNames: List<String>): String
     fun formatListeningTime(totalSeconds: Double): String
     fun formatRelativeTime(epochMs: Long, nowMs: Long = System.currentTimeMillis()): String
 
@@ -819,12 +823,12 @@ object EnStrings : AppStrings {
     override val couldNotRelocateFolderFallback = "Could not relocate that folder."
     override val errorDuplicateRoot = "That folder is already in your library."
     override val errorNotAFolder = "That location could not be opened as a folder."
-    override val errorUnsupportedCloudUrl = "Enter a valid YouTube, Bilibili, or Google Drive URL."
+    override val errorUnsupportedCloudUrl = "Enter a valid Google Drive or enabled extension URL."
     override val removeLocalFolderConfirmMessage = "Its songs leave your library, playlists and queues. The files themselves are not deleted."
     override val removeCloudFolderConfirmMessage = "Its songs leave your library, playlists and queues."
-    override val cloudUrlLabel = "YouTube, Bilibili, or Google Drive URL"
-    override val cloudUrlPlaceholder = "Playlist, video, or Google Drive link"
-    override val cloudUrlSupportingText = "Supports YouTube / YT Music playlists & videos, Bilibili favlists, collections, series & BV / b23.tv links, and Google Drive shared folders or audio files."
+    override val cloudUrlLabel = "Cloud URL"
+    override val cloudUrlPlaceholder = "Google Drive or extension link"
+    override val cloudUrlSupportingText = "Supports Google Drive shared folders or audio files. Install extensions in Extensions to add more cloud sources."
     override val cookieOptionalLabel = "Cookie (optional)"
     override val cookiePlaceholder = "Only needed for private playlists"
     override val cloudPlaylistLoadErrorFallback = "Could not load that cloud playlist."
@@ -847,8 +851,8 @@ object EnStrings : AppStrings {
     override val fetchingLatestCloudPlaylist = "Fetching latest cloud playlist…"
     override val lookingForMusic = "Looking for music…"
     override val addYourMusicFoldersTitle = "Add Your Music Folders"
-    override val addYourMusicFoldersDesc = "Pick folders on your device, add a YouTube, Bilibili, or Google Drive link, or copy songs into the Musico Folder and pull down to rescan."
-    override val foldersFooterHint = "Add local folders, link YouTube, Bilibili, or Google Drive folders, or copy music into the Musico Folder and pull down to rescan."
+    override val addYourMusicFoldersDesc = "Pick folders on your device, add a Google Drive link (more sources can be added in Extensions), or copy songs into the Musico Folder and pull down to rescan."
+    override val foldersFooterHint = "Add local folders, link Google Drive folders (more sources can be added in Extensions), or copy music into the Musico Folder and pull down to rescan."
     override val badgeYouTube = "YouTube"
     override val badgeBilibili = "Bilibili"
     override val badgeGoogleDrive = "Google Drive"
@@ -1335,6 +1339,43 @@ object EnStrings : AppStrings {
     override fun cloudSearchIdleTitle(sourceName: String): String = "Search $sourceName"
     override fun addedFolderNotice(name: String): String = "Added “$name” to Folders."
 
+    private fun joinProviderNamesEn(extensionNames: List<String>): String {
+        val names = (listOf("Google Drive") + extensionNames.map { it.trim() }.filter { it.isNotEmpty() }).distinct()
+        return when (names.size) {
+            1 -> names[0]
+            2 -> "${names[0]} and ${names[1]}"
+            else -> "${names.dropLast(1).joinToString(", ")}, and ${names.last()}"
+        }
+    }
+
+    override fun cloudUrlSupportingTextFor(extensionNames: List<String>): String =
+        if (extensionNames.isEmpty()) {
+            cloudUrlSupportingText
+        } else {
+            "Supports ${joinProviderNamesEn(extensionNames)} links."
+        }
+
+    override fun addYourMusicFoldersDescFor(extensionNames: List<String>): String =
+        if (extensionNames.isEmpty()) {
+            addYourMusicFoldersDesc
+        } else {
+            "Pick folders on your device, add a ${joinProviderNamesEn(extensionNames)} link, or copy songs into the Musico Folder and pull down to rescan."
+        }
+
+    override fun foldersFooterHintFor(extensionNames: List<String>): String =
+        if (extensionNames.isEmpty()) {
+            foldersFooterHint
+        } else {
+            "Add local folders, link ${joinProviderNamesEn(extensionNames)} folders, or copy music into the Musico Folder and pull down to rescan."
+        }
+
+    override fun errorUnsupportedCloudUrlFor(extensionNames: List<String>): String =
+        if (extensionNames.isEmpty()) {
+            "Enter a valid Google Drive URL (or install an extension in Extensions for other sources)."
+        } else {
+            "Enter a valid ${joinProviderNamesEn(extensionNames)} URL."
+        }
+
     override val appearanceSection = "Appearance"
     override val generalSection = "General"
     override val librarySection = "Library"
@@ -1514,12 +1555,12 @@ object ZhHansStrings : AppStrings {
     override val couldNotRelocateFolderFallback = "无法重新定位该文件夹。"
     override val errorDuplicateRoot = "该文件夹已在你的音乐库中。"
     override val errorNotAFolder = "无法将该位置作为文件夹打开。"
-    override val errorUnsupportedCloudUrl = "请输入有效的 YouTube、Bilibili 或 Google Drive 链接。"
+    override val errorUnsupportedCloudUrl = "请输入有效的 Google Drive 或已启用扩展支持的链接。"
     override val removeLocalFolderConfirmMessage = "其中的歌曲将从音乐库、歌单和队列中移除，但本地文件本身不会被删除。"
     override val removeCloudFolderConfirmMessage = "其中的歌曲将从音乐库、歌单和队列中移除。"
-    override val cloudUrlLabel = "YouTube、Bilibili 或 Google Drive 链接"
-    override val cloudUrlPlaceholder = "歌单、视频或 Google Drive 分享链接"
-    override val cloudUrlSupportingText = "支持 YouTube / YT Music 歌单与视频、Bilibili 收藏夹/合集/系列与 BV / b23.tv 链接，以及 Google Drive 共享文件夹或音频文件。"
+    override val cloudUrlLabel = "云端链接"
+    override val cloudUrlPlaceholder = "Google Drive 或扩展支持的链接"
+    override val cloudUrlSupportingText = "支持 Google Drive 共享文件夹或音频文件。可在“扩展管理”中安装扩展以添加更多云端来源。"
     override val cookieOptionalLabel = "Cookie（可选）"
     override val cookiePlaceholder = "仅私密歌单需要填写"
     override val cloudPlaylistLoadErrorFallback = "无法加载该云端歌单。"
@@ -1542,8 +1583,8 @@ object ZhHansStrings : AppStrings {
     override val fetchingLatestCloudPlaylist = "正在获取最新云端歌单…"
     override val lookingForMusic = "正在查找音乐…"
     override val addYourMusicFoldersTitle = "添加你的音乐文件夹"
-    override val addYourMusicFoldersDesc = "选择设备上的本地文件夹、添加 YouTube、Bilibili 或 Google Drive 链接，或将歌曲复制到 Musico 文件夹后下拉重新扫描。"
-    override val foldersFooterHint = "添加本地文件夹、关联 YouTube、Bilibili 或 Google Drive 文件夹，或将音乐复制到 Musico 文件夹后下拉重新扫描。"
+    override val addYourMusicFoldersDesc = "选择设备上的本地文件夹、添加 Google Drive 链接（可在扩展管理中添加更多来源），或将歌曲复制到 Musico 文件夹后下拉重新扫描。"
+    override val foldersFooterHint = "添加本地文件夹、关联 Google Drive 文件夹（可在扩展管理中添加更多来源），或将音乐复制到 Musico 文件夹后下拉重新扫描。"
     override val badgeYouTube = "YouTube"
     override val badgeBilibili = "Bilibili"
     override val badgeGoogleDrive = "Google Drive"
@@ -2025,6 +2066,39 @@ object ZhHansStrings : AppStrings {
     override fun cloudSearchPlaceholder(sourceName: String): String = "搜索 $sourceName"
     override fun cloudSearchIdleTitle(sourceName: String): String = "搜索 $sourceName"
     override fun addedFolderNotice(name: String): String = "已将“$name”添加到文件夹。"
+
+    private fun joinProviderNamesZh(extensionNames: List<String>): String =
+        (listOf("Google Drive") + extensionNames.map { it.trim() }.filter { it.isNotEmpty() })
+            .distinct()
+            .joinToString("、")
+
+    override fun cloudUrlSupportingTextFor(extensionNames: List<String>): String =
+        if (extensionNames.isEmpty()) {
+            cloudUrlSupportingText
+        } else {
+            "支持 ${joinProviderNamesZh(extensionNames)} 链接。"
+        }
+
+    override fun addYourMusicFoldersDescFor(extensionNames: List<String>): String =
+        if (extensionNames.isEmpty()) {
+            addYourMusicFoldersDesc
+        } else {
+            "选择设备上的本地文件夹、添加 ${joinProviderNamesZh(extensionNames)} 链接，或将歌曲复制到 Musico 文件夹后下拉重新扫描。"
+        }
+
+    override fun foldersFooterHintFor(extensionNames: List<String>): String =
+        if (extensionNames.isEmpty()) {
+            foldersFooterHint
+        } else {
+            "添加本地文件夹、关联 ${joinProviderNamesZh(extensionNames)} 文件夹，或将音乐复制到 Musico 文件夹后下拉重新扫描。"
+        }
+
+    override fun errorUnsupportedCloudUrlFor(extensionNames: List<String>): String =
+        if (extensionNames.isEmpty()) {
+            "请输入有效的 Google Drive 链接（如需其他来源，请在扩展管理中安装扩展）。"
+        } else {
+            "请输入有效的 ${joinProviderNamesZh(extensionNames)} 链接。"
+        }
 
     override val appearanceSection = "外观"
     override val generalSection = "通用"

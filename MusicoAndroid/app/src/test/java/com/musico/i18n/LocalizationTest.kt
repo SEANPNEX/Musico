@@ -7,6 +7,7 @@ import com.musico.ui.theme.AppThemeMode
 import com.musico.ui.theme.BackgroundColorPreset
 import com.musico.ui.theme.ForegroundColorPreset
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
@@ -198,7 +199,19 @@ class LocalizationTest {
             EnStrings.albumCount(1) to ZhHansStrings.albumCount(1),
             EnStrings.albumCount(3) to ZhHansStrings.albumCount(3),
             EnStrings.libraryExploredSummary("42%", 5, 12) to ZhHansStrings.libraryExploredSummary("42%", 5, 12),
+            EnStrings.cloudUrlSupportingTextFor(emptyList()) to ZhHansStrings.cloudUrlSupportingTextFor(emptyList()),
+            EnStrings.cloudUrlSupportingTextFor(listOf("YouTube Search")) to ZhHansStrings.cloudUrlSupportingTextFor(listOf("YouTube Search")),
+            EnStrings.addYourMusicFoldersDescFor(listOf("YouTube Search", "Bilibili Search")) to ZhHansStrings.addYourMusicFoldersDescFor(listOf("YouTube Search", "Bilibili Search")),
+            EnStrings.foldersFooterHintFor(listOf("YouTube Search")) to ZhHansStrings.foldersFooterHintFor(listOf("YouTube Search")),
+            EnStrings.errorUnsupportedCloudUrlFor(emptyList()) to ZhHansStrings.errorUnsupportedCloudUrlFor(emptyList()),
+            EnStrings.errorUnsupportedCloudUrlFor(listOf("YouTube Search")) to ZhHansStrings.errorUnsupportedCloudUrlFor(listOf("YouTube Search")),
         )
+        assertTrue(EnStrings.cloudUrlSupportingTextFor(emptyList()).contains("Google Drive"))
+        assertTrue(EnStrings.cloudUrlSupportingTextFor(emptyList()).contains("Extensions"))
+        assertFalse(EnStrings.cloudUrlSupportingTextFor(emptyList()).contains("YouTube"))
+        assertFalse(EnStrings.cloudUrlSupportingTextFor(emptyList()).contains("Bilibili"))
+        assertTrue(EnStrings.cloudUrlSupportingTextFor(listOf("YouTube Search", "Bilibili Search")).contains("YouTube Search"))
+        assertTrue(ZhHansStrings.cloudUrlSupportingTextFor(listOf("YouTube Search")).contains("Google Drive"))
         formattedPairs.forEach { (en, zh) ->
             assertTrue("EN formatted string blank: $en", en.isNotBlank())
             assertTrue("ZH formatted string blank: $zh", zh.isNotBlank())

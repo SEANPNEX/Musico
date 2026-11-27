@@ -226,4 +226,40 @@ class PlayHistoryStoreTest {
         store.recordPlay(t4, now)
         assertEquals(1.0f, store.playedLibraryFraction(library), 0.0001f)
     }
+
+    @Test
+    fun remapTracksMergesCountsTakesMaxTimestampIgnoresEphemeralAndPersists() {
+        val store = PlayHistoryStore(dir)
+        val cloudA = Track.makeId("cloud_root", "youtube/vid1")
+        val cloudB = Track.makeId("cloud_root", "youtube/vid2")
+        val localA = Track.makeId("local_root", "Song 1.m4a")
+        val localB = Track.makeId("local_root", "Song 2.m4a")
+        val ephId = Track.makeEphemeralId("youtube-search", "vid1")
+
+        store.recordPlay(cloudA, now - 5 * day)
+        store.recordPlay(cloudA, now - 2 * day) // count=2, last=now-2d
+        store.recordPlay(localA, now - day) // count=1, last=now-1d
+        store.recordPlay(cloudB, now) // count=1, last=now
+
+        store.remapTracks(
+            mapOf(
+                cloudA to localA,
+                cloudB to localB,
+                ephId to localA,
+                localB to localB,
+            )
+        )
+
+        assertEquals(0, store.count(cloudA))
+        assertEquals(0, store.count(cloudB))
+        assertEquals(3, store.count(localA))
+        assertEquals(now - day, store.lastPlayed(localA))
+        assertEquals(1, store.count(localB))
+        assertEquals(now, store.lastPlayed(localB))
+
+        val reloaded = PlayHistoryStore(dir)
+        assertEquals(3, reloaded.count(localA))
+        assertEquals(now - day, reloaded.lastPlayed(localA))
+        assertEquals(1, reloaded.count(localB))
+    }
 }

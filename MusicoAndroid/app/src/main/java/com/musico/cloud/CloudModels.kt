@@ -495,24 +495,37 @@ private val CLOUD_URL_TRAILING_PUNCTUATION = setOf(
 )
 
 /**
- * Extracts an `http(s)://...` link from pasted share text (e.g. title + URL + trailing
- * punctuation), stripping surrounding text and trailing punctuation while preserving
- * bare playlist/video IDs (`PL...`, `BV...`, `av...`, `ml...`).
+ * Extracts all `http(s)://...` URLs from pasted share text, stripping trailing punctuation,
+ * or returns the trimmed bare input when no HTTP URL is present.
  */
-fun extractCloudSourceInput(raw: String): String {
+fun extractCloudSourceInputs(raw: String): List<String> {
     val trimmed = raw.trim()
-    if (trimmed.isEmpty()) return ""
+    if (trimmed.isEmpty()) return emptyList()
     val matches = CLOUD_HTTP_URL_REGEX.findAll(trimmed)
         .map { match -> match.value.trimEnd { it in CLOUD_URL_TRAILING_PUNCTUATION } }
         .filter { it.isNotEmpty() }
         .toList()
-    if (matches.isEmpty()) return trimmed
-    return matches.firstOrNull { url ->
+    return matches.ifEmpty { listOf(trimmed) }
+}
+
+/**
+ * Extracts an `http(s)://...` link from pasted share text (e.g. title + URL + trailing
+ * punctuation), stripping surrounding text and trailing punctuation while preserving
+ * bare IDs. When multiple URLs are present, prefers [matchesPreferred] or Google Drive links.
+ */
+fun extractCloudSourceInput(
+    raw: String,
+    matchesPreferred: ((String) -> Boolean)? = null,
+): String {
+    val candidates = extractCloudSourceInputs(raw)
+    if (candidates.isEmpty()) return ""
+    if (matchesPreferred != null) {
+        candidates.firstOrNull(matchesPreferred)?.let { return it }
+    }
+    return candidates.firstOrNull { url ->
         val lower = url.lowercase()
-        lower.contains("youtube") || lower.contains("youtu.be") ||
-            lower.contains("bilibili") || lower.contains("b23.tv") ||
-            lower.contains("drive.google.com") || lower.contains("drive.usercontent.google.com")
-    } ?: matches.first()
+        lower.contains("drive.google.com") || lower.contains("drive.usercontent.google.com")
+    } ?: candidates.first()
 }
 
 internal fun parseClockDurationSec(text: String?): Double {

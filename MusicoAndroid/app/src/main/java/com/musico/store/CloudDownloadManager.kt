@@ -88,6 +88,7 @@ class CloudDownloadManager(
         parentUri: Uri,
         folderName: String,
         addToLibrary: Boolean,
+        isWholeRootExport: Boolean = true,
         onSavedWithoutLibrary: ((String) -> Unit)? = null,
     ): String = launchPlaylistExportJob(
         tracks = tracks,
@@ -104,19 +105,29 @@ class CloudDownloadManager(
                 onDetailedProgress = onProgress,
             )
         },
+        isTargetAlreadyIndexed = { res ->
+            if (parentUri.scheme == "file" && res.targetDir != null) {
+                libraryStore.isDirectoryInsideIndexedRoot(res.targetDir)
+            } else {
+                libraryStore.isUriInsideIndexedRoot(parentUri)
+            }
+        },
         addTargetToLibrary = { res ->
+            val mergeCloudRoot = isWholeRootExport && root?.kind?.isCloud == true
             val isDirectFileDir = parentUri.scheme == "file" && res.targetDir != null
             if (isDirectFileDir) {
                 libraryStore.addLocalFolder(
                     dir = res.targetDir!!,
                     cloudSourceRoot = root,
                     trackedSubfolderName = null,
+                    mergeCloudRoot = mergeCloudRoot,
                 )
             } else {
                 libraryStore.addPickedRoot(
                     treeUri = parentUri,
                     cloudSourceRoot = root,
                     trackedSubfolderName = res.savedFolderName,
+                    mergeCloudRoot = mergeCloudRoot,
                 )
             }
         },
@@ -128,6 +139,7 @@ class CloudDownloadManager(
         parentDir: File,
         folderName: String,
         addToLibrary: Boolean,
+        isWholeRootExport: Boolean = true,
         onSavedWithoutLibrary: ((String) -> Unit)? = null,
     ): String = launchPlaylistExportJob(
         tracks = tracks,
@@ -144,12 +156,18 @@ class CloudDownloadManager(
                 onDetailedProgress = onProgress,
             )
         },
+        isTargetAlreadyIndexed = { res ->
+            val dir = res.targetDir ?: File(parentDir, res.savedFolderName ?: folderName)
+            libraryStore.isDirectoryInsideIndexedRoot(dir)
+        },
         addTargetToLibrary = { res ->
+            val mergeCloudRoot = isWholeRootExport && root?.kind?.isCloud == true
             val dir = res.targetDir ?: File(parentDir, res.savedFolderName ?: folderName)
             libraryStore.addLocalFolder(
                 dir = dir,
                 cloudSourceRoot = root,
                 trackedSubfolderName = null,
+                mergeCloudRoot = mergeCloudRoot,
             )
         },
     )
@@ -161,6 +179,7 @@ class CloudDownloadManager(
         addToLibrary: Boolean,
         onSavedWithoutLibrary: ((String) -> Unit)?,
         runExport: suspend (onProgress: (CloudExportProgress) -> Unit) -> CloudExportSummary,
+        isTargetAlreadyIndexed: (CloudExportSummary) -> Boolean,
         addTargetToLibrary: suspend (CloudExportSummary) -> Result<Unit>,
     ): String {
         val jobId = UUID.randomUUID().toString()
@@ -181,8 +200,9 @@ class CloudDownloadManager(
                 var addAttempted = false
                 var libUpdated = false
                 var addErr: Throwable? = null
-                if (addToLibrary && res.savedCount > 0) {
-                    addAttempted = true
+                val targetIndexed = res.savedCount > 0 && isTargetAlreadyIndexed(res)
+                if (res.savedCount > 0 && (addToLibrary || targetIndexed)) {
+                    addAttempted = addToLibrary
                     val addResult = addTargetToLibrary(res)
                     libUpdated = addResult.isSuccess
                     addErr = addResult.exceptionOrNull()
