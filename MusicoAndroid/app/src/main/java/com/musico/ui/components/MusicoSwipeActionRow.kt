@@ -36,9 +36,14 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.geometry.CornerRadius
+import androidx.compose.ui.geometry.RoundRect
+import androidx.compose.ui.graphics.ClipOp
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.clipPath
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
@@ -166,8 +171,9 @@ fun MusicoSwipeActionRow(
     val isArmed = exposedConfig != null && gapPx >= thresholdPxFor(exposedConfig)
 
     val colorSpec = if (reduceMotion) snap<Color>() else tween<Color>(durationMillis = 160)
+    val floatSpec = if (reduceMotion) snap<Float>() else tween<Float>(durationMillis = 160)
     val targetBgColor = when {
-        exposedConfig == null || !isArmed -> MaterialTheme.colorScheme.surfaceContainerHighest
+        exposedConfig == null || !isArmed -> MaterialTheme.colorScheme.surfaceContainerHigh
         exposedConfig.isDestructive -> MaterialTheme.colorScheme.error
         else -> MaterialTheme.colorScheme.primary
     }
@@ -185,6 +191,11 @@ fun MusicoSwipeActionRow(
         targetValue = targetContentColor,
         animationSpec = colorSpec,
         label = "swipe_back_content",
+    )
+    val armedBaseAlpha by animateFloatAsState(
+        targetValue = if (isArmed) 1f else 0.92f,
+        animationSpec = floatSpec,
+        label = "swipe_back_alpha",
     )
 
     val iconScale = remember { Animatable(1f) }
@@ -266,25 +277,37 @@ fun MusicoSwipeActionRow(
                 },
             ),
     ) {
+        val liftDistancePx = with(density) { 24.dp.toPx() }
+        val dragFraction = if (liftDistancePx > 0f) (gapPx / liftDistancePx).coerceIn(0f, 1f) else 0f
+        val cardCorner = (12f * dragFraction).dp
+        val cardCornerPx = with(density) { cardCorner.toPx() }
+        val cardShape = RoundedCornerShape(cardCorner)
+        val cardBg = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f * dragFraction)
+        val cardBorder = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f * dragFraction)
+        val effectiveBackBgColor = backBgColor.copy(alpha = armedBaseAlpha * dragFraction)
+        val cardClipPath = remember { Path() }
+
         if (exposedConfig != null && gapPx > 0.5f) {
             Box(
                 modifier = Modifier
                     .matchParentSize()
+                    .clipToBounds()
                     .drawWithContent {
-                        val clipLeft = if (isLeftExposed) 0f else (size.width - gapPx).coerceAtLeast(0f)
-                        val clipRight = if (isLeftExposed) gapPx.coerceAtMost(size.width) else size.width
-                        if (clipRight > clipLeft) {
-                            clipRect(
-                                left = clipLeft,
+                        cardClipPath.reset()
+                        cardClipPath.addRoundRect(
+                            RoundRect(
+                                left = offsetPx,
                                 top = 0f,
-                                right = clipRight,
+                                right = size.width + offsetPx,
                                 bottom = size.height,
-                            ) {
-                                this@drawWithContent.drawContent()
-                            }
+                                cornerRadius = CornerRadius(cardCornerPx, cardCornerPx),
+                            )
+                        )
+                        clipPath(path = cardClipPath, clipOp = ClipOp.Difference) {
+                            this@drawWithContent.drawContent()
                         }
                     }
-                    .background(backBgColor)
+                    .background(effectiveBackBgColor)
                     .padding(horizontal = 18.dp),
                 contentAlignment = if (isLeftExposed) Alignment.CenterStart else Alignment.CenterEnd,
             ) {
@@ -340,13 +363,6 @@ fun MusicoSwipeActionRow(
                 }
             }
         }
-
-        val liftDistancePx = with(density) { 24.dp.toPx() }
-        val dragFraction = if (liftDistancePx > 0f) (gapPx / liftDistancePx).coerceIn(0f, 1f) else 0f
-        val cardCorner = (12f * dragFraction).dp
-        val cardShape = RoundedCornerShape(cardCorner)
-        val cardBg = MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.92f * dragFraction)
-        val cardBorder = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.45f * dragFraction)
 
         Box(
             modifier = Modifier
