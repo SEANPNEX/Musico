@@ -170,4 +170,47 @@ final class PlayHistoryStoreTests: XCTestCase {
         store.recordPlay(all[2].id, at: now)
         XCTAssertEqual(store.playedLibraryFraction(from: all + [ephemeral]), 0.5, accuracy: 0.0001)
     }
+
+    func testRemapTracksSumsCountsKeepsNewerDateIgnoresEphemeralAndPreservesTotals() {
+        let store = PlayHistoryStore(directory: dir)
+        let older = now - 2 * day
+        let newer = now - day
+        let newest = now
+
+        store.recordPlay("cloud1", at: older)
+        store.recordPlay("cloud1", at: newest)
+        store.recordPlay("local1", at: newer)
+        store.recordPlay("cloud2", at: older)
+        store.recordPlay("cloud3", at: newer)
+        store.addListening(123.5)
+        store.save()
+
+        let expectedTotalPlays = store.totalPlays
+        let expectedTotalSeconds = store.totalSeconds
+
+        let ephemeralID = Track.makeEphemeralID(extensionID: "demo", remoteTrackID: "r1")
+        store.remapTracks([
+            "cloud1": "local1",
+            "cloud2": "local2",
+            "cloud3": ephemeralID,
+            "missing": "localX"
+        ])
+
+        XCTAssertEqual(store.count(for: "cloud1"), 0)
+        XCTAssertEqual(store.count(for: "local1"), 3)
+        XCTAssertEqual(store.lastPlayed(for: "local1"), newest)
+        XCTAssertEqual(store.count(for: "cloud2"), 0)
+        XCTAssertEqual(store.count(for: "local2"), 1)
+        XCTAssertEqual(store.lastPlayed(for: "local2"), older)
+        XCTAssertEqual(store.count(for: "cloud3"), 0)
+        XCTAssertEqual(store.count(for: ephemeralID), 0)
+        XCTAssertEqual(store.totalPlays, expectedTotalPlays)
+        XCTAssertEqual(store.totalSeconds, expectedTotalSeconds, accuracy: 0.001)
+
+        let reloaded = PlayHistoryStore(directory: dir)
+        XCTAssertEqual(reloaded.count(for: "local1"), 3)
+        XCTAssertEqual(reloaded.lastPlayed(for: "local1"), newest)
+        XCTAssertEqual(reloaded.count(for: "local2"), 1)
+        XCTAssertEqual(reloaded.totalPlays, expectedTotalPlays)
+    }
 }

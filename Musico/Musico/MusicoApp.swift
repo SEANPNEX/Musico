@@ -38,6 +38,14 @@ final class AppModel {
         history = PlayHistoryStore(directory: support)
         player = PlayerController(library: library, queues: queues, history: history, engine: AudioEngine(),
                                   settingsURL: support.appendingPathComponent("settings.json"))
+        library.onTracksRemapped = { [weak player, weak queues, weak history] map in
+            if let player {
+                player.tracksRemapped(map)
+            } else {
+                queues?.remapTracks(map)
+                history?.remapTracks(map)
+            }
+        }
         lyrics = LyricsStore(directory: support.appendingPathComponent("Lyrics"))
         #if targetEnvironment(macCatalyst)
         updateManager = UpdateManager()

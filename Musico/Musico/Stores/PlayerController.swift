@@ -149,6 +149,7 @@ final class PlayerController {
         engine.onTrackEnded = { [weak self] in self?.trackDidEnd() }
         library.onBeforeDeletingTracks = { [weak self] ids in self?.prepareForDeletingTracks(ids) }
         library.onTracksRemoved = { [weak self] ids in self?.tracksRemoved(ids) }
+        library.onTracksRemapped = { [weak self] map in self?.tracksRemapped(map) }
         library.onTrackUpdated = { [weak self] track in self?.trackUpdated(track) }
         library.onFolderAdded = { [weak self] name, trackIDs in self?.syncFolderQueue(name: name, trackIDs: trackIDs) }
         queues.onQueuesChanged = { [weak library] referencedIDs in
@@ -1102,6 +1103,23 @@ final class PlayerController {
         queues.removeTracks(ids)
         history.removeTracks(ids)
         if currentRemoved { startCurrent(autoplay: wasPlaying) }
+    }
+
+    func tracksRemapped(_ map: [String: String]) {
+        guard !map.isEmpty else { return }
+        queues.remapTracks(map)
+        history.remapTracks(map)
+        if let current = currentTrack,
+           let newID = map[current.id],
+           let updated = library.track(newID) {
+            currentTrack = updated
+            if !updated.isCloud {
+                currentStreamQualityID = nil
+                currentStreamQualityLabel = nil
+                currentTrackQualityOverride = nil
+            }
+            updateNowPlaying()
+        }
     }
 
     // MARK: Persistence

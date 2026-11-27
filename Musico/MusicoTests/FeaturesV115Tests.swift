@@ -405,11 +405,11 @@ final class FeaturesV115Tests: XCTestCase {
 
     func testAddCloudRootCreatesQueueWithExactCloudFolderName() async throws {
         let fetcher = CloudRootTestFetcher(result: CloudPlaylistResult(
-            kind: .cloudYouTube,
-            remoteID: "PL99",
+            kind: .cloudGoogleDrive,
+            remoteID: "fld99",
             title: "City Pop Mix",
             tracks: [
-                CloudTrackInfo(remoteTrackID: "v1", relativePath: "v1", title: "Plastic Love", artist: "Mariya", album: "Variety", trackNumber: 1, duration: 240, artworkURL: nil)
+                CloudTrackInfo(remoteTrackID: "v1", relativePath: "v1.flac", title: "Plastic Love", artist: "Mariya", album: "Variety", trackNumber: 1, duration: 240, artworkURL: nil)
             ]
         ))
         let store = LibraryStore(
@@ -432,7 +432,7 @@ final class FeaturesV115Tests: XCTestCase {
         defer { player.shutdown() }
 
         let initialActive = queues.activeID
-        try await store.addCloudRoot(sourceURL: "https://music.youtube.com/playlist?list=PL99")
+        try await store.addCloudRoot(sourceURL: "https://drive.google.com/drive/folders/fld99")
 
         let cloudQueue = try XCTUnwrap(queues.queues.first { $0.name == "City Pop Mix" })
         XCTAssertEqual(cloudQueue.trackIDs.count, 1)

@@ -21,6 +21,8 @@ struct CloudTrackingInfo: Codable, Equatable, Hashable, Sendable {
 
 struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
     enum Kind: String, Codable, Sendable {
+        // Legacy `.cloudYouTube` and `.cloudBilibili` cases are retained ONLY for JSON deserialization
+        // compatibility with persisted `library.json` and `.musico-cloud.json` manifests.
         case picked, appFolder, cloudYouTube, cloudBilibili, cloudGoogleDrive, cloudExtension
 
         var isCloud: Bool {
@@ -30,12 +32,19 @@ struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
             }
         }
 
+        var isLegacyExtensionBacked: Bool {
+            switch self {
+            case .cloudYouTube, .cloudBilibili: true
+            case .picked, .appFolder, .cloudGoogleDrive, .cloudExtension: false
+            }
+        }
+
         var isLocal: Bool { !isCloud }
 
         var cloudSourceSlug: String? {
             switch self {
-            case .cloudYouTube: "youtube"
-            case .cloudBilibili: "bilibili"
+            case .cloudYouTube: "youtube" // Legacy
+            case .cloudBilibili: "bilibili" // Legacy
             case .cloudGoogleDrive: "gdrive"
             case .picked, .appFolder, .cloudExtension: nil
             }
@@ -43,8 +52,8 @@ struct LibraryRoot: Codable, Hashable, Identifiable, Sendable {
 
         var builtInProviderID: String? {
             switch self {
-            case .cloudYouTube: "builtin.youtube"
-            case .cloudBilibili: "builtin.bilibili"
+            case .cloudYouTube: "builtin.youtube" // Legacy
+            case .cloudBilibili: "builtin.bilibili" // Legacy
             case .cloudGoogleDrive: "builtin.gdrive"
             case .picked, .appFolder, .cloudExtension: nil
             }

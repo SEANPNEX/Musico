@@ -418,7 +418,7 @@ final class LibraryStoreTests: XCTestCase {
             UIColor.blue.setFill(); ctx.fill(CGRect(x: 0, y: 0, width: 10, height: 10))
         }
         let fetcher = StubCloudFetcher(result: .success(CloudPlaylistResult(
-            kind: .cloudYouTube,
+            kind: .cloudExtension,
             remoteID: "PLcloud123",
             title: "Cloud Mix",
             tracks: [
@@ -442,8 +442,12 @@ final class LibraryStoreTests: XCTestCase {
                     duration: 210,
                     artworkURL: nil
                 )
-            ]
+            ],
+            providerID: "ext.youtube-search"
         )))
+
+        let registry = CloudProviderRegistry()
+        registry.registerExtension(LibraryTestYouTubeExtension())
 
         let store = LibraryStore(
             directory: state,
@@ -451,13 +455,14 @@ final class LibraryStoreTests: XCTestCase {
             reader: reader,
             artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
             cloudFetcher: fetcher,
+            providerRegistry: registry,
             artworkDownloader: { _ in png }
         )
 
         try await store.addCloudRoot(sourceURL: "https://music.youtube.com/playlist?list=PLcloud123")
         XCTAssertEqual(store.roots.count, 2)
         let cloudRoot = try XCTUnwrap(store.roots.last)
-        XCTAssertEqual(cloudRoot.kind, .cloudYouTube)
+        XCTAssertEqual(cloudRoot.kind, .cloudExtension)
         XCTAssertEqual(cloudRoot.name, "Cloud Mix")
         XCTAssertTrue(store.isAvailable(cloudRoot))
         XCTAssertTrue(store.isRemovable(cloudRoot))
@@ -486,6 +491,7 @@ final class LibraryStoreTests: XCTestCase {
             reader: reader,
             artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
             cloudFetcher: fetcher,
+            providerRegistry: registry,
             artworkDownloader: { _ in png }
         )
         XCTAssertEqual(relaunched.roots.count, 2)
@@ -498,7 +504,7 @@ final class LibraryStoreTests: XCTestCase {
 
         // Online again with updated track list: keeps vid1 dateAdded, removes vid2, adds vid3.
         fetcher.result = .success(CloudPlaylistResult(
-            kind: .cloudYouTube,
+            kind: .cloudExtension,
             remoteID: "PLcloud123",
             title: "Cloud Mix",
             tracks: [
@@ -522,7 +528,8 @@ final class LibraryStoreTests: XCTestCase {
                     duration: 195,
                     artworkURL: nil
                 )
-            ]
+            ],
+            providerID: "ext.youtube-search"
         ))
         await relaunched.rescan()
         XCTAssertNil(relaunched.cloudSyncErrors[cloudRoot.id])
@@ -700,20 +707,24 @@ final class LibraryStoreTests: XCTestCase {
         let parentDir = makeTempDir()
         touch("root.mp3", in: parentDir)
 
+        let registry = CloudProviderRegistry()
+        registry.registerExtension(LibraryTestYouTubeExtension())
         let fetcher = MutableCloudFetcher(result: .success(CloudPlaylistResult(
-            kind: .cloudYouTube,
+            kind: .cloudExtension,
             remoteID: "PLnew",
             title: "Updated Remote",
             tracks: [
                 CloudTrackInfo(remoteTrackID: "v1", relativePath: "v1", title: "Existing", artist: "A", album: "Al", trackNumber: 1, duration: 10, artworkURL: nil)
-            ]
+            ],
+            providerID: "ext.youtube-search"
         )))
         let store = LibraryStore(
             directory: state,
             documentsURL: docs,
             reader: reader,
             artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
-            cloudFetcher: fetcher
+            cloudFetcher: fetcher,
+            providerRegistry: registry
         )
         try await store.addRoot(url: parentDir)
         let parentRoot = try XCTUnwrap(store.roots.first { $0.kind == .picked })
@@ -776,12 +787,13 @@ final class LibraryStoreTests: XCTestCase {
         )
         let editedTracking = try XCTUnwrap(store.cloudTracking(rootID: parentRoot.id, path: "ExternalBili"))
         XCTAssertEqual(editedTracking.sourceURL, "https://music.youtube.com/playlist?list=PLedited123")
-        XCTAssertEqual(editedTracking.cloudKind, .cloudYouTube)
+        XCTAssertEqual(editedTracking.cloudKind, .cloudExtension)
+        XCTAssertEqual(editedTracking.resolvedProviderID, "ext.youtube-search")
         XCTAssertEqual(editedTracking.cookie, "SID=new")
 
         let diskManifestAfterEdit = try XCTUnwrap(CloudExporter.loadManifest(in: externalSub))
         XCTAssertEqual(diskManifestAfterEdit.sourceURL, "https://music.youtube.com/playlist?list=PLedited123")
-        XCTAssertEqual(diskManifestAfterEdit.cloudKind, .cloudYouTube)
+        XCTAssertEqual(diskManifestAfterEdit.cloudKind, .cloudExtension)
 
         // Write a stale manifest with OLD URL & timestamp in ExternalBili and verify rescan preserves newer edited store tracking AND updateTrackedLocalRoot prefers edited tracking.
         let staleManifest = CloudFolderManifest(
@@ -812,6 +824,7 @@ final class LibraryStoreTests: XCTestCase {
         let dir = makeTempDir()
         let docs = makeTempDir()
         let registry = CloudProviderRegistry()
+        registry.registerExtension(LibraryTestYouTubeExtension())
 
         // Backward-compatible LibraryRoot decoding without streamQualityID/downloadQualityID
         let legacyRootJSON = """
@@ -851,7 +864,7 @@ final class LibraryStoreTests: XCTestCase {
         try Persistence.save(SavedLib(roots: [decodedRoot], tracks: [orphanTrack]), to: dir.appendingPathComponent("library.json"))
 
         let fetcher = MutableCloudFetcher(result: .success(CloudPlaylistResult(
-            kind: .cloudYouTube,
+            kind: .cloudExtension,
             remoteID: "PLorphan1",
             title: "Recovered YT",
             tracks: [
@@ -866,7 +879,7 @@ final class LibraryStoreTests: XCTestCase {
                     artworkURL: nil
                 )
             ],
-            providerID: BuiltInProviderID.youtube
+            providerID: "ext.youtube-search"
         )))
 
         let store = LibraryStore(
@@ -884,35 +897,35 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(store.cloudExtensionAvailability(for: orphanRoot), .missing(providerID: "ext.missing-yt"))
         XCTAssertFalse(store.isAvailable(orphanRoot))
 
-        // Option A: compatibleProviders finds built-in YouTube matching sourceURL
+        // Option A: compatibleProviders finds installed YouTube extension matching sourceURL
         let compatible = store.compatibleProviders(for: orphanRoot)
-        XCTAssertEqual(compatible.map(\.id), [BuiltInProviderID.youtube])
+        XCTAssertEqual(compatible.map(\.id), ["ext.youtube-search"])
 
         let playlistID = store.createPlaylist(name: "Saved Mix")
         store.add([orphanTrack.id], toPlaylist: playlistID)
         store.toggleFavourite(orphanTrack.id)
 
-        // Safe re-binding to builtin.youtube keeps root.id, updates kind/provider/qualities, and triggers clean re-sync
+        // Safe re-binding to ext.youtube-search keeps root.id, updates kind/provider/qualities, and triggers clean re-sync
         try await store.rebindCloudRoot(
             orphanRoot.id,
             sourceURL: "https://music.youtube.com/playlist?list=PLorphan1",
             cookie: "CONSENT=YES",
-            preferredProviderID: BuiltInProviderID.youtube,
+            preferredProviderID: "ext.youtube-search",
             streamQualityID: "high",
             downloadQualityID: "highest"
         )
 
         let rebound = try XCTUnwrap(store.root(orphanRoot.id))
         XCTAssertEqual(rebound.id, orphanRoot.id)
-        XCTAssertEqual(rebound.kind, .cloudYouTube)
-        XCTAssertEqual(rebound.resolvedProviderID, BuiltInProviderID.youtube)
+        XCTAssertEqual(rebound.kind, .cloudExtension)
+        XCTAssertEqual(rebound.resolvedProviderID, "ext.youtube-search")
         XCTAssertEqual(rebound.cookie, "CONSENT=YES")
         XCTAssertEqual(rebound.streamQualityID, "high")
         XCTAssertEqual(rebound.downloadQualityID, "highest")
         XCTAssertTrue(store.isAvailable(rebound))
 
         let syncedTrack = try XCTUnwrap(store.tracks.first { $0.rootID == orphanRoot.id })
-        XCTAssertEqual(syncedTrack.cloudSource, "youtube")
+        XCTAssertEqual(syncedTrack.cloudSource, "ext.youtube-search")
         XCTAssertEqual(syncedTrack.remoteTrackID, "vid-1")
         XCTAssertEqual(syncedTrack.title, "Recovered Song")
         XCTAssertEqual(store.playlists.first { $0.id == playlistID }?.trackIDs, [syncedTrack.id])
@@ -996,6 +1009,229 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: pickedRootURL.path))
         XCTAssertNil(store.root(pickedRoot.id))
         XCTAssertNil(store.track(keepTrack.id))
+    }
+
+    func testMergeCloudRootIntoStandaloneLocalFolderPreservesPositionAndRemapsAllUserState() async throws {
+        let registry = CloudProviderRegistry()
+        registry.registerExtension(LibraryTestYouTubeExtension())
+
+        let fetcher = StubCloudFetcher(result: .success(CloudPlaylistResult(
+            kind: .cloudExtension,
+            remoteID: "PLmergeA",
+            title: "Merge Mix A",
+            tracks: [
+                CloudTrackInfo(remoteTrackID: "r1", relativePath: "r1", title: "Alpha Song", artist: "Art A", album: "Alb", trackNumber: 1, duration: 120, artworkURL: nil),
+                CloudTrackInfo(remoteTrackID: "r2", relativePath: "r2", title: "Beta Song", artist: "Art B", album: "Alb", trackNumber: 2, duration: 140, artworkURL: nil)
+            ],
+            providerID: "ext.youtube-search"
+        )))
+        let store = LibraryStore(
+            directory: state,
+            documentsURL: docs,
+            reader: reader,
+            artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
+            cloudFetcher: fetcher,
+            providerRegistry: registry,
+            artworkDownloader: { _ in nil }
+        )
+
+        try await store.addCloudRoot(sourceURL: "https://music.youtube.com/playlist?list=PLmergeA")
+        let cloudA = try XCTUnwrap(store.roots.last)
+
+        fetcher.result = .success(CloudPlaylistResult(
+            kind: .cloudGoogleDrive,
+            remoteID: "fldMergeB",
+            title: "Drive Mix B",
+            tracks: [
+                CloudTrackInfo(remoteTrackID: "d1", relativePath: "d1.mp3", title: "Gamma", artist: "Google Drive", album: "Drive Mix B", trackNumber: 1, duration: 100, artworkURL: nil)
+            ]
+        ))
+        try await store.addCloudRoot(sourceURL: "https://drive.google.com/drive/folders/fldMergeB")
+        let cloudB = try XCTUnwrap(store.roots.last)
+        // roots = [AppFolder, CloudA, CloudB]
+        XCTAssertEqual(store.roots.map(\.id), [LibraryRoot.appFolderID, cloudA.id, cloudB.id])
+
+        let c1 = try XCTUnwrap(store.tracks.first { $0.rootID == cloudA.id && $0.remoteTrackID == "r1" })
+        let c2 = try XCTUnwrap(store.tracks.first { $0.rootID == cloudA.id && $0.remoteTrackID == "r2" })
+
+        let playlistID = store.createPlaylist(name: "Cloud Favs")
+        store.add([c1.id, c2.id], toPlaylist: playlistID)
+        store.toggleFavourite(c1.id)
+        store.toggleFavourite(c2.id)
+        _ = store.updateTrackMetadata(id: c1.id, title: "Alpha Custom", artist: "Art A", album: "Alb", genre: "Pop")
+        store.moveFolderTracks(root: cloudA.id, path: "", currentTrackIDs: [c2.id, c1.id], from: IndexSet(integer: 0), to: 1)
+
+        let queues = QueueStore(directory: state)
+        let history = PlayHistoryStore(directory: state)
+        let player = PlayerController(
+            library: store,
+            queues: queues,
+            history: history,
+            engine: AudioEngine(),
+            settingsURL: state.appendingPathComponent("settings.json")
+        )
+        defer { player.shutdown() }
+
+        queues.updateActive { $0.replace(with: [c1.id, c2.id], startAt: 0) }
+        let secondaryQueue = queues.addQueue(name: "Alt", trackIDs: [c2.id, c1.id], startAt: 0)
+        history.recordPlay(c1.id, at: Date(timeIntervalSince1970: 1_700_000_000))
+        history.recordPlay(c1.id, at: Date(timeIntervalSince1970: 1_700_000_100))
+        history.recordPlay(c2.id, at: Date(timeIntervalSince1970: 1_700_000_050))
+
+        // Export only r1 into a standalone folder outside docs (simulating partial export where r2 failed)
+        let standaloneDest = makeTempDir().appendingPathComponent("Merge Mix A")
+        try FileManager.default.createDirectory(at: standaloneDest, withIntermediateDirectories: true)
+        touch("Alpha Song.m4a", in: standaloneDest)
+        let manifest = CloudFolderManifest(
+            sourceURL: "https://music.youtube.com/playlist?list=PLmergeA",
+            remoteID: "PLmergeA",
+            cloudKind: .cloudExtension,
+            lastSyncedEpochMs: 1_700_000_200_000,
+            tracks: ["r1": "Alpha Song.m4a"],
+            providerID: "ext.youtube-search"
+        )
+        try CloudExporter.saveManifest(manifest, in: standaloneDest)
+
+        try await store.registerExportedCloudFolder(destinationURL: standaloneDest, from: cloudA, mergeCloudRoot: true)
+
+        // Strictly 1 folder replaces cloudA at index 1!
+        XCTAssertNil(store.root(cloudA.id))
+        XCTAssertEqual(store.roots.count, 3)
+        let mergedLocalRoot = store.roots[1]
+        XCTAssertEqual(mergedLocalRoot.kind, .picked)
+        XCTAssertEqual(store.roots[2].id, cloudB.id)
+        XCTAssertEqual(mergedLocalRoot.linkedProviderID, "ext.youtube-search")
+        XCTAssertEqual(mergedLocalRoot.sourceURL, "https://music.youtube.com/playlist?list=PLmergeA")
+        XCTAssertEqual(store.mergedFolderRedirects[cloudA.id], FolderRef(root: mergedLocalRoot.id, path: ""))
+
+        let local1 = try XCTUnwrap(store.tracks.first { $0.rootID == mergedLocalRoot.id && $0.relativePath == "Alpha Song.m4a" })
+        XCTAssertEqual(local1.title, "Alpha Custom")
+        XCTAssertFalse(store.tracks.contains { $0.rootID == cloudA.id })
+
+        // User state remapped to local1, unmapped c2 cleaned up
+        XCTAssertEqual(store.playlists.first { $0.id == playlistID }?.trackIDs, [local1.id])
+        XCTAssertEqual(store.favourites, [local1.id])
+        XCTAssertEqual(store.favouritesOrder, [local1.id])
+        XCTAssertEqual(store.metadataOverrides[local1.id]?.title, "Alpha Custom")
+        XCTAssertNil(store.metadataOverrides[c1.id])
+        XCTAssertEqual(store.folderOrders[LibraryStore.folderKey(rootID: mergedLocalRoot.id, path: "")]?.customTrackIDs, [local1.id])
+        XCTAssertNil(store.folderOrders[LibraryStore.folderKey(rootID: cloudA.id, path: "")])
+        XCTAssertEqual(queues.active.trackIDs, [local1.id])
+        XCTAssertEqual(queues.queues.first { $0.id == secondaryQueue }?.trackIDs, [local1.id])
+        XCTAssertEqual(history.count(for: local1.id), 2)
+        XCTAssertEqual(history.count(for: c1.id), 0)
+        XCTAssertEqual(history.count(for: c2.id), 0)
+    }
+
+    func testMergeCloudRootIntoExistingLocalSubfolderKeepsSingleRootAndRemapsState() async throws {
+        let fetcher = StubCloudFetcher(result: .success(CloudPlaylistResult(
+            kind: .cloudGoogleDrive,
+            remoteID: "fldSubMerge",
+            title: "Drive Sub",
+            tracks: [
+                CloudTrackInfo(remoteTrackID: "f1", relativePath: "Track One.mp3", title: "Track One", artist: "Google Drive", album: "Drive Sub", trackNumber: 1, duration: 90, artworkURL: nil)
+            ]
+        )))
+        let store = LibraryStore(
+            directory: state,
+            documentsURL: docs,
+            reader: reader,
+            artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
+            cloudFetcher: fetcher,
+            artworkDownloader: { _ in nil }
+        )
+
+        try await store.addCloudRoot(sourceURL: "https://drive.google.com/drive/folders/fldSubMerge")
+        let cloudRoot = try XCTUnwrap(store.roots.last)
+        let cloudTrack = try XCTUnwrap(store.tracks.first { $0.rootID == cloudRoot.id })
+
+        let playlistID = store.createPlaylist(name: "Sub List")
+        store.add([cloudTrack.id], toPlaylist: playlistID)
+        store.toggleFavourite(cloudTrack.id)
+
+        let queues = QueueStore(directory: state)
+        let history = PlayHistoryStore(directory: state)
+        let player = PlayerController(
+            library: store,
+            queues: queues,
+            history: history,
+            engine: AudioEngine(),
+            settingsURL: state.appendingPathComponent("settings.json")
+        )
+        defer { player.shutdown() }
+
+        queues.updateActive { $0.replace(with: [cloudTrack.id], startAt: 0) }
+        history.recordPlay(cloudTrack.id)
+
+        let subDest = docs.appendingPathComponent("SavedDriveMix")
+        try FileManager.default.createDirectory(at: subDest, withIntermediateDirectories: true)
+        touch("Track One.mp3", in: subDest)
+        let manifest = CloudFolderManifest(
+            sourceURL: "https://drive.google.com/drive/folders/fldSubMerge",
+            remoteID: "fldSubMerge",
+            cloudKind: .cloudGoogleDrive,
+            lastSyncedEpochMs: 1_700_000_500_000,
+            tracks: ["f1": "Track One.mp3"],
+            providerID: BuiltInProviderID.googleDrive
+        )
+        try CloudExporter.saveManifest(manifest, in: subDest)
+
+        try await store.registerExportedCloudFolder(destinationURL: subDest, from: cloudRoot, mergeCloudRoot: true)
+
+        XCTAssertEqual(store.roots.map(\.id), [LibraryRoot.appFolderID])
+        XCTAssertNil(store.root(cloudRoot.id))
+        let tracking = try XCTUnwrap(store.cloudTracking(rootID: LibraryRoot.appFolderID, path: "SavedDriveMix"))
+        XCTAssertEqual(tracking.cloudKind, .cloudGoogleDrive)
+        XCTAssertEqual(tracking.sourceURL, "https://drive.google.com/drive/folders/fldSubMerge")
+        XCTAssertEqual(store.mergedFolderRedirects[cloudRoot.id], FolderRef(root: LibraryRoot.appFolderID, path: "SavedDriveMix"))
+
+        let localTrack = try XCTUnwrap(store.tracks.first { $0.rootID == LibraryRoot.appFolderID && $0.relativePath == "SavedDriveMix/Track One.mp3" })
+        XCTAssertEqual(store.playlists.first { $0.id == playlistID }?.trackIDs, [localTrack.id])
+        XCTAssertEqual(store.favourites, [localTrack.id])
+        XCTAssertEqual(queues.active.trackIDs, [localTrack.id])
+        XCTAssertEqual(history.count(for: localTrack.id), 1)
+        XCTAssertEqual(history.count(for: cloudTrack.id), 0)
+    }
+}
+
+private struct LibraryTestYouTubeExtension: CloudSourceProvider {
+    let id = "ext.youtube-search"
+    let displayName = "YouTube Search"
+    let badgeLabel = "YouTube"
+    let rootKind = LibraryRoot.Kind.cloudExtension
+    let trackCloudSource = "ext.youtube-search"
+    let supportsTree = false
+    let supportsCookie = true
+    var availableQualities: [CloudQualityOption] {
+        [
+            CloudQualityOption(id: "highest", label: "Highest", badge: "256k", lossless: false),
+            CloudQualityOption(id: "high", label: "High", badge: "128k", lossless: false),
+            CloudQualityOption(id: "standard", label: "Standard", badge: "128k", lossless: false)
+        ]
+    }
+    var defaultStreamQualityID: String? { "standard" }
+    var defaultDownloadQualityID: String? { "highest" }
+
+    func canHandle(rawText: String, extractedURL: String) -> CloudMatchResult? {
+        let candidate = extractedURL.isEmpty ? rawText : extractedURL
+        let lower = candidate.lowercased()
+        guard lower.contains("youtube.com") || lower.contains("youtu.be") else { return nil }
+        return CloudMatchResult(
+            providerID: id,
+            kind: .cloudExtension,
+            extractedURL: candidate,
+            normalizedURL: candidate,
+            remoteID: "PLedited123",
+            itemKind: "playlist"
+        )
+    }
+
+    func fetchCollection(sourceURL: String, cookie: String?) async throws -> CloudPlaylistResult {
+        CloudPlaylistResult(kind: .cloudExtension, remoteID: "PLedited123", title: "YT", tracks: [], providerID: id)
+    }
+
+    func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult {
+        CloudStreamResult(url: URL(string: "https://cdn.example/yt.m4a")!, headers: [:], fileExtension: "m4a", expiresAt: Date().addingTimeInterval(600))
     }
 }
 

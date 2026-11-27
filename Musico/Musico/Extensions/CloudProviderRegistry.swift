@@ -1,6 +1,7 @@
 import Foundation
 
 enum BuiltInProviderID {
+    // Legacy IDs kept ONLY for resolving persisted roots/tracks/manifests via compatible JS extensions.
     static let youtube = "builtin.youtube"
     static let bilibili = "builtin.bilibili"
     static let googleDrive = "builtin.gdrive"
@@ -43,6 +44,7 @@ protocol CloudSourceProvider: Sendable {
         purpose: CloudStreamPurpose,
         overrideQualityID: String?
     ) -> String?
+    func configureArtworkRequest(_ request: inout URLRequest)
 }
 
 extension CloudSourceProvider {
@@ -50,6 +52,8 @@ extension CloudSourceProvider {
     var availableQualities: [CloudQualityOption] { [] }
     var defaultStreamQualityID: String? { nil }
     var defaultDownloadQualityID: String? { nil }
+
+    func configureArtworkRequest(_ request: inout URLRequest) {}
 
     func resolveStream(
         track: Track,
@@ -144,167 +148,6 @@ protocol CloudTreeProgressiveFetching: CloudPlaylistFetching {
 }
 
 // MARK: - Built-in Cloud Providers
-
-struct YouTubeCloudProvider: CloudSourceProvider {
-    let id = BuiltInProviderID.youtube
-    let displayName = "YouTube"
-    let badgeLabel = "YouTube"
-    let rootKind = LibraryRoot.Kind.cloudYouTube
-    let trackCloudSource = "youtube"
-    let supportsTree = false
-    let supportsCookie = true
-    var availableQualities: [CloudQualityOption] {
-        [
-            CloudQualityOption(id: "highest", label: L10n.trNonisolated("Highest (256k)"), badge: "256k", lossless: false),
-            CloudQualityOption(id: "high", label: L10n.trNonisolated("High (128k–160k)"), badge: "128k", lossless: false),
-            CloudQualityOption(id: "standard", label: L10n.trNonisolated("Standard (128k)"), badge: "128k", lossless: false),
-            CloudQualityOption(id: "low", label: L10n.trNonisolated("Low (48k)"), badge: "48k", lossless: false)
-        ]
-    }
-    let defaultStreamQualityID: String? = "standard"
-    let defaultDownloadQualityID: String? = "highest"
-
-    let client: YouTubeClient
-
-    init(client: YouTubeClient) {
-        self.client = client
-    }
-
-    func canHandle(rawText: String, extractedURL: String) -> CloudMatchResult? {
-        let candidate = extractedURL.isEmpty ? rawText : extractedURL
-        guard let target = YouTubeClient.parseExtracted(candidate) else { return nil }
-        let remoteID: String
-        let itemKind: String
-        switch target {
-        case .playlist(let id, _):
-            remoteID = id
-            itemKind = "playlist"
-        case .video(let id):
-            remoteID = id
-            itemKind = "track"
-        }
-        return CloudMatchResult(
-            providerID: id,
-            kind: .cloudYouTube,
-            extractedURL: candidate,
-            normalizedURL: candidate,
-            remoteID: remoteID,
-            itemKind: itemKind
-        )
-    }
-
-    func fetchCollection(sourceURL: String, cookie: String?) async throws -> CloudPlaylistResult {
-        var result = try await client.fetchPlaylist(sourceURL: sourceURL, cookie: cookie)
-        result.providerID = id
-        return result
-    }
-
-    func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult {
-        try await resolveStream(track: track, root: root, purpose: .stream, qualityID: nil, forceRefresh: forceRefresh)
-    }
-
-    func resolveStream(
-        track: Track,
-        root: LibraryRoot?,
-        purpose: CloudStreamPurpose,
-        qualityID: String?,
-        forceRefresh: Bool
-    ) async throws -> CloudStreamResult {
-        let videoID = track.remoteTrackID ?? track.relativePath
-        let effectiveQuality = effectiveQualityID(root: root, purpose: purpose, overrideQualityID: qualityID)
-        return try await client.resolveStream(
-            videoID: videoID,
-            cookie: root?.cookie,
-            qualityID: effectiveQuality,
-            forceRefresh: forceRefresh
-        )
-    }
-}
-
-struct BilibiliCloudProvider: CloudSourceProvider {
-    let id = BuiltInProviderID.bilibili
-    let displayName = "Bilibili"
-    let badgeLabel = "Bilibili"
-    let rootKind = LibraryRoot.Kind.cloudBilibili
-    let trackCloudSource = "bilibili"
-    let supportsTree = false
-    let supportsCookie = true
-    var availableQualities: [CloudQualityOption] {
-        [
-            CloudQualityOption(id: "highest", label: L10n.trNonisolated("Highest (FLAC / 192k)"), badge: "FLAC", lossless: true),
-            CloudQualityOption(id: "high", label: L10n.trNonisolated("High (192k)"), badge: "192k", lossless: false),
-            CloudQualityOption(id: "standard", label: L10n.trNonisolated("Standard (132k)"), badge: "132k", lossless: false),
-            CloudQualityOption(id: "low", label: L10n.trNonisolated("Low (64k)"), badge: "64k", lossless: false)
-        ]
-    }
-    let defaultStreamQualityID: String? = "standard"
-    let defaultDownloadQualityID: String? = "highest"
-
-    let client: BilibiliClient
-
-    init(client: BilibiliClient) {
-        self.client = client
-    }
-
-    func canHandle(rawText: String, extractedURL: String) -> CloudMatchResult? {
-        let candidate = extractedURL.isEmpty ? rawText : extractedURL
-        guard let target = BilibiliClient.parseExtracted(candidate) else { return nil }
-        let remoteID: String?
-        let itemKind: String
-        switch target {
-        case .video(let bvid, let aid):
-            remoteID = bvid ?? aid
-            itemKind = "track"
-        case .favlist(let id):
-            remoteID = "fid_\(id)"
-            itemKind = "playlist"
-        case .season(let id, _):
-            remoteID = "season_\(id)"
-            itemKind = "playlist"
-        case .series(let id, _):
-            remoteID = "series_\(id)"
-            itemKind = "playlist"
-        case .shortLink:
-            remoteID = nil
-            itemKind = "playlist"
-        }
-        return CloudMatchResult(
-            providerID: id,
-            kind: .cloudBilibili,
-            extractedURL: candidate,
-            normalizedURL: candidate,
-            remoteID: remoteID,
-            itemKind: itemKind
-        )
-    }
-
-    func fetchCollection(sourceURL: String, cookie: String?) async throws -> CloudPlaylistResult {
-        var result = try await client.fetchPlaylist(sourceURL: sourceURL, cookie: cookie)
-        result.providerID = id
-        return result
-    }
-
-    func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult {
-        try await resolveStream(track: track, root: root, purpose: .stream, qualityID: nil, forceRefresh: forceRefresh)
-    }
-
-    func resolveStream(
-        track: Track,
-        root: LibraryRoot?,
-        purpose: CloudStreamPurpose,
-        qualityID: String?,
-        forceRefresh: Bool
-    ) async throws -> CloudStreamResult {
-        let trackID = track.remoteTrackID ?? track.relativePath
-        let effectiveQuality = effectiveQualityID(root: root, purpose: purpose, overrideQualityID: qualityID)
-        return try await client.resolveStream(
-            trackID: trackID,
-            cookie: root?.cookie,
-            qualityID: effectiveQuality,
-            forceRefresh: forceRefresh
-        )
-    }
-}
 
 struct GoogleDriveCloudProvider: CloudProgressiveTreeProvider {
     let id = BuiltInProviderID.googleDrive
@@ -415,21 +258,18 @@ struct GoogleDriveCloudProvider: CloudProgressiveTreeProvider {
 /// Central thread-safe registry mapping built-in cloud providers and enabled JS extensions.
 final class CloudProviderRegistry: @unchecked Sendable {
     static let shared = CloudProviderRegistry()
+    static let defaultUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
 
     private let lock = NSLock()
     private let builtIns: [any CloudSourceProvider]
     private var extensionsByID: [String: any CloudSourceProvider] = [:]
 
-    let youtubeClient: YouTubeClient?
-    let bilibiliClient: BilibiliClient?
     let googleDriveClient: GoogleDriveClient?
 
     init(
         transport: any CloudHTTPTransport = URLSessionCloudTransport(),
         driveRetryDelaysNanoseconds: [UInt64] = [500_000_000, 1_500_000_000]
     ) {
-        let yt = YouTubeClient(transport: transport)
-        let bili = BilibiliClient(transport: transport)
         let drive = GoogleDriveClient(
             transport: transport,
             retryDelaysNanoseconds: driveRetryDelaysNanoseconds,
@@ -437,21 +277,43 @@ final class CloudProviderRegistry: @unchecked Sendable {
                 try await GoogleDriveOAuthManager.shared.validAccessToken(forceRefresh: forceRefresh)
             }
         )
-        self.youtubeClient = yt
-        self.bilibiliClient = bili
         self.googleDriveClient = drive
         self.builtIns = [
-            YouTubeCloudProvider(client: yt),
-            BilibiliCloudProvider(client: bili),
             GoogleDriveCloudProvider(client: drive)
         ]
     }
 
     init(builtIns: [any CloudSourceProvider]) {
-        self.youtubeClient = builtIns.compactMap { ($0 as? YouTubeCloudProvider)?.client }.first
-        self.bilibiliClient = builtIns.compactMap { ($0 as? BilibiliCloudProvider)?.client }.first
         self.googleDriveClient = builtIns.compactMap { ($0 as? GoogleDriveCloudProvider)?.client }.first
         self.builtIns = builtIns
+    }
+
+    static func isLegacyYouTubeID(_ id: String?) -> Bool {
+        guard let trimmed = id?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return false
+        }
+        return trimmed == BuiltInProviderID.youtube || trimmed == "youtube"
+    }
+
+    static func isLegacyBilibiliID(_ id: String?) -> Bool {
+        guard let trimmed = id?.trimmingCharacters(in: .whitespacesAndNewlines), !trimmed.isEmpty else {
+            return false
+        }
+        return trimmed == BuiltInProviderID.bilibili || trimmed == "bilibili"
+    }
+
+    static func isLegacyProviderID(_ id: String?) -> Bool {
+        isLegacyYouTubeID(id) || isLegacyBilibiliID(id)
+    }
+
+    static func legacyFallbackExtensionID(forKind kind: LibraryRoot.Kind?, providerID: String?) -> String? {
+        if kind == .cloudYouTube || isLegacyYouTubeID(providerID) {
+            return "ext.youtube-search"
+        }
+        if kind == .cloudBilibili || isLegacyBilibiliID(providerID) {
+            return "ext.bilibili-search"
+        }
+        return nil
     }
 
     func allProviders() -> [any CloudSourceProvider] {
@@ -473,6 +335,142 @@ final class CloudProviderRegistry: @unchecked Sendable {
             return builtIn
         }
         return lock.withLock { extensionsByID[providerID] }
+    }
+
+    func provider(forRoot root: LibraryRoot) -> (any CloudSourceProvider)? {
+        let pid = root.effectiveProviderID
+        if root.kind.isLegacyExtensionBacked || Self.isLegacyProviderID(pid) {
+            return resolveLegacyExtensionProvider(
+                kind: root.effectiveCloudKind,
+                providerID: pid,
+                sourceURL: root.sourceURL,
+                trackID: nil
+            )
+        }
+        return provider(forID: pid)
+    }
+
+    func provider(forTrack track: Track, root: LibraryRoot? = nil) -> (any CloudSourceProvider)? {
+        if let cs = track.cloudSource?.trimmingCharacters(in: .whitespacesAndNewlines), !cs.isEmpty {
+            switch cs {
+            case "youtube":
+                return resolveLegacyExtensionProvider(
+                    kind: .cloudYouTube,
+                    providerID: BuiltInProviderID.youtube,
+                    sourceURL: root?.sourceURL,
+                    trackID: track.remoteTrackID ?? track.relativePath
+                )
+            case "bilibili":
+                return resolveLegacyExtensionProvider(
+                    kind: .cloudBilibili,
+                    providerID: BuiltInProviderID.bilibili,
+                    sourceURL: root?.sourceURL,
+                    trackID: track.remoteTrackID ?? track.relativePath
+                )
+            case "gdrive", "googledrive":
+                return provider(forID: BuiltInProviderID.googleDrive)
+            default:
+                if cs.hasPrefix("ext.") {
+                    return provider(forID: cs)
+                }
+            }
+        }
+        if let extID = track.ephemeralExtensionID {
+            return provider(forID: "ext.\(extID)")
+        }
+        if let root {
+            return provider(forRoot: root)
+        }
+        return nil
+    }
+
+    func providerForKind(
+        _ kind: LibraryRoot.Kind?,
+        providerID: String?,
+        sourceURL: String? = nil
+    ) -> (any CloudSourceProvider)? {
+        if let providerID, !providerID.isEmpty {
+            if Self.isLegacyProviderID(providerID) {
+                return resolveLegacyExtensionProvider(
+                    kind: kind,
+                    providerID: providerID,
+                    sourceURL: sourceURL,
+                    trackID: nil
+                )
+            }
+            return provider(forID: providerID)
+        }
+        if let kind, kind.isLegacyExtensionBacked {
+            return resolveLegacyExtensionProvider(
+                kind: kind,
+                providerID: nil,
+                sourceURL: sourceURL,
+                trackID: nil
+            )
+        }
+        if let builtInID = kind?.builtInProviderID {
+            return provider(forID: builtInID)
+        }
+        return nil
+    }
+
+    private func resolveLegacyExtensionProvider(
+        kind: LibraryRoot.Kind?,
+        providerID: String?,
+        sourceURL: String?,
+        trackID: String?
+    ) -> (any CloudSourceProvider)? {
+        let exts = extensionProviders()
+        guard !exts.isEmpty else { return nil }
+
+        if let raw = sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines), !raw.isEmpty {
+            let extracted = CloudSourceInput.extract(from: raw, registry: self)
+            if let matched = exts.first(where: { $0.canHandle(rawText: raw, extractedURL: extracted) != nil }) {
+                return matched
+            }
+        }
+
+        let isYouTube = kind == .cloudYouTube || Self.isLegacyYouTubeID(providerID)
+        let isBilibili = kind == .cloudBilibili || Self.isLegacyBilibiliID(providerID)
+
+        if isYouTube {
+            if let preferred = lock.withLock({ extensionsByID["ext.youtube-search"] }) {
+                return preferred
+            }
+            if let trackID = trackID?.trimmingCharacters(in: .whitespacesAndNewlines), !trackID.isEmpty,
+               let matched = exts.first(where: { $0.canHandle(rawText: trackID, extractedURL: trackID) != nil }) {
+                return matched
+            }
+            let probe = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+            return exts.first(where: { $0.canHandle(rawText: probe, extractedURL: probe) != nil })
+        }
+
+        if isBilibili {
+            if let preferred = lock.withLock({ extensionsByID["ext.bilibili-search"] }) {
+                return preferred
+            }
+            if let trackID = trackID?.trimmingCharacters(in: .whitespacesAndNewlines), !trackID.isEmpty,
+               let matched = exts.first(where: { $0.canHandle(rawText: trackID, extractedURL: trackID) != nil }) {
+                return matched
+            }
+            let probe = "https://www.bilibili.com/video/BV1xx411c7mD"
+            return exts.first(where: { $0.canHandle(rawText: probe, extractedURL: probe) != nil })
+        }
+
+        return nil
+    }
+
+    func configureArtworkRequest(_ request: inout URLRequest, providerID: String? = nil) {
+        if request.value(forHTTPHeaderField: "User-Agent") == nil {
+            request.setValue(Self.defaultUserAgent, forHTTPHeaderField: "User-Agent")
+        }
+        if let providerID, let resolved = provider(forID: providerID) {
+            resolved.configureArtworkRequest(&request)
+            return
+        }
+        for provider in allProviders() {
+            provider.configureArtworkRequest(&request)
+        }
     }
 
     func registerExtension(_ provider: any CloudSourceProvider) {

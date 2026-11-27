@@ -252,14 +252,17 @@ final class PlayerControllerTests: XCTestCase {
     func testCloudTrackPlaysAsynchronouslyAndRapidNextCancelsStaleLoad() async throws {
         let fixture = try XCTUnwrap(Bundle(for: PlayerControllerTests.self).url(forResource: "sample", withExtension: "mp3"))
         let sampleData = try Data(contentsOf: fixture)
+        let registry = CloudProviderRegistry()
+        registry.registerExtension(TestQualityExtensionProvider(id: "ext.test-cloud"))
         let fetcher = TestCloudFetcher(result: CloudPlaylistResult(
-            kind: .cloudYouTube,
+            kind: .cloudExtension,
             remoteID: "PLplayback",
             title: "Cloud Play",
             tracks: [
                 CloudTrackInfo(remoteTrackID: "c1", relativePath: "c1", title: "Cloud 1", artist: "A", album: "Al", trackNumber: 1, duration: 58, artworkURL: nil),
                 CloudTrackInfo(remoteTrackID: "c2", relativePath: "c2", title: "Cloud 2", artist: "B", album: "Al", trackNumber: 2, duration: 58, artworkURL: nil)
-            ]
+            ],
+            providerID: "ext.test-cloud"
         ))
         let cloudLib = LibraryStore(
             directory: makeTempDir(),
@@ -267,9 +270,10 @@ final class PlayerControllerTests: XCTestCase {
             reader: StubReader(),
             artwork: ArtworkCache(directory: makeTempDir()),
             cloudFetcher: fetcher,
+            providerRegistry: registry,
             artworkDownloader: { _ in nil }
         )
-        try await cloudLib.addCloudRoot(sourceURL: "https://music.youtube.com/playlist?list=PLplayback")
+        try await cloudLib.addCloudRoot(sourceURL: "https://ext.test/list/PLplayback", preferredProviderID: "ext.test-cloud")
 
         let cacheDir = makeTempDir()
         let resolver = TestCloudResolver { track, _, _ in
@@ -471,14 +475,17 @@ final class PlayerControllerTests: XCTestCase {
         let fixture = try XCTUnwrap(Bundle(for: PlayerControllerTests.self).url(forResource: "sample", withExtension: "mp3"))
         let sampleData = try Data(contentsOf: fixture)
 
+        let registry = CloudProviderRegistry()
+        registry.registerExtension(TestQualityExtensionProvider(id: "ext.test-quality"))
         let fetcher = TestCloudFetcher(result: CloudPlaylistResult(
-            kind: .cloudBilibili,
+            kind: .cloudExtension,
             remoteID: "BVqtest",
             title: "Quality Play",
             tracks: [
                 CloudTrackInfo(remoteTrackID: "q1", relativePath: "q1", title: "Track Q1", artist: "A", album: "Al", trackNumber: 1, duration: 58, artworkURL: nil),
                 CloudTrackInfo(remoteTrackID: "q2", relativePath: "q2", title: "Track Q2", artist: "B", album: "Al", trackNumber: 2, duration: 58, artworkURL: nil)
-            ]
+            ],
+            providerID: "ext.test-quality"
         ))
         let cloudLib = LibraryStore(
             directory: makeTempDir(),
@@ -486,9 +493,10 @@ final class PlayerControllerTests: XCTestCase {
             reader: StubReader(),
             artwork: ArtworkCache(directory: makeTempDir()),
             cloudFetcher: fetcher,
+            providerRegistry: registry,
             artworkDownloader: { _ in nil }
         )
-        try await cloudLib.addCloudRoot(sourceURL: "https://www.bilibili.com/video/BVqtest")
+        try await cloudLib.addCloudRoot(sourceURL: "https://ext.test/quality/BVqtest", preferredProviderID: "ext.test-quality")
         let rootID = try XCTUnwrap(cloudLib.roots.first?.id)
 
         let recordedLock = NSLock()
@@ -648,6 +656,66 @@ final class PlayerControllerTests: XCTestCase {
         player.deleteQueue(otherID)
         player.restoreToQueue(removedOther)
         XCTAssertFalse(queues.queues.contains { $0.id == otherID })
+    }
+
+    func testTracksRemappedUpdatesQueuesHistoryAndCurrentTrack() {
+        let aID = id("a.mp3")
+        let bID = id("b.mp3")
+        player.play([aID, bID], startAt: 0)
+        history.recordPlay(aID)
+        XCTAssertEqual(player.currentTrack?.id, aID)
+
+        let secondID = queues.addQueue(name: "Extra", trackIDs: [aID, bID], startAt: 0)
+        player.tracksRemapped([aID: bID])
+
+        XCTAssertEqual(queues.active.trackIDs, [bID, bID])
+        XCTAssertEqual(queues.queues.first { $0.id == secondID }?.trackIDs, [bID, bID])
+        XCTAssertEqual(history.count(for: aID), 0)
+        XCTAssertEqual(history.count(for: bID), 1)
+        XCTAssertEqual(player.currentTrack?.id, bID)
+    }
+}
+
+private struct TestQualityExtensionProvider: CloudSourceProvider {
+    let id: String
+    var displayName: String { "Test Cloud" }
+    var badgeLabel: String { "Test" }
+    var rootKind: LibraryRoot.Kind { .cloudExtension }
+    var trackCloudSource: String { id }
+    var supportsTree: Bool { false }
+    var supportsCookie: Bool { true }
+    var availableQualities: [CloudQualityOption] {
+        [
+            CloudQualityOption(id: "highest", label: "Highest (FLAC)", badge: "FLAC", lossless: true),
+            CloudQualityOption(id: "standard", label: "Standard (132k)", badge: "132k", lossless: false)
+        ]
+    }
+    var defaultStreamQualityID: String? { "standard" }
+    var defaultDownloadQualityID: String? { "highest" }
+
+    func canHandle(rawText: String, extractedURL: String) -> CloudMatchResult? {
+        let candidate = extractedURL.isEmpty ? rawText : extractedURL
+        return CloudMatchResult(
+            providerID: id,
+            kind: .cloudExtension,
+            extractedURL: candidate,
+            normalizedURL: candidate,
+            remoteID: "test",
+            itemKind: "playlist"
+        )
+    }
+
+    func fetchCollection(sourceURL: String, cookie: String?) async throws -> CloudPlaylistResult {
+        CloudPlaylistResult(kind: .cloudExtension, remoteID: "test", title: "Test", tracks: [], providerID: id)
+    }
+
+    func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult {
+        CloudStreamResult(
+            url: URL(string: "https://cdn.example/\(track.remoteTrackID ?? "x").mp3")!,
+            headers: [:],
+            fileExtension: "mp3",
+            expiresAt: Date().addingTimeInterval(600)
+        )
     }
 }
 

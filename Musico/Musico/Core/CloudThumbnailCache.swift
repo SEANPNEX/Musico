@@ -35,10 +35,7 @@ final class CloudThumbnailCache: @unchecked Sendable {
             let session = URLSession(configuration: config)
             self.fetcher = { url in
                 var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 10)
-                req.setValue(YouTubeClient.webUserAgent, forHTTPHeaderField: "User-Agent")
-                if let referer = Self.referer(for: url) {
-                    req.setValue(referer, forHTTPHeaderField: "Referer")
-                }
+                CloudProviderRegistry.shared.configureArtworkRequest(&req)
                 let (data, response) = try await session.data(for: req)
                 guard let http = response as? HTTPURLResponse,
                       (200..<300).contains(http.statusCode),
@@ -48,14 +45,6 @@ final class CloudThumbnailCache: @unchecked Sendable {
                 return data
             }
         }
-    }
-
-    static func referer(for url: URL) -> String? {
-        guard let host = url.host?.lowercased() else { return nil }
-        if host.contains("hdslb.com") || host == "bilibili.com" || host.hasSuffix(".bilibili.com") || host.contains("biliimg.com") {
-            return BilibiliClient.referer
-        }
-        return nil
     }
 
     static func detectedMIMEType(for data: Data) -> String? {

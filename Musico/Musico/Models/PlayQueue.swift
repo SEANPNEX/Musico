@@ -223,6 +223,15 @@ struct PlayQueue: Codable, Identifiable, Hashable, Sendable {
         }
     }
 
+    @discardableResult
+    mutating func remapTracks(_ map: [String: String]) -> Bool {
+        guard !map.isEmpty else { return false }
+        let updated = trackIDs.map { map[$0] ?? $0 }
+        guard updated != trackIDs else { return false }
+        trackIDs = updated
+        return true
+    }
+
     private mutating func reshuffle(using rng: inout some RandomNumberGenerator) {
         guard shuffle else { shuffleOrder = []; return }
         var rest = trackIDs.indices.filter { $0 != currentIndex }

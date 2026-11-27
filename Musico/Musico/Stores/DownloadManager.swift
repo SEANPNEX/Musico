@@ -94,7 +94,8 @@ final class DownloadManager {
         parentURL: URL,
         folderName: String,
         addToLibrary: Bool,
-        library: LibraryStore?
+        library: LibraryStore?,
+        isWholeRootExport: Bool = true
     ) -> DownloadJob {
         let cloudTracks = tracks.filter(\.isCloud)
         let displayTitle = folderName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
@@ -146,9 +147,17 @@ final class DownloadManager {
                 job.totalTracks = cloudTracks.count
                 job.bytesPerSecond = 0
 
-                if addToLibrary, let library, FileManager.default.fileExists(atPath: result.destinationURL.path) {
+                let shouldRegister = result.savedCount > 0 && (library.map { lib in
+                    addToLibrary || lib.containsLocalURL(result.destinationURL)
+                } ?? false)
+                if shouldRegister, let library, FileManager.default.fileExists(atPath: result.destinationURL.path) {
+                    let shouldMergeCloudRoot = root.kind.isCloud && isWholeRootExport
                     do {
-                        try await library.registerExportedCloudFolder(destinationURL: result.destinationURL, from: root)
+                        try await library.registerExportedCloudFolder(
+                            destinationURL: result.destinationURL,
+                            from: root,
+                            mergeCloudRoot: shouldMergeCloudRoot
+                        )
                     } catch {
                         job.errors.append(L10n.tr("Saved songs, but couldn’t add folder to library: %@", error.localizedDescription))
                     }

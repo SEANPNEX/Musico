@@ -485,4 +485,148 @@ final class DownloadManagerTests: XCTestCase {
         XCTAssertEqual(updateJob.updateSummary?.skippedCount, 1)
         XCTAssertTrue(FileManager.default.fileExists(atPath: pickedParent.appendingPathComponent("SavedSub/Song Two.m4a").path))
     }
+
+    @MainActor
+    func testDownloadManagerPlaylistExportMergesCloudRootAndRespectsGuardrails() async throws {
+        let state = makeTempDir()
+        let docs = makeTempDir()
+        let library = LibraryStore(
+            directory: state,
+            documentsURL: docs,
+            reader: StubReader(),
+            artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
+            artworkDownloader: { _ in nil }
+        )
+
+        let resolver = TestStreamResolver { track, _, _ in
+            if track.remoteTrackID == "fail-only" {
+                throw CloudSourceError.noPlayableStream
+            }
+            return CloudStreamResult(
+                url: URL(string: "https://cdn.example/\(track.remoteTrackID ?? track.id).m4a")!,
+                headers: [:],
+                fileExtension: "m4a",
+                expiresAt: Date().addingTimeInterval(600)
+            )
+        }
+        let cache = CloudAudioCache(
+            directory: makeTempDir(),
+            maxBytes: 10_000_000,
+            resolver: resolver,
+            downloader: { url, _ in
+                let tmp = makeTempDir().appendingPathComponent("dl.m4a")
+                try Data("audio-\(url.lastPathComponent)".utf8).write(to: tmp)
+                return (tmp, 200, "audio/mp4")
+            }
+        )
+        let manager = DownloadManager(cache: cache)
+
+        // Seed cloud root in library via Google Drive-like Stub fetcher
+        struct LocalMergeCloudFetcher: CloudPlaylistFetching {
+            let result: CloudPlaylistResult
+            func fetchPlaylist(sourceURL: String, cookie: String?, kindHint: LibraryRoot.Kind?) async throws -> CloudPlaylistResult {
+                result
+            }
+        }
+        let driveFetcher = LocalMergeCloudFetcher(result: CloudPlaylistResult(
+            kind: .cloudGoogleDrive,
+            remoteID: "fld-merge-1",
+            title: "Drive Mix",
+            tracks: [
+                CloudTrackInfo(remoteTrackID: "f1", relativePath: "Song One.m4a", title: "Song One", artist: "A", album: "Drive Mix", trackNumber: 1, duration: 10, artworkURL: nil)
+            ]
+        ))
+        let mergeLibrary = LibraryStore(
+            directory: makeTempDir(),
+            documentsURL: makeTempDir(),
+            reader: StubReader(),
+            artwork: ArtworkCache(directory: makeTempDir()),
+            cloudFetcher: driveFetcher,
+            artworkDownloader: { _ in nil }
+        )
+        try await mergeLibrary.addCloudRoot(sourceURL: "https://drive.google.com/drive/folders/fld-merge-1")
+        let cloudRoot = try XCTUnwrap(mergeLibrary.roots.first { $0.kind == .cloudGoogleDrive })
+        let cloudTrack = try XCTUnwrap(mergeLibrary.tracks.first { $0.rootID == cloudRoot.id })
+
+        // 1. isWholeRootExport == false keeps cloudRoot intact
+        let subParent = makeTempDir()
+        let subJob = manager.startPlaylistExport(
+            root: cloudRoot,
+            tracks: [cloudTrack],
+            parentURL: subParent,
+            folderName: "Sub Export",
+            addToLibrary: true,
+            library: mergeLibrary,
+            isWholeRootExport: false
+        )
+        for _ in 0..<80 where subJob.state == .running { try await Task.sleep(for: .milliseconds(25)) }
+        XCTAssertEqual(subJob.state, .completed)
+        XCTAssertNotNil(mergeLibrary.root(cloudRoot.id))
+
+        // 2. addToLibrary == false outside indexed local root keeps cloudRoot intact
+        let unindexedParent = makeTempDir()
+        let unindexedJob = manager.startPlaylistExport(
+            root: cloudRoot,
+            tracks: [cloudTrack],
+            parentURL: unindexedParent,
+            folderName: "Unindexed Export",
+            addToLibrary: false,
+            library: mergeLibrary,
+            isWholeRootExport: true
+        )
+        for _ in 0..<80 where unindexedJob.state == .running { try await Task.sleep(for: .milliseconds(25)) }
+        XCTAssertEqual(unindexedJob.state, .completed)
+        XCTAssertNotNil(mergeLibrary.root(cloudRoot.id))
+
+        // 3. savedCount == 0 keeps cloudRoot intact even when addToLibrary == true
+        let failingTrack = Track(
+            id: "fail-track",
+            rootID: cloudRoot.id,
+            relativePath: "fail.m4a",
+            title: "Fail",
+            artist: "A",
+            album: "Drive Mix",
+            albumArtist: "A",
+            duration: 10,
+            fileSize: 0,
+            modified: Date(),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(),
+            cloudSource: "gdrive",
+            remoteTrackID: "fail-only"
+        )
+        let failJob = manager.startPlaylistExport(
+            root: cloudRoot,
+            tracks: [failingTrack],
+            parentURL: makeTempDir(),
+            folderName: "Empty Export",
+            addToLibrary: true,
+            library: mergeLibrary,
+            isWholeRootExport: true
+        )
+        for _ in 0..<80 where failJob.state == .running { try await Task.sleep(for: .milliseconds(25)) }
+        XCTAssertEqual(failJob.state, .completed)
+        XCTAssertEqual(failJob.exportSummary?.savedCount, 0)
+        XCTAssertNotNil(mergeLibrary.root(cloudRoot.id))
+
+        // 4. addToLibrary == false INSIDE an indexed local root still merges cloudRoot!
+        let docsRoot = try XCTUnwrap(mergeLibrary.root(LibraryRoot.appFolderID))
+        let docsURL = try XCTUnwrap(mergeLibrary.rootURL(docsRoot.id))
+        let mergeJob = manager.startPlaylistExport(
+            root: cloudRoot,
+            tracks: [cloudTrack],
+            parentURL: docsURL,
+            folderName: "Drive Mix",
+            addToLibrary: false,
+            library: mergeLibrary,
+            isWholeRootExport: true
+        )
+        for _ in 0..<80 where mergeJob.state == .running { try await Task.sleep(for: .milliseconds(25)) }
+        XCTAssertEqual(mergeJob.state, .completed)
+        XCTAssertNil(mergeLibrary.root(cloudRoot.id))
+        // AppFolder + Sub Export (added in step 1 when isWholeRootExport == false)
+        XCTAssertEqual(mergeLibrary.roots.count, 2)
+        XCTAssertNotNil(mergeLibrary.cloudTracking(rootID: docsRoot.id, path: "Drive Mix"))
+        _ = library
+    }
 }

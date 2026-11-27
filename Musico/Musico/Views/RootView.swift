@@ -153,7 +153,7 @@ struct RootView: View {
         @Bindable var navigation = navigation
         let baseTabs = TabView(selection: $navigation.selectedTab) {
             Tab(L10n.tr("Folders"), systemImage: "folder", value: AppTab.folders) {
-                NavigationStack { FoldersView().background { ThemeBackdropView() } }
+                NavigationStack(path: $navigation.foldersPath) { FoldersView().background { ThemeBackdropView() } }
             }
             Tab(L10n.tr("Library"), systemImage: "music.note.list", value: AppTab.library) {
                 NavigationStack(path: $navigation.libraryPath) { LibraryView().background { ThemeBackdropView() } }
@@ -183,7 +183,7 @@ struct RootView: View {
     private var legacyTabs: some View {
         @Bindable var navigation = navigation
         return TabView(selection: $navigation.selectedTab) {
-            tab(L10n.tr("Folders"), "folder", tag: .folders) { FoldersView() }
+            tab(L10n.tr("Folders"), "folder", tag: .folders, path: $navigation.foldersPath) { FoldersView() }
             tab(L10n.tr("Library"), "music.note.list", tag: .library, path: $navigation.libraryPath) { LibraryView() }
             tab(L10n.tr("Queues"), "list.bullet", tag: .queues) { QueuesView() }
             tab(L10n.tr("Stats"), "chart.bar", tag: .stats) { StatsView() }

@@ -40,7 +40,7 @@ struct FoldersView: View {
 
     private var unavailableExtensionRoots: [(root: LibraryRoot, availability: CloudExtensionAvailability)] {
         library.roots.compactMap { root in
-            guard root.kind == .cloudExtension else { return nil }
+            guard root.kind == .cloudExtension || root.kind.isLegacyExtensionBacked else { return nil }
             let status = library.cloudExtensionAvailability(for: root)
             return status == .available ? nil : (root, status)
         }
@@ -58,7 +58,7 @@ struct FoldersView: View {
                     }
                 }
             } footer: {
-                Text(Self.hint)
+                Text(Self.hint(extensionStore: extensionStore))
             }
             if !unavailableExtensionRoots.isEmpty {
                 Section(L10n.tr("Unavailable Extensions")) {
@@ -259,13 +259,24 @@ struct FoldersView: View {
     private static var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
 
     @MainActor
-    private static var hint: String {
+    private static func hint(extensionStore: ExtensionStore) -> String {
+        let extNames = extensionStore.registry.extensionProviders().map(\.displayName)
+        if extNames.isEmpty {
+            #if targetEnvironment(macCatalyst)
+            return L10n.tr("Your Mac’s Music folder is included to start with. Add local folders, Google Drive links, or install extensions for other cloud sources.")
+            #else
+            return L10n.tr(isPad
+                ? "Add a folder from Files, link a Google Drive source, install extensions for more cloud sources, or copy music into the Musico folder in Files › On My iPad."
+                : "Add a folder from Files, link a Google Drive source, install extensions for more cloud sources, or copy music into the Musico folder in Files › On My iPhone.")
+            #endif
+        }
+        let sources = ([L10n.tr("Google Drive")] + extNames).joined(separator: ", ")
         #if targetEnvironment(macCatalyst)
-        L10n.tr("Your Mac’s Music folder is included to start with. Add local folders or YouTube, Bilibili, or Google Drive cloud sources, or remove any you don’t want.")
+        return L10n.tr("Your Mac’s Music folder is included to start with. Add local folders or cloud sources (%@), or remove any you don’t want.", sources)
         #else
-        L10n.tr(isPad
-            ? "Add a folder from Files, link a YouTube, Bilibili, or Google Drive source, or copy music into the Musico folder in Files › On My iPad."
-            : "Add a folder from Files, link a YouTube, Bilibili, or Google Drive source, or copy music into the Musico folder in Files › On My iPhone.")
+        return L10n.tr(isPad
+            ? "Add a folder from Files, link a cloud source (%@), or copy music into the Musico folder in Files › On My iPad."
+            : "Add a folder from Files, link a cloud source (%@), or copy music into the Musico folder in Files › On My iPhone.", sources)
         #endif
     }
 
@@ -345,9 +356,9 @@ struct FoldersView: View {
     private static func sourceLabel(for root: LibraryRoot, library: LibraryStore, extensionStore: ExtensionStore) -> String? {
         switch root.kind {
         case .cloudYouTube:
-            return "YouTube"
+            return library.provider(for: root)?.badgeLabel ?? "YouTube"
         case .cloudBilibili:
-            return "Bilibili"
+            return library.provider(for: root)?.badgeLabel ?? "Bilibili"
         case .cloudGoogleDrive:
             return L10n.tr("Google Drive")
         case .cloudExtension:
@@ -458,7 +469,7 @@ struct FoldersView: View {
                 }
             }
             if root.kind.isCloud {
-                if root.kind == .cloudExtension,
+                if (root.kind == .cloudExtension || root.kind.isLegacyExtensionBacked),
                    extAvailability != .available,
                    let suggested = library.compatibleProviders(for: root).first {
                     Button(L10n.tr("Switch Source…"), systemImage: "arrow.triangle.2.circlepath") {
@@ -559,6 +570,14 @@ struct AddCloudFolderSheet: View {
         selectedProvider?.supportsCookie ?? true
     }
 
+    private var urlExamplesFooter: String {
+        let extNames = extensionStore.registry.extensionProviders().map(\.displayName)
+        if extNames.isEmpty {
+            return L10n.tr("Examples: drive.google.com/drive/folders/…, drive.google.com/file/d/…. Install extensions in Extensions to add more cloud sources.")
+        }
+        return L10n.tr("Supported sources: Google Drive, %@. Example: drive.google.com/drive/folders/…", extNames.joined(separator: ", "))
+    }
+
     var body: some View {
         NavigationStack {
             Form {
@@ -585,7 +604,7 @@ struct AddCloudFolderSheet: View {
                 } header: {
                     Text(L10n.tr("Playlist, Folder, or Video Link"))
                 } footer: {
-                    Text(L10n.tr("Examples: youtube.com/playlist?list=…, bilibili.com/video/BV…, b23.tv/…, drive.google.com/drive/folders/…, drive.google.com/file/d/…"))
+                    Text(urlExamplesFooter)
                 }
 
                 if shouldShowCookieField {
@@ -597,7 +616,7 @@ struct AddCloudFolderSheet: View {
                     } header: {
                         Text(L10n.tr("Authentication"))
                     } footer: {
-                        Text(L10n.tr("Public links work without signing in. Add a Cookie only for private playlists, restricted Google Drive links, or higher Bilibili audio quality."))
+                        Text(L10n.tr("Public links work without signing in. Add a Cookie only for private playlists, restricted Google Drive links, or extension-authenticated sources."))
                     }
                 }
 
@@ -671,9 +690,10 @@ struct FolderDetailView: View {
     @Environment(\.lyricsStore) private var lyricsStore
     @Environment(\.languageManager) private var languageManager
     @Environment(\.themeManager) private var themeManager
+    @Environment(\.appNavigation) private var navigation
     @Environment(DeleteItemPrompt.self) private var deletePrompt: DeleteItemPrompt?
     @Environment(\.dismiss) private var dismiss
-    @State private var showExportSheet = false
+    @State private var exportingRoot: LibraryRoot?
     @State private var showExtensionsSheet = false
     @State private var updatingTarget: FolderTrackingTarget?
     @State private var editingTarget: FolderTrackingTarget?
@@ -697,7 +717,7 @@ struct FolderDetailView: View {
         let currentTracking = library.cloudTracking(rootID: ref.root, path: ref.path)
 
         List {
-            if let root, root.kind == .cloudExtension, extAvailability != .available {
+            if let root, (root.kind == .cloudExtension || root.kind.isLegacyExtensionBacked), extAvailability != .available {
                 let compatible = library.compatibleProviders(for: root)
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(alignment: .top, spacing: 10) {
@@ -877,7 +897,7 @@ struct FolderDetailView: View {
                     }
                     .help(L10n.tr("Edit Cloud Source…"))
                     Button(L10n.tr("Save to Local Folder…"), systemImage: "square.and.arrow.down") {
-                        showExportSheet = true
+                        exportingRoot = root
                     }
                     .help(L10n.tr("Save to Local Folder…"))
                 }
@@ -920,13 +940,19 @@ struct FolderDetailView: View {
             .environment(\.locale, languageManager.effectiveLocale)
             .applyTheme(themeManager)
         }
-        .sheet(isPresented: $showExportSheet) {
-            if let root {
-                SaveCloudPlaylistSheet(root: root, library: library, downloadManager: downloadManager)
-                    .environment(library)
-                    .environment(\.downloadManager, downloadManager)
-                    .environment(\.locale, languageManager.effectiveLocale)
-                    .applyTheme(themeManager)
+        .sheet(item: $exportingRoot) { root in
+            SaveCloudPlaylistSheet(root: root, library: library, downloadManager: downloadManager)
+                .environment(library)
+                .environment(\.downloadManager, downloadManager)
+                .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
+        }
+        .onChange(of: library.mergedFolderRedirects[ref.root]) { _, _ in
+            redirectIfMerged()
+        }
+        .onChange(of: exportingRoot == nil) { _, isClosed in
+            if isClosed {
+                redirectIfMerged()
             }
         }
         .sheet(item: $updatingTarget) { target in
@@ -959,6 +985,31 @@ struct FolderDetailView: View {
         #if !targetEnvironment(macCatalyst)
         .sensoryFeedback(.impact(weight: .light), trigger: reorderFeedbackTrigger)
         #endif
+    }
+
+    private func redirectIfMerged() {
+        guard exportingRoot == nil,
+              let redirect = library.mergedFolderRedirects[ref.root] else {
+            return
+        }
+        let destinationPath: String
+        if ref.path.isEmpty {
+            destinationPath = redirect.path
+        } else if redirect.path.isEmpty {
+            destinationPath = ref.path
+        } else {
+            destinationPath = "\(redirect.path)/\(ref.path)"
+        }
+        let target = FolderRef(root: redirect.root, path: destinationPath)
+        var next = NavigationPath()
+        next.append(target)
+        if !navigation.foldersPath.isEmpty {
+            navigation.foldersPath = next
+        } else if navigation.sidebarSelection == .folders, !navigation.sidebarDetailPath.isEmpty {
+            navigation.sidebarDetailPath = next
+        } else {
+            dismiss()
+        }
     }
 
     private func switchSourceBannerButton(root: LibraryRoot, currentName: String, suggestedID: String) -> some View {
@@ -1026,6 +1077,7 @@ struct FolderDetailView: View {
 
 struct SaveCloudPlaylistSheet: View {
     let root: LibraryRoot
+    var isWholeRootExport: Bool = true
     private let explicitLibrary: LibraryStore?
     private let explicitDownloadManager: DownloadManager?
     @Environment(LibraryStore.self) private var envLibrary: LibraryStore?
@@ -1040,8 +1092,14 @@ struct SaveCloudPlaylistSheet: View {
     @State private var activeJobID: UUID?
     @State private var pickerErrorMessage: String?
 
-    init(root: LibraryRoot, library: LibraryStore? = nil, downloadManager: DownloadManager? = nil) {
+    init(
+        root: LibraryRoot,
+        isWholeRootExport: Bool = true,
+        library: LibraryStore? = nil,
+        downloadManager: DownloadManager? = nil
+    ) {
         self.root = root
+        self.isWholeRootExport = isWholeRootExport
         self.explicitLibrary = library
         self.explicitDownloadManager = downloadManager
         _folderName = State(initialValue: CloudExporter.sanitizeFileName(root.name, fallback: "Cloud Playlist"))
@@ -1201,7 +1259,8 @@ struct SaveCloudPlaylistSheet: View {
             parentURL: parentURL,
             folderName: folderName,
             addToLibrary: addToLibrary,
-            library: library
+            library: library,
+            isWholeRootExport: isWholeRootExport
         )
         activeJobID = job.id
     }
@@ -1258,7 +1317,7 @@ struct UpdateTrackedFolderSheet: View {
             return CloudTrackingInfo(
                 sourceURL: src,
                 remoteID: root.remoteID,
-                cloudKind: root.effectiveCloudKind ?? .cloudYouTube,
+                cloudKind: root.effectiveCloudKind ?? .cloudExtension,
                 cookie: root.cookie,
                 lastSynced: root.lastSynced,
                 providerID: root.effectiveProviderID
@@ -1489,7 +1548,7 @@ struct EditCloudTrackingSheet: View {
                     CloudTrackingInfo(
                         sourceURL: $0,
                         remoteID: root.remoteID,
-                        cloudKind: root.effectiveCloudKind ?? .cloudYouTube,
+                        cloudKind: root.effectiveCloudKind ?? .cloudExtension,
                         cookie: root.cookie,
                         lastSynced: root.lastSynced,
                         providerID: root.effectiveProviderID,

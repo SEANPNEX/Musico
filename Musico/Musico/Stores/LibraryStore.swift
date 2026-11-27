@@ -12,7 +12,7 @@ enum LibraryError: LocalizedError {
         switch self {
         case .duplicateRoot: L10n.trNonisolated("That location is already in your library.")
         case .notAFolder: L10n.trNonisolated("That location could not be opened as a folder.")
-        case .invalidCloudURL: L10n.trNonisolated("Enter a valid YouTube, Bilibili, or Google Drive link.")
+        case .invalidCloudURL: L10n.trNonisolated("Enter a valid Google Drive link or a link supported by an installed extension.")
         case .cannotDeleteAppFolderRoot: L10n.trNonisolated("The built-in music folder cannot be deleted from disk.")
         case .fileNotFoundOnDisk: L10n.trNonisolated("The file or folder could not be found on disk.")
         case .cannotDeleteCloudItem: L10n.trNonisolated("Cloud items can only be removed from the library.")
@@ -84,6 +84,7 @@ final class LibraryStore {
     private(set) var scanProgress: (done: Int, total: Int) = (0, 0)
     private(set) var cloudSyncErrors: [UUID: String] = [:]
     private(set) var cloudSyncProgress: [UUID: CloudSyncProgress] = [:]
+    private(set) var mergedFolderRedirects: [UUID: FolderRef] = [:]
     private var knownDriveSubfolders: [UUID: [String: KnownDriveSubfolder]] = [:]
     private var rootURLs: [UUID: URL] = [:]
     /// True once the user has removed the built-in root (only possible where it is removable).
@@ -93,6 +94,7 @@ final class LibraryStore {
 
     @ObservationIgnored var onBeforeDeletingTracks: ((Set<String>) -> Void)?
     @ObservationIgnored var onTracksRemoved: ((Set<String>) -> Void)?
+    @ObservationIgnored var onTracksRemapped: (([String: String]) -> Void)?
     @ObservationIgnored var onTrackUpdated: ((Track) -> Void)?
     @ObservationIgnored var onFolderAdded: ((_ name: String, _ trackIDs: [String]) -> Void)?
     @ObservationIgnored private var byID: [String: Track] = [:]
@@ -285,14 +287,12 @@ final class LibraryStore {
     }
 
     func provider(for root: LibraryRoot) -> (any CloudSourceProvider)? {
-        guard let pid = root.effectiveProviderID else { return nil }
-        return providerRegistry.provider(forID: pid)
+        providerRegistry.provider(forRoot: root)
     }
 
     func provider(for track: Track, root: LibraryRoot? = nil) -> (any CloudSourceProvider)? {
         let resolvedRoot = root ?? self.root(track.rootID)
-        guard let pid = CloudProviderRegistry.providerID(for: track, root: resolvedRoot) else { return nil }
-        return providerRegistry.provider(forID: pid)
+        return providerRegistry.provider(forTrack: track, root: resolvedRoot)
     }
 
     func compatibleProviders(
@@ -321,6 +321,16 @@ final class LibraryStore {
     }
 
     func cloudExtensionAvailability(for root: LibraryRoot) -> CloudExtensionAvailability {
+        if root.kind.isLegacyExtensionBacked {
+            if providerRegistry.provider(forRoot: root) != nil {
+                return .available
+            }
+            let fallbackID = CloudProviderRegistry.legacyFallbackExtensionID(
+                forKind: root.kind,
+                providerID: root.resolvedProviderID
+            ) ?? ""
+            return extensionAvailabilityProvider(fallbackID)
+        }
         guard root.kind == .cloudExtension else { return .available }
         guard let pid = root.resolvedProviderID, !pid.isEmpty else {
             return .missing(providerID: "")
@@ -332,7 +342,7 @@ final class LibraryStore {
     }
 
     func isAvailable(_ root: LibraryRoot) -> Bool {
-        if root.kind == .cloudExtension {
+        if root.kind == .cloudExtension || root.kind.isLegacyExtensionBacked {
             return cloudExtensionAvailability(for: root) == .available
         }
         return root.kind.isCloud || rootURLs[root.id] != nil
@@ -380,6 +390,10 @@ final class LibraryStore {
     }
 
     func addRoot(url: URL) async throws {
+        try await addRoot(url: url, notifyFolderAdded: true, skippingCloudRootID: nil)
+    }
+
+    private func addRoot(url: URL, notifyFolderAdded: Bool, skippingCloudRootID: UUID?) async throws {
         let scoped = url.startAccessingSecurityScopedResource()
         func fail(_ error: LibraryError) -> LibraryError {
             if scoped { url.stopAccessingSecurityScopedResource() }
@@ -409,7 +423,7 @@ final class LibraryStore {
                 migratedTrackedSubfolders[relPath] = CloudTrackingInfo(
                     sourceURL: src,
                     remoteID: existingRoot.remoteID,
-                    cloudKind: existingRoot.linkedCloudKind ?? .cloudYouTube,
+                    cloudKind: existingRoot.linkedCloudKind ?? .cloudExtension,
                     cookie: existingRoot.cookie,
                     lastSynced: existingRoot.lastSynced,
                     providerID: existingRoot.effectiveProviderID
@@ -478,9 +492,13 @@ final class LibraryStore {
         roots.append(root)
         rootURLs[root.id] = url
         saveLibrary()
-        onFolderAdded?(root.name, [])
-        await rescan()
-        onFolderAdded?(root.name, tracks(under: root.id, path: "").map(\.id))
+        if notifyFolderAdded {
+            onFolderAdded?(root.name, [])
+        }
+        await rescan(skippingCloudRootID: skippingCloudRootID)
+        if notifyFolderAdded {
+            onFolderAdded?(root.name, tracks(under: root.id, path: "").map(\.id))
+        }
     }
 
     func notifyFolderQueueSync(folderURL: URL) {
@@ -528,7 +546,11 @@ final class LibraryStore {
         saveLibrary()
     }
 
-    func registerExportedCloudFolder(destinationURL: URL, from cloudRoot: LibraryRoot) async throws {
+    func registerExportedCloudFolder(
+        destinationURL: URL,
+        from cloudRoot: LibraryRoot,
+        mergeCloudRoot: Bool = false
+    ) async throws {
         let now = Date()
         let trimmedSource = cloudRoot.sourceURL?.trimmingCharacters(in: .whitespacesAndNewlines)
         let trackingInfo: CloudTrackingInfo? = {
@@ -547,6 +569,16 @@ final class LibraryStore {
                 downloadQualityID: cloudRoot.downloadQualityID
             )
         }()
+
+        let shouldMerge = mergeCloudRoot
+            && cloudRoot.kind.isCloud
+            && roots.contains(where: { $0.id == cloudRoot.id })
+        let cloudTracksSnapshot = shouldMerge ? tracks.filter { $0.rootID == cloudRoot.id } : []
+
+        let targetRootID: UUID
+        let targetRelPath: String
+        let folderName: String
+        var createdStandaloneRootID: UUID? = nil
 
         if let match = containingLocalRoot(for: destinationURL),
            let index = roots.firstIndex(where: { $0.id == match.root.id }) {
@@ -577,14 +609,178 @@ final class LibraryStore {
                 }
             }
             saveLibrary()
-            await rescan()
-            let folderName = relPath.isEmpty ? roots[index].name : destinationURL.lastPathComponent
-            onFolderAdded?(folderName, tracks(under: rootID, path: relPath).map(\.id))
-            return
+            await rescan(skippingCloudRootID: shouldMerge ? cloudRoot.id : nil)
+            targetRootID = rootID
+            targetRelPath = relPath
+            folderName = relPath.isEmpty ? (root(rootID)?.name ?? destinationURL.lastPathComponent) : destinationURL.lastPathComponent
+        } else {
+            try await addRoot(url: destinationURL, notifyFolderAdded: !shouldMerge, skippingCloudRootID: shouldMerge ? cloudRoot.id : nil)
+            attachCloudTracking(toFolderURL: destinationURL, from: cloudRoot)
+            guard let addedMatch = containingLocalRoot(for: destinationURL) else {
+                return
+            }
+            targetRootID = addedMatch.root.id
+            targetRelPath = LibraryRoot.normalizeFolderPath(addedMatch.relativePath)
+            folderName = addedMatch.root.name
+            if targetRelPath.isEmpty {
+                createdStandaloneRootID = addedMatch.root.id
+            }
         }
 
-        try await addRoot(url: destinationURL)
-        attachCloudTracking(toFolderURL: destinationURL, from: cloudRoot)
+        if shouldMerge {
+            let localTracks = tracks(under: targetRootID, path: targetRelPath)
+            let manifest = CloudExporter.loadManifest(in: destinationURL)
+            let trackIDMap = Self.buildMergedTrackIDMap(
+                cloudTracks: cloudTracksSnapshot,
+                localTracks: localTracks,
+                targetRelPath: targetRelPath,
+                manifest: manifest
+            )
+
+            let oldFolderKey = Self.folderKey(rootID: cloudRoot.id, path: "")
+            let newFolderKey = Self.folderKey(rootID: targetRootID, path: targetRelPath)
+            if oldFolderKey != newFolderKey, var oldOrder = folderOrders.removeValue(forKey: oldFolderKey) {
+                oldOrder.customTrackIDs = oldOrder.customTrackIDs.map { trackIDMap[$0] ?? $0 }
+                if folderOrders[newFolderKey] == nil {
+                    folderOrders[newFolderKey] = oldOrder
+                }
+            }
+
+            remapTrackIDs(trackIDMap)
+
+            driveCrawlTasks[cloudRoot.id]?.cancel()
+            driveCrawlTasks[cloudRoot.id] = nil
+            driveCrawlPriorities[cloudRoot.id] = nil
+            cloudSyncProgress[cloudRoot.id] = nil
+            knownDriveSubfolders[cloudRoot.id] = nil
+            let keyPrefix = "\(cloudRoot.id.uuidString)::"
+            for key in onDemandDriveFolderTasks.keys where key.hasPrefix(keyPrefix) {
+                onDemandDriveFolderTasks[key]?.cancel()
+                onDemandDriveFolderTasks[key] = nil
+            }
+            cloudSyncErrors[cloudRoot.id] = nil
+
+            let cloudOriginalIdx = roots.firstIndex(where: { $0.id == cloudRoot.id })
+            if let cloudOriginalIdx {
+                roots.remove(at: cloudOriginalIdx)
+            }
+            if let standaloneID = createdStandaloneRootID,
+               let cloudOriginalIdx,
+               let currentStandaloneIdx = roots.firstIndex(where: { $0.id == standaloneID }) {
+                let standaloneRoot = roots.remove(at: currentStandaloneIdx)
+                let insertIdx = min(cloudOriginalIdx, roots.count)
+                roots.insert(standaloneRoot, at: insertIdx)
+            }
+
+            let unmappedIDs = Set(cloudTracksSnapshot.map(\.id)).subtracting(trackIDMap.keys)
+            let remainingTracks = tracks.filter { $0.rootID != cloudRoot.id }
+            publish(remainingTracks)
+            if !unmappedIDs.isEmpty {
+                forget(unmappedIDs)
+            }
+            mergedFolderRedirects[cloudRoot.id] = FolderRef(root: targetRootID, path: targetRelPath)
+            onFolderAdded?(folderName, tracks(under: targetRootID, path: targetRelPath).map(\.id))
+        } else if createdStandaloneRootID == nil {
+            onFolderAdded?(folderName, tracks(under: targetRootID, path: targetRelPath).map(\.id))
+        }
+    }
+
+    private static func normalizedTrackMatchKey(_ raw: String) -> String {
+        raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .precomposedStringWithCanonicalMapping
+            .lowercased()
+            .components(separatedBy: .whitespacesAndNewlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private static func buildMergedTrackIDMap(
+        cloudTracks: [Track],
+        localTracks: [Track],
+        targetRelPath: String,
+        manifest: CloudFolderManifest?
+    ) -> [String: String] {
+        guard !cloudTracks.isEmpty, !localTracks.isEmpty else { return [:] }
+
+        func relativeInDestination(for localTrack: Track) -> String {
+            guard !targetRelPath.isEmpty else { return localTrack.relativePath }
+            let prefix = targetRelPath + "/"
+            if localTrack.relativePath.hasPrefix(prefix) {
+                return String(localTrack.relativePath.dropFirst(prefix.count))
+            }
+            return localTrack.fileName
+        }
+
+        var byRelExact: [String: Track] = [:]
+        var byRelLower: [String: Track] = [:]
+        var byFileLower: [String: Track] = [:]
+        var byStem: [String: [Track]] = [:]
+        var byTitleArtist: [String: [Track]] = [:]
+
+        for lt in localTracks {
+            let rel = relativeInDestination(for: lt)
+            if byRelExact[rel] == nil { byRelExact[rel] = lt }
+            let relLower = rel.lowercased()
+            if byRelLower[relLower] == nil { byRelLower[relLower] = lt }
+            let fileLower = lt.fileName.lowercased()
+            if byFileLower[fileLower] == nil { byFileLower[fileLower] = lt }
+            let stem = normalizedTrackMatchKey((lt.fileName as NSString).deletingPathExtension)
+            if !stem.isEmpty { byStem[stem, default: []].append(lt) }
+            let taKey = "\(normalizedTrackMatchKey(lt.title))\u{1F}\(normalizedTrackMatchKey(lt.artist))"
+            byTitleArtist[taKey, default: []].append(lt)
+        }
+
+        var map: [String: String] = [:]
+        var claimedLocalIDs: Set<String> = []
+
+        func claim(_ candidate: Track?) -> Track? {
+            guard let candidate, !claimedLocalIDs.contains(candidate.id) else { return nil }
+            claimedLocalIDs.insert(candidate.id)
+            return candidate
+        }
+
+        for cloudTrack in cloudTracks {
+            var matched: Track? = nil
+
+            if let manifest {
+                let keys = [cloudTrack.remoteTrackID, cloudTrack.relativePath].compactMap { $0 }
+                for key in keys where !key.isEmpty {
+                    if let fileName = manifest.tracks[key] {
+                        let cleanName = LibraryRoot.normalizeFolderPath(fileName)
+                        matched = claim(byRelExact[cleanName])
+                            ?? claim(byRelLower[cleanName.lowercased()])
+                            ?? claim(byFileLower[(cleanName as NSString).lastPathComponent.lowercased()])
+                        if matched != nil { break }
+                    }
+                }
+            }
+
+            if matched == nil {
+                let sanitizedTitleStem = normalizedTrackMatchKey(
+                    CloudExporter.sanitizeFileName(cloudTrack.title, fallback: cloudTrack.remoteTrackID ?? "")
+                )
+                let rawFileStem = normalizedTrackMatchKey((cloudTrack.fileName as NSString).deletingPathExtension)
+                for stem in [sanitizedTitleStem, rawFileStem] where !stem.isEmpty {
+                    if let hit = byStem[stem]?.first(where: { !claimedLocalIDs.contains($0.id) }) {
+                        matched = claim(hit)
+                        break
+                    }
+                }
+            }
+
+            if matched == nil {
+                let taKey = "\(normalizedTrackMatchKey(cloudTrack.title))\u{1F}\(normalizedTrackMatchKey(cloudTrack.artist))"
+                if let hit = byTitleArtist[taKey]?.first(where: { !claimedLocalIDs.contains($0.id) }) {
+                    matched = claim(hit)
+                }
+            }
+
+            if let matched, cloudTrack.id != matched.id {
+                map[cloudTrack.id] = matched.id
+            }
+        }
+
+        return map
     }
 
     func cloudTracking(rootID: UUID, path: String) -> CloudTrackingInfo? {
@@ -610,7 +806,7 @@ final class LibraryStore {
             return CloudTrackingInfo(
                 sourceURL: src,
                 remoteID: root.remoteID,
-                cloudKind: root.linkedCloudKind ?? .cloudYouTube,
+                cloudKind: root.linkedCloudKind ?? .cloudExtension,
                 cookie: root.cookie,
                 lastSynced: root.lastSynced,
                 providerID: root.effectiveProviderID,
@@ -1383,6 +1579,10 @@ final class LibraryStore {
     /// Brings the index up to date with the folders. If a scan is already running, this asks it
     /// to run once more (so a folder added meanwhile is not missed) and waits for it.
     func rescan() async {
+        await rescan(skippingCloudRootID: nil)
+    }
+
+    private func rescan(skippingCloudRootID: UUID?) async {
         if isScanning {
             rescanRequested = true
             while isScanning { try? await Task.sleep(nanoseconds: 50_000_000) }
@@ -1391,7 +1591,7 @@ final class LibraryStore {
         isScanning = true
         repeat {
             rescanRequested = false
-            await scanOnce()
+            await scanOnce(skippingCloudRootID: skippingCloudRootID)
         } while rescanRequested
         isScanning = false
     }
@@ -1400,7 +1600,7 @@ final class LibraryStore {
         list.sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
 
-    private func scanOnce() async {
+    private func scanOnce(skippingCloudRootID: UUID? = nil) async {
         scanProgress = (0, 0)
 
         // Roots that were unreachable (unplugged drive, moved folder) may be back.
@@ -1431,7 +1631,12 @@ final class LibraryStore {
 
         for root in roots {
             let existingTracks = tracks.filter { $0.rootID == root.id }
-            if root.kind == .cloudExtension, cloudExtensionAvailability(for: root) != .available {
+            if let skippingCloudRootID, root.id == skippingCloudRootID {
+                kept.append(contentsOf: existingTracks)
+                continue
+            }
+            if (root.kind == .cloudExtension || root.kind.isLegacyExtensionBacked),
+               cloudExtensionAvailability(for: root) != .available {
                 // Non-destructive: keep tracks, playlists, stats, and cached audio intact while disabled or missing.
                 cloudSyncErrors[root.id] = nil
                 kept.append(contentsOf: existingTracks)
@@ -1925,6 +2130,7 @@ final class LibraryStore {
     private func remapTrackIDs(_ map: [String: String]) {
         guard !map.isEmpty else { return }
         var playlistsChanged = false
+        var libraryChanged = false
         for idx in playlists.indices {
             let updated = playlists[idx].trackIDs.map { map[$0] ?? $0 }
             if updated != playlists[idx].trackIDs {
@@ -1948,14 +2154,21 @@ final class LibraryStore {
         for (oldID, newID) in map where oldID != newID {
             if let ov = metadataOverrides.removeValue(forKey: oldID), metadataOverrides[newID] == nil {
                 metadataOverrides[newID] = ov
+                libraryChanged = true
             }
         }
         for key in folderOrders.keys {
-            if let updated = folderOrders[key]?.customTrackIDs.map({ map[$0] ?? $0 }) {
-                folderOrders[key]?.customTrackIDs = updated
+            if let existing = folderOrders[key]?.customTrackIDs {
+                let updated = existing.map { map[$0] ?? $0 }
+                if updated != existing {
+                    folderOrders[key]?.customTrackIDs = updated
+                    libraryChanged = true
+                }
             }
         }
         if playlistsChanged { savePlaylists() }
+        if libraryChanged { saveLibrary() }
+        onTracksRemapped?(map)
     }
 
     private func publish(_ list: [Track]) {
@@ -2198,10 +2411,7 @@ final class LibraryStore {
 
     private static let defaultArtworkDownload: @Sendable (URL) async -> Data? = { url in
         var req = URLRequest(url: url, timeoutInterval: 10)
-        req.setValue(YouTubeClient.webUserAgent, forHTTPHeaderField: "User-Agent")
-        if url.host?.lowercased().contains("hdslb.com") == true {
-            req.setValue(BilibiliClient.referer, forHTTPHeaderField: "Referer")
-        }
+        CloudProviderRegistry.shared.configureArtworkRequest(&req)
         guard let (data, response) = try? await URLSession.shared.data(for: req),
               let http = response as? HTTPURLResponse,
               (200..<300).contains(http.statusCode),

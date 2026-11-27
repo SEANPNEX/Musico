@@ -66,6 +66,33 @@ final class PlayHistoryStore {
         save()
     }
 
+    func remapTracks(_ map: [String: String]) {
+        guard !map.isEmpty else { return }
+        var changed = false
+        var pending: [(newID: String, entry: Entry)] = []
+        for (oldID, newID) in map where oldID != newID {
+            if let oldEntry = entries.removeValue(forKey: oldID) {
+                changed = true
+                if !Self.isEphemeralTrackID(newID) {
+                    pending.append((newID, oldEntry))
+                }
+            }
+        }
+        for (newID, entry) in pending {
+            if let existing = entries[newID] {
+                entries[newID] = Entry(
+                    count: existing.count + entry.count,
+                    lastPlayed: max(existing.lastPlayed, entry.lastPlayed)
+                )
+            } else {
+                entries[newID] = entry
+            }
+        }
+        if changed {
+            save()
+        }
+    }
+
     func count(for id: String) -> Int { entries[id]?.count ?? 0 }
     func lastPlayed(for id: String) -> Date? { entries[id]?.lastPlayed }
 

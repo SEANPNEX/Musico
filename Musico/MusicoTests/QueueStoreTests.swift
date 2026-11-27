@@ -133,4 +133,25 @@ final class QueueStoreTests: XCTestCase {
         reloaded.toggleSidePanel(.queue)
         XCTAssertNil(reloaded.sidePanel)
     }
+
+    func testRemapTracksUpdatesAllQueuesPreservingOrderAndCurrentIndex() {
+        let store = QueueStore(directory: dir)
+        store.updateActive {
+            $0.replace(with: ["c1", "c2", "keep"], startAt: 1)
+            $0.position = 42
+        }
+        let second = store.addQueue(name: "Secondary", trackIDs: ["c2", "c1"], startAt: 0)
+
+        store.remapTracks(["c1": "l1", "c2": "l2"])
+
+        XCTAssertEqual(store.active.trackIDs, ["l1", "l2", "keep"])
+        XCTAssertEqual(store.active.currentIndex, 1)
+        XCTAssertEqual(store.active.currentTrackID, "l2")
+        XCTAssertEqual(store.active.position, 42)
+        XCTAssertEqual(store.queues.first { $0.id == second }?.trackIDs, ["l2", "l1"])
+
+        let reloaded = QueueStore(directory: dir)
+        XCTAssertEqual(reloaded.active.trackIDs, ["l1", "l2", "keep"])
+        XCTAssertEqual(reloaded.queues.first { $0.id == second }?.trackIDs, ["l2", "l1"])
+    }
 }

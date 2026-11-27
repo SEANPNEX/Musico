@@ -126,7 +126,9 @@ final class LocalizationTests: XCTestCase {
 
         XCTAssertEqual(LibraryError.duplicateRoot.errorDescription, "该位置已在你的资料库中。")
         XCTAssertEqual(LyricsError.unreadable.errorDescription, "无法将该文件读取为歌词文本。")
-        XCTAssertEqual(CloudSourceError.invalidURL.errorDescription, "请输入有效的 YouTube、Bilibili 或 Google Drive 链接。")
+        XCTAssertEqual(CloudSourceError.invalidURL.errorDescription, "请输入有效的 Google Drive 链接，或已安装扩展支持的链接。")
+        XCTAssertEqual(CloudSourceError.unsupportedSource.errorDescription, "Google Drive 或当前已启用的扩展均不支持该链接。")
+        XCTAssertEqual(LibraryError.invalidCloudURL.errorDescription, "请输入有效的 Google Drive 链接，或已安装扩展支持的链接。")
         XCTAssertEqual(CloudSourceError.rateLimited.errorDescription, "云端来源请求过于频繁，请稍后再试。")
         XCTAssertEqual(CloudSourceError.permissionDenied(host: "evil.test").errorDescription, "已拒绝扩展访问未授权的主机“evil.test”。")
         XCTAssertEqual(CloudSourceError.extensionUnavailable(name: "Demo").errorDescription, "扩展“Demo”已停用或未安装。")

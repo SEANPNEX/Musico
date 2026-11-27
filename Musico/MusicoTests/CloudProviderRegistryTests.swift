@@ -434,4 +434,136 @@ final class CloudProviderRegistryTests: XCTestCase {
         XCTAssertEqual(store.cloudExtensionAvailability(for: alphaRoot), .available)
         XCTAssertTrue(store.isAvailable(alphaRoot))
     }
+
+    func testBareRegistryExcludesYouTubeAndBilibiliAndResolvesLegacyRootsViaExtensions() async throws {
+        let registry = CloudProviderRegistry()
+        XCTAssertEqual(registry.allProviders().map(\.id), [BuiltInProviderID.googleDrive])
+        XCTAssertNil(registry.provider(forID: BuiltInProviderID.youtube))
+        XCTAssertNil(registry.provider(forID: BuiltInProviderID.bilibili))
+        XCTAssertNotNil(registry.provider(forID: BuiltInProviderID.googleDrive))
+
+        let ytRoot = LibraryRoot(
+            id: UUID(),
+            name: "Legacy YT",
+            kind: .cloudYouTube,
+            bookmark: nil,
+            sourceURL: "https://music.youtube.com/playlist?list=PLlegacy",
+            remoteID: "PLlegacy"
+        )
+        let biliRoot = LibraryRoot(
+            id: UUID(),
+            name: "Legacy Bili",
+            kind: .cloudBilibili,
+            bookmark: nil,
+            sourceURL: "https://www.bilibili.com/video/BV1xx411c7mD",
+            remoteID: "BV1xx411c7mD"
+        )
+        let driveRoot = LibraryRoot(
+            id: UUID(),
+            name: "Drive",
+            kind: .cloudGoogleDrive,
+            bookmark: nil,
+            sourceURL: "https://drive.google.com/drive/folders/fld1",
+            remoteID: "fld1"
+        )
+        let ytTrack = Track(
+            id: "yt-1",
+            rootID: ytRoot.id,
+            relativePath: "vid1",
+            title: "YT",
+            artist: "Art",
+            album: "Alb",
+            albumArtist: "Art",
+            duration: 10,
+            fileSize: 0,
+            modified: Date(),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(),
+            cloudSource: "youtube",
+            remoteTrackID: "vid1"
+        )
+        let biliTrack = Track(
+            id: "bili-1",
+            rootID: biliRoot.id,
+            relativePath: "BV1xx411c7mD",
+            title: "Bili",
+            artist: "Art",
+            album: "Alb",
+            albumArtist: "Art",
+            duration: 10,
+            fileSize: 0,
+            modified: Date(),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(),
+            cloudSource: "bilibili",
+            remoteTrackID: "BV1xx411c7mD#1"
+        )
+
+        // Without installed plugins, legacy YouTube/Bilibili resolve to nil while Google Drive still resolves.
+        XCTAssertNil(registry.provider(forRoot: ytRoot))
+        XCTAssertNil(registry.provider(forRoot: biliRoot))
+        XCTAssertNil(registry.provider(forTrack: ytTrack, root: ytRoot))
+        XCTAssertNil(registry.provider(forTrack: biliTrack, root: biliRoot))
+        XCTAssertNil(registry.providerForKind(.cloudYouTube, providerID: BuiltInProviderID.youtube, sourceURL: ytRoot.sourceURL))
+        XCTAssertNil(registry.providerForKind(.cloudBilibili, providerID: BuiltInProviderID.bilibili, sourceURL: biliRoot.sourceURL))
+        XCTAssertEqual(registry.provider(forRoot: driveRoot)?.id, BuiltInProviderID.googleDrive)
+
+        // Installing YouTube and Bilibili JS extensions seamlessly backs legacy roots and tracks.
+        let ytExt = StubExtensionProvider(
+            id: "ext.youtube-search",
+            displayName: "YouTube Search",
+            urlPrefix: "youtube.com"
+        )
+        let biliExt = StubExtensionProvider(
+            id: "ext.bilibili-search",
+            displayName: "Bilibili Search",
+            urlPrefix: "bilibili.com"
+        )
+        registry.registerExtension(ytExt)
+        registry.registerExtension(biliExt)
+
+        XCTAssertEqual(registry.provider(forRoot: ytRoot)?.id, "ext.youtube-search")
+        XCTAssertEqual(registry.provider(forRoot: biliRoot)?.id, "ext.bilibili-search")
+        XCTAssertEqual(registry.provider(forTrack: ytTrack, root: ytRoot)?.id, "ext.youtube-search")
+        XCTAssertEqual(registry.provider(forTrack: biliTrack, root: biliRoot)?.id, "ext.bilibili-search")
+        XCTAssertEqual(registry.providerForKind(.cloudYouTube, providerID: nil, sourceURL: ytRoot.sourceURL)?.id, "ext.youtube-search")
+        XCTAssertEqual(registry.providerForKind(.cloudBilibili, providerID: BuiltInProviderID.bilibili, sourceURL: nil)?.id, "ext.bilibili-search")
+    }
+}
+
+private struct StubExtensionProvider: CloudSourceProvider {
+    let id: String
+    let displayName: String
+    let urlPrefix: String
+    var badgeLabel: String { displayName }
+    var rootKind: LibraryRoot.Kind { .cloudExtension }
+    var trackCloudSource: String { id }
+    var supportsTree: Bool { false }
+    var supportsCookie: Bool { true }
+
+    func canHandle(rawText: String, extractedURL: String) -> CloudMatchResult? {
+        let candidate = extractedURL.isEmpty ? rawText : extractedURL
+        guard candidate.lowercased().contains(urlPrefix) else { return nil }
+        return CloudMatchResult(
+            providerID: id,
+            kind: .cloudExtension,
+            extractedURL: candidate,
+            normalizedURL: candidate,
+            remoteID: "stub",
+            itemKind: "playlist"
+        )
+    }
+
+    func fetchCollection(sourceURL: String, cookie: String?) async throws -> CloudPlaylistResult {
+        CloudPlaylistResult(kind: .cloudExtension, remoteID: "stub", title: displayName, tracks: [], providerID: id)
+    }
+
+    func resolveStream(track: Track, root: LibraryRoot?, forceRefresh: Bool) async throws -> CloudStreamResult {
+        CloudStreamResult(
+            url: URL(string: "https://cdn.example/\(track.remoteTrackID ?? "x").m4a")!,
+            headers: [:],
+            fileExtension: "m4a",
+            expiresAt: Date().addingTimeInterval(600)
+        )
+    }
 }

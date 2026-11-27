@@ -12,6 +12,7 @@ final class AppNavigation {
     static let sidePanelStorageKey = "appNavigation.sidePanel"
 
     var selectedTab: AppTab = .queues
+    var foldersPath = NavigationPath()
     var librarySection: LibraryView.Section = .songs
     var libraryPath = NavigationPath()
     var sidebarSelection: SidebarItem? {

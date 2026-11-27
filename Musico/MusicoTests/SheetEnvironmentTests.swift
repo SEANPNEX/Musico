@@ -178,10 +178,10 @@ final class SheetEnvironmentTests: XCTestCase {
         let cloudRoot = LibraryRoot(
             id: UUID(),
             name: "Cloud Mix",
-            kind: .cloudYouTube,
+            kind: .cloudGoogleDrive,
             bookmark: nil,
-            sourceURL: "https://music.youtube.com/playlist?list=PL123",
-            remoteID: "PL123"
+            sourceURL: "https://drive.google.com/drive/folders/fld123",
+            remoteID: "fld123"
         )
         try await present(AddCloudFolderSheet(), over: false, attachEmptyHostEnvironment: true)
         try await present(SaveCloudPlaylistSheet(root: cloudRoot), over: false, attachEmptyHostEnvironment: true)

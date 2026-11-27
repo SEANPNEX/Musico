@@ -147,4 +147,17 @@ final class QueueStore {
         }
         saveAndNotify()
     }
+
+    func remapTracks(_ map: [String: String]) {
+        guard !map.isEmpty else { return }
+        var changed = false
+        for index in queues.indices {
+            if queues[index].remapTracks(map) {
+                changed = true
+            }
+        }
+        if changed {
+            saveAndNotify()
+        }
+    }
 }

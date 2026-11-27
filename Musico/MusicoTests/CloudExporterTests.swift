@@ -453,18 +453,17 @@ final class CloudExporterTests: XCTestCase {
 
     @MainActor
     func testCoverArtResolutionEmbeddingAndWebMSidecarAcrossExportPaths() async throws {
-        // 1. Magic-byte MIME detection & Bilibili CDN Referer
+        // 1. Magic-byte MIME detection & generic/provider-configured artwork headers
         let png = Self.makeImageData(color: .systemRed, png: true)
         let jpg = Self.makeImageData(color: .systemBlue, png: false)
         let webpHeader = Data([0x52, 0x49, 0x46, 0x46, 0x00, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50])
         XCTAssertEqual(CloudThumbnailCache.detectedMIMEType(for: png), "image/png")
         XCTAssertEqual(CloudThumbnailCache.detectedMIMEType(for: jpg), "image/jpeg")
         XCTAssertEqual(CloudThumbnailCache.detectedMIMEType(for: webpHeader), "image/webp")
-        XCTAssertEqual(
-            CloudThumbnailCache.referer(for: URL(string: "https://i0.hdslb.com/bfs/archive/cover.jpg")!),
-            "https://www.bilibili.com/"
-        )
-        XCTAssertNil(CloudThumbnailCache.referer(for: URL(string: "https://i.ytimg.com/vi/abc/hqdefault.jpg")!))
+        var artworkReq = URLRequest(url: URL(string: "https://cdn.example.com/cover.jpg")!)
+        CloudProviderRegistry().configureArtworkRequest(&artworkReq)
+        XCTAssertEqual(artworkReq.value(forHTTPHeaderField: "User-Agent"), CloudProviderRegistry.defaultUserAgent)
+        XCTAssertNil(artworkReq.value(forHTTPHeaderField: "Referer"))
 
         // 2. Disk ArtworkCache fallback + remote fetch fallback
         let artworkCache = ArtworkCache(directory: makeTempDir())
