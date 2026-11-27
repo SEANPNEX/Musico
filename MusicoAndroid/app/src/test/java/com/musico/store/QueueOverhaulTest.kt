@@ -247,4 +247,38 @@ class QueueOverhaulTest {
         assertEquals(listOf(ids[0]), custom.trackIds)
         assertNotEquals(customId, queueStore.state.value.activeId)
     }
+
+    @Test
+    fun removeFromQueueWithUndoAndRestoreToQueuePreservesPositionAndPlayState() {
+        val ids = seedTracks("Alpha", "Beta", "Gamma")
+        val qId = queueStore.state.value.activeId
+        controller.play(ids, startAt = 1)
+        controller.seek(33.0)
+        assertEquals(ids[1], controller.state.value.currentTrack?.id)
+
+        // Removing non-current track does not reload playback and restores cleanly.
+        val loadsBeforeNonCurrent = engine.loadCalls
+        val nonCurrentEntry = controller.removeFromQueueWithUndo(index = 2, queueId = qId)!!
+        assertFalse(nonCurrentEntry.wasCurrent)
+        assertEquals(listOf(ids[0], ids[1]), queueStore.active.trackIds)
+        assertEquals(loadsBeforeNonCurrent, engine.loadCalls)
+
+        controller.restoreToQueue(nonCurrentEntry)
+        assertEquals(ids, queueStore.active.trackIds)
+        assertEquals(ids[1], controller.state.value.currentTrack?.id)
+        assertEquals(loadsBeforeNonCurrent, engine.loadCalls)
+
+        // Removing current track advances playback and captures position/play state; undo restores it.
+        val currentEntry = controller.removeFromQueueWithUndo(index = 1, queueId = qId)!!
+        assertTrue(currentEntry.wasCurrent)
+        assertTrue(currentEntry.wasPlaying)
+        assertEquals(33.0, currentEntry.positionSec, 0.0001)
+        assertEquals(ids[2], controller.state.value.currentTrack?.id)
+
+        controller.restoreToQueue(currentEntry)
+        assertEquals(ids, queueStore.active.trackIds)
+        assertEquals(ids[1], controller.state.value.currentTrack?.id)
+        assertEquals(33.0, controller.state.value.currentTimeSec, 0.0001)
+        assertTrue(controller.state.value.isPlaying)
+    }
 }

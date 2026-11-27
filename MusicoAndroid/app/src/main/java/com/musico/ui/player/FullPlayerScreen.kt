@@ -73,7 +73,6 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
@@ -122,6 +121,7 @@ import com.musico.ui.LocalSnackbarHost
 import com.musico.ui.components.ArtworkImage
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.LocalThumbnailCache
+import com.musico.ui.components.MusicoSnackbarHost
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.screens.QueueSheet
 import com.musico.ui.screens.QueuesContent
@@ -329,7 +329,15 @@ fun FullPlayerScreen(
                                         index = index,
                                         count = PlayerSidePane.entries.size
                                     ),
-                                    label = { Text(pane.label(strings)) }
+                                    icon = {},
+                                    label = {
+                                        Text(
+                                            text = pane.label(strings),
+                                            maxLines = 1,
+                                            softWrap = false,
+                                            overflow = TextOverflow.Ellipsis,
+                                        )
+                                    }
                                 )
                             }
                         }
@@ -387,7 +395,7 @@ fun FullPlayerScreen(
             }
         }
             if (snackbarHostState != null) {
-                SnackbarHost(
+                MusicoSnackbarHost(
                     hostState = snackbarHostState,
                     modifier = Modifier
                         .align(Alignment.BottomCenter)

@@ -40,6 +40,7 @@ import androidx.compose.material.icons.rounded.CloudDownload
 import androidx.compose.material.icons.rounded.CloudQueue
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.Delete
+import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Extension
@@ -77,14 +78,11 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
-import androidx.compose.material3.SwipeToDismissBox
-import androidx.compose.material3.SwipeToDismissBoxValue
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.material3.rememberModalBottomSheetState
-import androidx.compose.material3.rememberSwipeToDismissBoxState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -138,8 +136,10 @@ import com.musico.ui.components.CloudTransferProgressSection
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.LocalDeleteOptionsDialog
+import com.musico.ui.components.MusicoSwipeActionRow
 import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.SortOrderMenuButton
+import com.musico.ui.components.SwipeActionConfig
 import com.musico.ui.components.TrackActionState
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
@@ -2355,41 +2355,16 @@ private fun FolderRootList(
 
             Column(modifier = Modifier.animateItem()) {
                 if (isRemovable) {
-                    val dismissState = rememberSwipeToDismissBoxState(
-                        confirmValueChange = { value ->
-                            if (value == SwipeToDismissBoxValue.EndToStart) {
-                                onRequestRemove(root)
-                            }
-                            false
-                        }
-                    )
-                    SwipeToDismissBox(
-                        state = dismissState,
-                        enableDismissFromStartToEnd = false,
-                        backgroundContent = {
-                            val isSwipingEndToStart = dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .background(
-                                        if (isSwipingEndToStart) {
-                                            MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
-                                        } else {
-                                            Color.Transparent
-                                        }
-                                    )
-                                    .padding(horizontal = 20.dp),
-                                contentAlignment = Alignment.CenterEnd
-                            ) {
-                                if (isSwipingEndToStart) {
-                                    Icon(
-                                        imageVector = Icons.Rounded.Delete,
-                                        contentDescription = strings.removeFolder,
-                                        tint = MaterialTheme.colorScheme.error
-                                    )
-                                }
-                            }
-                        }
+                    MusicoSwipeActionRow(
+                        endAction = SwipeActionConfig(
+                            label = strings.remove,
+                            icon = Icons.Rounded.DeleteOutline,
+                            isDestructive = true,
+                            thresholdFraction = 0.44f,
+                            minThresholdDp = 140.dp,
+                            maxThresholdDp = 200.dp,
+                            onTrigger = { onRequestRemove(root) },
+                        )
                     ) {
                         val bestRecoveryProvider = if (!available && root.kind == RootKind.CLOUD_EXTENSION) {
                             libraryStore.bestCompatibleProviderForRoot(root)
@@ -2969,43 +2944,18 @@ private fun FolderDetailContent(
                 root?.takeIf { !it.kind.isCloud }?.trackingFor(childPath)
             }
             var menuExpanded by remember { mutableStateOf(false) }
-            val dismissState = rememberSwipeToDismissBoxState(
-                confirmValueChange = { value ->
-                    if (value == SwipeToDismissBoxValue.EndToStart) {
-                        onRequestRemoveSubfolder(childRef)
-                    }
-                    false
-                }
-            )
 
             Box(modifier = Modifier.animateItem()) {
-                SwipeToDismissBox(
-                    state = dismissState,
-                    enableDismissFromStartToEnd = false,
-                    backgroundContent = {
-                        val isSwipingEndToStart = dismissState.dismissDirection == SwipeToDismissBoxValue.EndToStart
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    if (isSwipingEndToStart) {
-                                        MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.55f)
-                                    } else {
-                                        Color.Transparent
-                                    }
-                                )
-                                .padding(horizontal = 20.dp),
-                            contentAlignment = Alignment.CenterEnd
-                        ) {
-                            if (isSwipingEndToStart) {
-                                Icon(
-                                    imageVector = Icons.Rounded.Delete,
-                                    contentDescription = strings.removeFolder,
-                                    tint = MaterialTheme.colorScheme.error
-                                )
-                            }
-                        }
-                    }
+                MusicoSwipeActionRow(
+                    endAction = SwipeActionConfig(
+                        label = strings.remove,
+                        icon = Icons.Rounded.DeleteOutline,
+                        isDestructive = true,
+                        thresholdFraction = 0.44f,
+                        minThresholdDp = 140.dp,
+                        maxThresholdDp = 200.dp,
+                        onTrigger = { onRequestRemoveSubfolder(childRef) },
+                    )
                 ) {
                     ListItem(
                         modifier = Modifier.clickable { onNavigate(childRef) },
@@ -3145,6 +3095,7 @@ private fun FolderDetailContent(
                 },
                 modifier = rowModifier,
                 dragHandleModifier = Modifier.dragHandle(dragState, dragItem.uid),
+                swipeEnabled = !isDragged,
                 menuContent = { onDismiss ->
                     TrackMenuItems(
                         ids = listOf(track.id),

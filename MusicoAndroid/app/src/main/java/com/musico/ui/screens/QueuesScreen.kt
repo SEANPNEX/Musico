@@ -56,7 +56,6 @@ import androidx.compose.material3.ListItemDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -90,9 +89,11 @@ import com.musico.ui.LocalShowMessage
 import com.musico.ui.LocalSnackbarHost
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.EmptyState
+import com.musico.ui.components.MusicoSnackbarHost
 import com.musico.ui.components.SortOrderMenuButton
 import com.musico.ui.components.TextInputDialog
 import com.musico.ui.components.TrackActionState
+import com.musico.ui.components.TrackEndSwipeBehavior
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
 import com.musico.ui.components.dragHandle
@@ -267,7 +268,7 @@ fun QueueSheet(
                 )
             }
             if (snackbarHostState != null) {
-                SnackbarHost(
+                MusicoSnackbarHost(
                     hostState = snackbarHostState,
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )
@@ -315,6 +316,19 @@ fun QueuesContent(
     var showQueueSwitcher by remember { mutableStateOf(false) }
 
     val viewed = queueState.viewed
+    val removeQueueTrackWithUndo: (Int) -> Unit = { removeIndex ->
+        val entry = playerController.removeFromQueueWithUndo(
+            index = removeIndex,
+            queueId = viewed.id,
+        )
+        if (entry != null) {
+            showMessage(
+                message = strings.removedFromQueueNotice,
+                actionLabel = strings.undo,
+                onAction = { playerController.restoreToQueue(entry) },
+            )
+        }
+    }
     val isViewingPlayingQueue = viewed.id == queueState.activeId
     val viewedSummary = queueSummaryText(
         queue = viewed,
@@ -599,6 +613,14 @@ fun QueuesContent(
                             onClick = { playerController.playTrack(inQueue = viewed.id, index = index) },
                             modifier = rowModifier,
                             dragHandleModifier = Modifier.dragHandle(dragState, dragItem.uid),
+                            swipeEnabled = !editing && !isDragged,
+                            endSwipeBehavior = TrackEndSwipeBehavior.Custom(
+                                label = strings.remove,
+                                icon = Icons.Rounded.DeleteOutline,
+                                thresholdFraction = 0.40f,
+                                minThresholdDp = 130.dp,
+                                onTrigger = { removeQueueTrackWithUndo(index) },
+                            ),
                             trailingActions = if (editing) {
                                 {
                                     Row(verticalAlignment = Alignment.CenterVertically) {
@@ -627,12 +649,7 @@ fun QueuesContent(
                                             Icon(Icons.Rounded.KeyboardArrowDown, contentDescription = strings.moveDown)
                                         }
                                         IconButton(
-                                            onClick = {
-                                                playerController.removeFromQueue(
-                                                    index = index,
-                                                    queueId = viewed.id,
-                                                )
-                                            }
+                                            onClick = { removeQueueTrackWithUndo(index) }
                                         ) {
                                             Icon(
                                                 Icons.Rounded.DeleteOutline,
@@ -667,10 +684,7 @@ fun QueuesContent(
                                         },
                                         onClick = {
                                             onDismiss()
-                                            playerController.removeFromQueue(
-                                                index = index,
-                                                queueId = viewed.id,
-                                            )
+                                            removeQueueTrackWithUndo(index)
                                         }
                                     )
                                 }
@@ -688,12 +702,7 @@ fun QueuesContent(
                             },
                             trailingContent = {
                                 IconButton(
-                                    onClick = {
-                                        playerController.removeFromQueue(
-                                            index = index,
-                                            queueId = viewed.id,
-                                        )
-                                    }
+                                    onClick = { removeQueueTrackWithUndo(index) }
                                 ) {
                                     Icon(Icons.Rounded.DeleteOutline, contentDescription = strings.remove)
                                 }

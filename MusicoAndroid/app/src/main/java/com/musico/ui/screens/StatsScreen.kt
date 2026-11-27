@@ -245,10 +245,12 @@ fun StatsScreen(
                                 index = index,
                                 count = StatsSection.entries.size
                             ),
+                            icon = {},
                             label = {
                                 Text(
                                     text = item.label(strings),
                                     maxLines = 1,
+                                    softWrap = false,
                                     overflow = TextOverflow.Ellipsis
                                 )
                             }

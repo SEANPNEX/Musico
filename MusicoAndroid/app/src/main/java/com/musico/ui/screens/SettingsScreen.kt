@@ -416,10 +416,12 @@ fun SettingsScreen(
                                             index = index,
                                             count = AppThemeMode.entries.size,
                                         ),
+                                        icon = {},
                                         label = {
                                             Text(
                                                 text = strings.themeModeLabel(mode),
                                                 maxLines = 1,
+                                                softWrap = false,
                                                 overflow = TextOverflow.Ellipsis,
                                             )
                                         },

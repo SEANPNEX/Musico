@@ -684,6 +684,8 @@ interface AppStrings {
     val deletedFromDeviceNotice: String
     val clearedQueueNotice: String
     val removedFromPlaylistNotice: String
+    val removedFromQueueNotice: String
+    val removedFromFavouritesNotice: String
     val appearancePreviewLabel: String
     val previewTrackTitle: String
     val previewTrackArtist: String
@@ -1397,6 +1399,8 @@ object EnStrings : AppStrings {
     override val deletedFromDeviceNotice = "Deleted from Device"
     override val clearedQueueNotice = "Cleared queue"
     override val removedFromPlaylistNotice = "Removed from playlist"
+    override val removedFromQueueNotice = "Removed from queue"
+    override val removedFromFavouritesNotice = "Removed from favourites"
     override val appearancePreviewLabel = "Preview"
     override val previewTrackTitle = "Midnight Reverie"
     override val previewTrackArtist = "Musico Studio"
@@ -2086,6 +2090,8 @@ object ZhHansStrings : AppStrings {
     override val deletedFromDeviceNotice = "已从设备删除"
     override val clearedQueueNotice = "已清空队列"
     override val removedFromPlaylistNotice = "已从歌单移除"
+    override val removedFromQueueNotice = "已从队列移除"
+    override val removedFromFavouritesNotice = "已取消收藏"
     override val appearancePreviewLabel = "效果预览"
     override val previewTrackTitle = "午夜遐想"
     override val previewTrackArtist = "Musico 工作室"

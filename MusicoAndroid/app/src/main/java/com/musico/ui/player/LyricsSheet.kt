@@ -48,7 +48,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -93,6 +92,7 @@ import com.musico.model.LyricsSource
 import com.musico.store.LibraryStore
 import com.musico.ui.LocalShowMessage
 import com.musico.ui.LocalSnackbarHost
+import com.musico.ui.components.MusicoSnackbarHost
 import com.musico.ui.components.EmptyState
 import com.musico.ui.theme.AppearanceSettings
 import com.musico.ui.theme.LocalReduceMotion
@@ -143,7 +143,7 @@ fun LyricsSheet(
                 modifier = Modifier.fillMaxWidth()
             )
             if (snackbarHostState != null) {
-                SnackbarHost(
+                MusicoSnackbarHost(
                     hostState = snackbarHostState,
                     modifier = Modifier.align(Alignment.BottomCenter),
                 )

@@ -235,4 +235,118 @@ class PlayQueueTest {
         val decoded = Persistence.json.decodeFromString<PlayQueue>(encoded)
         assertEquals(q, decoded)
     }
+
+    @Test
+    fun insertNextDeduplicatesExistingTrackAfterCurrent() {
+        val q = queue(listOf("a", "b", "c", "d"), at = 0)
+            .copy(positionSec = 14.5)
+            .insertNext(listOf("c"))
+        assertEquals(listOf("a", "c", "b", "d"), q.trackIds)
+        assertEquals("a", q.currentTrackId)
+        assertEquals(0, q.currentIndex)
+        assertEquals(14.5, q.positionSec, 0.0001)
+    }
+
+    @Test
+    fun insertNextDeduplicatesExistingTrackBeforeCurrentAndPreservesCurrent() {
+        val q = queue(listOf("a", "b", "c", "d"), at = 2)
+            .copy(positionSec = 22.0)
+            .insertNext(listOf("a"))
+        assertEquals(listOf("b", "c", "a", "d"), q.trackIds)
+        assertEquals("c", q.currentTrackId)
+        assertEquals(1, q.currentIndex)
+        assertEquals(22.0, q.positionSec, 0.0001)
+    }
+
+    @Test
+    fun insertNextCurrentTrackAloneIsNoOp() {
+        val base = queue(listOf("a", "b", "c"), at = 1)
+            .withShuffle(true, Random(5))
+            .copy(positionSec = 9.0)
+        assertEquals(base, base.insertNext(listOf("b")))
+        assertEquals(base, base.insertNext(listOf("b", "b")))
+    }
+
+    @Test
+    fun insertNextMixedBatchDeduplicatesAndPreservesOrder() {
+        val q = queue(listOf("a", "b", "c", "d"), at = 0)
+            .insertNext(listOf("a", "d", "x", "d", "b", "x"))
+        assertEquals(listOf("a", "d", "x", "b", "c"), q.trackIds)
+        assertEquals(0, q.currentIndex)
+    }
+
+    @Test
+    fun insertNextDeduplicatesInShuffleModeAndKeepsValidPermutation() {
+        var q = queue(listOf("a", "b", "c", "d"), at = 2)
+            .withShuffle(true, Random(5))
+            .insertNext(listOf("a", "x"))
+        assertEquals("c", q.currentTrackId)
+        assertEquals(5, q.trackIds.size)
+        assertEquals(5, q.trackIds.toSet().size)
+        assertEquals(listOf(0, 1, 2, 3, 4), q.shuffleOrder.sorted())
+        val (q2, t2) = q.next(auto = true)
+        q = q2
+        assertEquals("a", t2)
+        assertEquals("x", q.next(auto = true).second)
+    }
+
+    @Test
+    fun insertNextRemovesLegacyDuplicateOccurrences() {
+        val q = queue(listOf("a", "b", "c", "b", "d"), at = 0)
+            .insertNext(listOf("b"))
+        assertEquals(listOf("a", "b", "c", "d"), q.trackIds)
+        assertEquals("a", q.currentTrackId)
+    }
+
+    @Test
+    fun restoreAtBeforeCurrentShiftsCurrentIndexAndPreservesPosition() {
+        val q = queue(listOf("b", "c"), at = 1)
+            .copy(positionSec = 19.0)
+            .restoreAt(index = 0, trackId = "a", makeCurrent = false)
+        assertEquals(listOf("a", "b", "c"), q.trackIds)
+        assertEquals(2, q.currentIndex)
+        assertEquals("c", q.currentTrackId)
+        assertEquals(19.0, q.positionSec, 0.0001)
+    }
+
+    @Test
+    fun restoreAtAfterCurrentKeepsCurrentIndexAndPosition() {
+        val q = queue(listOf("a", "b"), at = 0)
+            .copy(positionSec = 7.5)
+            .restoreAt(index = 2, trackId = "c", makeCurrent = false)
+        assertEquals(listOf("a", "b", "c"), q.trackIds)
+        assertEquals(0, q.currentIndex)
+        assertEquals("a", q.currentTrackId)
+        assertEquals(7.5, q.positionSec, 0.0001)
+    }
+
+    @Test
+    fun restoreAtAsCurrentSetsCurrentIndexAndRestoredPosition() {
+        val q = queue(listOf("a", "c"), at = 1)
+            .restoreAt(index = 1, trackId = "b", makeCurrent = true, restoredPositionSec = 42.5)
+        assertEquals(listOf("a", "b", "c"), q.trackIds)
+        assertEquals(1, q.currentIndex)
+        assertEquals("b", q.currentTrackId)
+        assertEquals(42.5, q.positionSec, 0.0001)
+    }
+
+    @Test
+    fun restoreAtInShuffleModeMaintainsValidPermutation() {
+        val base = queue(listOf("a", "b", "c"), at = 1).withShuffle(true, Random(11))
+        val afterNonCurrent = base.removeAt(0).restoreAt(index = 0, trackId = "a", makeCurrent = false)
+        assertEquals(listOf("a", "b", "c"), afterNonCurrent.trackIds)
+        assertEquals("b", afterNonCurrent.currentTrackId)
+        assertEquals(listOf(0, 1, 2), afterNonCurrent.shuffleOrder.sorted())
+
+        val afterCurrent = base.removeAt(1).restoreAt(
+            index = 1,
+            trackId = "b",
+            makeCurrent = true,
+            restoredPositionSec = 12.0,
+        )
+        assertEquals(listOf("a", "b", "c"), afterCurrent.trackIds)
+        assertEquals("b", afterCurrent.currentTrackId)
+        assertEquals(12.0, afterCurrent.positionSec, 0.0001)
+        assertEquals(listOf(0, 1, 2), afterCurrent.shuffleOrder.sorted())
+    }
 }

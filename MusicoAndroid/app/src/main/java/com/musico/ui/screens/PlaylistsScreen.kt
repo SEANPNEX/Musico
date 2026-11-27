@@ -26,6 +26,7 @@ import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.Favorite
+import androidx.compose.material.icons.rounded.HeartBroken
 import androidx.compose.material.icons.rounded.KeyboardArrowDown
 import androidx.compose.material.icons.rounded.KeyboardArrowUp
 import androidx.compose.material.icons.rounded.MoreVert
@@ -80,6 +81,7 @@ import com.musico.ui.components.PlayShuffleButtons
 import com.musico.ui.components.SortOrderMenuButton
 import com.musico.ui.components.TextInputDialog
 import com.musico.ui.components.TrackActionState
+import com.musico.ui.components.TrackEndSwipeBehavior
 import com.musico.ui.components.TrackMenuItems
 import com.musico.ui.components.TrackRow
 import com.musico.ui.components.dragHandle
@@ -530,6 +532,45 @@ fun PlaylistDetailScreen(
                         dragHandleModifier = if (ref is PlaylistRef.User) {
                             Modifier.dragHandle(dragState, dragItem.uid)
                         } else null,
+                        swipeEnabled = !editing && !isDragged,
+                        endSwipeBehavior = when (ref) {
+                            is PlaylistRef.User -> TrackEndSwipeBehavior.Custom(
+                                label = strings.remove,
+                                icon = Icons.Rounded.DeleteOutline,
+                                thresholdFraction = 0.40f,
+                                minThresholdDp = 130.dp,
+                                onTrigger = {
+                                    val targetIndex = removeIndex
+                                    val removedId = playlist?.trackIds?.getOrNull(targetIndex) ?: track.id
+                                    libraryStore.removeFromPlaylist(ref.playlistId, targetIndex)
+                                    showMessage(
+                                        message = strings.removedFromPlaylistNotice,
+                                        actionLabel = strings.undo,
+                                        onAction = {
+                                            libraryStore.restoreToPlaylist(ref.playlistId, removedId, targetIndex)
+                                        },
+                                    )
+                                },
+                            )
+                            PlaylistRef.Favourites -> TrackEndSwipeBehavior.Custom(
+                                label = strings.remove,
+                                icon = Icons.Rounded.HeartBroken,
+                                thresholdFraction = 0.40f,
+                                minThresholdDp = 130.dp,
+                                onTrigger = {
+                                    libraryStore.toggleFavourite(track.id)
+                                    showMessage(
+                                        message = strings.removedFromFavouritesNotice,
+                                        actionLabel = strings.undo,
+                                        onAction = {
+                                            if (track.id !in libraryStore.state.value.favourites) {
+                                                libraryStore.toggleFavourite(track.id)
+                                            }
+                                        },
+                                    )
+                                },
+                            )
+                        },
                         trailingActions = if (ref is PlaylistRef.User && editing) {
                             {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
