@@ -123,6 +123,111 @@ public sealed class PlayQueueTests
         var r = new PlayQueue("R");
         r.Append(["z"]);
         Assert.Equal("z", r.CurrentTrackId);
+
+        var s = new PlayQueue("S");
+        s.SetShuffle(true, new Random(1));
+        s.InsertNext(["x", "x", "y"]);
+        Assert.Equal(["x", "y"], s.TrackIds);
+        Assert.Equal(0, s.CurrentIndex);
+        Assert.Equal("x", s.CurrentTrackId);
+        Assert.Equal([0, 1], s.ShuffleOrder);
+        Assert.Equal("y", s.Next(auto: true));
+    }
+
+    [Fact]
+    public void InsertNextMovesExistingTrackAfterCurrentWithoutDuplication()
+    {
+        var q = MakeQueue(["a", "b", "c", "d"], index: 0);
+        q.PositionSeconds = 12;
+        q.InsertNext(["c"]);
+        Assert.Equal(["a", "c", "b", "d"], q.TrackIds);
+        Assert.Equal(0, q.CurrentIndex);
+        Assert.Equal("a", q.CurrentTrackId);
+        Assert.Equal(12, q.PositionSeconds);
+        Assert.Equal("c", q.Next(auto: true));
+        Assert.Equal("b", q.Next(auto: true));
+    }
+
+    [Fact]
+    public void InsertNextMovesExistingTrackBeforeCurrentWithoutDisturbingCurrent()
+    {
+        var q = MakeQueue(["a", "b", "c", "d"], index: 2);
+        q.PositionSeconds = 45;
+        q.InsertNext(["a"]);
+        Assert.Equal(["b", "c", "a", "d"], q.TrackIds);
+        Assert.Equal(1, q.CurrentIndex);
+        Assert.Equal("c", q.CurrentTrackId);
+        Assert.Equal(45, q.PositionSeconds);
+        Assert.Equal("a", q.Next(auto: true));
+        Assert.Equal("d", q.Next(auto: true));
+    }
+
+    [Fact]
+    public void InsertNextCurrentTrackAloneIsNoOp()
+    {
+        var q = MakeQueue(["a", "b", "c"], index: 1);
+        q.SetShuffle(true, new Random(7));
+        q.PositionSeconds = 33;
+        var expectedOrder = q.ShuffleOrder.ToList();
+
+        q.InsertNext(["b"]);
+        Assert.Equal(["a", "b", "c"], q.TrackIds);
+        Assert.Equal(1, q.CurrentIndex);
+        Assert.Equal("b", q.CurrentTrackId);
+        Assert.Equal(33, q.PositionSeconds);
+        Assert.Equal(expectedOrder, q.ShuffleOrder);
+    }
+
+    [Fact]
+    public void InsertNextMixedBatchPreservesOrderAndDeduplicates()
+    {
+        var q = MakeQueue(["a", "b", "c", "d"], index: 1);
+        q.PositionSeconds = 18;
+        q.InsertNext(["b", "d", "x", "d"]);
+        Assert.Equal(["a", "b", "d", "x", "c"], q.TrackIds);
+        Assert.Equal(1, q.CurrentIndex);
+        Assert.Equal("b", q.CurrentTrackId);
+        Assert.Equal(18, q.PositionSeconds);
+        Assert.Equal("d", q.Next(auto: true));
+        Assert.Equal("x", q.Next(auto: true));
+        Assert.Equal("c", q.Next(auto: true));
+    }
+
+    [Fact]
+    public void InsertNextMovesAndAddsTracksWhenShuffled()
+    {
+        var q = MakeQueue(["a", "b", "c", "d", "e"], index: 2);
+        q.SetShuffle(true, new Random(5));
+        q.PositionSeconds = 21;
+
+        q.InsertNext(["a", "x", "e"]);
+
+        Assert.Equal("c", q.CurrentTrackId);
+        Assert.Equal(21, q.PositionSeconds);
+        Assert.Equal([0, 1, 2, 3, 4, 5], q.ShuffleOrder.OrderBy(i => i).ToArray());
+        Assert.Equal(6, q.TrackIds.Count);
+        Assert.Equal(6, q.TrackIds.Distinct().Count());
+        Assert.Equal("a", q.Next(auto: true));
+        Assert.Equal("x", q.Next(auto: true));
+        Assert.Equal("e", q.Next(auto: true));
+
+        var remaining = new List<string>();
+        while (q.Next(auto: true) is string id)
+        {
+            remaining.Add(id);
+        }
+        Assert.Equal(2, remaining.Count);
+        Assert.Equal(new HashSet<string> { "b", "d" }, remaining.ToHashSet());
+    }
+
+    [Fact]
+    public void InsertNextRemovesAllLegacyNonCurrentDuplicatesOfMovedId()
+    {
+        var q = MakeQueue(["x", "b", "x", "c", "x"], index: 1);
+        q.InsertNext(["x"]);
+        Assert.Equal(["b", "x", "c"], q.TrackIds);
+        Assert.Equal(0, q.CurrentIndex);
+        Assert.Equal("b", q.CurrentTrackId);
     }
 
     [Fact]

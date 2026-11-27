@@ -138,20 +138,53 @@ public sealed class PlayQueue
 
     public void InsertNext(IEnumerable<string> ids)
     {
-        var list = ids as IList<string> ?? ids.ToList();
-        if (list.Count == 0) return;
+        var seen = new HashSet<string>();
+        var dedup = new List<string>();
+        foreach (string id in ids)
+        {
+            if (seen.Add(id))
+            {
+                dedup.Add(id);
+            }
+        }
+        if (dedup.Count == 0) return;
+
+        if (TrackIds.Count == 0)
+        {
+            TrackIds.InsertRange(0, dedup);
+            if (Shuffle)
+            {
+                ShuffleOrder.AddRange(Enumerable.Range(0, dedup.Count));
+            }
+            CurrentIndex = 0;
+            PositionSeconds = 0;
+            return;
+        }
+
+        string? activeId = CurrentTrackId;
+        var filtered = dedup.Where(id => id != activeId).ToList();
+        if (filtered.Count == 0) return;
+
+        var filteredSet = new HashSet<string>(filtered);
+        for (int i = TrackIds.Count - 1; i >= 0; i--)
+        {
+            if (filteredSet.Contains(TrackIds[i]) && i != CurrentIndex)
+            {
+                RemoveAt(i);
+            }
+        }
 
         int insertAt = CurrentIndex.HasValue ? CurrentIndex.Value + 1 : 0;
         int? orderPos = OrderPosition;
-        TrackIds.InsertRange(insertAt, list);
+        TrackIds.InsertRange(insertAt, filtered);
 
         if (Shuffle)
         {
             for (int i = 0; i < ShuffleOrder.Count; i++)
             {
-                if (ShuffleOrder[i] >= insertAt) ShuffleOrder[i] += list.Count;
+                if (ShuffleOrder[i] >= insertAt) ShuffleOrder[i] += filtered.Count;
             }
-            ShuffleOrder.InsertRange(orderPos.HasValue ? orderPos.Value + 1 : 0, Enumerable.Range(insertAt, list.Count));
+            ShuffleOrder.InsertRange(orderPos.HasValue ? orderPos.Value + 1 : 0, Enumerable.Range(insertAt, filtered.Count));
         }
 
         if (!CurrentIndex.HasValue)
