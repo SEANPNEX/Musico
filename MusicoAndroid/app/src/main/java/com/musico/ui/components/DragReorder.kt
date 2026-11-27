@@ -7,6 +7,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
@@ -334,6 +335,12 @@ fun <T> rememberDragReorderState(
         state.clearPendingCommitIfMatching(token)
     }
 
+    DisposableEffect(state) {
+        onDispose {
+            state.endDrag()
+        }
+    }
+
     return state
 }
 
@@ -341,10 +348,16 @@ fun <T> Modifier.dragHandle(
     state: DragReorderState<T>,
     uid: String,
 ): Modifier = pointerInput(state, uid) {
-    detectDragGestures(
-        onDragStart = { state.startDrag(uid) },
-        onDrag = { change, dragAmount -> state.onDrag(change, dragAmount.y) },
-        onDragEnd = { state.endDrag() },
-        onDragCancel = { state.endDrag() },
-    )
+    try {
+        detectDragGestures(
+            onDragStart = { state.startDrag(uid) },
+            onDrag = { change, dragAmount -> state.onDrag(change, dragAmount.y) },
+            onDragEnd = { state.endDrag() },
+            onDragCancel = { state.endDrag() },
+        )
+    } finally {
+        if (state.activeUid == uid) {
+            state.endDrag()
+        }
+    }
 }

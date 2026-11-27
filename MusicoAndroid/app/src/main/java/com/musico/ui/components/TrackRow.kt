@@ -212,7 +212,7 @@ fun TrackRow(
         )
     }
 
-    if (!swipeEnabled || (startAction == null && endAction == null)) {
+    if (startAction == null && endAction == null) {
         rowContent(modifier)
         return
     }

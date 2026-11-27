@@ -3095,7 +3095,7 @@ private fun FolderDetailContent(
                 },
                 modifier = rowModifier,
                 dragHandleModifier = Modifier.dragHandle(dragState, dragItem.uid),
-                swipeEnabled = !isDragged,
+                swipeEnabled = !dragState.isDragging,
                 menuContent = { onDismiss ->
                     TrackMenuItems(
                         ids = listOf(track.id),

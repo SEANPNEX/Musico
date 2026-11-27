@@ -82,6 +82,7 @@ fun MusicoSwipeActionRow(
     val rightAction = if (isRtl) startAction else endAction
     val canSwipe = enabled && (leftAction != null || rightAction != null)
 
+    val currentCanSwipe by rememberUpdatedState(canSwipe)
     val currentLeftAction by rememberUpdatedState(leftAction)
     val currentRightAction by rememberUpdatedState(rightAction)
     val density = LocalDensity.current
@@ -254,7 +255,7 @@ fun MusicoSwipeActionRow(
                         cur < 0f -> currentRightAction
                         else -> null
                     }
-                    val triggered = if (activeCfg != null && abs(cur) >= thresholdPxFor(activeCfg)) {
+                    val triggered = if (currentCanSwipe && activeCfg != null && abs(cur) >= thresholdPxFor(activeCfg)) {
                         activeCfg
                     } else {
                         null

@@ -532,7 +532,7 @@ fun PlaylistDetailScreen(
                         dragHandleModifier = if (ref is PlaylistRef.User) {
                             Modifier.dragHandle(dragState, dragItem.uid)
                         } else null,
-                        swipeEnabled = !editing && !isDragged,
+                        swipeEnabled = !editing && !dragState.isDragging,
                         endSwipeBehavior = when (ref) {
                             is PlaylistRef.User -> TrackEndSwipeBehavior.Custom(
                                 label = strings.remove,

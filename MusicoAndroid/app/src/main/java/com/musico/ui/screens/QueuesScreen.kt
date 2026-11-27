@@ -613,7 +613,7 @@ fun QueuesContent(
                             onClick = { playerController.playTrack(inQueue = viewed.id, index = index) },
                             modifier = rowModifier,
                             dragHandleModifier = Modifier.dragHandle(dragState, dragItem.uid),
-                            swipeEnabled = !editing && !isDragged,
+                            swipeEnabled = !editing && !dragState.isDragging,
                             endSwipeBehavior = TrackEndSwipeBehavior.Custom(
                                 label = strings.remove,
                                 icon = Icons.Rounded.DeleteOutline,
