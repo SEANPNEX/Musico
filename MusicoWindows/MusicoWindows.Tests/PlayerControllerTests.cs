@@ -188,68 +188,16 @@ public sealed class PlayerControllerTests : IDisposable
     [Fact]
     public async Task RapidCloudTrackSkipsCancelStaleLoadAndPrefetchNext()
     {
-        string playlistJson = """
-        {
-          "header": { "musicDetailHeaderRenderer": { "title": { "runs": [{ "text": "Cloud" }] } } },
-          "contents": {
-            "singleColumnBrowseResultsRenderer": {
-              "tabs": [{
-                "tabRenderer": {
-                  "content": {
-                    "sectionListRenderer": {
-                      "contents": [{
-                        "musicPlaylistShelfRenderer": {
-                          "contents": [
-                            { "musicResponsiveListItemRenderer": { "playlistItemData": { "videoId": "vidSlow0001" }, "flexColumns": [ { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Slow 1" }] } } }, { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Artist" }] } } } ] } },
-                            { "musicResponsiveListItemRenderer": { "playlistItemData": { "videoId": "vidFast0002" }, "flexColumns": [ { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Fast 2" }] } } }, { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Artist" }] } } } ] } },
-                            { "musicResponsiveListItemRenderer": { "playlistItemData": { "videoId": "vidNext0003" }, "flexColumns": [ { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Next 3" }] } } }, { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Artist" }] } } } ] } }
-                          ]
-                        }
-                      }]
-                    }
-                  }
-                }
-              }]
-            }
-          }
-        }
-        """;
-
         var slowGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var handler = new AsyncStubHandler(async (req, ct) =>
         {
             string url = req.RequestUri!.AbsoluteUri;
-            if (url.Contains("/youtubei/v1/browse"))
+            if (url.StartsWith("https://cdn.example/", StringComparison.Ordinal))
             {
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(playlistJson, Encoding.UTF8, "application/json")
-                };
-            }
-            if (url.Contains("/youtubei/v1/player"))
-            {
-                string body = await req.Content!.ReadAsStringAsync(ct);
-                string vid = body.Contains("vidSlow0001") ? "vidSlow0001" : body.Contains("vidFast0002") ? "vidFast0002" : "vidNext0003";
-                if (vid == "vidSlow0001")
+                if (url.Contains("vidSlow0001", StringComparison.Ordinal))
                 {
                     await slowGate.Task.WaitAsync(ct);
                 }
-                string playerJson = $$"""
-                {
-                  "streamingData": {
-                    "adaptiveFormats": [
-                      { "itag": 140, "url": "https://cdn.example/{{vid}}.m4a", "mimeType": "audio/mp4", "bitrate": 128000 }
-                    ]
-                  }
-                }
-                """;
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(playerJson, Encoding.UTF8, "application/json")
-                };
-            }
-            if (url.StartsWith("https://cdn.example/", StringComparison.Ordinal))
-            {
                 if (req.Headers.Range is not null)
                 {
                     return new HttpResponseMessage(HttpStatusCode.PartialContent)
@@ -265,17 +213,53 @@ public sealed class PlayerControllerTests : IDisposable
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
-        var yt = new YouTubeClient(handler);
+        string script = """
+            var manifest = {
+              apiVersion: 1,
+              id: 'race-ext',
+              name: 'Race Source',
+              version: '1.0.0',
+              capabilities: ['playlist', 'stream'],
+              urlPatterns: ['^https://race\\.example/playlist/'],
+              permissions: { hosts: ['race.example', 'cdn.example'] }
+            };
+            function canHandle(input) {
+              return { matched: true, normalizedUrl: input.extractedUrl, remoteId: 'PLRaceTest12345', kind: 'playlist' };
+            }
+            async function fetchCollection(ctx, req) {
+              return {
+                remoteId: 'PLRaceTest12345',
+                title: 'Cloud',
+                tracks: [
+                  { remoteTrackId: 'vidSlow0001', title: 'Slow 1', artist: 'Artist', trackNumber: 1 },
+                  { remoteTrackId: 'vidFast0002', title: 'Fast 2', artist: 'Artist', trackNumber: 2 },
+                  { remoteTrackId: 'vidNext0003', title: 'Next 3', artist: 'Artist', trackNumber: 3 }
+                ]
+              };
+            }
+            async function resolveStream(ctx, req) {
+              return { url: 'https://cdn.example/' + req.remoteTrackId + '.m4a', fileExtension: 'm4a' };
+            }
+            module.exports = { manifest: manifest, canHandle: canHandle, fetchCollection: fetchCollection, resolveStream: resolveStream };
+            """;
+
+        var registry = new MusicoWindows.Extensions.CloudProviderRegistry();
+        var extStore = new MusicoWindows.Extensions.ExtensionStore(_stateDir);
+        extStore.BindRegistry(registry);
+        var inst = extStore.StageImportedPackage(MusicoWindows.Extensions.ExtensionPackageLoader.LoadSingleFileScript(script));
+        extStore.ApproveAndEnable(inst.Id);
+
         var cache = new CloudAudioCache(Path.Combine(_stateDir, "CloudCache"), handler: handler);
         var lib = new LibraryStore(
             _stateDir,
             _musicDir,
             new StubMetadataReader(),
             new ArtworkCache(Path.Combine(_stateDir, "Art2")),
-            youtubeClient: yt,
-            artworkHandler: handler);
+            artworkHandler: handler,
+            cloudCache: cache,
+            providerRegistry: registry);
 
-        await lib.AddCloudRootAsync("https://music.youtube.com/playlist?list=PLRaceTest12345");
+        await lib.AddCloudRootAsync("https://race.example/playlist/PLRaceTest12345");
         var cloudTracks = lib.Tracks.Where(t => t.IsCloud).OrderBy(t => t.TrackNumber).ToList();
         Assert.Equal(3, cloudTracks.Count);
 
@@ -290,7 +274,7 @@ public sealed class PlayerControllerTests : IDisposable
             smtc: null,
             enableTicker: false,
             cloudCache: cache,
-            youtubeClient: yt);
+            providerRegistry: registry);
 
         _engine.LoadedPaths.Clear();
 

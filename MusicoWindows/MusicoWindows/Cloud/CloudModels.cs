@@ -151,21 +151,58 @@ public sealed class ExtensionHttpResponse
     public string? BytesBase64 { get; set; }
 }
 
+public static class CloudProxyUtils
+{
+    /// <summary>
+    /// Normalizes Aria-style proxy inputs: "7890" -> "http://127.0.0.1:7890",
+    /// "127.0.0.1:7890" -> "http://127.0.0.1:7890", or full "http://host:port".
+    /// </summary>
+    public static string? NormalizeProxyUrl(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return null;
+        string trimmed = raw.Trim();
+
+        if (trimmed.All(char.IsDigit))
+        {
+            if (!int.TryParse(trimmed, out int port) || port < 1 || port > 65535)
+            {
+                throw new ArgumentException("Proxy port must be between 1 and 65535.");
+            }
+            return $"http://127.0.0.1:{port}";
+        }
+
+        string candidate = trimmed.Contains("://", StringComparison.Ordinal) ? trimmed : $"http://{trimmed}";
+        if (!Uri.TryCreate(candidate, UriKind.Absolute, out var uri) ||
+            string.IsNullOrWhiteSpace(uri.Host) ||
+            uri.Port <= 0 ||
+            uri.Scheme is not ("http" or "https" or "socks5" or "socks4"))
+        {
+            throw new ArgumentException("Invalid proxy format. Use port (e.g. 7890), host:port, or http://host:port.");
+        }
+
+        return candidate;
+    }
+}
+
 public static class CloudUrlClassifier
 {
     private static readonly Regex HttpUrlRegex = new(
         @"https?://[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-    private static readonly Regex SchemelessCloudUrlRegex = new(
-        @"(?:[A-Za-z0-9-]+\.)*(?:youtube\.com|youtu\.be|bilibili\.com|b23\.tv|drive\.google\.com|drive\.usercontent\.google\.com)/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
+    private static readonly Regex SchemelessGoogleDriveUrlRegex = new(
+        @"(?:[A-Za-z0-9-]+\.)*(?:drive\.google\.com|drive\.usercontent\.google\.com)/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
+        RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
+    private static readonly Regex SchemelessHostPathRegex = new(
+        @"[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/[A-Za-z0-9\-._~:/?#\[\]@!$&'()*+,;=%]+",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     private static readonly char[] TrailingUrlPunctuation =
         [')', ']', '】', '」', '》', '。', ',', '.', '\'', '"', '）', '］', '”', '’', '>', ';', '；', '！', '、', '!', '?'];
 
     /// <summary>
-    /// Extracts an http(s)://... URL (or scheme-less YouTube/Bilibili/Google Drive URL) from pasted share text,
+    /// Extracts an http(s)://... URL (or scheme-less Google Drive / enabled extension URL) from pasted share text,
     /// stripping surrounding title/description text and trailing punctuation while preserving bare IDs.
     /// </summary>
     public static string ExtractCloudUrl(string? input) =>
@@ -206,13 +243,25 @@ public static class CloudUrlClassifier
             }
         }
 
-        var schemelessMatch = SchemelessCloudUrlRegex.Match(input);
-        if (schemelessMatch.Success)
+        var driveMatch = SchemelessGoogleDriveUrlRegex.Match(input);
+        if (driveMatch.Success)
         {
-            string candidate = schemelessMatch.Value.TrimEnd(TrailingUrlPunctuation);
+            string candidate = driveMatch.Value.TrimEnd(TrailingUrlPunctuation);
             if (!string.IsNullOrEmpty(candidate))
             {
                 return candidate;
+            }
+        }
+
+        if (registry is not null)
+        {
+            foreach (Match match in SchemelessHostPathRegex.Matches(input))
+            {
+                string candidate = match.Value.TrimEnd(TrailingUrlPunctuation);
+                if (!string.IsNullOrEmpty(candidate) && registry.MatchesAnyExtensionPattern(candidate))
+                {
+                    return candidate;
+                }
             }
         }
 
@@ -227,11 +276,7 @@ public static class CloudUrlClassifier
         }
 
         string host = uri.Host.ToLowerInvariant();
-        return host.Contains("youtube.com", StringComparison.Ordinal) ||
-               host.Contains("youtu.be", StringComparison.Ordinal) ||
-               host.Contains("bilibili.com", StringComparison.Ordinal) ||
-               host.Contains("b23.tv", StringComparison.Ordinal) ||
-               host.Equals("drive.google.com", StringComparison.Ordinal) ||
+        return host.Equals("drive.google.com", StringComparison.Ordinal) ||
                host.EndsWith(".drive.google.com", StringComparison.Ordinal) ||
                host.Equals("drive.usercontent.google.com", StringComparison.Ordinal);
     }
@@ -243,10 +288,10 @@ public static class CloudUrlClassifier
         string extracted = ExtractCloudUrl(input, registry);
         if (string.IsNullOrWhiteSpace(extracted))
         {
-            throw new ArgumentException("Enter a cloud playlist, folder, or extension URL.", nameof(input));
+            throw new ArgumentException("Enter a Google Drive or enabled extension URL.", nameof(input));
         }
 
-        if (TryClassifyBuiltinUrlOrToken(extracted, includeRawYouTubeId: false) is { } builtinKind)
+        if (TryClassifyBuiltinUrlOrToken(extracted) is { } builtinKind)
         {
             return builtinKind;
         }
@@ -262,12 +307,7 @@ public static class CloudUrlClassifier
             }
         }
 
-        if (TryClassifyBuiltinUrlOrToken(extracted, includeRawYouTubeId: true) is { } rawYtKind)
-        {
-            return rawYtKind;
-        }
-
-        throw new ArgumentException("Unsupported URL. Paste a YouTube, Bilibili, Google Drive, or enabled extension link.");
+        throw new ArgumentException("Unsupported URL. Paste a Google Drive link or an enabled extension URL.");
     }
 
     public static async Task<(ICloudSourceProvider Provider, CloudCanHandleResult Match)> ClassifyAsync(
@@ -281,7 +321,7 @@ public static class CloudUrlClassifier
         string extracted = ExtractCloudUrl(input, registry);
         if (string.IsNullOrWhiteSpace(extracted))
         {
-            throw new ArgumentException("Enter a cloud playlist, folder, or extension URL.", nameof(input));
+            throw new ArgumentException("Enter a Google Drive or enabled extension URL.", nameof(input));
         }
 
         if (!string.IsNullOrWhiteSpace(preferredProviderId))
@@ -305,7 +345,7 @@ public static class CloudUrlClassifier
             return (provider, match);
         }
 
-        if (TryClassifyBuiltinUrlOrToken(extracted, includeRawYouTubeId: false) is { } builtinKind &&
+        if (TryClassifyBuiltinUrlOrToken(extracted) is { } builtinKind &&
             registry.GetById(builtinKind.BuiltinProviderId()) is { } builtinProvider)
         {
             var match = await builtinProvider.TryMatchAsync(input, extracted, ct).ConfigureAwait(false);
@@ -318,37 +358,16 @@ public static class CloudUrlClassifier
             return extMatch.Value;
         }
 
-        if (TryClassifyBuiltinUrlOrToken(extracted, includeRawYouTubeId: true) is { } ytKind &&
-            registry.GetById(ytKind.BuiltinProviderId()) is { } ytProvider)
-        {
-            var match = await ytProvider.TryMatchAsync(input, extracted, ct).ConfigureAwait(false);
-            return (ytProvider, match.Matched ? match : new CloudCanHandleResult(true, extracted, ytProvider.TryExtractRemoteId(extracted)));
-        }
-
-        throw new ArgumentException("Unsupported URL. Paste a YouTube, Bilibili, Google Drive, or enabled extension link.");
+        throw new ArgumentException("Unsupported URL. Paste a Google Drive link or an enabled extension URL.");
     }
 
-    internal static RootKind? TryClassifyBuiltinUrlOrToken(string extracted, bool includeRawYouTubeId)
+    internal static RootKind? TryClassifyBuiltinUrlOrToken(string extracted)
     {
         string lower = extracted.ToLowerInvariant();
 
         if (lower.Contains("drive.google.com") || lower.Contains("drive.usercontent.google.com"))
         {
             return RootKind.CloudGoogleDrive;
-        }
-
-        if (lower.Contains("bilibili.com") || lower.Contains("b23.tv") ||
-            (extracted.StartsWith("BV", StringComparison.OrdinalIgnoreCase) && extracted.Length >= 12 && !extracted.Contains('/')) ||
-            Regex.IsMatch(extracted, @"^(av|ml)\d+$", RegexOptions.IgnoreCase))
-        {
-            return RootKind.CloudBilibili;
-        }
-
-        if (lower.Contains("youtube.com") || lower.Contains("youtu.be") ||
-            lower.Contains("music.youtube.com") ||
-            (includeRawYouTubeId && YouTubeClient.LooksLikeRawYouTubeId(extracted)))
-        {
-            return RootKind.CloudYouTube;
         }
 
         return null;
@@ -363,7 +382,7 @@ internal static class CloudHttpHelper
 
     public static void ConfigureProxy(HttpClientHandler handler, string? proxyUrl)
     {
-        string? normalized = YouTubeClient.NormalizeProxyUrl(proxyUrl);
+        string? normalized = CloudProxyUtils.NormalizeProxyUrl(proxyUrl);
         if (normalized is not null)
         {
             handler.Proxy = new WebProxy(normalized);

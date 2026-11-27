@@ -3,6 +3,7 @@ using System.Net.Http;
 using System.Text;
 using MusicoWindows.Cloud;
 using MusicoWindows.Core;
+using MusicoWindows.Extensions;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 using Xunit;
@@ -55,6 +56,64 @@ public sealed class CloudExporterTests
         return data;
     }
 
+    private sealed class StubExtensionProvider : ICloudSourceProvider
+    {
+        private readonly Func<string, string?, Task<CloudAudioStream>> _resolve;
+        private readonly Func<string, Task<CloudPlaylistResult>>? _fetch;
+
+        public StubExtensionProvider(
+            string providerId,
+            Func<string, string?, Task<CloudAudioStream>> resolve,
+            Func<string, Task<CloudPlaylistResult>>? fetch = null,
+            IReadOnlyList<ExtensionQualityOption>? qualities = null)
+        {
+            ProviderId = providerId;
+            _resolve = resolve;
+            _fetch = fetch;
+            AvailableQualities = qualities ?? Array.Empty<ExtensionQualityOption>();
+        }
+
+        public string ProviderId { get; }
+        public string DisplayName => "Stub Cloud";
+        public string BadgeLabel => "Stub";
+        public RootKind RootKind => RootKind.CloudExtension;
+        public string CloudSourceKey => ProviderId;
+        public bool SupportsCookies => true;
+        public bool SupportsProxy => true;
+        public bool UsesFlatCloudListing => true;
+        public bool SupportsProgressiveTree => false;
+        public bool SupportsCollectionImport => true;
+        public bool IsAvailable => true;
+        public IReadOnlyList<ExtensionQualityOption> AvailableQualities { get; }
+        public string? DefaultStreamQualityId => AvailableQualities.FirstOrDefault()?.Id;
+        public string? DefaultDownloadQualityId => AvailableQualities.FirstOrDefault()?.Id;
+        public bool MatchesUrlPattern(string? candidate) => !string.IsNullOrWhiteSpace(candidate) && candidate.Contains("stub.example", StringComparison.OrdinalIgnoreCase);
+        public Task<CloudCanHandleResult> TryMatchAsync(string rawInput, string extractedUrl, CancellationToken ct = default) =>
+            Task.FromResult(new CloudCanHandleResult(MatchesUrlPattern(extractedUrl), extractedUrl, "stub-1", "playlist"));
+        public string? TryExtractRemoteId(string url) => "stub-1";
+        public Task<CloudPlaylistResult> FetchPlaylistAsync(string sourceUrl, string? cookie, string? proxyUrl, CancellationToken ct = default) =>
+            _fetch is not null ? _fetch(sourceUrl) : throw new NotSupportedException();
+        public Task<CloudTreeSession?> StartProgressiveFetchAsync(string sourceUrl, string? cookie, string? proxyUrl, CancellationToken ct = default) =>
+            Task.FromResult<CloudTreeSession?>(null);
+        public Task<CloudAudioStream> ResolveAudioStreamAsync(string remoteTrackId, string? relativePath, string? cookie, string? proxyUrl, bool forceRefresh = false, CancellationToken ct = default, string? quality = null, CloudStreamPurpose purpose = CloudStreamPurpose.Stream) =>
+            _resolve(remoteTrackId, quality);
+        public void ConfigureArtworkRequest(HttpRequestMessage request) { }
+    }
+
+    private static CloudProviderRegistry MakeRegistryWithStub(
+        HttpMessageHandler? handler = null,
+        Func<string, string?, Task<CloudAudioStream>>? resolve = null,
+        Func<string, Task<CloudPlaylistResult>>? fetch = null,
+        IReadOnlyList<ExtensionQualityOption>? qualities = null)
+    {
+        var registry = new CloudProviderRegistry(new GoogleDriveClient(handler));
+        if (resolve is not null)
+        {
+            registry.RegisterExtensionProvider(new StubExtensionProvider("ext.stub", resolve, fetch, qualities));
+        }
+        return registry;
+    }
+
     private static Track MakeCloudTrack(
         Guid rootId,
         string remoteId,
@@ -63,7 +122,7 @@ public sealed class CloudExporterTests
         string album = "Cloud Album",
         int? trackNumber = 1,
         string? artworkKey = null,
-        string source = CloudSources.YouTube)
+        string source = "ext.stub")
     {
         string relPath = $"{remoteId}.m4a";
         return new Track(
@@ -77,7 +136,8 @@ public sealed class CloudExporterTests
             {
                 CloudSources.Bilibili => "Bilibili",
                 CloudSources.GoogleDrive => "Google Drive",
-                _ => "YouTube"
+                CloudSources.YouTube => "YouTube",
+                _ => "Stub Cloud"
             },
             TrackNumber: trackNumber,
             DiscNumber: 1,
@@ -155,7 +215,7 @@ public sealed class CloudExporterTests
 
         var handler = new StubHttpHandler(_ => throw new InvalidOperationException("Network should not be called for cached tracks."));
         var cache = new CloudAudioCache(cacheDir, handler: handler);
-        var exporter = new CloudExporter(cache, new YouTubeClient(handler), new BilibiliClient(handler), artwork);
+        var exporter = new CloudExporter(cache, MakeRegistryWithStub(handler), artwork);
 
         string exported = await exporter.ExportTrackAsync(track, root, destDir);
 
@@ -179,30 +239,13 @@ public sealed class CloudExporterTests
         string destDir = TestHelpers.MakeTempDir();
 
         var rootId = Guid.NewGuid();
-        var root = new LibraryRoot(rootId, "YT Singles", RootKind.CloudYouTube, "https://youtube.com/watch?v=vid00000002");
+        var root = new LibraryRoot(rootId, "Stub Singles", RootKind.CloudExtension, "https://stub.example/playlist/1", ProviderId: "ext.stub");
         var track = MakeCloudTrack(rootId, "vid00000002", "CON");
 
         byte[] audioPayload = Encoding.UTF8.GetBytes("stub-m4a-stream-bytes");
         var handler = new StubHttpHandler(req =>
         {
             string uri = req.RequestUri!.AbsoluteUri;
-            if (uri.Contains("youtubei/v1/player", StringComparison.Ordinal))
-            {
-                string playerJson = """
-                {
-                  "streamingData": {
-                    "adaptiveFormats": [
-                      { "itag": 140, "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 128000, "url": "https://cdn.example/audio/vid2.m4a" }
-                    ]
-                  }
-                }
-                """;
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(playerJson, Encoding.UTF8, "application/json")
-                };
-            }
-
             if (uri == "https://cdn.example/audio/vid2.m4a")
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
@@ -215,7 +258,8 @@ public sealed class CloudExporterTests
         });
 
         var cache = new CloudAudioCache(cacheDir, handler: handler);
-        var exporter = new CloudExporter(cache, new YouTubeClient(handler), new BilibiliClient(handler));
+        var registry = MakeRegistryWithStub(handler, (_, _) => Task.FromResult(new CloudAudioStream("https://cdn.example/audio/vid2.m4a", ".m4a")));
+        var exporter = new CloudExporter(cache, registry);
 
         string exported = await exporter.ExportTrackAsync(track, root, destDir);
 
@@ -231,7 +275,7 @@ public sealed class CloudExporterTests
         string cacheDir = TestHelpers.MakeTempDir();
         string destDir = TestHelpers.MakeTempDir();
         var localTrack = TestHelpers.MakeTrack("song.mp3");
-        var exporter = new CloudExporter(new CloudAudioCache(cacheDir), new YouTubeClient(), new BilibiliClient());
+        var exporter = new CloudExporter(new CloudAudioCache(cacheDir), new CloudProviderRegistry());
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             exporter.ExportTrackAsync(localTrack, null, destDir));
@@ -244,7 +288,7 @@ public sealed class CloudExporterTests
         string parentDir = TestHelpers.MakeTempDir();
 
         var rootId = Guid.NewGuid();
-        var root = new LibraryRoot(rootId, "Road/Trip: Mix", RootKind.CloudYouTube, "https://youtube.com/playlist?list=PLmix");
+        var root = new LibraryRoot(rootId, "Road/Trip: Mix", RootKind.CloudExtension, "https://stub.example/playlist/PLmix", ProviderId: "ext.stub");
 
         var t1 = MakeCloudTrack(rootId, "vid00000010", "Same Title", trackNumber: 1);
         var t2Broken = MakeCloudTrack(rootId, "vid00000011", "Broken Track", trackNumber: 2);
@@ -254,30 +298,6 @@ public sealed class CloudExporterTests
         var handler = new StubHttpHandler(req =>
         {
             string uri = req.RequestUri!.AbsoluteUri;
-            if (uri.Contains("youtubei/v1/player", StringComparison.Ordinal))
-            {
-                string body = req.Content?.ReadAsStringAsync().GetAwaiter().GetResult() ?? string.Empty;
-                if (body.Contains("vid00000011", StringComparison.Ordinal))
-                {
-                    return new HttpResponseMessage(HttpStatusCode.NotFound);
-                }
-
-                string videoId = body.Contains("vid00000010", StringComparison.Ordinal) ? "vid00000010" : "vid00000012";
-                string playerJson = $$"""
-                {
-                  "streamingData": {
-                    "adaptiveFormats": [
-                      { "itag": 140, "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 128000, "url": "https://cdn.example/{{videoId}}" }
-                    ]
-                  }
-                }
-                """;
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(playerJson, Encoding.UTF8, "application/json")
-                };
-            }
-
             if (uri.StartsWith("https://cdn.example/", StringComparison.Ordinal))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
@@ -290,7 +310,15 @@ public sealed class CloudExporterTests
         });
 
         var cache = new CloudAudioCache(cacheDir, handler: handler);
-        var exporter = new CloudExporter(cache, new YouTubeClient(handler), new BilibiliClient(handler));
+        var registry = MakeRegistryWithStub(handler, (remoteId, _) =>
+        {
+            if (remoteId == "vid00000011")
+            {
+                throw new CloudServiceException(CloudErrorCode.NoPlayableStream, "Not found");
+            }
+            return Task.FromResult(new CloudAudioStream($"https://cdn.example/{remoteId}", ".m4a"));
+        });
+        var exporter = new CloudExporter(cache, registry);
 
         var progressEvents = new List<CloudExportProgress>();
         var syncProgress = new SynchronousProgress<CloudExportProgress>(p => progressEvents.Add(p));
@@ -339,7 +367,7 @@ public sealed class CloudExporterTests
         File.WriteAllBytes(Path.Combine(cacheDir, $"{t1.Id}.mp3"), MakeMinimalMp3Bytes());
         File.WriteAllBytes(Path.Combine(cacheDir, $"{t2.Id}.mp3"), MakeMinimalMp3Bytes());
 
-        var exporter = new CloudExporter(new CloudAudioCache(cacheDir), new YouTubeClient(), new BilibiliClient());
+        var exporter = new CloudExporter(new CloudAudioCache(cacheDir), new CloudProviderRegistry());
         using var cts = new CancellationTokenSource();
 
         var progress = new SynchronousProgress<CloudExportProgress>(p =>
@@ -396,11 +424,12 @@ public sealed class CloudExporterTests
         var cloudRoot = new LibraryRoot(
             Id: cloudId,
             Name: "Tracked Mix",
-            Kind: RootKind.CloudYouTube,
-            Path: "https://music.youtube.com/playlist?list=PLtrack",
-            SourceUrl: "https://music.youtube.com/playlist?list=PLtrack",
+            Kind: RootKind.CloudExtension,
+            Path: "https://stub.example/playlist/PLtrack",
+            SourceUrl: "https://stub.example/playlist/PLtrack",
             RemoteId: "PLtrack",
-            Cookie: "SECRET_COOKIE=should_not_persist");
+            Cookie: "SECRET_COOKIE=should_not_persist",
+            ProviderId: "ext.stub");
 
         var t1 = MakeCloudTrack(cloudId, "vid_1", "Song One", trackNumber: 1);
         var t2 = MakeCloudTrack(cloudId, "vid_2", "Song Two", trackNumber: 2);
@@ -410,28 +439,6 @@ public sealed class CloudExporterTests
         var handler = new StubHttpHandler(req =>
         {
             string uri = req.RequestUri!.AbsoluteUri;
-            if (uri.Contains("youtubei/v1/player", StringComparison.Ordinal))
-            {
-                string body = req.Content?.ReadAsStringAsync().GetAwaiter().GetResult() ?? string.Empty;
-                string vid = body.Contains("vid_1", StringComparison.Ordinal) ? "vid_1"
-                    : body.Contains("vid_2", StringComparison.Ordinal) ? "vid_2"
-                    : "vid_3";
-                requestedIds.Add(vid);
-                string playerJson = $$"""
-                {
-                  "streamingData": {
-                    "adaptiveFormats": [
-                      { "itag": 140, "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 128000, "url": "https://cdn.example/{{vid}}.m4a" }
-                    ]
-                  }
-                }
-                """;
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(playerJson, Encoding.UTF8, "application/json")
-                };
-            }
-
             if (uri.StartsWith("https://cdn.example/", StringComparison.Ordinal))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
@@ -443,7 +450,12 @@ public sealed class CloudExporterTests
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
-        var exporter = new CloudExporter(new CloudAudioCache(cacheDir, handler: handler), new YouTubeClient(handler), new BilibiliClient(handler));
+        var registry = MakeRegistryWithStub(handler, (remoteId, _) =>
+        {
+            requestedIds.Add(remoteId);
+            return Task.FromResult(new CloudAudioStream($"https://cdn.example/{remoteId}.m4a", ".m4a"));
+        });
+        var exporter = new CloudExporter(new CloudAudioCache(cacheDir, handler: handler), registry);
         var exportResult = await exporter.ExportPlaylistAsync(cloudRoot, [t1, t2], parentDir, "Tracked Mix");
         Assert.Equal(2, exportResult.SavedCount);
 
@@ -454,8 +466,8 @@ public sealed class CloudExporterTests
 
         var loaded = CloudExporter.LoadManifest(exportResult.DestinationFolder);
         Assert.NotNull(loaded);
-        Assert.Equal("https://music.youtube.com/playlist?list=PLtrack", loaded!.SourceUrl);
-        Assert.Equal(RootKind.CloudYouTube.ToString(), loaded.CloudKind);
+        Assert.Equal("https://stub.example/playlist/PLtrack", loaded!.SourceUrl);
+        Assert.Equal(RootKind.CloudExtension.ToString(), loaded.CloudKind);
         Assert.Equal(2, loaded.Tracks.Count);
 
         // Delete Song Two on disk, keep Song One, add an unrelated user file, and clear requestedIds.
@@ -471,15 +483,17 @@ public sealed class CloudExporterTests
             Path: exportResult.DestinationFolder,
             SourceUrl: cloudRoot.SourceUrl,
             RemoteId: cloudRoot.RemoteId,
-            LinkedCloudKind: RootKind.CloudYouTube);
+            LinkedCloudKind: RootKind.CloudExtension,
+            LinkedProviderId: "ext.stub");
 
         var updateResult = await exporter.UpdateLocalFolderAsync(
             localTrackedRoot,
             fetchPlaylist: (_, _, _, _, _) => Task.FromResult(new CloudPlaylistResult(
-                Kind: RootKind.CloudYouTube,
+                Kind: RootKind.CloudExtension,
                 RemoteId: "PLtrack",
                 Title: "Tracked Mix",
-                SourceUrl: "https://music.youtube.com/playlist?list=PLtrack",
+                SourceUrl: "https://stub.example/playlist/PLtrack",
+                ProviderId: "ext.stub",
                 Items:
                 [
                     new CloudPlaylistItem("vid_1", "Song One", "Artist", "Tracked Mix", 180, null, 1),
@@ -594,9 +608,7 @@ public sealed class CloudExporterTests
 
         var exporter = new CloudExporter(
             new CloudAudioCache(cacheDir, handler: handler),
-            new YouTubeClient(handler),
-            new BilibiliClient(handler),
-            googleDriveClient: new GoogleDriveClient(handler));
+            new CloudProviderRegistry(new GoogleDriveClient(handler)));
 
         var exportResult = await exporter.ExportPlaylistAsync(cloudRoot, [t1, t2], parentDir, "Drive Jazz");
         Assert.Equal(2, exportResult.SavedCount);
@@ -648,23 +660,6 @@ public sealed class CloudExporterTests
         var handler = new StubHttpHandler(req =>
         {
             string uri = req.RequestUri!.AbsoluteUri;
-            if (uri.Contains("youtubei/v1/player", StringComparison.Ordinal))
-            {
-                string json = """
-                {
-                  "streamingData": {
-                    "adaptiveFormats": [
-                      { "itag": 140, "url": "https://cdn.example/large.m4a", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 128000 }
-                    ]
-                  }
-                }
-                """;
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(json, Encoding.UTF8, "application/json")
-                };
-            }
-
             if (uri.StartsWith("https://cdn.example/large.m4a", StringComparison.Ordinal))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
@@ -676,10 +671,10 @@ public sealed class CloudExporterTests
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
+        var registry = MakeRegistryWithStub(handler, (_, _) => Task.FromResult(new CloudAudioStream("https://cdn.example/large.m4a", ".m4a")));
         var exporter = new CloudExporter(
             new CloudAudioCache(cacheDir, handler: handler),
-            new YouTubeClient(handler),
-            new BilibiliClient(handler));
+            registry);
 
         var progressEvents = new List<CloudExportProgress>();
         var progress = new SynchronousProgress<CloudExportProgress>(p => progressEvents.Add(p));
@@ -705,47 +700,18 @@ public sealed class CloudExporterTests
 
         byte[] mp3Bytes = MakeMinimalMp3Bytes();
         CloudExporter.SaveManifest(subDir, new CloudFolderManifest(
-            SourceUrl: "https://www.youtube.com/playlist?list=PL_STALE_OLD",
+            SourceUrl: "https://stub.example/playlist/PL_STALE_OLD",
             RemoteId: "PL_STALE_OLD",
-            CloudKind: RootKind.CloudYouTube.ToString(),
+            CloudKind: RootKind.CloudExtension.ToString(),
             LastSyncedUtc: DateTimeOffset.UtcNow.AddDays(-1),
-            Tracks: new Dictionary<string, string>(StringComparer.Ordinal)));
+            Tracks: new Dictionary<string, string>(StringComparer.Ordinal),
+            ProviderId: "ext.stub"));
 
         var requestedUrls = new List<string>();
         var handler = new StubHttpHandler(req =>
         {
             string uri = req.RequestUri!.AbsoluteUri;
             requestedUrls.Add(uri);
-
-            if (uri.Contains("list=PL_OVERRIDE_NEW", StringComparison.Ordinal))
-            {
-                string browseHtml = """
-                    <html><head><title>Updated SubAlbum - YouTube</title></head><body>
-                    <script>var ytInitialData = {"metadata":{"playlistMetadataRenderer":{"title":"Updated SubAlbum"}},"contents":{"twoColumnBrowseResultsRenderer":{"tabs":[{"tabRenderer":{"content":{"sectionListRenderer":{"contents":[{"itemSectionRenderer":{"contents":[{"playlistVideoListRenderer":{"contents":[{"playlistVideoRenderer":{"videoId":"vidnew00001","title":{"runs":[{"text":"Fresh Air"}]},"shortBylineText":{"runs":[{"text":"Cloud Band"}]},"lengthSeconds":"180"}}]}}]}}]}}}}]}}};</script>
-                    </body></html>
-                    """;
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(browseHtml, Encoding.UTF8, "text/html")
-                };
-            }
-
-            if (uri.Contains("youtubei/v1/player", StringComparison.Ordinal))
-            {
-                string json = """
-                {
-                  "streamingData": {
-                    "adaptiveFormats": [
-                      { "itag": 140, "url": "https://cdn.example/fresh.m4a", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 128000 }
-                    ]
-                  }
-                }
-                """;
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(json, Encoding.UTF8, "application/json")
-                };
-            }
 
             if (uri.StartsWith("https://cdn.example/fresh.m4a", StringComparison.Ordinal))
             {
@@ -758,16 +724,28 @@ public sealed class CloudExporterTests
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
-        var exporter = new CloudExporter(
-            new CloudAudioCache(cacheDir, handler: handler),
-            new YouTubeClient(handler),
-            new BilibiliClient(handler));
+        var registry = MakeRegistryWithStub(
+            handler,
+            resolve: (_, _) => Task.FromResult(new CloudAudioStream("https://cdn.example/fresh.m4a", ".m4a")),
+            fetch: url =>
+            {
+                requestedUrls.Add(url);
+                return Task.FromResult(new CloudPlaylistResult(
+                    Kind: RootKind.CloudExtension,
+                    RemoteId: "PL_OVERRIDE_NEW",
+                    Title: "Updated SubAlbum",
+                    SourceUrl: url,
+                    ProviderId: "ext.stub",
+                    Items: [new CloudPlaylistItem("vidnew00001", "Fresh Air", "Cloud Band", "Updated SubAlbum", 180, null, 1)]));
+            });
+        var exporter = new CloudExporter(new CloudAudioCache(cacheDir, handler: handler), registry);
 
         var localParentRoot = new LibraryRoot(Guid.NewGuid(), "Music Parent", RootKind.Picked, parentDir);
         var overrideTracking = new CloudTrackingInfo(
-            sourceUrl: "https://www.youtube.com/playlist?list=PL_OVERRIDE_NEW",
+            sourceUrl: "https://stub.example/playlist/PL_OVERRIDE_NEW",
             remoteId: "PL_OVERRIDE_NEW",
-            cloudKind: RootKind.CloudYouTube);
+            cloudKind: RootKind.CloudExtension,
+            providerId: "ext.stub");
 
         var progressEvents = new List<CloudExportProgress>();
         var result = await exporter.UpdateLocalFolderAsync(
@@ -779,12 +757,12 @@ public sealed class CloudExporterTests
         Assert.Equal(1, result.AddedCount);
         Assert.Equal(0, result.FailedCount);
         Assert.True(File.Exists(Path.Combine(subDir, "Fresh Air.m4a")));
-        Assert.Contains(requestedUrls, u => u.Contains("list=PL_OVERRIDE_NEW", StringComparison.Ordinal));
-        Assert.DoesNotContain(requestedUrls, u => u.Contains("list=PL_STALE_OLD", StringComparison.Ordinal));
+        Assert.Contains(requestedUrls, u => u.Contains("PL_OVERRIDE_NEW", StringComparison.Ordinal));
+        Assert.DoesNotContain(requestedUrls, u => u.Contains("PL_STALE_OLD", StringComparison.Ordinal));
 
         var reloadedManifest = CloudExporter.LoadManifest(subDir);
         Assert.NotNull(reloadedManifest);
-        Assert.Equal("https://www.youtube.com/playlist?list=PL_OVERRIDE_NEW", reloadedManifest!.SourceUrl);
+        Assert.Equal("https://stub.example/playlist/PL_OVERRIDE_NEW", reloadedManifest!.SourceUrl);
         Assert.Equal("PL_OVERRIDE_NEW", reloadedManifest.RemoteId);
         Assert.Contains(progressEvents, p => p.BytesDownloaded > 0);
     }
@@ -799,34 +777,17 @@ public sealed class CloudExporterTests
         var track = MakeCloudTrack(rootId, "vid_q1", "Quality Track");
         var root = new LibraryRoot(
             Id: rootId,
-            Name: "YT",
-            Kind: RootKind.CloudYouTube,
+            Name: "Stub",
+            Kind: RootKind.CloudExtension,
             Path: null,
-            SourceUrl: "https://music.youtube.com/playlist?list=PL_Q",
-            RemoteId: "PL_Q");
+            SourceUrl: "https://stub.example/playlist/PL_Q",
+            RemoteId: "PL_Q",
+            ProviderId: "ext.stub");
 
         var downloadedUrls = new List<string>();
         var handler = new StubHttpHandler(req =>
         {
             string uri = req.RequestUri!.AbsoluteUri;
-            if (uri.Contains("youtubei/v1/player", StringComparison.Ordinal))
-            {
-                string json = """
-                {
-                  "streamingData": {
-                    "adaptiveFormats": [
-                      { "itag": 140, "url": "https://cdn.example/high-128.m4a", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 128000 },
-                      { "itag": 139, "url": "https://cdn.example/low-48.m4a", "mimeType": "audio/mp4; codecs=\"mp4a.40.5\"", "bitrate": 48000 }
-                    ]
-                  }
-                }
-                """;
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(json, Encoding.UTF8, "application/json")
-                };
-            }
-
             if (req.Method == HttpMethod.Get && uri.StartsWith("https://cdn.example/", StringComparison.Ordinal))
             {
                 downloadedUrls.Add(uri);
@@ -840,7 +801,14 @@ public sealed class CloudExporterTests
         });
 
         var cache = new CloudAudioCache(cacheDir, handler: handler);
-        var exporter = new CloudExporter(cache, new YouTubeClient(handler), new BilibiliClient(handler));
+        var registry = MakeRegistryWithStub(
+            handler,
+            resolve: (_, quality) => Task.FromResult(new CloudAudioStream(
+                quality == "low" ? "https://cdn.example/low-48.m4a" : "https://cdn.example/high-128.m4a",
+                ".m4a",
+                ActualQuality: quality)),
+            qualities: [new ExtensionQualityOption("highest", "High"), new ExtensionQualityOption("low", "Low")]);
+        var exporter = new CloudExporter(cache, registry);
 
         string savedPath = await exporter.ExportTrackAsync(
             track,

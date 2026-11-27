@@ -94,31 +94,77 @@ public sealed class CloudProviderRegistryTests
     {
         var registry = new CloudProviderRegistry();
 
-        Assert.Equal(3, registry.AllProviders.Count);
+        var gd = Assert.Single(registry.AllProviders);
+        Assert.Equal(CloudProviderRegistry.BuiltinGoogleDriveId, gd.ProviderId);
 
-        var yt = registry.GetById(CloudProviderRegistry.BuiltinYouTubeId);
-        var bili = registry.GetById(CloudProviderRegistry.BuiltinBilibiliId);
-        var gd = registry.GetById(CloudProviderRegistry.BuiltinGoogleDriveId);
+        Assert.Null(registry.GetById(CloudProviderRegistry.BuiltinYouTubeId));
+        Assert.Null(registry.GetById(CloudProviderRegistry.BuiltinBilibiliId));
+        Assert.Null(registry.GetBySourceOrProviderId(CloudSources.YouTube));
+        Assert.Null(registry.GetBySourceOrProviderId(CloudSources.Bilibili));
 
-        Assert.NotNull(yt);
-        Assert.NotNull(bili);
-        Assert.NotNull(gd);
-
-        Assert.True(yt!.UsesFlatCloudListing);
-        Assert.False(yt.SupportsProgressiveTree);
-        Assert.True(yt.SupportsProxy);
-
-        Assert.True(bili!.UsesFlatCloudListing);
-        Assert.False(bili.SupportsProgressiveTree);
-        Assert.False(bili.SupportsProxy);
-
-        Assert.False(gd!.UsesFlatCloudListing);
+        Assert.False(gd.UsesFlatCloudListing);
         Assert.True(gd.SupportsProgressiveTree);
         Assert.True(gd.SupportsProxy);
 
-        Assert.Same(yt, registry.GetBySourceOrProviderId(CloudSources.YouTube));
-        Assert.Same(bili, registry.GetBySourceOrProviderId(CloudSources.Bilibili));
         Assert.Same(gd, registry.GetBySourceOrProviderId(CloudSources.GoogleDrive));
+    }
+
+    [Fact]
+    public void LegacyYouTubeAndBilibiliRootsResolveToEnabledExtensionsAndNullWhenMissingOrDisabled()
+    {
+        string stateDir = TestHelpers.MakeTempDir();
+        var registry = new CloudProviderRegistry();
+        var extStore = new ExtensionStore(stateDir);
+        extStore.BindRegistry(registry);
+
+        var ytRoot = new LibraryRoot(
+            Guid.NewGuid(),
+            "Legacy YT",
+            RootKind.CloudYouTube,
+            "https://www.youtube.com/playlist?list=PLlegacy",
+            SourceUrl: "https://www.youtube.com/playlist?list=PLlegacy",
+            RemoteId: "PLlegacy");
+        var biliRoot = new LibraryRoot(
+            Guid.NewGuid(),
+            "Legacy Bili",
+            RootKind.CloudBilibili,
+            "https://www.bilibili.com/video/BV1xx411c7mD",
+            SourceUrl: "https://www.bilibili.com/video/BV1xx411c7mD",
+            RemoteId: "BV1xx411c7mD");
+        var biliTracking = new CloudTrackingInfo(
+            "https://www.bilibili.com/video/BV1xx411c7mD",
+            "BV1xx411c7mD",
+            RootKind.CloudBilibili);
+
+        // Bare app without extensions returns null for legacy YouTube/Bilibili
+        Assert.Null(registry.GetProvider(ytRoot));
+        Assert.Null(registry.GetProvider(biliRoot));
+        Assert.Null(registry.GetProvider(biliTracking));
+        Assert.Null(registry.GetById(CloudProviderRegistry.BuiltinYouTubeId));
+        Assert.Null(registry.GetBySourceOrProviderId(CloudSources.Bilibili));
+
+        // Register compatible extensions (matching official IDs)
+        string ytScript = BuildSampleExtensionScript("youtube-search", "www.youtube.com", @"^https?://(www\.)?youtube\.com/", "YouTube");
+        string biliScript = BuildSampleExtensionScript("bilibili-search", "www.bilibili.com", @"^https?://(www\.)?bilibili\.com/", "Bilibili");
+        var ytExt = extStore.StageImportedPackage(ExtensionPackageLoader.LoadSingleFileScript(ytScript));
+        var biliExt = extStore.StageImportedPackage(ExtensionPackageLoader.LoadSingleFileScript(biliScript));
+        extStore.ApproveAndEnable(ytExt.Id);
+        extStore.ApproveAndEnable(biliExt.Id);
+
+        Assert.Equal("ext.youtube-search", registry.GetProvider(ytRoot)?.ProviderId);
+        Assert.Equal("ext.bilibili-search", registry.GetProvider(biliRoot)?.ProviderId);
+        Assert.Equal("ext.bilibili-search", registry.GetProvider(biliTracking)?.ProviderId);
+        Assert.Equal("ext.youtube-search", registry.GetBySourceOrProviderId(CloudSources.YouTube)?.ProviderId);
+        Assert.Equal("ext.bilibili-search", registry.GetBySourceOrProviderId(CloudSources.Bilibili)?.ProviderId);
+
+        // Disabling extension returns null again for legacy roots/sources
+        extStore.SetEnabled(ytExt.Id, false);
+        extStore.SetEnabled(biliExt.Id, false);
+        Assert.Null(registry.GetProvider(ytRoot));
+        Assert.Null(registry.GetProvider(biliRoot));
+        Assert.Null(registry.GetProvider(biliTracking));
+        Assert.Null(registry.GetById(CloudProviderRegistry.BuiltinYouTubeId));
+        Assert.Null(registry.GetBySourceOrProviderId(CloudSources.Bilibili));
     }
 
     [Fact]
@@ -316,13 +362,16 @@ public sealed class CloudProviderRegistryTests
         var ext = extStore.StageImportedPackage(ExtensionPackageLoader.LoadSingleFileScript(script));
         extStore.ApproveAndEnable(ext.Id);
 
-        // Manual override to disabled/unknown provider throws ExtensionUnavailable
+        // Manual override to disabled/unknown/removed builtin provider throws ExtensionUnavailable
         await Assert.ThrowsAsync<CloudServiceException>(() =>
             CloudUrlClassifier.ClassifyAsync("https://a.test/item/42", registry, preferredProviderId: "ext.does.not.exist"));
+        var removedBuiltinEx = await Assert.ThrowsAsync<CloudServiceException>(() =>
+            CloudUrlClassifier.ClassifyAsync("https://a.test/item/42", registry, preferredProviderId: CloudProviderRegistry.BuiltinYouTubeId));
+        Assert.Equal(CloudErrorCode.ExtensionUnavailable, removedBuiltinEx.Code);
 
         // Manual override to wrong provider throws InvalidUrl
         var wrongEx = await Assert.ThrowsAsync<CloudServiceException>(() =>
-            CloudUrlClassifier.ClassifyAsync("https://a.test/item/42", registry, preferredProviderId: CloudProviderRegistry.BuiltinYouTubeId));
+            CloudUrlClassifier.ClassifyAsync("https://a.test/item/42", registry, preferredProviderId: CloudProviderRegistry.BuiltinGoogleDriveId));
         Assert.Equal(CloudErrorCode.InvalidUrl, wrongEx.Code);
 
         var lib = new LibraryStore(

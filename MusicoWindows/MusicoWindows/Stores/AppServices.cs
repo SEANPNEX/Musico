@@ -23,18 +23,16 @@ public sealed class AppServices : IDisposable
 
         var artwork = new ArtworkCache(Path.Combine(StateDirectory, "Artwork"));
         CloudCache = new CloudAudioCache(Path.Combine(StateDirectory, "CloudCache"));
-        YouTube = new YouTubeClient();
-        Bilibili = new BilibiliClient();
         GoogleDriveOAuth = new GoogleDriveOAuthManager(StateDirectory);
         GoogleDrive = new GoogleDriveClient(oauthTokenProvider: (force, ct) => GoogleDriveOAuth.GetValidAccessTokenAsync(force, ct));
-        CloudProviders = new CloudProviderRegistry(YouTube, Bilibili, GoogleDrive);
+        CloudProviders = new CloudProviderRegistry(GoogleDrive);
         Extensions = new ExtensionStore(
             stateDirectory: StateDirectory,
             appVersion: UpdateService.GetCurrentAppVersion().ToString());
         Extensions.BindRegistry(CloudProviders);
         Thumbnails = new CloudThumbnailCache();
 
-        CloudExporter = new CloudExporter(CloudCache, YouTube, Bilibili, artwork, GoogleDrive, CloudProviders, Extensions, Thumbnails);
+        CloudExporter = new CloudExporter(CloudCache, CloudProviders, artwork, Extensions, Thumbnails);
 
         Library = new LibraryStore(
             stateDirectory: StateDirectory,
@@ -42,8 +40,6 @@ public sealed class AppServices : IDisposable
             reader: new TagLibMetadataReader(),
             artwork: artwork,
             appFolderRemovable: true,
-            youtubeClient: YouTube,
-            bilibiliClient: Bilibili,
             cloudCache: CloudCache,
             googleDriveClient: GoogleDrive,
             providerRegistry: CloudProviders);
@@ -67,8 +63,6 @@ public sealed class AppServices : IDisposable
             settingsPath: Path.Combine(StateDirectory, "settings.json"),
             smtc: Smtc,
             cloudCache: CloudCache,
-            youtubeClient: YouTube,
-            bilibiliClient: Bilibili,
             googleDriveClient: GoogleDrive,
             providerRegistry: CloudProviders,
             extensions: Extensions);
@@ -78,8 +72,6 @@ public sealed class AppServices : IDisposable
     public string MusicDirectory { get; }
     public CloudAudioCache CloudCache { get; }
     public CloudThumbnailCache Thumbnails { get; }
-    public YouTubeClient YouTube { get; }
-    public BilibiliClient Bilibili { get; }
     public GoogleDriveOAuthManager GoogleDriveOAuth { get; }
     public GoogleDriveClient GoogleDrive { get; }
     public CloudProviderRegistry CloudProviders { get; }

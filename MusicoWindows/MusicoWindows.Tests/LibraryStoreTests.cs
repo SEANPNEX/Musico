@@ -264,40 +264,6 @@ public sealed class LibraryStoreTests
     public async Task CloudRootAddSyncResilienceAndRemoveWorks()
     {
         bool failNetwork = false;
-        string playlistJson = """
-        {
-          "header": { "musicDetailHeaderRenderer": { "title": { "runs": [{ "text": "Cloud Mix" }] } } },
-          "contents": {
-            "singleColumnBrowseResultsRenderer": {
-              "tabs": [{
-                "tabRenderer": {
-                  "content": {
-                    "sectionListRenderer": {
-                      "contents": [{
-                        "musicPlaylistShelfRenderer": {
-                          "contents": [
-                            {
-                              "musicResponsiveListItemRenderer": {
-                                "playlistItemData": { "videoId": "cloudvid001" },
-                                "thumbnail": { "musicThumbnailRenderer": { "thumbnail": { "thumbnails": [{ "url": "https://img.test/cover.jpg", "width": 400 }] } } },
-                                "flexColumns": [
-                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Cloud Song 1" }] } } },
-                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Cloud Artist" }, { "text": " • " }, { "text": "2:30" }] } } }
-                                ]
-                              }
-                            }
-                          ]
-                        }
-                      }]
-                    }
-                  }
-                }
-              }]
-            }
-          }
-        }
-        """;
-
         // Valid 1x1 RGB PNG so Windows WIC BitmapDecoder accepts it in CI as well as macOS.
         byte[] fakeArtBytes =
         [
@@ -317,30 +283,40 @@ public sealed class LibraryStoreTests
             {
                 throw new HttpRequestException("Offline");
             }
-            return new HttpResponseMessage(HttpStatusCode.OK)
+            if (req.RequestUri!.AbsoluteUri.Contains("/drive/folders/gdCloudTest1", StringComparison.Ordinal))
             {
-                Content = new StringContent(playlistJson, Encoding.UTF8, "application/json")
-            };
+                string html = """
+                <html><head><title>Cloud Test - Google Drive</title></head><body>
+                <script>window['_DRIVE_ivd'] = '[["gd_file_1",["gdCloudTest1"],"Cloud Song.mp3","audio/mpeg"]]';</script>
+                </body></html>
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(html, Encoding.UTF8, "text/html")
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
-        var yt = new YouTubeClient(handler);
+        var gd = new GoogleDriveClient(handler);
+        var registry = new MusicoWindows.Extensions.CloudProviderRegistry(gd);
         var store = new LibraryStore(
             _stateDir,
             _musicDir,
             _reader,
             new ArtworkCache(Path.Combine(_stateDir, "Artwork")),
-            youtubeClient: yt,
-            artworkHandler: handler);
+            artworkHandler: handler,
+            googleDriveClient: gd,
+            providerRegistry: registry);
 
-        var root = await store.AddCloudRootAsync("https://music.youtube.com/playlist?list=PLCloudTest1234", proxyUrl: "7890");
-        Assert.Equal(RootKind.CloudYouTube, root.Kind);
+        var root = await store.AddCloudRootAsync("https://drive.google.com/drive/folders/gdCloudTest1", proxyUrl: "7890");
+        Assert.Equal(RootKind.CloudGoogleDrive, root.Kind);
         Assert.Equal("http://127.0.0.1:7890", root.ProxyUrl);
         Assert.True(store.IsAvailable(root));
 
         var track = Assert.Single(store.Tracks);
         Assert.True(track.IsCloud);
         Assert.True(store.IsAvailable(track));
-        Assert.NotNull(track.ArtworkKey);
         var addedUtc = track.DateAddedUtc;
 
         var plId = store.CreatePlaylist("My Cloud List");
@@ -361,8 +337,9 @@ public sealed class LibraryStoreTests
             _musicDir,
             _reader,
             new ArtworkCache(Path.Combine(_stateDir, "Artwork")),
-            youtubeClient: yt,
-            artworkHandler: handler);
+            artworkHandler: handler,
+            googleDriveClient: gd,
+            providerRegistry: registry);
         Assert.Equal(2, reloaded.Roots.Count);
         Assert.True(reloaded.IsAvailable(reloaded.Roots[1]));
 

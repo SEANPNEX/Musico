@@ -28,8 +28,6 @@ public sealed class PlayerController : ObservableStore, IDisposable
     private readonly string _settingsPath;
     private readonly string _audioPrefsPath;
     private readonly CloudAudioCache _cloudCache;
-    private readonly YouTubeClient _youtube;
-    private readonly BilibiliClient _bilibili;
     private readonly GoogleDriveClient _googleDrive;
     private readonly CloudProviderRegistry _providerRegistry;
     private readonly ExtensionStore? _extensions;
@@ -72,8 +70,6 @@ public sealed class PlayerController : ObservableStore, IDisposable
         ISmtcBridge? smtc = null,
         bool enableTicker = true,
         CloudAudioCache? cloudCache = null,
-        YouTubeClient? youtubeClient = null,
-        BilibiliClient? bilibiliClient = null,
         GoogleDriveClient? googleDriveClient = null,
         CloudProviderRegistry? providerRegistry = null,
         ExtensionStore? extensions = null)
@@ -87,8 +83,6 @@ public sealed class PlayerController : ObservableStore, IDisposable
         string stateDir = Path.GetDirectoryName(settingsPath) ?? string.Empty;
         _audioPrefsPath = Path.Combine(stateDir, "audio_prefs.json");
         _cloudCache = cloudCache ?? new CloudAudioCache(Path.Combine(stateDir, "CloudCache"));
-        _youtube = youtubeClient ?? new YouTubeClient();
-        _bilibili = bilibiliClient ?? new BilibiliClient();
         _googleDrive = googleDriveClient ?? new GoogleDriveClient();
         _providerRegistry = providerRegistry ?? library.CloudProviders;
         _extensions = extensions;

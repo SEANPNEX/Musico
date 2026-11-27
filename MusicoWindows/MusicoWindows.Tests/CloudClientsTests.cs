@@ -7,6 +7,7 @@ using System.Text;
 using System.Text.Json;
 using MusicoWindows.Cloud;
 using MusicoWindows.Core;
+using MusicoWindows.Extensions;
 using MusicoWindows.Models;
 using MusicoWindows.Stores;
 using Xunit;
@@ -54,834 +55,15 @@ public sealed class CloudClientsTests
         new(code) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
 
     [Fact]
-    public void YouTubeUrlAndIdParsingHandlesAllFormats()
-    {
-        var t1 = YouTubeClient.ParseInput("https://music.youtube.com/playlist?list=PL1234567890abcdef");
-        Assert.True(t1.IsPlaylist);
-        Assert.Equal("PL1234567890abcdef", t1.PlaylistId);
-
-        var t2 = YouTubeClient.ParseInput("https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=OLAK5uy_k12345678");
-        Assert.True(t2.IsPlaylist);
-        Assert.Equal("OLAK5uy_k12345678", t2.PlaylistId);
-        Assert.Equal("dQw4w9WgXcQ", t2.VideoId);
-
-        var t2b = YouTubeClient.ParseInput("https://youtu.be/dQw4w9WgXcQ?list=RDdQw4w9WgXcQ");
-        Assert.True(t2b.IsPlaylist);
-        Assert.Equal("RDdQw4w9WgXcQ", t2b.PlaylistId);
-        Assert.Equal("dQw4w9WgXcQ", t2b.VideoId);
-
-        var tBrowse = YouTubeClient.ParseInput("https://music.youtube.com/browse/MPREb_4pQ5x8K9y2Z");
-        Assert.True(tBrowse.IsPlaylist);
-        Assert.Equal("MPREb_4pQ5x8K9y2Z", tBrowse.PlaylistId);
-        Assert.Null(tBrowse.VideoId);
-
-        var t3 = YouTubeClient.ParseInput("https://youtu.be/dQw4w9WgXcQ?t=10");
-        Assert.False(t3.IsPlaylist);
-        Assert.Equal("dQw4w9WgXcQ", t3.VideoId);
-
-        var t4 = YouTubeClient.ParseInput("PLabcdefgh123456");
-        Assert.True(t4.IsPlaylist);
-        Assert.Equal("PLabcdefgh123456", t4.PlaylistId);
-
-        var tRdmm = YouTubeClient.ParseInput("RDMM");
-        Assert.True(tRdmm.IsPlaylist);
-        Assert.Equal("RDMM", tRdmm.PlaylistId);
-        Assert.True(YouTubeClient.LooksLikeRawYouTubeId("RDMM"));
-        Assert.Equal(RootKind.CloudYouTube, CloudUrlClassifier.Classify("RDMM"));
-
-        var tMpreb = YouTubeClient.ParseInput("MPREb_4pQ5x8K9y2Z");
-        Assert.True(tMpreb.IsPlaylist);
-        Assert.Equal("MPREb_4pQ5x8K9y2Z", tMpreb.PlaylistId);
-        Assert.True(YouTubeClient.LooksLikeRawYouTubeId("MPREb_4pQ5x8K9y2Z"));
-        Assert.Equal(RootKind.CloudYouTube, CloudUrlClassifier.Classify("MPREb_4pQ5x8K9y2Z"));
-
-        var t5 = YouTubeClient.ParseInput("dQw4w9WgXcQ");
-        Assert.False(t5.IsPlaylist);
-        Assert.Equal("dQw4w9WgXcQ", t5.VideoId);
-
-        Assert.Throws<ArgumentException>(() => YouTubeClient.ParseInput("https://example.com/foo"));
-    }
-
-    [Fact]
     public void ProxyNormalizationMatchesAriaFormats()
     {
-        Assert.Null(YouTubeClient.NormalizeProxyUrl(null));
-        Assert.Null(YouTubeClient.NormalizeProxyUrl("   "));
-        Assert.Equal("http://127.0.0.1:7890", YouTubeClient.NormalizeProxyUrl("7890"));
-        Assert.Equal("http://127.0.0.1:8080", YouTubeClient.NormalizeProxyUrl("127.0.0.1:8080"));
-        Assert.Equal("https://proxy.local:3128", YouTubeClient.NormalizeProxyUrl("https://proxy.local:3128"));
-        Assert.Throws<ArgumentException>(() => YouTubeClient.NormalizeProxyUrl("99999"));
-        Assert.Throws<ArgumentException>(() => YouTubeClient.NormalizeProxyUrl("ftp://proxy:21"));
-    }
-
-    [Fact]
-    public void SapisidHashHeaderMatchesExpectedSha1Vector()
-    {
-        string? header = YouTubeClient.BuildSapisidHashHeader(
-            "PREF=f1; SAPISID=my_secret_sid; SID=abc",
-            "https://music.youtube.com",
-            timestampOverride: 1700000000);
-
-        byte[] expected = SHA1.HashData(Encoding.UTF8.GetBytes("1700000000 my_secret_sid https://music.youtube.com"));
-        string expectedHex = Convert.ToHexString(expected).ToLowerInvariant();
-        Assert.Equal($"SAPISIDHASH 1700000000_{expectedHex}", header);
-        Assert.Null(YouTubeClient.BuildSapisidHashHeader("PREF=f1", "https://music.youtube.com"));
-    }
-
-    [Fact]
-    public async Task YouTubeInnertubeBrowsePaginatesAndParsesBothRenderers()
-    {
-        string page1Json = """
-        {
-          "header": {
-            "musicDetailHeaderRenderer": {
-              "title": { "runs": [ { "text": "Late Night Mix" } ] }
-            }
-          },
-          "contents": {
-            "singleColumnBrowseResultsRenderer": {
-              "tabs": [{
-                "tabRenderer": {
-                  "content": {
-                    "sectionListRenderer": {
-                      "contents": [{
-                        "musicPlaylistShelfRenderer": {
-                          "contents": [
-                            {
-                              "musicResponsiveListItemRenderer": {
-                                "playlistItemData": { "videoId": "vid00000001" },
-                                "thumbnail": {
-                                  "musicThumbnailRenderer": {
-                                    "thumbnail": { "thumbnails": [{ "url": "https://img.example/1.jpg", "width": 544 }] }
-                                  }
-                                },
-                                "flexColumns": [
-                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Track One" }] } } },
-                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Artist A" }, { "text": " • " }, { "text": "3:15" }] } } }
-                                ]
-                              }
-                            },
-                            {
-                              "continuationItemRenderer": {
-                                "continuationEndpoint": {
-                                  "continuationCommand": { "token": "CONT_PAGE_2" }
-                                }
-                              }
-                            }
-                          ]
-                        }
-                      }]
-                    }
-                  }
-                }
-              }]
-            }
-          }
-        }
-        """;
-
-        string page2Json = """
-        {
-          "onResponseReceivedActions": [{
-            "appendContinuationItemsAction": {
-              "continuationItems": [{
-                "playlistVideoRenderer": {
-                  "videoId": "vid00000002",
-                  "title": { "simpleText": "Track Two" },
-                  "shortBylineText": { "runs": [{ "text": "Artist B" }] },
-                  "lengthSeconds": "245",
-                  "thumbnail": { "thumbnails": [{ "url": "//img.example/2.jpg", "width": 480 }] }
-                }
-              }]
-            }
-          }]
-        }
-        """;
-
-        int browseCalls = 0;
-        var handler = new StubHttpHandler(req =>
-        {
-            browseCalls++;
-            return browseCalls == 1 ? JsonResponse(page1Json) : JsonResponse(page2Json);
-        });
-
-        var client = new YouTubeClient(handler);
-        var result = await client.FetchPlaylistAsync("https://music.youtube.com/playlist?list=PLTest12345678");
-
-        Assert.Equal(RootKind.CloudYouTube, result.Kind);
-        Assert.Equal("Late Night Mix", result.Title);
-        Assert.Equal(2, result.Items.Count);
-        Assert.Equal("vid00000001", result.Items[0].RemoteTrackId);
-        Assert.Equal("Track One", result.Items[0].Title);
-        Assert.Equal("Artist A", result.Items[0].Artist);
-        Assert.Equal(195, result.Items[0].DurationSeconds);
-        Assert.Equal("vid00000002", result.Items[1].RemoteTrackId);
-        Assert.Equal("https://img.example/2.jpg", result.Items[1].ArtworkUrl);
-        Assert.Equal(245, result.Items[1].DurationSeconds);
-        Assert.Equal(2, browseCalls);
-    }
-
-    [Fact]
-    public async Task YouTubePlayerMultiClientFallbackAndRangeProbeWorks()
-    {
-        string androidForbidden = """{ "playabilityStatus": { "status": "LOGIN_REQUIRED" } }""";
-        string iosSuccess = """
-        {
-          "streamingData": {
-            "adaptiveFormats": [
-              { "itag": 251, "url": "https://cdn.example/opus.webm", "mimeType": "audio/webm; codecs=\"opus\"", "bitrate": 160000 },
-              { "itag": 140, "url": "https://cdn.example/aac128.m4a", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 129000 }
-            ]
-          }
-        }
-        """;
-
-        int playerAttempt = 0;
-        bool sawRangeProbe = false;
-        var handler = new StubHttpHandler(req =>
-        {
-            if (req.RequestUri!.AbsoluteUri.Contains("/youtubei/v1/player"))
-            {
-                playerAttempt++;
-                return playerAttempt == 1 ? JsonResponse(androidForbidden) : JsonResponse(iosSuccess);
-            }
-            if (req.RequestUri.AbsoluteUri == "https://cdn.example/aac128.m4a")
-            {
-                sawRangeProbe = req.Headers.Range is not null;
-                return new HttpResponseMessage(HttpStatusCode.PartialContent);
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
-
-        var client = new YouTubeClient(handler);
-        var stream = await client.ResolveAudioStreamAsync("dQw4w9WgXcQ");
-
-        Assert.Equal("https://cdn.example/aac128.m4a", stream.Url);
-        Assert.Equal(".m4a", stream.Extension);
-        Assert.True(sawRangeProbe);
-        Assert.Equal(2, playerAttempt);
-        Assert.NotNull(stream.Headers);
-        Assert.Equal("bytes=0-", stream.Headers!["Range"]);
-    }
-
-    [Fact]
-    public async Task YouTubeLockupViewModelPageHeaderAndBrowseIdPrefixWorkWithoutSwJsData()
-    {
-        string browseJson = """
-        {
-          "header": {
-            "pageHeaderRenderer": {
-              "content": {
-                "pageHeaderViewModel": {
-                  "title": {
-                    "dynamicTextViewModel": {
-                      "text": { "content": "Album via PageHeaderVM" }
-                    }
-                  }
-                }
-              }
-            }
-          },
-          "contents": {
-            "twoColumnBrowseResultsRenderer": {
-              "tabs": [{
-                "tabRenderer": {
-                  "content": {
-                    "sectionListRenderer": {
-                      "contents": [
-                        {
-                          "lockupViewModel": {
-                            "contentId": "vidLockup01",
-                            "contentType": "LOCKUP_CONTENT_TYPE_VIDEO",
-                            "contentImage": {
-                              "thumbnailViewModel": {
-                                "image": {
-                                  "sources": [
-                                    { "url": "//img.example/small.jpg", "width": 168 },
-                                    { "url": "//img.example/large.jpg", "width": 720 }
-                                  ]
-                                },
-                                "overlays": [{
-                                  "thumbnailOverlayBadgeViewModel": {
-                                    "thumbnailBadges": [{ "thumbnailBadgeViewModel": { "text": "4:05" } }]
-                                  }
-                                }]
-                              }
-                            },
-                            "metadata": {
-                              "lockupMetadataViewModel": {
-                                "title": { "content": "Lockup Track One" },
-                                "metadata": {
-                                  "contentMetadataViewModel": {
-                                    "metadataRows": [{
-                                      "metadataParts": [{ "text": { "content": "Artist Lockup" } }]
-                                    }]
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        },
-                        {
-                          "lockupViewModel": {
-                            "contentId": "vidEleven02",
-                            "metadata": {
-                              "lockupMetadataViewModel": {
-                                "title": { "content": "Lockup Track Two" }
-                              }
-                            }
-                          }
-                        },
-                        {
-                          "lockupViewModel": {
-                            "contentId": "PLShouldBeSkipped1234",
-                            "contentType": "LOCKUP_CONTENT_TYPE_PLAYLIST",
-                            "metadata": {
-                              "lockupMetadataViewModel": {
-                                "title": { "content": "Nested Playlist" }
-                              }
-                            }
-                          }
-                        }
-                      ]
-                    }
-                  }
-                }
-              }]
-            }
-          }
-        }
-        """;
-
-        string? capturedBrowseBody = null;
-        bool sawSwJsData = false;
-        string? clientNameHeader = null;
-        string? clientVersionHeader = null;
-        string? cookieHeader = null;
-
-        var handler = new StubHttpHandler(req =>
-        {
-            string url = req.RequestUri!.AbsoluteUri;
-            if (url.Contains("sw.js_data", StringComparison.Ordinal))
-            {
-                sawSwJsData = true;
-                return new HttpResponseMessage(HttpStatusCode.NotFound);
-            }
-            if (url.Contains("/youtubei/v1/browse", StringComparison.Ordinal))
-            {
-                capturedBrowseBody = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
-                clientNameHeader = req.Headers.GetValues("X-YouTube-Client-Name").FirstOrDefault();
-                clientVersionHeader = req.Headers.GetValues("X-YouTube-Client-Version").FirstOrDefault();
-                cookieHeader = req.Headers.GetValues("Cookie").FirstOrDefault();
-                return JsonResponse(browseJson);
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
-
-        var client = new YouTubeClient(handler);
-        var result = await client.FetchPlaylistAsync("https://music.youtube.com/browse/MPREb_4pQ5x8K9y2Z");
-
-        Assert.False(sawSwJsData);
-        Assert.Equal("67", clientNameHeader);
-        Assert.Equal("1.20260707.12.00", clientVersionHeader);
-        Assert.Equal("SOCS=CAI", cookieHeader);
-        Assert.NotNull(capturedBrowseBody);
-        Assert.Contains("\"browseId\":\"MPREb_4pQ5x8K9y2Z\"", capturedBrowseBody);
-        Assert.DoesNotContain("VLMPREb_", capturedBrowseBody);
-
-        Assert.Equal("Album via PageHeaderVM", result.Title);
-        Assert.Equal("https://music.youtube.com/browse/MPREb_4pQ5x8K9y2Z", result.SourceUrl);
-        Assert.Equal(2, result.Items.Count);
-        Assert.Equal("vidLockup01", result.Items[0].RemoteTrackId);
-        Assert.Equal("Lockup Track One", result.Items[0].Title);
-        Assert.Equal("Artist Lockup", result.Items[0].Artist);
-        Assert.Equal(245, result.Items[0].DurationSeconds);
-        Assert.Equal("https://img.example/large.jpg", result.Items[0].ArtworkUrl);
-        Assert.Equal("vidEleven02", result.Items[1].RemoteTrackId);
-        Assert.Equal("Lockup Track Two", result.Items[1].Title);
-    }
-
-    [Fact]
-    public async Task YouTubeRdMixUsesNextEndpointHtmlFallbackAndSingleVideoFallback()
-    {
-        string nextJson = """
-        {
-          "contents": {
-            "twoColumnWatchNextResults": {
-              "playlist": {
-                "playlist": {
-                  "title": "My YouTube Mix",
-                  "contents": [
-                    {
-                      "playlistPanelVideoRenderer": {
-                        "videoId": "dQw4w9WgXcQ",
-                        "title": { "simpleText": "Mix Track 1" },
-                        "shortBylineText": { "runs": [{ "text": "Mix Artist 1" }] },
-                        "lengthText": { "simpleText": "3:33" },
-                        "thumbnail": { "thumbnails": [{ "url": "https://img.example/m1.jpg", "width": 320 }] }
-                      }
-                    },
-                    {
-                      "playlistPanelVideoRenderer": {
-                        "videoId": "abc12345678",
-                        "title": { "runs": [{ "text": "Mix Track 2" }] },
-                        "longBylineText": { "runs": [{ "text": "Mix Artist 2" }] },
-                        "lengthText": { "simpleText": "4:10" }
-                      }
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        }
-        """;
-
-        string? nextBody = null;
-        string? nextClientName = null;
-        string? nextCookie = null;
-
-        var mixHandler = new StubHttpHandler(req =>
-        {
-            if (req.RequestUri!.AbsoluteUri.Contains("/youtubei/v1/next", StringComparison.Ordinal))
-            {
-                nextBody = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
-                nextClientName = req.Headers.GetValues("X-YouTube-Client-Name").FirstOrDefault();
-                nextCookie = req.Headers.GetValues("Cookie").FirstOrDefault();
-                return JsonResponse(nextJson);
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
-
-        var mixClient = new YouTubeClient(mixHandler);
-        var mixResult = await mixClient.FetchPlaylistAsync("RDdQw4w9WgXcQ");
-
-        Assert.Equal("1", nextClientName);
-        Assert.Equal("SOCS=CAI", nextCookie);
-        Assert.NotNull(nextBody);
-        Assert.Contains("\"playlistId\":\"RDdQw4w9WgXcQ\"", nextBody);
-        Assert.Contains("\"videoId\":\"dQw4w9WgXcQ\"", nextBody);
-        Assert.Equal("My YouTube Mix", mixResult.Title);
-        Assert.Equal(2, mixResult.Items.Count);
-        Assert.Equal("Mix Track 1", mixResult.Items[0].Title);
-        Assert.Equal(213, mixResult.Items[0].DurationSeconds);
-        Assert.Equal("Mix Artist 2", mixResult.Items[1].Artist);
-        Assert.Equal(250, mixResult.Items[1].DurationSeconds);
-
-        // HTML ytInitialData fallback when /browse returns 404
-        string htmlPage = """
-        <html><head><title>YouTube</title></head><body>
-        <script>var ytInitialData = {"metadata":{"playlistMetadataRenderer":{"title":"HTML Fallback List"}},"contents":{"twoColumnBrowseResultsRenderer":{"tabs":[{"tabRenderer":{"content":{"sectionListRenderer":{"contents":[{"playlistVideoRenderer":{"videoId":"htmlVid0001","title":{"simpleText":"HTML Song"},"shortBylineText":{"runs":[{"text":"HTML Artist"}]},"lengthSeconds":"180"}}]}}}}]}}};</script>
-        </body></html>
-        """;
-        string? htmlCookie = null;
-        var htmlHandler = new StubHttpHandler(req =>
-        {
-            if (req.RequestUri!.AbsoluteUri.StartsWith("https://www.youtube.com/playlist?list=PLHtmlFallback1", StringComparison.Ordinal))
-            {
-                htmlCookie = req.Headers.GetValues("Cookie").FirstOrDefault();
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(htmlPage, Encoding.UTF8, "text/html")
-                };
-            }
-            return new HttpResponseMessage(HttpStatusCode.BadRequest);
-        });
-
-        var htmlResult = await new YouTubeClient(htmlHandler).FetchPlaylistAsync("PLHtmlFallback1");
-        Assert.Equal("SOCS=CAI", htmlCookie);
-        Assert.Equal("HTML Fallback List", htmlResult.Title);
-        var htmlTrack = Assert.Single(htmlResult.Items);
-        Assert.Equal("htmlVid0001", htmlTrack.RemoteTrackId);
-        Assert.Equal("HTML Song", htmlTrack.Title);
-
-        // If all playlist fetches yield 0 items and VideoId is present, fall back to FetchSingleVideoInfoAsync
-        var singleFallbackHandler = new StubHttpHandler(req =>
-        {
-            string url = req.RequestUri!.AbsoluteUri;
-            if (url.Contains("/youtubei/v1/player", StringComparison.Ordinal))
-            {
-                return JsonResponse("""
-                {
-                  "videoDetails": {
-                    "videoId": "dQw4w9WgXcQ",
-                    "title": "Single Video Fallback",
-                    "author": "Rick",
-                    "lengthSeconds": "212"
-                  }
-                }
-                """);
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
-
-        var singleResult = await new YouTubeClient(singleFallbackHandler)
-            .FetchPlaylistAsync("https://youtu.be/dQw4w9WgXcQ?list=PLEmpty1234567");
-        Assert.Equal("dQw4w9WgXcQ", singleResult.RemoteId);
-        Assert.Equal("Single Video Fallback", singleResult.Title);
-        var singleItem = Assert.Single(singleResult.Items);
-        Assert.Equal("Rick", singleItem.Artist);
-        Assert.Equal(212, singleItem.DurationSeconds);
-    }
-
-    [Fact]
-    public async Task YouTubeVisionOsVisitorDataPost1Mb403RejectionAndRangeDownloadWork()
-    {
-        const string visitor = "CgJ2aXNpdG9yVGVzdDEyMzQ1";
-        int swJsCalls = 0;
-        string? playerBody = null;
-        string? playerClientName = null;
-        string? playerClientVersion = null;
-        string? playerVisitorHeader = null;
-        string? playerCookie = null;
-        bool rejectedBlocked1Mb = false;
-        bool sawFullRangeDownload = false;
-
-        string playerResponse = """
-        {
-          "streamingData": {
-            "adaptiveFormats": [
-              {
-                "itag": 140,
-                "url": "https://cdn.example/blocked-at-1mb.m4a",
-                "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
-                "bitrate": 129000,
-                "contentLength": "5000000"
-              },
-              {
-                "itag": 141,
-                "url": "https://cdn.example/good-256k.m4a",
-                "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
-                "bitrate": 256000,
-                "contentLength": "2000000"
-              }
-            ]
-          }
-        }
-        """;
-
-        byte[] audioBytes = Encoding.UTF8.GetBytes("full-speed-m4a-stream");
-
-        var handler = new StubHttpHandler(req =>
-        {
-            string url = req.RequestUri!.AbsoluteUri;
-            if (url == "https://www.youtube.com/sw.js_data")
-            {
-                swJsCalls++;
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent($")]}}'\n[[\"f\",\"{visitor}\"]]", Encoding.UTF8, "application/json")
-                };
-            }
-            if (url.Contains("/youtubei/v1/player", StringComparison.Ordinal))
-            {
-                playerBody = req.Content!.ReadAsStringAsync().GetAwaiter().GetResult();
-                playerClientName = req.Headers.GetValues("X-YouTube-Client-Name").FirstOrDefault();
-                playerClientVersion = req.Headers.GetValues("X-YouTube-Client-Version").FirstOrDefault();
-                playerVisitorHeader = req.Headers.GetValues("X-Goog-Visitor-Id").FirstOrDefault();
-                playerCookie = req.Headers.GetValues("Cookie").FirstOrDefault();
-                return JsonResponse(playerResponse);
-            }
-            if (url == "https://cdn.example/blocked-at-1mb.m4a")
-            {
-                var range = req.Headers.Range?.Ranges.FirstOrDefault();
-                if (range is { From: 0, To: 1023 })
-                {
-                    return new HttpResponseMessage(HttpStatusCode.PartialContent);
-                }
-                if (range is { From: 1048576, To: 1049599 })
-                {
-                    rejectedBlocked1Mb = true;
-                    return new HttpResponseMessage(HttpStatusCode.Forbidden);
-                }
-            }
-            if (url == "https://cdn.example/good-256k.m4a")
-            {
-                var range = req.Headers.Range?.Ranges.FirstOrDefault();
-                if (range is { From: 0, To: null })
-                {
-                    sawFullRangeDownload = true;
-                    return new HttpResponseMessage(HttpStatusCode.PartialContent)
-                    {
-                        Content = new ByteArrayContent(audioBytes)
-                    };
-                }
-                if (range is not null)
-                {
-                    return new HttpResponseMessage(HttpStatusCode.PartialContent);
-                }
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
-
-        var client = new YouTubeClient(handler);
-        var stream = await client.ResolveAudioStreamAsync("dQw4w9WgXcQ");
-
-        Assert.Equal(1, swJsCalls);
-        Assert.Equal("101", playerClientName);
-        Assert.Equal("1.02", playerClientVersion);
-        Assert.Equal(visitor, playerVisitorHeader);
-        Assert.Equal("SOCS=CAI", playerCookie);
-        Assert.NotNull(playerBody);
-        Assert.Contains($"\"visitorData\":\"{visitor}\"", playerBody);
-        Assert.True(rejectedBlocked1Mb);
-        Assert.Equal("https://cdn.example/good-256k.m4a", stream.Url);
-        Assert.Equal(".m4a", stream.Extension);
-        Assert.Equal("bytes=0-", stream.Headers!["Range"]);
-        Assert.Equal(2_000_000L, stream.ContentLength);
-
-        // Second resolve reuses cached visitorData without re-fetching sw.js_data
-        var stream2 = await client.ResolveAudioStreamAsync("dQw4w9WgXcQ");
-        Assert.Equal("https://cdn.example/good-256k.m4a", stream2.Url);
-        Assert.Equal(1, swJsCalls);
-
-        // CloudAudioCache forwards Range: bytes=0- and accepts 206 PartialContent
-        string cacheDir = TestHelpers.MakeTempDir();
-        var cache = new CloudAudioCache(cacheDir, handler: handler);
-        string cachedPath = await cache.GetOrDownloadAsync("yt_track_1", ct => client.ResolveAudioStreamAsync("dQw4w9WgXcQ", ct: ct));
-        Assert.True(sawFullRangeDownload);
-        Assert.Equal(audioBytes, File.ReadAllBytes(cachedPath));
-    }
-
-    [Fact]
-    public async Task YouTubeSingleVideoFallsBackToOembedWhenAllPlayerClientsFail()
-    {
-        var triedClientIds = new List<string>();
-        var handler = new StubHttpHandler(req =>
-        {
-            string url = req.RequestUri!.AbsoluteUri;
-            if (url.Contains("/youtubei/v1/player", StringComparison.Ordinal))
-            {
-                if (req.Headers.TryGetValues("X-YouTube-Client-Name", out var vals))
-                {
-                    triedClientIds.Add(vals.First());
-                }
-                return JsonResponse("""{ "playabilityStatus": { "status": "LOGIN_REQUIRED" } }""");
-            }
-            if (url.StartsWith("https://www.youtube.com/oembed?", StringComparison.Ordinal))
-            {
-                return JsonResponse("""
-                {
-                  "title": "OEmbed Fallback Song",
-                  "author_name": "OEmbed Channel",
-                  "thumbnail_url": "http://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg"
-                }
-                """);
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
-
-        var client = new YouTubeClient(handler);
-        var result = await client.FetchPlaylistAsync("https://www.youtube.com/watch?v=dQw4w9WgXcQ");
-
-        Assert.Equal(["101", "3", "5", "1"], triedClientIds);
-        Assert.Equal("OEmbed Fallback Song", result.Title);
-        var item = Assert.Single(result.Items);
-        Assert.Equal("dQw4w9WgXcQ", item.RemoteTrackId);
-        Assert.Equal("OEmbed Channel", item.Artist);
-        Assert.Equal("https://i.ytimg.com/vi/dQw4w9WgXcQ/hqdefault.jpg", item.ArtworkUrl);
-    }
-
-    [Fact]
-    public void BilibiliUrlParsingHandlesAllTargets()
-    {
-        var fav = BilibiliClient.ParseTarget("https://space.bilibili.com/12345/favlist?fid=987654");
-        Assert.Equal(BilibiliTargetKind.FavList, fav.Kind);
-        Assert.Equal("987654", fav.Id);
-
-        var ml = BilibiliClient.ParseTarget("https://www.bilibili.com/medialist/detail/ml555666");
-        Assert.Equal(BilibiliTargetKind.FavList, ml.Kind);
-        Assert.Equal("555666", ml.Id);
-
-        var season = BilibiliClient.ParseTarget("https://space.bilibili.com/42/channel/collectiondetail?sid=777");
-        Assert.Equal(BilibiliTargetKind.Season, season.Kind);
-        Assert.Equal("777", season.Id);
-        Assert.Equal("42", season.Mid);
-
-        var series = BilibiliClient.ParseTarget("https://space.bilibili.com/42/channel/seriesdetail?sid=888");
-        Assert.Equal(BilibiliTargetKind.Series, series.Kind);
-        Assert.Equal("888", series.Id);
-        Assert.Equal("42", series.Mid);
-
-        var bv = BilibiliClient.ParseTarget("https://www.bilibili.com/video/BV1xx411c7mD");
-        Assert.Equal(BilibiliTargetKind.Video, bv.Kind);
-        Assert.Equal("BV1xx411c7mD", bv.Id);
-
-        var av = BilibiliClient.ParseTarget("av170001");
-        Assert.Equal(BilibiliTargetKind.Video, av.Kind);
-        Assert.Equal("av170001", av.Id);
-    }
-
-    [Fact]
-    public void BilibiliWbiMixinAndSigningMatchesStandardVector()
-    {
-        string imgKey = "7cd084941338484aae1ad9425b84077c";
-        string subKey = "4932caff0ff746eab6f01bf08b70ac45";
-
-        string mixin = BilibiliClient.GetMixinKey(imgKey + subKey);
-        Assert.Equal(32, mixin.Length);
-        Assert.Equal("ea1db124af3c7062474693fa704f4ff8", mixin);
-
-        var parameters = new Dictionary<string, string>
-        {
-            ["foo"] = "114",
-            ["bar"] = "514",
-            ["baz"] = "1919810!*'()"
-        };
-        string signed = BilibiliClient.SignWbiQuery(parameters, imgKey, subKey, wtsOverride: 1702204169);
-
-        string expectedRaw = "bar=514&baz=1919810&foo=114&wts=1702204169";
-        string expectedRid = Convert.ToHexString(
-            MD5.HashData(Encoding.UTF8.GetBytes(expectedRaw + mixin))).ToLowerInvariant();
-        Assert.Equal($"{expectedRaw}&w_rid={expectedRid}", signed);
-    }
-
-    [Fact]
-    public async Task BilibiliExpandsMultiPartVideoAndResolvesWbiPlayUrl()
-    {
-        string viewJson = """
-        {
-          "code": 0,
-          "data": {
-            "bvid": "BV1xx411c7mD",
-            "title": "Live Concert",
-            "pic": "http://i0.hdslb.com/bfs/archive/cover.jpg",
-            "duration": 500,
-            "cid": 1001,
-            "owner": { "name": "Musician" },
-            "pages": [
-              { "cid": 1001, "page": 1, "part": "Intro", "duration": 180 },
-              { "cid": 1002, "page": 2, "part": "Finale", "duration": 320 }
-            ]
-          }
-        }
-        """;
-
-        string navJson = """
-        {
-          "code": 0,
-          "data": {
-            "wbi_img": {
-              "img_url": "https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png",
-              "sub_url": "https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png"
-            }
-          }
-        }
-        """;
-
-        string playUrlJson = """
-        {
-          "code": 0,
-          "data": {
-            "dash": {
-              "audio": [
-                { "id": 30216, "bandwidth": 64000, "baseUrl": "https://upos.example/64k.m4s" },
-                { "id": 30280, "bandwidth": 192000, "baseUrl": "https://upos.example/192k.m4s" }
-              ]
-            }
-          }
-        }
-        """;
-
-        bool sawB23Redirect = false;
-        bool sawWbiQuery = false;
-        bool sawReferer = false;
-
-        var handler = new StubHttpHandler(req =>
-        {
-            string url = req.RequestUri!.AbsoluteUri;
-            if (url.Contains("b23.tv"))
-            {
-                sawB23Redirect = true;
-                var resp = new HttpResponseMessage(HttpStatusCode.Redirect);
-                resp.Headers.Location = new Uri("https://www.bilibili.com/video/BV1xx411c7mD");
-                return resp;
-            }
-            if (url.Contains("/x/frontend/finger/spi"))
-            {
-                return JsonResponse("""{"code":0,"data":{"b_3":"BUVID3TEST","b_4":"BUVID4TEST"}}""");
-            }
-            if (url.Contains("/x/web-interface/view"))
-            {
-                return JsonResponse(viewJson);
-            }
-            if (url.Contains("/x/web-interface/nav"))
-            {
-                return JsonResponse(navJson);
-            }
-            if (url.Contains("/x/player/wbi/playurl"))
-            {
-                sawWbiQuery = url.Contains("w_rid=") && url.Contains("wts=");
-                sawReferer = req.Headers.TryGetValues("Referer", out var refs) &&
-                             refs.Any(r => r.Contains("bilibili.com"));
-                return JsonResponse(playUrlJson);
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
-
-        var client = new BilibiliClient(handler);
-        var playlist = await client.FetchPlaylistAsync("https://b23.tv/short123");
-
-        Assert.True(sawB23Redirect);
-        Assert.Equal(RootKind.CloudBilibili, playlist.Kind);
-        Assert.Equal(2, playlist.Items.Count);
-        Assert.Equal("BV1xx411c7mD#1001", playlist.Items[0].RemoteTrackId);
-        Assert.Equal("BV1xx411c7mD#1002", playlist.Items[1].RemoteTrackId);
-        Assert.Equal("P1 Intro", playlist.Items[0].Title);
-        Assert.Equal("P2 Finale", playlist.Items[1].Title);
-        Assert.Equal("https://i0.hdslb.com/bfs/archive/cover.jpg", playlist.Items[0].ArtworkUrl);
-
-        var stream = await client.ResolveAudioStreamAsync("BV1xx411c7mD#1002");
-        Assert.True(sawWbiQuery);
-        Assert.True(sawReferer);
-        Assert.Equal("https://upos.example/192k.m4s", stream.Url);
-        Assert.Equal(".m4a", stream.Extension);
-        Assert.True(stream.Headers!.ContainsKey("Referer"));
-        Assert.True(stream.Headers!.ContainsKey("Cookie"));
-    }
-
-    [Fact]
-    public void BilibiliFavAndSeasonJsonParsingSkipsInvalidAndExtractsCids()
-    {
-        using var favDoc = JsonDocument.Parse("""
-        {
-          "code": 0,
-          "data": {
-            "info": { "title": "My Favs" },
-            "has_more": false,
-            "medias": [
-              { "attr": 0, "bvid": "BV1111111111", "title": "Good Song", "duration": 200, "upper": { "name": "Up1" }, "cover": "http://img/a.jpg", "ugc": { "first_cid": 9001 } },
-              { "attr": 9, "bvid": "BV2222222222", "title": "已失效视频", "duration": 0 }
-            ]
-          }
-        }
-        """);
-
-        var (favTitle, favItems, hasMore) = BilibiliClient.ParseFavListResponse(favDoc.RootElement, "Fallback");
-        Assert.Equal("My Favs", favTitle);
-        Assert.False(hasMore);
-        Assert.Single(favItems);
-        Assert.Equal("BV1111111111#9001", favItems[0].RemoteTrackId);
-        Assert.Equal("https://img/a.jpg", favItems[0].ArtworkUrl);
-
-        using var seasonDoc = JsonDocument.Parse("""
-        {
-          "code": 0,
-          "data": {
-            "meta": { "name": "OST Collection" },
-            "page": { "total": 1 },
-            "archives": [
-              { "bvid": "BV3333333333", "title": "Theme", "duration": 150, "pic": "//img/b.jpg" }
-            ]
-          }
-        }
-        """);
-
-        var (sTitle, sItems, sTotal) = BilibiliClient.ParseArchivesListResponse(seasonDoc.RootElement, "Fallback");
-        Assert.Equal("OST Collection", sTitle);
-        Assert.Equal(1, sTotal);
-        Assert.Single(sItems);
-        Assert.Equal("https://img/b.jpg", sItems[0].ArtworkUrl);
+        Assert.Null(CloudProxyUtils.NormalizeProxyUrl(null));
+        Assert.Null(CloudProxyUtils.NormalizeProxyUrl("   "));
+        Assert.Equal("http://127.0.0.1:7890", CloudProxyUtils.NormalizeProxyUrl("7890"));
+        Assert.Equal("http://127.0.0.1:8080", CloudProxyUtils.NormalizeProxyUrl("127.0.0.1:8080"));
+        Assert.Equal("https://proxy.local:3128", CloudProxyUtils.NormalizeProxyUrl("https://proxy.local:3128"));
+        Assert.Throws<ArgumentException>(() => CloudProxyUtils.NormalizeProxyUrl("99999"));
+        Assert.Throws<ArgumentException>(() => CloudProxyUtils.NormalizeProxyUrl("ftp://proxy:21"));
     }
 
     [Fact]
@@ -958,101 +140,102 @@ public sealed class CloudClientsTests
     }
 
     [Fact]
-    public void ExtractCloudUrlHandlesShareTextTrailingPunctuationAndBareIds()
+    public void BareAppRejectsYouTubeAndBilibiliWhileExtensionsHandleShareTextAndBareIds()
     {
-        // Chinese & English share text with URLs and trailing punctuation
-        Assert.Equal(
-            "https://b23.tv/abc1234",
-            CloudUrlClassifier.ExtractCloudUrl("【歌单】深夜听的歌 https://b23.tv/abc1234"));
-        Assert.Equal(
-            "https://b23.tv/abc1234",
-            CloudUrlClassifier.ExtractCloudUrl("【歌单】深夜听的歌https://b23.tv/abc1234快来听"));
-        Assert.Equal(
-            "https://music.youtube.com/playlist?list=PL1234567890abcdef",
-            CloudUrlClassifier.ExtractCloudUrl("Check out this mix https://music.youtube.com/playlist?list=PL1234567890abcdef。"));
-        Assert.Equal(
-            "https://youtu.be/dQw4w9WgXcQ",
-            CloudUrlClassifier.ExtractCloudUrl("Listen here (https://youtu.be/dQw4w9WgXcQ),"));
-        Assert.Equal(
-            "https://www.bilibili.com/video/BV1xx411c7mD",
-            CloudUrlClassifier.ExtractCloudUrl("Favorite track [https://www.bilibili.com/video/BV1xx411c7mD]."));
-        Assert.Equal(
-            "https://www.bilibili.com/video/BV1xx411c7mD?p=2",
-            CloudUrlClassifier.ExtractCloudUrl("【合集】https://www.bilibili.com/video/BV1xx411c7mD?p=2】"));
-        Assert.Equal(
-            "https://music.youtube.com/playlist?list=OLAK5uy_k12345678",
-            CloudUrlClassifier.ExtractCloudUrl("「夜曲」https://music.youtube.com/playlist?list=OLAK5uy_k12345678」"));
-        Assert.Equal(
-            "https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1234567890abcdef",
-            CloudUrlClassifier.ExtractCloudUrl("《歌单》https://www.youtube.com/watch?v=dQw4w9WgXcQ&list=PL1234567890abcdef》"));
-        Assert.Equal(
-            "https://youtu.be/dQw4w9WgXcQ",
-            CloudUrlClassifier.ExtractCloudUrl("Share: \"https://youtu.be/dQw4w9WgXcQ\""));
-        Assert.Equal(
-            "https://youtu.be/dQw4w9WgXcQ",
-            CloudUrlClassifier.ExtractCloudUrl("Share: 'https://youtu.be/dQw4w9WgXcQ'."));
+        string stateDir = TestHelpers.MakeTempDir();
+        var bareRegistry = new CloudProviderRegistry();
 
-        // Multi-line share text & multiple URLs
+        // Bare app rejects YouTube & Bilibili URLs and bare IDs cleanly
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("https://music.youtube.com/playlist?list=PL1234567890abcdef"));
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("https://youtu.be/dQw4w9WgXcQ"));
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("https://www.bilibili.com/video/BV1xx411c7mD"));
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("https://b23.tv/abc1234"));
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("PL1234567890abcdef", bareRegistry));
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("RDMM", bareRegistry));
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("MPREb_4pQ5x8K9y2Z", bareRegistry));
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("dQw4w9WgXcQ", bareRegistry));
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("BV1xx411c7mD", bareRegistry));
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("av170001", bareRegistry));
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("ml555666", bareRegistry));
+
+        // Bare app still supports Google Drive URLs
+        Assert.Equal(RootKind.CloudGoogleDrive, CloudUrlClassifier.Classify("https://drive.google.com/drive/folders/abc1234", bareRegistry));
         Assert.Equal(
-            "https://space.bilibili.com/12345/favlist?fid=987654",
-            CloudUrlClassifier.ExtractCloudUrl("【B站收藏夹】夜曲\nhttps://space.bilibili.com/12345/favlist?fid=987654\n打开哔哩哔哩"));
+            "drive.google.com/drive/folders/abc1234",
+            CloudUrlClassifier.ExtractCloudUrl("Check folder drive.google.com/drive/folders/abc1234。"));
+
+        // Register YouTube & Bilibili JS extensions
+        var extRegistry = new CloudProviderRegistry();
+        var extStore = new ExtensionStore(stateDir);
+        extStore.BindRegistry(extRegistry);
+
+        string ytScript = """
+            var manifest = {
+              apiVersion: 1,
+              id: 'youtube-search',
+              name: 'YouTube',
+              version: '1.0.0',
+              capabilities: ['playlist', 'stream'],
+              urlPatterns: [
+                '^(https?://)?(www\\.|m\\.|music\\.)?youtube(-nocookie)?\\.com/(watch|playlist|browse|shorts|live|embed|v/)',
+                '^(https?://)?(www\\.)?youtu\\.be/[A-Za-z0-9_-]{11}',
+                '^(PL|OLAK5uy_|MPREb_|UU|FL|RD)[A-Za-z0-9_-]{8,}$',
+                '^RDMM$'
+              ],
+              permissions: { hosts: ['youtube.com', 'music.youtube.com', 'youtu.be'] }
+            };
+            function canHandle(input) {
+              return { matched: true, normalizedUrl: input.extractedUrl, remoteId: 'yt-1', kind: 'playlist' };
+            }
+            async function fetchCollection() { return { remoteId: 'yt-1', title: 'YT', tracks: [] }; }
+            async function resolveStream() { return { url: 'https://youtube.com/a.m4a' }; }
+            module.exports = { manifest: manifest, canHandle: canHandle, fetchCollection: fetchCollection, resolveStream: resolveStream };
+            """;
+        string biliScript = """
+            var manifest = {
+              apiVersion: 1,
+              id: 'bilibili-search',
+              name: 'Bilibili',
+              version: '1.0.0',
+              capabilities: ['playlist', 'stream'],
+              urlPatterns: [
+                '^(https?://)?(www\\.|m\\.|space\\.)?bilibili\\.com/',
+                '^(https?://)?(www\\.)?b23\\.tv/[A-Za-z0-9]+',
+                '^BV[0-9A-Za-z]{10,}$',
+                '^av[0-9]+$',
+                '^ml[0-9]+$'
+              ],
+              permissions: { hosts: ['bilibili.com', 'b23.tv'] }
+            };
+            function canHandle(input) {
+              return { matched: true, normalizedUrl: input.extractedUrl, remoteId: 'bili-1', kind: 'playlist' };
+            }
+            async function fetchCollection() { return { remoteId: 'bili-1', title: 'Bili', tracks: [] }; }
+            async function resolveStream() { return { url: 'https://bilibili.com/a.m4a' }; }
+            module.exports = { manifest: manifest, canHandle: canHandle, fetchCollection: fetchCollection, resolveStream: resolveStream };
+            """;
+
+        var ytInst = extStore.StageImportedPackage(ExtensionPackageLoader.LoadSingleFileScript(ytScript));
+        var biliInst = extStore.StageImportedPackage(ExtensionPackageLoader.LoadSingleFileScript(biliScript));
+        extStore.ApproveAndEnable(ytInst.Id);
+        extStore.ApproveAndEnable(biliInst.Id);
+
         Assert.Equal(
             "https://b23.tv/abc1234",
-            CloudUrlClassifier.ExtractCloudUrl("App: https://example.com/download Link: https://b23.tv/abc1234"));
-
-        // Scheme-less URLs in share text
+            CloudUrlClassifier.ExtractCloudUrl("App: https://example.com/download Link: https://b23.tv/abc1234", extRegistry));
         Assert.Equal(
             "music.youtube.com/playlist?list=PL1234567890abcdef",
-            CloudUrlClassifier.ExtractCloudUrl("Mix: music.youtube.com/playlist?list=PL1234567890abcdef。"));
+            CloudUrlClassifier.ExtractCloudUrl("Mix: music.youtube.com/playlist?list=PL1234567890abcdef。", extRegistry));
         Assert.Equal(
             "b23.tv/abc1234",
-            CloudUrlClassifier.ExtractCloudUrl("【歌单】b23.tv/abc1234)"));
+            CloudUrlClassifier.ExtractCloudUrl("【歌单】b23.tv/abc1234)", extRegistry));
 
-        // Bare IDs preserved
-        Assert.Equal("PL1234567890abcdef", CloudUrlClassifier.ExtractCloudUrl("  PL1234567890abcdef  "));
-        Assert.Equal("OLAK5uy_k12345678", CloudUrlClassifier.ExtractCloudUrl("OLAK5uy_k12345678"));
-        Assert.Equal("BV1xx411c7mD", CloudUrlClassifier.ExtractCloudUrl("BV1xx411c7mD"));
-        Assert.Equal("av170001", CloudUrlClassifier.ExtractCloudUrl("av170001"));
-        Assert.Equal("ml555666", CloudUrlClassifier.ExtractCloudUrl("ml555666"));
-        Assert.Equal("dQw4w9WgXcQ", CloudUrlClassifier.ExtractCloudUrl("dQw4w9WgXcQ"));
-        Assert.Equal(string.Empty, CloudUrlClassifier.ExtractCloudUrl("   "));
-    }
-
-    [Fact]
-    public void ClassifierAndClientsParseShareTextWithoutTitleInterference()
-    {
-        // Title mentions YouTube, URL is Bilibili -> classifies as Bilibili
-        string biliShare = "【YouTube搬运合集】深夜听的歌 https://b23.tv/abc1234】";
-        Assert.Equal(RootKind.CloudBilibili, CloudUrlClassifier.Classify(biliShare));
-
-        string biliFavShare = "My favs [https://space.bilibili.com/42/favlist?fid=987654].";
-        Assert.Equal(RootKind.CloudBilibili, CloudUrlClassifier.Classify(biliFavShare));
-        var biliTarget = BilibiliClient.ParseTarget(biliFavShare);
-        Assert.Equal(BilibiliTargetKind.FavList, biliTarget.Kind);
-        Assert.Equal("987654", biliTarget.Id);
-
-        // Title mentions BV id, URL is YouTube Music -> classifies as YouTube
-        string ytShare = "Check out this BV1xx411c7mD cover https://music.youtube.com/playlist?list=PL1234567890abcdef。";
-        Assert.Equal(RootKind.CloudYouTube, CloudUrlClassifier.Classify(ytShare));
-        var ytTarget = YouTubeClient.ParseInput(ytShare);
-        Assert.True(ytTarget.IsPlaylist);
-        Assert.Equal("PL1234567890abcdef", ytTarget.PlaylistId);
-
-        string ytShortShare = "「Listen」https://youtu.be/dQw4w9WgXcQ?t=10」";
-        Assert.Equal(RootKind.CloudYouTube, CloudUrlClassifier.Classify(ytShortShare));
-        var ytShortTarget = YouTubeClient.ParseInput(ytShortShare);
-        Assert.False(ytShortTarget.IsPlaylist);
-        Assert.Equal("dQw4w9WgXcQ", ytShortTarget.VideoId);
-
-        // Bare IDs still classify and parse
-        Assert.Equal(RootKind.CloudYouTube, CloudUrlClassifier.Classify("PL1234567890abcdef"));
-        Assert.Equal(RootKind.CloudYouTube, CloudUrlClassifier.Classify("OLAK5uy_k12345678"));
-        Assert.Equal(RootKind.CloudBilibili, CloudUrlClassifier.Classify("BV1xx411c7mD"));
-        Assert.Equal(RootKind.CloudBilibili, CloudUrlClassifier.Classify("av170001"));
-        Assert.Equal(RootKind.CloudBilibili, CloudUrlClassifier.Classify("ml555666"));
-
-        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("https://example.com/foo"));
-        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("just some random text"));
+        Assert.Equal(RootKind.CloudExtension, CloudUrlClassifier.Classify("【YouTube搬运合集】深夜听的歌 https://b23.tv/abc1234】", extRegistry));
+        Assert.Equal(RootKind.CloudExtension, CloudUrlClassifier.Classify("Check out this BV1xx411c7mD cover https://music.youtube.com/playlist?list=PL1234567890abcdef。", extRegistry));
+        Assert.Equal(RootKind.CloudExtension, CloudUrlClassifier.Classify("PL1234567890abcdef", extRegistry));
+        Assert.Equal(RootKind.CloudExtension, CloudUrlClassifier.Classify("BV1xx411c7mD", extRegistry));
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("https://example.com/foo", extRegistry));
+        Assert.Throws<ArgumentException>(() => CloudUrlClassifier.Classify("just some random text", extRegistry));
     }
 
     [Fact]
@@ -1061,98 +244,84 @@ public sealed class CloudClientsTests
         string stateDir = TestHelpers.MakeTempDir();
         string musicDir = TestHelpers.MakeTempDir();
 
-        string ytJson = """
-        {
-          "header": { "musicDetailHeaderRenderer": { "title": { "runs": [{ "text": "YT Mix" }] } } },
-          "contents": {
-            "singleColumnBrowseResultsRenderer": {
-              "tabs": [{
-                "tabRenderer": {
-                  "content": {
-                    "sectionListRenderer": {
-                      "contents": [{
-                        "musicPlaylistShelfRenderer": {
-                          "contents": [
-                            {
-                              "musicResponsiveListItemRenderer": {
-                                "playlistItemData": { "videoId": "vid00000001" },
-                                "flexColumns": [
-                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Song Alpha" }] } } },
-                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Artist A" }] } } }
-                                ]
-                              }
-                            },
-                            {
-                              "musicResponsiveListItemRenderer": {
-                                "playlistItemData": { "videoId": "vid00000002" },
-                                "flexColumns": [
-                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Song Beta" }] } } },
-                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Artist B" }] } } }
-                                ]
-                              }
-                            }
-                          ]
-                        }
-                      }]
-                    }
-                  }
-                }
-              }]
-            }
-          }
-        }
-        """;
+        var registry = new CloudProviderRegistry();
+        var extStore = new ExtensionStore(stateDir);
+        extStore.BindRegistry(registry);
 
-        string biliViewJson = """
-        {
-          "code": 0,
-          "data": {
-            "bvid": "BV1xx411c7mD",
-            "title": "Bili Concert",
-            "duration": 400,
-            "cid": 1001,
-            "owner": { "name": "Uploader" },
-            "pages": [
-              { "cid": 1001, "page": 1, "part": "Part One", "duration": 180 },
-              { "cid": 1002, "page": 2, "part": "Part Two", "duration": 220 }
-            ]
-          }
-        }
-        """;
-
-        var handler = new StubHttpHandler(req =>
-        {
-            string url = req.RequestUri!.AbsoluteUri;
-            if (url.Contains("/youtubei/v1/browse")) return JsonResponse(ytJson);
-            if (url.Contains("b23.tv"))
-            {
-                var resp = new HttpResponseMessage(HttpStatusCode.Redirect);
-                resp.Headers.Location = new Uri("https://www.bilibili.com/video/BV1xx411c7mD");
-                return resp;
+        string ytScript = """
+            var manifest = {
+              apiVersion: 1,
+              id: 'youtube-search',
+              name: 'YouTube',
+              version: '1.0.0',
+              capabilities: ['playlist', 'stream'],
+              urlPatterns: ['^(https?://)?(www\\.|m\\.|music\\.)?youtube\\.com/'],
+              permissions: { hosts: ['music.youtube.com'] }
+            };
+            function canHandle(input) {
+              return { matched: true, normalizedUrl: input.extractedUrl, remoteId: 'PLShareTest123', kind: 'playlist' };
             }
-            if (url.Contains("/x/frontend/finger/spi"))
-                return JsonResponse("""{"code":0,"data":{"b_3":"BUVID3TEST","b_4":"BUVID4TEST"}}""");
-            if (url.Contains("/x/web-interface/view"))
-                return JsonResponse(biliViewJson);
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
+            async function fetchCollection() {
+              return {
+                remoteId: 'PLShareTest123',
+                title: 'YT Mix',
+                tracks: [
+                  { remoteTrackId: 'vid00000001', title: 'Song Alpha', artist: 'Artist A', trackNumber: 1 },
+                  { remoteTrackId: 'vid00000002', title: 'Song Beta', artist: 'Artist B', trackNumber: 2 }
+                ]
+              };
+            }
+            async function resolveStream() { return { url: 'https://music.youtube.com/a.m4a' }; }
+            module.exports = { manifest: manifest, canHandle: canHandle, fetchCollection: fetchCollection, resolveStream: resolveStream };
+            """;
+        string biliScript = """
+            var manifest = {
+              apiVersion: 1,
+              id: 'bilibili-search',
+              name: 'Bilibili',
+              version: '1.0.0',
+              capabilities: ['playlist', 'stream'],
+              urlPatterns: ['^(https?://)?(www\\.)?b23\\.tv/'],
+              permissions: { hosts: ['b23.tv'] }
+            };
+            function canHandle(input) {
+              return { matched: true, normalizedUrl: 'https://b23.tv/short123', remoteId: 'BV1xx411c7mD', kind: 'playlist' };
+            }
+            async function fetchCollection() {
+              return {
+                remoteId: 'BV1xx411c7mD',
+                title: 'Bili Concert',
+                tracks: [
+                  { remoteTrackId: 'BV1xx411c7mD#1001', title: 'Part One', artist: 'Uploader', trackNumber: 1 },
+                  { remoteTrackId: 'BV1xx411c7mD#1002', title: 'Part Two', artist: 'Uploader', trackNumber: 2 }
+                ]
+              };
+            }
+            async function resolveStream() { return { url: 'https://b23.tv/a.m4a' }; }
+            module.exports = { manifest: manifest, canHandle: canHandle, fetchCollection: fetchCollection, resolveStream: resolveStream };
+            """;
+
+        var ytInst = extStore.StageImportedPackage(ExtensionPackageLoader.LoadSingleFileScript(ytScript));
+        var biliInst = extStore.StageImportedPackage(ExtensionPackageLoader.LoadSingleFileScript(biliScript));
+        extStore.ApproveAndEnable(ytInst.Id);
+        extStore.ApproveAndEnable(biliInst.Id);
 
         var lib = new LibraryStore(
             stateDir,
             musicDir,
             new StubMetadataReader(),
             new ArtworkCache(Path.Combine(stateDir, "Art")),
-            youtubeClient: new YouTubeClient(handler),
-            bilibiliClient: new BilibiliClient(handler),
-            artworkHandler: handler);
+            providerRegistry: registry);
 
         var ytRoot = await lib.AddCloudRootAsync("Check out this mix https://music.youtube.com/playlist?list=PLShareTest123。");
-        Assert.Equal(RootKind.CloudYouTube, ytRoot.Kind);
+        Assert.Equal(RootKind.CloudExtension, ytRoot.Kind);
+        Assert.Equal("ext.youtube-search", ytRoot.ProviderId);
         Assert.Equal("https://music.youtube.com/playlist?list=PLShareTest123", ytRoot.SourceUrl);
 
         var biliRoot = await lib.AddCloudRootAsync("【歌单】深夜听的歌 https://b23.tv/short123)");
-        Assert.Equal(RootKind.CloudBilibili, biliRoot.Kind);
-        Assert.Equal("https://www.bilibili.com/video/BV1xx411c7mD", biliRoot.SourceUrl);
+        Assert.Equal(RootKind.CloudExtension, biliRoot.Kind);
+        Assert.Equal("ext.bilibili-search", biliRoot.ProviderId);
+        Assert.Equal("https://b23.tv/short123", biliRoot.SourceUrl);
 
         // Verify cloud folder custom ordering persists cleanly without losing tracks
         var history = new PlayHistoryStore(stateDir);
@@ -1643,71 +812,6 @@ public sealed class CloudClientsTests
             client.FetchPlaylistAsync("https://drive.google.com/u/1/file/d/doc_pdf/preview"));
         await Assert.ThrowsAsync<InvalidOperationException>(() =>
             client.FetchPlaylistAsync("https://drive.google.com/file/d/doc_mime/view"));
-    }
-
-    [Fact]
-    public async Task YouTubeResolveAudioStreamPopulatesContentLengthWhenPresentAndNullWhenMissing()
-    {
-        string withLengthJson = """
-        {
-          "streamingData": {
-            "adaptiveFormats": [
-              {
-                "itag": 140,
-                "url": "https://cdn.example/large.m4a",
-                "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
-                "bitrate": 129000,
-                "contentLength": "10485760"
-              }
-            ]
-          }
-        }
-        """;
-
-        string withoutLengthJson = """
-        {
-          "streamingData": {
-            "adaptiveFormats": [
-              {
-                "itag": 140,
-                "url": "https://cdn.example/unknown.m4a",
-                "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"",
-                "bitrate": 129000
-              }
-            ]
-          }
-        }
-        """;
-
-        bool returnWithLength = true;
-        var handler = new StubHttpHandler(req =>
-        {
-            string url = req.RequestUri!.AbsoluteUri;
-            if (url == "https://www.youtube.com/sw.js_data")
-            {
-                return new HttpResponseMessage(HttpStatusCode.NotFound);
-            }
-            if (url.Contains("/youtubei/v1/player", StringComparison.Ordinal))
-            {
-                return JsonResponse(returnWithLength ? withLengthJson : withoutLengthJson);
-            }
-            if (url.StartsWith("https://cdn.example/", StringComparison.Ordinal))
-            {
-                return new HttpResponseMessage(HttpStatusCode.PartialContent);
-            }
-            return new HttpResponseMessage(HttpStatusCode.NotFound);
-        });
-
-        var client = new YouTubeClient(handler);
-
-        var largeStream = await client.ResolveAudioStreamAsync("vidWithLen1");
-        Assert.Equal(10_485_760L, largeStream.ContentLength);
-        Assert.Equal(".m4a", largeStream.Extension);
-
-        returnWithLength = false;
-        var unknownStream = await client.ResolveAudioStreamAsync("vidNoLen002");
-        Assert.Null(unknownStream.ContentLength);
-        Assert.Equal(".m4a", unknownStream.Extension);
     }
 
     [Fact]

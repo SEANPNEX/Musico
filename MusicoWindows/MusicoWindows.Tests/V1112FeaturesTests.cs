@@ -46,17 +46,17 @@ public sealed class V1112FeaturesTests
     private static LibraryStore MakeLibrary(
         string stateDir,
         string musicDir,
-        YouTubeClient? youtube = null,
         GoogleDriveClient? googleDrive = null,
-        HttpMessageHandler? handler = null) =>
+        HttpMessageHandler? handler = null,
+        MusicoWindows.Extensions.CloudProviderRegistry? registry = null) =>
         new(
             stateDir,
             musicDir,
             new StubMetadataReader(),
             new ArtworkCache(Path.Combine(stateDir, "Artwork")),
-            youtubeClient: youtube,
+            artworkHandler: handler,
             googleDriveClient: googleDrive,
-            artworkHandler: handler);
+            providerRegistry: registry);
 
     [Fact]
     public async Task LibraryStoreProgressiveGoogleDriveLoadsRootFirstUnionsSubfoldersPrioritizesRemapsLegacyIdsAndCancelsOnRemove()
@@ -316,22 +316,22 @@ public sealed class V1112FeaturesTests
         store.UpdateCloudTrackingAddress(
             parentRoot.Id,
             "BiliMix",
-            "https://www.youtube.com/playlist?list=PL_EDITED_DEST",
+            "https://drive.google.com/drive/folders/gdEditedDest1?usp=sharing",
             cookie: "NID=updated",
             proxyUrl: "7890");
 
         var editedTracking = store.GetCloudTracking(parentRoot.Id, "BiliMix");
         Assert.NotNull(editedTracking);
-        Assert.Equal("https://www.youtube.com/playlist?list=PL_EDITED_DEST", editedTracking!.SourceUrl);
-        Assert.Equal("PL_EDITED_DEST", editedTracking.RemoteId);
-        Assert.Equal(RootKind.CloudYouTube, editedTracking.CloudKind);
+        Assert.Equal("https://drive.google.com/drive/folders/gdEditedDest1?usp=sharing", editedTracking!.SourceUrl);
+        Assert.Equal("gdEditedDest1", editedTracking.RemoteId);
+        Assert.Equal(RootKind.CloudGoogleDrive, editedTracking.CloudKind);
         Assert.Equal("http://127.0.0.1:7890", editedTracking.ProxyUrl);
 
         var diskManifest = CloudExporter.LoadManifest(exportedSubDir);
         Assert.NotNull(diskManifest);
-        Assert.Equal("https://www.youtube.com/playlist?list=PL_EDITED_DEST", diskManifest!.SourceUrl);
-        Assert.Equal("PL_EDITED_DEST", diskManifest.RemoteId);
-        Assert.Equal(RootKind.CloudYouTube.ToString(), diskManifest.CloudKind);
+        Assert.Equal("https://drive.google.com/drive/folders/gdEditedDest1?usp=sharing", diskManifest!.SourceUrl);
+        Assert.Equal("gdEditedDest1", diskManifest.RemoteId);
+        Assert.Equal(RootKind.CloudGoogleDrive.ToString(), diskManifest.CloudKind);
 
         // Deleting DriveAuto's manifest causes next RescanAsync to prune DriveAuto from TrackedSubfolders.
         File.Delete(Path.Combine(scannedSubDir, CloudExporter.ManifestFileName));
@@ -362,30 +362,7 @@ public sealed class V1112FeaturesTests
         var handler = new AsyncStubHttpHandler(async (req, ct) =>
         {
             string url = req.RequestUri!.AbsoluteUri;
-            if (url.Contains("youtubei/v1/player", StringComparison.Ordinal))
-            {
-                string body = req.Content is not null
-                    ? await req.Content.ReadAsStringAsync(ct).ConfigureAwait(false)
-                    : string.Empty;
-                string cdnUrl = body.Contains("vidSlow1", StringComparison.Ordinal)
-                    ? "https://cdn.example/slow.m4a"
-                    : "https://cdn.example/fast.m4a";
-                string json = $$"""
-                {
-                  "streamingData": {
-                    "adaptiveFormats": [
-                      { "itag": 140, "url": "{{cdnUrl}}", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 128000 }
-                    ]
-                  }
-                }
-                """;
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(json, Encoding.UTF8, "application/json")
-                };
-            }
-
-            if (url == "https://cdn.example/fast.m4a")
+            if (url.Contains("id=gdFast1", StringComparison.Ordinal))
             {
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
@@ -393,7 +370,7 @@ public sealed class V1112FeaturesTests
                 };
             }
 
-            if (url == "https://cdn.example/slow.m4a")
+            if (url.Contains("id=gdSlow1", StringComparison.Ordinal))
             {
                 slowTrackStarted.TrySetResult();
                 await slowTrackGate.Task.WaitAsync(ct).ConfigureAwait(false);
@@ -406,18 +383,20 @@ public sealed class V1112FeaturesTests
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
-        var store = MakeLibrary(stateDir, musicDir, youtube: new YouTubeClient(handler), handler: handler);
+        var gd = new GoogleDriveClient(handler);
+        var registry = new MusicoWindows.Extensions.CloudProviderRegistry(gd);
+        var store = MakeLibrary(stateDir, musicDir, googleDrive: gd, handler: handler, registry: registry);
         var cache = new CloudAudioCache(cacheDir, handler: handler);
-        var exporter = new CloudExporter(cache, new YouTubeClient(handler), new BilibiliClient(handler));
+        var exporter = new CloudExporter(cache, registry);
         var downloads = new DownloadManager(exporter, store);
 
         var cloudRoot = new LibraryRoot(
             Guid.NewGuid(),
             "Fast Mix",
-            RootKind.CloudYouTube,
-            "https://www.youtube.com/playlist?list=PL_FAST",
-            SourceUrl: "https://www.youtube.com/playlist?list=PL_FAST",
-            RemoteId: "PL_FAST");
+            RootKind.CloudGoogleDrive,
+            "https://drive.google.com/drive/folders/gdFastFolder",
+            SourceUrl: "https://drive.google.com/drive/folders/gdFastFolder",
+            RemoteId: "gdFastFolder");
         var fastTrack = new Track(
             Id: Track.MakeId(cloudRoot.Id, "fast.mp3"),
             RootId: cloudRoot.Id,
@@ -425,7 +404,7 @@ public sealed class V1112FeaturesTests
             Title: "Fast Track",
             Artist: "Artist",
             Album: "Fast Mix",
-            AlbumArtist: "YouTube",
+            AlbumArtist: "Google Drive",
             TrackNumber: 1,
             DiscNumber: 1,
             DurationSeconds: 60,
@@ -434,8 +413,8 @@ public sealed class V1112FeaturesTests
             HasEmbeddedLyrics: false,
             DateAddedUtc: DateTimeOffset.UtcNow,
             ArtworkKey: null,
-            CloudSource: CloudSources.YouTube,
-            RemoteTrackId: "vidFast1");
+            CloudSource: CloudSources.GoogleDrive,
+            RemoteTrackId: "gdFast1");
 
         var completedTcs = new TaskCompletionSource<DownloadJob>(TaskCreationOptions.RunContinuationsAsynchronously);
         var cancelledTcs = new TaskCompletionSource<DownloadJob>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -465,7 +444,7 @@ public sealed class V1112FeaturesTests
         Assert.Contains(store.Roots, r => r.IsCloudTrackedLocal && r.Path == Path.Combine(exportParentDir, "Fast Mix"));
 
         // Cancelling a running SingleTrackExport stops the transfer and marks job Cancelled.
-        var slowTrack = fastTrack with { Id = Track.MakeId(cloudRoot.Id, "slow.mp3"), RelativePath = "slow.mp3", Title = "Slow Track", RemoteTrackId = "vidSlow1" };
+        var slowTrack = fastTrack with { Id = Track.MakeId(cloudRoot.Id, "slow.mp3"), RelativePath = "slow.mp3", Title = "Slow Track", RemoteTrackId = "gdSlow1" };
         var singleJob = downloads.StartSingleTrackExport(slowTrack, cloudRoot, TestHelpers.MakeTempDir());
         await slowTrackStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
         Assert.True(downloads.HasActiveDownloads);

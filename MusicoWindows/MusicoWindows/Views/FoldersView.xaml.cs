@@ -56,6 +56,7 @@ public partial class FoldersView : UserControl
         Detach();
         _ctx = ctx;
         _ctx.Services.Library.PropertyChanged += OnLibraryChanged;
+        _ctx.Services.Library.CloudRootMerged += OnCloudRootMerged;
         _ctx.Services.Player.PropertyChanged += OnPlayerChanged;
         LocalizationManager.LanguageChanged += OnLanguageChanged;
         Refresh();
@@ -80,6 +81,7 @@ public partial class FoldersView : UserControl
         LocalizationManager.LanguageChanged -= OnLanguageChanged;
         if (_ctx is null) return;
         _ctx.Services.Library.PropertyChanged -= OnLibraryChanged;
+        _ctx.Services.Library.CloudRootMerged -= OnCloudRootMerged;
         _ctx.Services.Player.PropertyChanged -= OnPlayerChanged;
     }
 
@@ -89,7 +91,28 @@ public partial class FoldersView : UserControl
         Refresh();
     }
 
-    private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e) => Refresh();
+    private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(Refresh);
+            return;
+        }
+        Refresh();
+    }
+
+    private void OnCloudRootMerged(Guid oldCloudRootId, Guid targetRootId, string targetRelativePath)
+    {
+        if (!Dispatcher.CheckAccess())
+        {
+            Dispatcher.BeginInvoke(() => OnCloudRootMerged(oldCloudRootId, targetRootId, targetRelativePath));
+            return;
+        }
+        if (_ctx is null || _currentRootId != oldCloudRootId) return;
+        _currentRootId = targetRootId;
+        _currentPath = LibraryRoot.NormalizeFolderPath(targetRelativePath);
+        Refresh();
+    }
 
     private void OnPlayerChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -256,7 +279,7 @@ public partial class FoldersView : UserControl
                     ? (syncSuffix is not null
                         ? $"{L.SongsCount(count)} · {syncSuffix} · {locationDisplay}"
                         : $"{L.SongsCount(count)} · {locationDisplay}")
-                    : root.Kind == RootKind.CloudExtension
+                    : root.IsCloud
                         ? L.Get("Folders_ExtensionUnavailable")
                         : L.Get("Folders_Unavailable"),
                 FontFamily = (FontFamily)FindResource("Win10Font"),
@@ -286,7 +309,7 @@ public partial class FoldersView : UserControl
                 };
                 actions.Children.Add(locateBtn);
             }
-            else if (!available && root.Kind == RootKind.CloudExtension)
+            else if (!available && root.IsCloud)
             {
                 var recoveryMatches = lib.GetCompatibleRecoveryProviders(root);
                 if (recoveryMatches.Count > 0)
@@ -348,7 +371,7 @@ public partial class FoldersView : UserControl
                 {
                     e.Handled = true;
                     var tracksToSave = lib.GetTracksUnder(rootId, string.Empty);
-                    _ctx.OpenSaveCloudPlaylist?.Invoke(root, tracksToSave);
+                    _ctx.OpenSaveCloudPlaylist?.Invoke(root, tracksToSave, true);
                 };
                 actions.Children.Add(saveBtn);
             }
@@ -458,9 +481,9 @@ public partial class FoldersView : UserControl
                         menu.Items.Add(TrackMenuHelper.CreateItem(
                             L.Get("Folders_SaveToLocal"),
                             "\uE896",
-                            () => _ctx.OpenSaveCloudPlaylist?.Invoke(root, rootTracks),
+                            () => _ctx.OpenSaveCloudPlaylist?.Invoke(root, rootTracks, true),
                             rootTracks.Count > 0 && available));
-                        if (!available && root.Kind == RootKind.CloudExtension)
+                        if (!available && root.IsCloud)
                         {
                             var recoveryMatches = lib.GetCompatibleRecoveryProviders(root);
                             if (recoveryMatches.Count > 0)
@@ -597,7 +620,7 @@ public partial class FoldersView : UserControl
 
         ContentStack.Children.Clear();
 
-        if (root.Kind == RootKind.CloudExtension && !lib.IsAvailable(root))
+        if (root.IsCloud && !lib.IsAvailable(root))
         {
             ContentStack.Children.Add(BuildExtensionUnavailableBanner(root));
         }
@@ -1090,7 +1113,7 @@ public partial class FoldersView : UserControl
         if (root is null || !root.IsCloud) return;
         var tracks = _ctx.Services.Library.GetTracksUnder(rid, _currentPath);
         if (tracks.Count == 0) return;
-        _ctx.OpenSaveCloudPlaylist?.Invoke(root, tracks);
+        _ctx.OpenSaveCloudPlaylist?.Invoke(root, tracks, string.IsNullOrEmpty(_currentPath));
     }
 
     private void UpdateTrackedFolder_Click(object sender, RoutedEventArgs e)

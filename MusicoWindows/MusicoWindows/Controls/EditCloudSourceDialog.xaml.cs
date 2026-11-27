@@ -314,7 +314,7 @@ public partial class EditCloudSourceDialog : UserControl
 
         try
         {
-            YouTubeClient.NormalizeProxyUrl(proxy);
+            CloudProxyUtils.NormalizeProxyUrl(proxy);
 
             if (_root.IsCloud && string.IsNullOrEmpty(_relativePath))
             {

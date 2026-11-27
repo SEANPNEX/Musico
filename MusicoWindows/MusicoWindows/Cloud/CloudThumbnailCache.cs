@@ -15,6 +15,8 @@ public sealed class CloudThumbnailCache
     public const int DefaultMaxEntries = 200;
     public const long DefaultMaxBytes = 32L * 1024 * 1024;
     public const int MaxSingleImageBytes = 8 * 1024 * 1024;
+    public const string DefaultUserAgent =
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/137.0.0.0 Safari/537.36";
 
     private sealed class ByteEntry
     {
@@ -106,33 +108,18 @@ public sealed class CloudThumbnailCache
         return false;
     }
 
-    public static string? InferReferer(string? url)
+    public Task<byte[]?> GetBytesAsync(string? url, CancellationToken ct = default) =>
+        GetBytesAsync(url, configureRequest: null, ct);
+
+    public Task<byte[]?> GetBytesAsync(string? url, string? referer, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(url) || !Uri.TryCreate(url.Trim(), UriKind.Absolute, out var uri))
-        {
-            return null;
-        }
-
-        string host = uri.Host.ToLowerInvariant();
-        if (host.Equals("hdslb.com", StringComparison.Ordinal) ||
-            host.EndsWith(".hdslb.com", StringComparison.Ordinal) ||
-            host.Equals("bilivideo.com", StringComparison.Ordinal) ||
-            host.EndsWith(".bilivideo.com", StringComparison.Ordinal) ||
-            host.Equals("bilibili.com", StringComparison.Ordinal) ||
-            host.EndsWith(".bilibili.com", StringComparison.Ordinal) ||
-            host.Equals("biliimg.com", StringComparison.Ordinal) ||
-            host.EndsWith(".biliimg.com", StringComparison.Ordinal))
-        {
-            return BilibiliClient.DefaultReferer;
-        }
-
-        return null;
+        Action<HttpRequestMessage>? configure = string.IsNullOrWhiteSpace(referer)
+            ? null
+            : req => req.Headers.TryAddWithoutValidation("Referer", referer.Trim());
+        return GetBytesAsync(url, configure, ct);
     }
 
-    public Task<byte[]?> GetBytesAsync(string? url, CancellationToken ct = default) =>
-        GetBytesAsync(url, referer: null, ct);
-
-    public async Task<byte[]?> GetBytesAsync(string? url, string? referer, CancellationToken ct = default)
+    public async Task<byte[]?> GetBytesAsync(string? url, Action<HttpRequestMessage>? configureRequest, CancellationToken ct = default)
     {
         if (!IsAllowedHttpsUrl(url))
         {
@@ -159,7 +146,7 @@ public sealed class CloudThumbnailCache
             if (!_inFlight.TryGetValue(key, out sharedTask!))
             {
                 startedNew = true;
-                sharedTask = DownloadAndStoreAsync(key, referer);
+                sharedTask = DownloadAndStoreAsync(key, configureRequest);
                 _inFlight[key] = sharedTask;
             }
         }
@@ -286,18 +273,14 @@ public sealed class CloudThumbnailCache
         }
     }
 
-    private async Task<byte[]?> DownloadAndStoreAsync(string url, string? referer = null)
+    private async Task<byte[]?> DownloadAndStoreAsync(string url, Action<HttpRequestMessage>? configureRequest = null)
     {
         try
         {
             using var client = CloudHttpHelper.CreateClient(proxyUrl: null, _handler, TimeSpan.FromSeconds(15));
             using var req = new HttpRequestMessage(HttpMethod.Get, url);
-            req.Headers.TryAddWithoutValidation("User-Agent", BilibiliClient.DefaultUserAgent);
-            string? effectiveReferer = string.IsNullOrWhiteSpace(referer) ? InferReferer(url) : referer.Trim();
-            if (!string.IsNullOrEmpty(effectiveReferer))
-            {
-                req.Headers.TryAddWithoutValidation("Referer", effectiveReferer);
-            }
+            req.Headers.TryAddWithoutValidation("User-Agent", DefaultUserAgent);
+            configureRequest?.Invoke(req);
             using var resp = await client.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, CancellationToken.None)
                 .ConfigureAwait(false);
 

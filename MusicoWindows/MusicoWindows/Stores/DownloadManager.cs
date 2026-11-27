@@ -143,7 +143,8 @@ public sealed class DownloadManager
         IReadOnlyList<Track> tracks,
         string parentDirectory,
         string folderName,
-        bool addToLibrary)
+        bool addToLibrary,
+        bool isWholeRootExport = true)
     {
         ArgumentNullException.ThrowIfNull(root);
         ArgumentNullException.ThrowIfNull(tracks);
@@ -171,7 +172,7 @@ public sealed class DownloadManager
             TargetRootId: root.Id);
 
         var entry = RegisterJob(job);
-        _ = RunPlaylistExportAsync(entry, root, trackSnapshot, parentDirectory, folderName, addToLibrary);
+        _ = RunPlaylistExportAsync(entry, root, trackSnapshot, parentDirectory, folderName, addToLibrary, isWholeRootExport);
         return job;
     }
 
@@ -387,7 +388,8 @@ public sealed class DownloadManager
         IReadOnlyList<Track> tracks,
         string parentDirectory,
         string folderName,
-        bool addToLibrary)
+        bool addToLibrary,
+        bool isWholeRootExport)
     {
         var ct = entry.Cts.Token;
         var progress = new InlineProgress(p =>
@@ -411,12 +413,24 @@ public sealed class DownloadManager
                 ct).ConfigureAwait(false);
 
             string? libraryNote = null;
+            Guid? resolvedTargetRootId = null;
+            string? resolvedTargetRelPath = null;
+            bool shouldMergeCloudRoot = root.Kind.IsCloud() && isWholeRootExport;
+
             if (addToLibrary && result.SavedCount > 0)
             {
                 bool wasAlreadyIndexed = _library.IsFolderIndexed(result.DestinationFolder);
                 try
                 {
-                    await _library.RegisterExportedCloudFolderAsync(result.DestinationFolder, root).ConfigureAwait(false);
+                    await _library.RegisterExportedCloudFolderAsync(
+                        result.DestinationFolder,
+                        root,
+                        mergeCloudRoot: shouldMergeCloudRoot).ConfigureAwait(false);
+                    if (_library.ResolveIndexedFolderLocation(result.DestinationFolder) is { } loc)
+                    {
+                        resolvedTargetRootId = loc.RootId;
+                        resolvedTargetRelPath = loc.RelativePath;
+                    }
                     libraryNote = wasAlreadyIndexed
                         ? L.Get("SaveCloud_LibraryRescanned")
                         : L.Get("SaveCloud_AddedToLibrary");
@@ -430,7 +444,15 @@ public sealed class DownloadManager
             {
                 try
                 {
-                    await _library.RegisterExportedCloudFolderAsync(result.DestinationFolder, root).ConfigureAwait(false);
+                    await _library.RegisterExportedCloudFolderAsync(
+                        result.DestinationFolder,
+                        root,
+                        mergeCloudRoot: shouldMergeCloudRoot).ConfigureAwait(false);
+                    if (_library.ResolveIndexedFolderLocation(result.DestinationFolder) is { } loc)
+                    {
+                        resolvedTargetRootId = loc.RootId;
+                        resolvedTargetRelPath = loc.RelativePath;
+                    }
                     libraryNote = L.Get("SaveCloud_LibraryRescanned");
                 }
                 catch
@@ -455,6 +477,8 @@ public sealed class DownloadManager
                 FailedItems = result.FailedCount,
                 Errors = result.Errors,
                 LibraryNote = libraryNote,
+                TargetRootId = resolvedTargetRootId ?? j.TargetRootId,
+                TargetRelativePath = resolvedTargetRelPath ?? j.TargetRelativePath,
                 BytesPerSecond = 0,
                 FinishedUtc = DateTimeOffset.UtcNow
             });
