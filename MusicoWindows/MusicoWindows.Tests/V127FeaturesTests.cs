@@ -299,141 +299,14 @@ public sealed class V127FeaturesTests : IDisposable
     // ==================== Feature A2: Built-in Provider Qualities ====================
 
     [Fact]
-    public async Task BilibiliClientResolvesRequestedQualitiesAcrossIdsAndPopulatesMetadata()
+    public void GoogleDriveBuiltinHasNoQualitySelectorsAndBareRegistryHasSingleBuiltin()
     {
-        var handler = new StubHttpHandler((req, _) =>
-        {
-            string uri = req.RequestUri!.AbsoluteUri;
-            if (uri.Contains("x/web-interface/nav"))
-            {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent("""{"code":0,"data":{"wbi_img":{"img_url":"https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png","sub_url":"https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png"}}}""", Encoding.UTF8, "application/json")
-                });
-            }
-            if (uri.Contains("x/web-interface/view"))
-            {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent("""{"code":0,"data":{"bvid":"BV1xx411c7mD","cid":1001,"pages":[{"cid":1001,"part":"Song"}]}}""", Encoding.UTF8, "application/json")
-                });
-            }
-            if (uri.Contains("x/player/wbi/playurl"))
-            {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent("""
-                    {
-                      "code":0,
-                      "data":{
-                        "dash":{
-                          "audio":[
-                            {"id":30216,"baseUrl":"https://upos.bilivideo.com/low.m4s","bandwidth":66000},
-                            {"id":30232,"baseUrl":"https://upos.bilivideo.com/std.m4s","bandwidth":132000},
-                            {"id":30280,"baseUrl":"https://upos.bilivideo.com/high.m4s","bandwidth":192000},
-                            {"id":30251,"baseUrl":"https://upos.bilivideo.com/hires.flac","bandwidth":960000}
-                          ]
-                        }
-                      }
-                    }
-                    """, Encoding.UTF8, "application/json")
-                });
-            }
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
-        });
-
-        var bili = new BilibiliClient(handler);
-        var provider = new BilibiliCloudProvider(bili);
-        Assert.Equal(["highest", "high", "standard", "low"], provider.AvailableQualities.Select(q => q.Id));
-        Assert.Equal("standard", provider.DefaultStreamQualityId);
-        Assert.Equal("highest", provider.DefaultDownloadQualityId);
-
-        var qHighest = await provider.ResolveAudioStreamAsync("BV1xx411c7mD#1001", relativePath: null, cookie: null, proxyUrl: null, forceRefresh: false, quality: "highest");
-        Assert.Equal("https://upos.bilivideo.com/hires.flac", qHighest.Url);
-        Assert.Equal("highest", qHighest.ActualQuality);
-        Assert.Equal("FLAC", qHighest.QualityLabel);
-        Assert.Equal(960, qHighest.BitrateKbps);
-
-        var qHigh = await provider.ResolveAudioStreamAsync("BV1xx411c7mD#1001", relativePath: null, cookie: null, proxyUrl: null, forceRefresh: false, quality: "high");
-        Assert.Equal("https://upos.bilivideo.com/high.m4s", qHigh.Url);
-        Assert.Equal("high", qHigh.ActualQuality);
-        Assert.Equal("192k", qHigh.QualityLabel);
-
-        var qStd = await provider.ResolveAudioStreamAsync("BV1xx411c7mD#1001", relativePath: null, cookie: null, proxyUrl: null, forceRefresh: false, quality: "standard");
-        Assert.Equal("https://upos.bilivideo.com/std.m4s", qStd.Url);
-        Assert.Equal("standard", qStd.ActualQuality);
-        Assert.Equal("132k", qStd.QualityLabel);
-
-        var qLow = await provider.ResolveAudioStreamAsync("BV1xx411c7mD#1001", relativePath: null, cookie: null, proxyUrl: null, forceRefresh: false, quality: "low");
-        Assert.Equal("https://upos.bilivideo.com/low.m4s", qLow.Url);
-        Assert.Equal("low", qLow.ActualQuality);
-        Assert.Equal("64k", qLow.QualityLabel);
-
-        var gdrive = new GoogleDriveCloudProvider(new GoogleDriveClient());
-        Assert.Empty(gdrive.AvailableQualities);
-        Assert.Null(gdrive.DefaultStreamQualityId);
-        Assert.Null(gdrive.DefaultDownloadQualityId);
-    }
-
-    [Fact]
-    public async Task YouTubeClientQualitySelectionRanksCompatibleM4aStreamsAndPopulatesLabels()
-    {
-        string playerJson = """
-        {
-          "playabilityStatus": { "status": "OK" },
-          "streamingData": {
-            "adaptiveFormats": [
-              { "itag": 251, "url": "https://rr.googlevideo.com/opus.webm", "mimeType": "audio/webm; codecs=\"opus\"", "bitrate": 160000 },
-              { "itag": 139, "url": "https://rr.googlevideo.com/low.m4a", "mimeType": "audio/mp4; codecs=\"mp4a.40.5\"", "bitrate": 48000 },
-              { "itag": 140, "url": "https://rr.googlevideo.com/std.m4a", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 128000 },
-              { "itag": 141, "url": "https://rr.googlevideo.com/high.m4a", "mimeType": "audio/mp4; codecs=\"mp4a.40.2\"", "bitrate": 256000 }
-            ]
-          }
-        }
-        """;
-
-        var handler = new StubHttpHandler((req, _) =>
-        {
-            if (req.RequestUri!.AbsoluteUri.Contains("/youtubei/v1/player"))
-            {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(playerJson, Encoding.UTF8, "application/json")
-                });
-            }
-            if (req.RequestUri.Host == "rr.googlevideo.com")
-            {
-                var resp = new HttpResponseMessage(HttpStatusCode.PartialContent);
-                resp.Content = new ByteArrayContent([0x00, 0x00]);
-                resp.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("audio/mp4");
-                resp.Content.Headers.ContentRange = new System.Net.Http.Headers.ContentRangeHeaderValue(0, 1, 1024);
-                return Task.FromResult(resp);
-            }
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
-        });
-
-        var yt = new YouTubeClient(handler);
-        var provider = new YouTubeCloudProvider(yt);
-        Assert.Equal(["highest", "high", "standard", "low"], provider.AvailableQualities.Select(q => q.Id));
-        Assert.Equal("standard", provider.DefaultStreamQualityId);
-        Assert.Equal("highest", provider.DefaultDownloadQualityId);
-
-        using var doc = JsonDocument.Parse(playerJson);
-        Assert.Equal("https://rr.googlevideo.com/high.m4a", YouTubeClient.SelectBestAudioFormat(doc.RootElement, "highest")?.Url);
-        Assert.Equal("https://rr.googlevideo.com/std.m4a", YouTubeClient.SelectBestAudioFormat(doc.RootElement, "standard")?.Url);
-        Assert.Equal("https://rr.googlevideo.com/low.m4a", YouTubeClient.SelectBestAudioFormat(doc.RootElement, "low")?.Url);
-
-        var rHighest = await provider.ResolveAudioStreamAsync("dQw4w9WgXcQ", relativePath: null, cookie: null, proxyUrl: null, forceRefresh: false, quality: "highest");
-        Assert.Equal("https://rr.googlevideo.com/high.m4a", rHighest.Url);
-        Assert.Equal("highest", rHighest.ActualQuality);
-        Assert.Equal("256k", rHighest.QualityLabel);
-        Assert.Equal(256, rHighest.BitrateKbps);
-
-        var rLow = await provider.ResolveAudioStreamAsync("dQw4w9WgXcQ", relativePath: null, cookie: null, proxyUrl: null, forceRefresh: false, quality: "low");
-        Assert.Equal("https://rr.googlevideo.com/low.m4a", rLow.Url);
-        Assert.Equal("low", rLow.ActualQuality);
-        Assert.Equal("48k", rLow.QualityLabel);
-        Assert.Equal(48, rLow.BitrateKbps);
+        var registry = new CloudProviderRegistry(new GoogleDriveClient());
+        var gd = Assert.Single(registry.AllProviders);
+        Assert.Equal(CloudProviderRegistry.BuiltinGoogleDriveId, gd.ProviderId);
+        Assert.Empty(gd.AvailableQualities);
+        Assert.Null(gd.DefaultStreamQualityId);
+        Assert.Null(gd.DefaultDownloadQualityId);
     }
 
     // ==================== Feature A3: Resolver Cache Key, AudioCache Partitioning, Persistence & Export ====================
@@ -449,34 +322,19 @@ public sealed class V127FeaturesTests : IDisposable
         var handler = new StubHttpHandler((req, _) =>
         {
             string uri = req.RequestUri!.AbsoluteUri;
-            if (uri.Contains("x/web-interface/nav"))
-            {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent("""{"code":0,"data":{"wbi_img":{"img_url":"https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png","sub_url":"https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png"}}}""", Encoding.UTF8, "application/json")
-                });
-            }
-            if (uri.Contains("x/web-interface/view"))
-            {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent("""{"code":0,"data":{"bvid":"BV1xx411c7mD","cid":1001}}""", Encoding.UTF8, "application/json")
-                });
-            }
-            if (uri.Contains("x/player/wbi/playurl"))
+            if (uri.StartsWith("https://cdn.example.test/resolve/", StringComparison.Ordinal))
             {
                 hits++;
+                string q = uri.Contains("highest", StringComparison.Ordinal) ? "highest" : "standard";
+                string payload = q == "highest"
+                    ? """{"url":"https://cdn.example.test/hires.flac","ext":".flac","label":"FLAC","kbps":960}"""
+                    : """{"url":"https://cdn.example.test/std.m4a","ext":".m4a","label":"132k","kbps":132}""";
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
-                    Content = new StringContent("""
-                    {"code":0,"data":{"dash":{
-                      "audio":[{"id":30232,"baseUrl":"https://cdn.bilivideo.com/std.m4a","bandwidth":132000}],
-                      "flac":{"audio":{"id":30251,"baseUrl":"https://cdn.bilivideo.com/hires.flac","bandwidth":960000}}
-                    }}}
-                    """, Encoding.UTF8, "application/json")
+                    Content = new StringContent(payload, Encoding.UTF8, "application/json")
                 });
             }
-            if (uri.StartsWith("https://cdn.bilivideo.com/", StringComparison.Ordinal))
+            if (uri.StartsWith("https://cdn.example.test/", StringComparison.Ordinal))
             {
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
@@ -486,9 +344,41 @@ public sealed class V127FeaturesTests : IDisposable
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
         });
 
-        var bili = new BilibiliClient(handler);
-        var registry = new CloudProviderRegistry(new YouTubeClient(handler), bili, new GoogleDriveClient(handler));
+        string script = """
+            exports.canHandle = (input) => ({ matched: true, normalizedUrl: input.extractedUrl, remoteId: "q1" });
+            exports.fetchCollection = async () => ({ remoteId: "q1", title: "Q", tracks: [] });
+            exports.resolveStream = async (ctx, req) => {
+              var resp = await ctx.http.request({ method: "GET", url: "https://cdn.example.test/resolve/" + req.quality });
+              var data = JSON.parse(resp.text);
+              return {
+                url: data.url,
+                fileExtension: data.ext,
+                actualQuality: req.quality,
+                qualityLabel: data.label,
+                bitrateKbps: data.kbps
+              };
+            };
+            """;
+        byte[] zip = MakeExtensionZipBytes(
+            "bilibili-search",
+            "1.0.0",
+            ["playlist", "stream"],
+            ["cdn.example.test"],
+            urlPatterns: ["^https?://(www\\.)?bilibili\\.com/"],
+            qualities:
+            [
+                new { id = "highest", label = "Highest (FLAC)", badge = "FLAC", lossless = true },
+                new { id = "standard", label = "Standard (132k)", badge = "132k" }
+            ],
+            defaultStreamQuality: "standard",
+            defaultDownloadQuality: "highest",
+            script: script);
+
+        var registry = new CloudProviderRegistry(new GoogleDriveClient(handler));
+        extStore = new ExtensionStore(stateDir, handler);
         extStore.BindRegistry(registry);
+        InstallAndEnable(extStore, zip);
+
         var root = new LibraryRoot(Guid.NewGuid(), "Bili", RootKind.CloudBilibili, "https://www.bilibili.com/video/BV1xx411c7mD");
         var track = new Track(
             Id: Track.MakeId(root.Id, "song.m4a"),
@@ -517,7 +407,7 @@ public sealed class V127FeaturesTests : IDisposable
         var rHigh = await CloudStreamResolver.ResolveAsync(registry, track, root, extStore, qualityOverride: "highest");
         Assert.Equal(2, hits);
         Assert.Equal("highest", rHigh.ActualQuality);
-        Assert.Equal("https://cdn.bilivideo.com/hires.flac", rHigh.Url);
+        Assert.Equal("https://cdn.example.test/hires.flac", rHigh.Url);
 
         await CloudStreamResolver.ResolveAsync(registry, track, root, extStore, forceRefresh: true, qualityOverride: "standard");
         Assert.Equal(3, hits);
@@ -622,7 +512,7 @@ public sealed class V127FeaturesTests : IDisposable
 
         var extStore = new ExtensionStore(stateDir, handler);
         var installed = InstallAndEnable(extStore, zip);
-        var registry = new CloudProviderRegistry(new YouTubeClient(handler), new BilibiliClient(handler), new GoogleDriveClient(handler));
+        var registry = new CloudProviderRegistry(new GoogleDriveClient(handler));
         extStore.BindRegistry(registry);
         var cache = new CloudAudioCache(cacheDir, handler: handler);
         var exporter = new CloudExporter(cache, registry, extensions: extStore);
@@ -717,7 +607,7 @@ public sealed class V127FeaturesTests : IDisposable
 
         var extStore = new ExtensionStore(stateDir, handler);
         InstallAndEnable(extStore, zip);
-        var registry = new CloudProviderRegistry(new YouTubeClient(handler), new BilibiliClient(handler), new GoogleDriveClient(handler));
+        var registry = new CloudProviderRegistry(new GoogleDriveClient(handler));
         extStore.BindRegistry(registry);
         var cache = new CloudAudioCache(Path.Combine(stateDir, "CloudCache"), handler: handler);
 
@@ -825,7 +715,7 @@ public sealed class V127FeaturesTests : IDisposable
         InstallAndEnable(extStore, zipA);
         InstallAndEnable(extStore, zipB);
 
-        var registry = new CloudProviderRegistry(new YouTubeClient(), new BilibiliClient(), new GoogleDriveClient());
+        var registry = new CloudProviderRegistry(new GoogleDriveClient());
         extStore.BindRegistry(registry);
         var lib = new LibraryStore(
             stateDir, musicDir, new StubMetadataReader(),

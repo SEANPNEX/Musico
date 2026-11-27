@@ -1000,7 +1000,7 @@ class PlayerController(
         }
     }
 
-    private fun tracksRemapped(idMap: Map<String, String>) {
+    fun tracksRemapped(idMap: Map<String, String>) {
         if (idMap.isEmpty()) return
         for ((oldId, newId) in idMap) {
             trackQualityOverrides.remove(oldId)?.let { q ->
@@ -1008,6 +1008,7 @@ class PlayerController(
             }
         }
         queues.remapTracks(idMap)
+        history.remapTracks(idMap)
         val current = _state.value.currentTrack
         val mappedCurrentId = current?.id?.let { idMap[it] }
         if (mappedCurrentId != null) {

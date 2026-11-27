@@ -28,6 +28,7 @@ public partial class SaveCloudFolderDialog : UserControl
     private string? _completedFile;
     private bool _singleTrackMode;
     private Track? _singleTrack;
+    private bool _isWholeRootExport = true;
 
     private sealed record QualityChoice(string QualityId, string Label);
 
@@ -39,7 +40,7 @@ public partial class SaveCloudFolderDialog : UserControl
 
     public bool IsOpen => Visibility == Visibility.Visible;
 
-    public void Show(AppServices services, LibraryRoot root, IReadOnlyList<Track> tracks)
+    public void Show(AppServices services, LibraryRoot root, IReadOnlyList<Track> tracks, bool isWholeRootExport = true)
     {
         DetachSubscription();
         _services = services;
@@ -51,6 +52,7 @@ public partial class SaveCloudFolderDialog : UserControl
         _completedFile = null;
         _singleTrackMode = false;
         _singleTrack = null;
+        _isWholeRootExport = isWholeRootExport;
 
         TitleText.Text = L.Get("SaveCloud_Title");
         SourceSummaryText.Text = $"{root.Name} · {L.SongsCount(tracks.Count)}";
@@ -533,7 +535,7 @@ public partial class SaveCloudFolderDialog : UserControl
         bool addToLibrary = AddToLibraryCheckBox.IsChecked == true;
         ErrorBanner.Visibility = Visibility.Collapsed;
 
-        var job = _services.Downloads.StartPlaylistExport(_root, _tracks, parentDir, folderName, addToLibrary);
+        var job = _services.Downloads.StartPlaylistExport(_root, _tracks, parentDir, folderName, addToLibrary, _isWholeRootExport);
         AttachToJob(_services, job);
     }
 

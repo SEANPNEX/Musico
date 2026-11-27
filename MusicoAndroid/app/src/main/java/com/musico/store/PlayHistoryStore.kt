@@ -138,6 +138,32 @@ class PlayHistoryStore(
         save()
     }
 
+    fun remapTracks(idMap: Map<String, String>) {
+        if (idMap.isEmpty()) return
+        val current = _state.value
+        val nextEntries = current.entries.toMutableMap()
+        var changed = false
+        for ((oldId, newId) in idMap) {
+            if (oldId == newId) continue
+            if (Track.isEphemeralId(oldId) || Track.isEphemeralId(newId)) continue
+            val oldEntry = nextEntries.remove(oldId) ?: continue
+            changed = true
+            val existingNew = nextEntries[newId]
+            nextEntries[newId] = if (existingNew != null) {
+                PlayHistoryEntry(
+                    count = existingNew.count + oldEntry.count,
+                    lastPlayedEpochMs = maxOf(existingNew.lastPlayedEpochMs, oldEntry.lastPlayedEpochMs),
+                )
+            } else {
+                oldEntry
+            }
+        }
+        if (changed) {
+            _state.value = current.copy(entries = nextEntries)
+            save()
+        }
+    }
+
     fun count(id: String): Int = if (Track.isEphemeralId(id)) 0 else (_state.value.entries[id]?.count ?: 0)
 
     fun lastPlayed(id: String): Long? = if (Track.isEphemeralId(id)) null else _state.value.entries[id]?.lastPlayedEpochMs

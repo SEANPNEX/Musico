@@ -48,8 +48,6 @@ public sealed class LibraryStore : ObservableStore
     private readonly IMetadataReader _reader;
     private readonly int _scanBatchSize;
     private readonly bool _appFolderRemovable;
-    private readonly YouTubeClient _youtube;
-    private readonly BilibiliClient _bilibili;
     private readonly GoogleDriveClient _googleDrive;
     private readonly CloudProviderRegistry _providerRegistry;
     private readonly HttpMessageHandler? _artworkHandler;
@@ -97,8 +95,6 @@ public sealed class LibraryStore : ObservableStore
         ArtworkCache artwork,
         int scanBatchSize = 100,
         bool appFolderRemovable = true,
-        YouTubeClient? youtubeClient = null,
-        BilibiliClient? bilibiliClient = null,
         HttpMessageHandler? artworkHandler = null,
         CloudAudioCache? cloudCache = null,
         GoogleDriveClient? googleDriveClient = null,
@@ -110,10 +106,8 @@ public sealed class LibraryStore : ObservableStore
         Artwork = artwork;
         _scanBatchSize = Math.Max(scanBatchSize, 1);
         _appFolderRemovable = appFolderRemovable;
-        _youtube = youtubeClient ?? new YouTubeClient();
-        _bilibili = bilibiliClient ?? new BilibiliClient();
-        _googleDrive = googleDriveClient ?? new GoogleDriveClient();
-        _providerRegistry = providerRegistry ?? new CloudProviderRegistry(_youtube, _bilibili, _googleDrive);
+        _googleDrive = googleDriveClient ?? providerRegistry?.GoogleDrive ?? new GoogleDriveClient();
+        _providerRegistry = providerRegistry ?? new CloudProviderRegistry(_googleDrive);
         _providerRegistry.Changed += OnCloudProvidersChanged;
         _artworkHandler = artworkHandler;
         _cloudCache = cloudCache;
@@ -200,6 +194,7 @@ public sealed class LibraryStore : ObservableStore
     public Action<ISet<string>>? OnTracksRemoved { get; set; }
     public Action<IReadOnlyDictionary<string, string>>? OnTracksMigrated { get; set; }
     public Action<string, IReadOnlyList<string>>? OnFolderAdded { get; set; }
+    public event Action<Guid, Guid, string>? CloudRootMerged;
     public event Action<Track>? TrackUpdated;
 
     private string LibraryPath => Path.Combine(_stateDirectory, "library.json");
@@ -266,17 +261,17 @@ public sealed class LibraryStore : ObservableStore
 
     public bool IsAvailable(LibraryRoot root)
     {
-        if (root.Kind == RootKind.CloudExtension)
+        if (root.IsCloud)
         {
             return _providerRegistry.GetProvider(root) is { IsAvailable: true };
         }
-        return root.IsCloud || _rootPaths.ContainsKey(root.Id);
+        return _rootPaths.ContainsKey(root.Id);
     }
 
     public IReadOnlyList<ICloudSourceProvider> GetCompatibleRecoveryProviders(LibraryRoot root)
     {
         ArgumentNullException.ThrowIfNull(root);
-        if (root.Kind != RootKind.CloudExtension || IsAvailable(root))
+        if (!root.IsCloud || IsAvailable(root))
         {
             return Array.Empty<ICloudSourceProvider>();
         }
@@ -364,7 +359,13 @@ public sealed class LibraryStore : ObservableStore
         return null;
     }
 
-    public async Task AddRootAsync(string path, LibraryRoot? cloudSourceRoot = null)
+    public Task AddRootAsync(string path, LibraryRoot? cloudSourceRoot = null) =>
+        AddRootInternalAsync(path, cloudSourceRoot, notifyFolderAdded: true);
+
+    private async Task<LibraryRoot> AddRootInternalAsync(
+        string path,
+        LibraryRoot? cloudSourceRoot,
+        bool notifyFolderAdded)
     {
         if (string.IsNullOrWhiteSpace(path) || !Directory.Exists(path))
         {
@@ -536,11 +537,42 @@ public sealed class LibraryStore : ObservableStore
         OnPropertyChanged(nameof(Roots));
         SaveLibrary();
         await RescanAsync();
-        var addedIds = GetTracksUnder(root.Id, string.Empty).Select(t => t.Id).ToList();
-        OnFolderAdded?.Invoke(root.Name, addedIds);
+        if (notifyFolderAdded)
+        {
+            var addedIds = GetTracksUnder(root.Id, string.Empty).Select(t => t.Id).ToList();
+            OnFolderAdded?.Invoke(root.Name, addedIds);
+        }
+        return root;
     }
 
-    public async Task RegisterExportedCloudFolderAsync(string destinationFolder, LibraryRoot cloudRoot)
+    public (Guid RootId, string RelativePath)? ResolveIndexedFolderLocation(string folderPath)
+    {
+        if (string.IsNullOrWhiteSpace(folderPath)) return null;
+        string target = NormalizeDirPath(folderPath);
+        foreach (var root in _roots)
+        {
+            if (!root.IsLocal || !_rootPaths.TryGetValue(root.Id, out string? rootPath)) continue;
+            string normRoot = NormalizeDirPath(rootPath);
+            if (string.Equals(target, normRoot, StringComparison.OrdinalIgnoreCase))
+            {
+                return (root.Id, string.Empty);
+            }
+            if (IsStrictSubdirectory(normRoot, target))
+            {
+                string rel = LibraryRoot.NormalizeFolderPath(Path.GetRelativePath(normRoot, target));
+                if (!root.IsExcluded(rel))
+                {
+                    return (root.Id, rel);
+                }
+            }
+        }
+        return null;
+    }
+
+    public async Task RegisterExportedCloudFolderAsync(
+        string destinationFolder,
+        LibraryRoot cloudRoot,
+        bool mergeCloudRoot = false)
     {
         if (string.IsNullOrWhiteSpace(destinationFolder)) return;
         string target = NormalizeDirPath(destinationFolder);
@@ -560,6 +592,11 @@ public sealed class LibraryStore : ObservableStore
                 cloudRoot.StreamQualityId,
                 cloudRoot.DownloadQualityId);
         }
+
+        Guid targetRootId = Guid.Empty;
+        string targetRelPath = string.Empty;
+        bool isNewStandaloneRoot = false;
+        bool matchedExisting = false;
 
         for (int i = 0; i < _roots.Count; i++)
         {
@@ -589,9 +626,11 @@ public sealed class LibraryStore : ObservableStore
                     SaveLibrary();
                 }
 
+                targetRootId = root.Id;
+                targetRelPath = string.Empty;
+                matchedExisting = true;
                 await RescanAsync();
-                NotifyFolderAddedByPath(target);
-                return;
+                break;
             }
 
             if (IsStrictSubdirectory(normRoot, target))
@@ -637,13 +676,241 @@ public sealed class LibraryStore : ObservableStore
                     SaveLibrary();
                 }
 
+                targetRootId = root.Id;
+                targetRelPath = relPath;
+                matchedExisting = true;
                 await RescanAsync();
-                NotifyFolderAddedByPath(target);
-                return;
+                break;
             }
         }
 
-        await AddRootAsync(target, cloudRoot);
+        if (!matchedExisting)
+        {
+            var addedRoot = await AddRootInternalAsync(target, cloudRoot, notifyFolderAdded: !mergeCloudRoot);
+            targetRootId = addedRoot.Id;
+            targetRelPath = string.Empty;
+            isNewStandaloneRoot = true;
+        }
+
+        bool hasCloudRootToMerge = mergeCloudRoot &&
+                                   cloudRoot.Kind.IsCloud() &&
+                                   _roots.Any(r => r.Id == cloudRoot.Id);
+
+        if (!hasCloudRootToMerge)
+        {
+            if (matchedExisting)
+            {
+                NotifyFolderAddedByPath(target);
+            }
+            return;
+        }
+
+        var oldCloudTracks = _tracks.Where(t => t.RootId == cloudRoot.Id).ToList();
+        var localTracks = GetTracksUnder(targetRootId, targetRelPath).Where(t => !t.IsCloud).ToList();
+        var manifest = CloudExporter.LoadManifest(target);
+        var trackIdMap = BuildCloudToLocalTrackIdMap(oldCloudTracks, localTracks, targetRelPath, manifest);
+
+        MigrateCloudFolderPrefsToLocal(cloudRoot.Id, targetRootId, targetRelPath);
+
+        if (trackIdMap.Count > 0)
+        {
+            MigrateTrackReferences(trackIdMap);
+
+            var migratedLocalIds = new HashSet<string>(trackIdMap.Values, StringComparer.Ordinal);
+            bool appliedAnyOverride = false;
+            var refreshedTracks = new List<Track>(_tracks.Count);
+            foreach (var t in _tracks)
+            {
+                if (migratedLocalIds.Contains(t.Id))
+                {
+                    var updated = ApplyMetadataOverride(t);
+                    if (!ReferenceEquals(updated, t)) appliedAnyOverride = true;
+                    refreshedTracks.Add(updated);
+                }
+                else
+                {
+                    refreshedTracks.Add(t);
+                }
+            }
+            if (appliedAnyOverride)
+            {
+                _tracks = refreshedTracks;
+            }
+        }
+
+        CancelCloudSync(cloudRoot.Id);
+
+        int cloudRootIndex = _roots.FindIndex(r => r.Id == cloudRoot.Id);
+        var nextRoots = _roots.Where(r => r.Id != cloudRoot.Id).ToList();
+        if (isNewStandaloneRoot && cloudRootIndex >= 0)
+        {
+            int newRootIdx = nextRoots.FindIndex(r => r.Id == targetRootId);
+            if (newRootIdx >= 0)
+            {
+                var standaloneRoot = nextRoots[newRootIdx];
+                nextRoots.RemoveAt(newRootIdx);
+                int insertAt = Math.Clamp(cloudRootIndex, 0, nextRoots.Count);
+                nextRoots.Insert(insertAt, standaloneRoot);
+            }
+        }
+        _roots = nextRoots;
+
+        var oldCloudTrackIds = new HashSet<string>(oldCloudTracks.Select(t => t.Id), StringComparer.Ordinal);
+        var unmappedCloudTrackIds = new HashSet<string>(
+            oldCloudTrackIds.Where(id => !trackIdMap.ContainsKey(id)),
+            StringComparer.Ordinal);
+
+        if (oldCloudTrackIds.Count > 0)
+        {
+            _tracks = _tracks.Where(t => t.RootId != cloudRoot.Id).ToList();
+            _cloudCache?.RemoveForTracks(oldCloudTrackIds);
+        }
+
+        RemoveFolderPrefsForRoot(cloudRoot.Id);
+        RebuildIndex();
+
+        if (unmappedCloudTrackIds.Count > 0)
+        {
+            Forget(unmappedCloudTrackIds);
+        }
+
+        SaveLibrary();
+        CloudRootMerged?.Invoke(cloudRoot.Id, targetRootId, targetRelPath);
+        OnPropertyChanged(nameof(Roots));
+        OnPropertyChanged(nameof(Tracks));
+    }
+
+    private static Dictionary<string, string> BuildCloudToLocalTrackIdMap(
+        IReadOnlyList<Track> cloudTracks,
+        IReadOnlyList<Track> localTracks,
+        string targetRelPath,
+        CloudFolderManifest? manifest)
+    {
+        var map = new Dictionary<string, string>(StringComparer.Ordinal);
+        if (cloudTracks.Count == 0 || localTracks.Count == 0) return map;
+
+        string GetRelToDest(Track localTrack)
+        {
+            string normRel = LibraryRoot.NormalizeFolderPath(localTrack.RelativePath);
+            if (string.IsNullOrEmpty(targetRelPath)) return normRel;
+            string prefix = targetRelPath + "/";
+            return normRel.StartsWith(prefix, StringComparison.OrdinalIgnoreCase)
+                ? normRel[prefix.Length..]
+                : localTrack.FileName;
+        }
+
+        var usedLocalIds = new HashSet<string>(StringComparer.Ordinal);
+        var localEntries = localTracks
+            .Select(lt => (
+                Track: lt,
+                RelToDest: GetRelToDest(lt),
+                FileName: lt.FileName,
+                Stem: Path.GetFileNameWithoutExtension(lt.FileName),
+                TitleNorm: lt.Title.Trim(),
+                ArtistNorm: lt.Artist.Trim()))
+            .ToList();
+
+        Track? TakeFirstMatch(Func<(Track Track, string RelToDest, string FileName, string Stem, string TitleNorm, string ArtistNorm), bool> predicate)
+        {
+            foreach (var entry in localEntries)
+            {
+                if (usedLocalIds.Contains(entry.Track.Id)) continue;
+                if (predicate(entry))
+                {
+                    usedLocalIds.Add(entry.Track.Id);
+                    return entry.Track;
+                }
+            }
+            return null;
+        }
+
+        foreach (var ct in cloudTracks)
+        {
+            Track? matched = null;
+
+            string? manifestRelFile = null;
+            if (manifest?.Tracks is { Count: > 0 })
+            {
+                if (!string.IsNullOrWhiteSpace(ct.RemoteTrackId))
+                {
+                    manifest.Tracks.TryGetValue(ct.RemoteTrackId, out manifestRelFile);
+                }
+                if (string.IsNullOrWhiteSpace(manifestRelFile) && !string.IsNullOrWhiteSpace(ct.RelativePath))
+                {
+                    manifest.Tracks.TryGetValue(ct.RelativePath, out manifestRelFile);
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(manifestRelFile))
+            {
+                string normManifest = LibraryRoot.NormalizeFolderPath(manifestRelFile);
+                string manifestFileName = Path.GetFileName(normManifest);
+                matched = TakeFirstMatch(e =>
+                    string.Equals(e.RelToDest, normManifest, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(e.FileName, manifestFileName, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (matched is null)
+            {
+                string fallbackName = string.IsNullOrWhiteSpace(ct.RemoteTrackId) ? "Track" : ct.RemoteTrackId;
+                string sanitizedTitle = CloudExporter.SanitizeFileName(ct.Title, fallbackName);
+                string cloudFileName = ct.FileName;
+                string cloudStem = Path.GetFileNameWithoutExtension(cloudFileName);
+                matched = TakeFirstMatch(e =>
+                    (!string.IsNullOrWhiteSpace(cloudFileName) &&
+                     string.Equals(e.FileName, cloudFileName, StringComparison.OrdinalIgnoreCase)) ||
+                    string.Equals(e.Stem, sanitizedTitle, StringComparison.OrdinalIgnoreCase) ||
+                    (!string.IsNullOrWhiteSpace(cloudStem) &&
+                     string.Equals(e.Stem, cloudStem, StringComparison.OrdinalIgnoreCase)));
+            }
+
+            if (matched is null && !string.IsNullOrWhiteSpace(ct.Title))
+            {
+                string ctTitle = ct.Title.Trim();
+                string ctArtist = ct.Artist.Trim();
+                if (!string.IsNullOrWhiteSpace(ctArtist))
+                {
+                    matched = TakeFirstMatch(e =>
+                        string.Equals(e.TitleNorm, ctTitle, StringComparison.OrdinalIgnoreCase) &&
+                        string.Equals(e.ArtistNorm, ctArtist, StringComparison.OrdinalIgnoreCase));
+                }
+                matched ??= TakeFirstMatch(e =>
+                    string.Equals(e.TitleNorm, ctTitle, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (matched is not null && !string.Equals(ct.Id, matched.Id, StringComparison.Ordinal))
+            {
+                map[ct.Id] = matched.Id;
+            }
+        }
+
+        return map;
+    }
+
+    private void MigrateCloudFolderPrefsToLocal(Guid cloudRootId, Guid targetRootId, string targetRelPath)
+    {
+        string oldPrefix = $"{cloudRootId:D}:";
+        var oldKeys = _folderPrefs.Keys
+            .Where(k => k.StartsWith(oldPrefix, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+        if (oldKeys.Count == 0) return;
+
+        foreach (string oldKey in oldKeys)
+        {
+            if (!_folderPrefs.Remove(oldKey, out var prefs)) continue;
+            string sub = oldKey.Length > oldPrefix.Length ? oldKey[oldPrefix.Length..] : string.Empty;
+            string destRel = string.IsNullOrEmpty(sub)
+                ? targetRelPath
+                : string.IsNullOrEmpty(targetRelPath) ? sub : $"{targetRelPath}/{sub}";
+            string newKey = MakeFolderOrderKey(targetRootId, destRel);
+
+            if (!_folderPrefs.TryGetValue(newKey, out var existing) ||
+                ((existing.CustomTrackOrder is null || existing.CustomTrackOrder.Count == 0) &&
+                 (prefs.CustomTrackOrder is { Count: > 0 } || prefs.SortMode != TrackSortMode.NameAscending)))
+            {
+                _folderPrefs[newKey] = prefs;
+            }
+        }
     }
 
     public void AttachCloudTracking(string folderPath, LibraryRoot cloudSourceRoot)
@@ -777,7 +1044,7 @@ public sealed class LibraryStore : ObservableStore
             ? match.NormalizedUrl!
             : CloudUrlClassifier.ExtractCloudUrl(newSourceUrl, _providerRegistry);
         RootKind newKind = provider.RootKind;
-        string? normalizedProxy = provider.SupportsProxy ? YouTubeClient.NormalizeProxyUrl(proxyUrl) : null;
+        string? normalizedProxy = provider.SupportsProxy ? CloudProxyUtils.NormalizeProxyUrl(proxyUrl) : null;
         string? trimmedCookie = provider.SupportsCookies && !string.IsNullOrWhiteSpace(cookie) ? cookie.Trim() : null;
         string? resolvedRemoteId = match.RemoteId ?? provider.TryExtractRemoteId(extractedUrl);
 
@@ -1002,7 +1269,7 @@ public sealed class LibraryStore : ObservableStore
         string effectiveUrl = !string.IsNullOrWhiteSpace(match.NormalizedUrl)
             ? match.NormalizedUrl!
             : CloudUrlClassifier.ExtractCloudUrl(sourceUrl, _providerRegistry);
-        string? normalizedProxy = provider.SupportsProxy ? YouTubeClient.NormalizeProxyUrl(proxyUrl) : null;
+        string? normalizedProxy = provider.SupportsProxy ? CloudProxyUtils.NormalizeProxyUrl(proxyUrl) : null;
         string? trimmedCookie = provider.SupportsCookies && !string.IsNullOrWhiteSpace(cookie) ? cookie.Trim() : null;
         string? normalizedStreamQuality = NormalizeQualityForProvider(provider, streamQualityId);
         string? normalizedDownloadQuality = NormalizeQualityForProvider(provider, downloadQualityId);
@@ -1142,7 +1409,7 @@ public sealed class LibraryStore : ObservableStore
         string effectiveUrl = !string.IsNullOrWhiteSpace(match.NormalizedUrl)
             ? match.NormalizedUrl!
             : CloudUrlClassifier.ExtractCloudUrl(newSourceUrl, _providerRegistry);
-        string? normalizedProxy = provider.SupportsProxy ? YouTubeClient.NormalizeProxyUrl(proxyUrl) : null;
+        string? normalizedProxy = provider.SupportsProxy ? CloudProxyUtils.NormalizeProxyUrl(proxyUrl) : null;
         string? trimmedCookie = provider.SupportsCookies && !string.IsNullOrWhiteSpace(cookie) ? cookie.Trim() : null;
         string? normalizedStreamQuality = updateQualityPrefs
             ? NormalizeQualityForProvider(provider, streamQualityId)
@@ -2360,10 +2627,10 @@ public sealed class LibraryStore : ObservableStore
         var seenTrackIds = new HashSet<string>(StringComparer.Ordinal);
         string cloudSource = provider?.CloudSourceKey ?? root.Kind switch
         {
-            RootKind.CloudBilibili => CloudSources.Bilibili,
             RootKind.CloudGoogleDrive => CloudSources.GoogleDrive,
-            RootKind.CloudExtension => root.EffectiveProviderId ?? "extension",
-            _ => CloudSources.YouTube
+            RootKind.CloudBilibili => CloudSources.Bilibili,
+            RootKind.CloudYouTube => CloudSources.YouTube,
+            _ => root.EffectiveProviderId ?? "extension"
         };
         string albumArtist = provider?.DisplayName ?? CloudProviderRegistry.ResolveDisplayLabel(
             _providerRegistry,

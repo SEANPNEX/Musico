@@ -1,7 +1,6 @@
 package com.musico.extensions
 
 import android.net.Uri
-import com.musico.cloud.BilibiliClient
 import com.musico.cloud.CloudErrorCode
 import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudFolderManifest
@@ -15,10 +14,8 @@ import com.musico.cloud.CloudStreamDownloader
 import com.musico.cloud.CloudStreamPurpose
 import com.musico.cloud.CloudStreamResolver
 import com.musico.cloud.CloudTrackMetadata
-import com.musico.cloud.GoogleDriveClient
 import com.musico.cloud.ResolvedStream
 import com.musico.cloud.UrlConnectionCloudHttpClient
-import com.musico.cloud.YouTubeClient
 import com.musico.core.ArtworkCache
 import com.musico.core.MetadataReading
 import com.musico.core.Persistence
@@ -214,12 +211,24 @@ class CloudProviderRegistryTest {
     @Test
     fun registryClassifiesBuiltinsExtensionsAndManualHints() {
         val registry = CloudProviderRegistry()
+        // Bare app rejects YouTube & Bilibili URLs/IDs while Google Drive remains built-in
+        assertNull(registry.classifyUrl("https://music.youtube.com/playlist?list=PL1234567890"))
+        assertNull(registry.classifyUrl("https://www.bilibili.com/video/BV1xx411c7mD"))
+        assertNull(registry.classifyUrl("PL1234567890"))
+        assertNull(registry.classifyUrl("BV1xx411c7mD"))
+        assertNull(registry.previewProvider("https://youtu.be/dQw4w9WgXcQ"))
+        assertNull(registry.previewProvider("https://b23.tv/abc123"))
+        assertEquals(CloudProviderIds.GOOGLE_DRIVE, registry.classifyUrl("https://drive.google.com/drive/folders/1DriveRoot")?.provider?.providerId)
+        assertEquals(1, registry.builtinProviders().size)
+
         val extA = FakeProvider("ext.com.example.a", "Alpha Source", "Alpha", "https://alpha.test/")
         val extB = FakeProvider("ext.com.example.b", "Beta Source", "Beta", "https://beta.test/")
-        registry.setExtensionProviders(listOf(extA, extB))
+        val ytExt = FakeProvider("ext.youtube-search", "YouTube Search", "YouTube", "https://music.youtube.com/")
+        val biliExt = FakeProvider("ext.bilibili-search", "Bilibili Search", "Bilibili", "https://www.bilibili.com/")
+        registry.setExtensionProviders(listOf(extA, extB, ytExt, biliExt))
 
-        assertEquals(CloudProviderIds.YOUTUBE, registry.classifyUrl("https://music.youtube.com/playlist?list=PL1234567890")?.provider?.providerId)
-        assertEquals(CloudProviderIds.BILIBILI, registry.classifyUrl("https://www.bilibili.com/video/BV1xx411c7mD")?.provider?.providerId)
+        assertEquals("ext.youtube-search", registry.classifyUrl("https://music.youtube.com/playlist?list=PL1234567890")?.provider?.providerId)
+        assertEquals("ext.bilibili-search", registry.classifyUrl("https://www.bilibili.com/video/BV1xx411c7mD")?.provider?.providerId)
         assertEquals(CloudProviderIds.GOOGLE_DRIVE, registry.classifyUrl("https://drive.google.com/drive/folders/1DriveRoot")?.provider?.providerId)
         assertEquals("ext.com.example.a", registry.classifyUrl("https://alpha.test/list/1")?.provider?.providerId)
         assertEquals("ext.com.example.b", registry.classifyUrl("https://beta.test/list/2", providerIdHint = "ext.com.example.b")?.provider?.providerId)
@@ -231,6 +240,150 @@ class CloudProviderRegistryTest {
         } catch (err: CloudSourceException) {
             assertEquals(CloudErrorCode.EXTENSION_UNAVAILABLE, err.code)
         }
+    }
+
+    @Test
+    fun legacyYouTubeAndBilibiliHandoffResolvesToEnabledExtensionsAndReturnsMissingWithoutPlugins() {
+        val registry = CloudProviderRegistry()
+        val ytRoot = LibraryRoot(
+            id = "legacy-yt",
+            name = "YT",
+            kind = RootKind.CLOUD_YOUTUBE,
+            sourceUrl = "https://music.youtube.com/playlist?list=PL123",
+            remoteId = "PL123",
+        )
+        val biliRoot = LibraryRoot(
+            id = "legacy-bili",
+            name = "Bili",
+            kind = RootKind.CLOUD_BILIBILI,
+            sourceUrl = "https://www.bilibili.com/video/BV1xx411c7mD",
+            remoteId = "BV1xx411c7mD",
+        )
+        val ytTracking = CloudTrackingInfo(
+            sourceUrl = "https://music.youtube.com/playlist?list=PL123",
+            remoteId = "PL123",
+            cloudKind = RootKind.CLOUD_YOUTUBE,
+        )
+        val biliTracking = CloudTrackingInfo(
+            sourceUrl = "https://www.bilibili.com/video/BV1xx411c7mD",
+            remoteId = "BV1xx411c7mD",
+            cloudKind = RootKind.CLOUD_BILIBILI,
+        )
+        val ytTrack = Track(
+            id = "yt_t1",
+            rootId = ytRoot.id,
+            relativePath = "youtube/vid1",
+            title = "YT Song",
+            artist = "Artist",
+            album = "YT",
+            albumArtist = "Artist",
+            durationSec = 100.0,
+            fileSize = 0L,
+            modifiedEpochMs = 0L,
+            dateAddedEpochMs = 1L,
+            cloudSource = CloudSource.YOUTUBE,
+            remoteTrackId = "vid1",
+        )
+        val biliTrack = Track(
+            id = "bili_t1",
+            rootId = biliRoot.id,
+            relativePath = "bilibili/BV1xx411c7mD",
+            title = "Bili Song",
+            artist = "UP",
+            album = "Bili",
+            albumArtist = "UP",
+            durationSec = 100.0,
+            fileSize = 0L,
+            modifiedEpochMs = 0L,
+            dateAddedEpochMs = 1L,
+            cloudSource = CloudSource.BILIBILI,
+            remoteTrackId = "BV1xx411c7mD",
+        )
+
+        // Without plugins installed, legacy YouTube & Bilibili resolve to null / MISSING
+        assertEquals(CloudProviderAvailability.MISSING, registry.availabilityFor(CloudProviderIds.YOUTUBE))
+        assertEquals(CloudProviderAvailability.MISSING, registry.availabilityFor(CloudProviderIds.BILIBILI))
+        assertEquals(CloudProviderAvailability.AVAILABLE, registry.availabilityFor(CloudProviderIds.GOOGLE_DRIVE))
+        assertNull(registry.providerForRoot(ytRoot))
+        assertNull(registry.providerForRoot(biliRoot))
+        assertNull(registry.providerForTracking(ytTracking))
+        assertNull(registry.providerForTracking(biliTracking))
+        assertNull(registry.providerForTrack(ytTrack, ytRoot))
+        assertNull(registry.providerForTrack(biliTrack, biliRoot))
+
+        // Register official extension IDs -> legacy roots/tracks/tracking resolve to them
+        val ytExt = FakeProvider(CloudProviderIds.YOUTUBE_EXTENSION, "YouTube Search", "YouTube", "https://music.youtube.com/")
+        val biliExt = FakeProvider(CloudProviderIds.BILIBILI_EXTENSION, "Bilibili Search", "Bilibili", "https://www.bilibili.com/")
+        registry.setExtensionProviders(listOf(ytExt, biliExt))
+
+        assertEquals(CloudProviderAvailability.AVAILABLE, registry.availabilityFor(CloudProviderIds.YOUTUBE))
+        assertEquals(CloudProviderAvailability.AVAILABLE, registry.availabilityFor(CloudProviderIds.BILIBILI))
+        assertEquals(ytExt, registry.providerForRoot(ytRoot))
+        assertEquals(biliExt, registry.providerForRoot(biliRoot))
+        assertEquals(ytExt, registry.providerForTracking(ytTracking))
+        assertEquals(biliExt, registry.providerForTracking(biliTracking))
+        assertEquals(ytExt, registry.providerForTrack(ytTrack, ytRoot))
+        assertEquals(biliExt, registry.providerForTrack(biliTrack, biliRoot))
+
+        // Alternate compatible extension matching sourceUrl also resolves providerForRoot / providerForTracking / providerForTrack
+        val customBili = FakeProvider("ext.custom-bili", "Custom Bili", "Bili", "https://www.bilibili.com/")
+        registry.setExtensionProviders(listOf(customBili))
+        assertEquals(CloudProviderAvailability.MISSING, registry.availabilityFor(CloudProviderIds.BILIBILI))
+        assertEquals(customBili, registry.providerForRoot(biliRoot))
+        assertEquals(customBili, registry.providerForTracking(biliTracking))
+        assertEquals(customBili, registry.providerForTrack(biliTrack, biliRoot))
+    }
+
+    @Test
+    fun jsExtensionCloudProviderMatchesUrlPatternsCaseInsensitivelyAndInMultiUrlShareText() = runBlocking {
+        val stateDir = tempFolder.newFolder("js_case_state")
+        val registry = CloudProviderRegistry()
+        val extStore = ExtensionStore(
+            stateDir = stateDir,
+            httpClient = noopHttp(),
+            providerRegistry = registry,
+            appVersion = "1.0.0-test",
+        )
+        val script = """
+            'use strict';
+            var manifest = {
+              apiVersion: 1,
+              id: 'bili-case-test',
+              name: 'Bili Case Test',
+              version: '1.0.0',
+              capabilities: ['playlist', 'stream'],
+              urlPatterns: ['^https?://(www\\.|m\\.|space\\.)?bilibili\\.com/', '^BV[0-9A-Za-z]{10}$'],
+              permissions: { hosts: ['www.bilibili.com'] }
+            };
+            function canHandle(input) {
+              return { matched: true, normalizedUrl: input.extractedUrl, remoteId: 'BV1xx411c7mD' };
+            }
+            async function fetchCollection(ctx, req) {
+              return { remoteId: 'BV1xx411c7mD', title: 'Test', tracks: [] };
+            }
+            async function resolveStream(ctx, req) {
+              return { url: 'https://www.bilibili.com/audio.m4a', expiresAtMs: Date.now() + 60000 };
+            }
+            module.exports = { manifest: manifest, canHandle: canHandle, fetchCollection: fetchCollection, resolveStream: resolveStream };
+        """.trimIndent()
+        val staged = extStore.stageFromBytes(script.toByteArray(Charsets.UTF_8), "bili-case.musico.js").getOrThrow()
+        extStore.installStaged(staged, enableImmediately = true)
+
+        // Lowercase "bv..." matches "^BV[0-9A-Za-z]{10}$" case-insensitively
+        val lowerBv = registry.classifyUrl("bv1xx411c7md")
+        assertNotNull(lowerBv)
+        assertEquals("ext.bili-case-test", lowerBv!!.provider.providerId)
+
+        // Uppercase domain matches case-insensitively
+        val upperUrl = registry.classifyUrl("HTTPS://WWW.BILIBILI.COM/video/BV1xx411c7mD")
+        assertNotNull(upperUrl)
+        assertEquals("ext.bili-case-test", upperUrl!!.provider.providerId)
+
+        // Multi-URL share text where first URL is unrelated still resolves to extension
+        val multiShare = "Promo https://example.com/post check https://www.bilibili.com/video/BV1xx411c7mD。"
+        assertEquals("ext.bili-case-test", registry.previewProvider(multiShare)?.providerId)
+        assertEquals("https://www.bilibili.com/video/BV1xx411c7mD", registry.classifyUrl(multiShare)?.normalizedUrl)
+        assertEquals(listOf("ext.bili-case-test"), registry.compatibleProvidersForUrl(multiShare).map { it.providerId })
     }
 
     @Test

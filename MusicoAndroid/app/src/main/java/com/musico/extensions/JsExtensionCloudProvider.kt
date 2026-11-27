@@ -8,7 +8,7 @@ import com.musico.cloud.CloudStreamPurpose
 import com.musico.cloud.CloudTrackMetadata
 import com.musico.cloud.GoogleDriveClient
 import com.musico.cloud.ResolvedStream
-import com.musico.cloud.extractCloudSourceInput
+import com.musico.cloud.extractCloudSourceInputs
 import com.musico.model.LibraryRoot
 import com.musico.model.RootKind
 import kotlinx.coroutines.CancellationException
@@ -35,7 +35,9 @@ class JsExtensionCloudProvider(
         val extra: JsonObject? = null,
     )
 
-    private val compiledPatterns: List<Regex> = extension.manifest.urlPatterns.map { Regex(it) }
+    private val compiledPatterns: List<Regex> = extension.manifest.urlPatterns.map {
+        Regex(it, RegexOption.IGNORE_CASE)
+    }
 
     override val providerId: String = extension.providerId
     override val rootKind: RootKind = RootKind.CLOUD_EXTENSION
@@ -58,17 +60,20 @@ class JsExtensionCloudProvider(
         extension.manifest.effectiveDefaultDownloadQuality
 
     override fun matchesUrlPatternFast(rawInput: String): Boolean {
-        val extracted = extractCloudSourceInput(rawInput)
+        val candidates = extractCloudSourceInputs(rawInput)
         val raw = rawInput.trim()
         return compiledPatterns.any { regex ->
-            (extracted.isNotEmpty() && regex.containsMatchIn(extracted)) ||
+            candidates.any { regex.containsMatchIn(it) } ||
                 (raw.isNotEmpty() && regex.containsMatchIn(raw))
         }
     }
 
     override fun canHandle(rawInput: String): CloudUrlMatch? {
         if (!matchesUrlPatternFast(rawInput)) return null
-        val extracted = extractCloudSourceInput(rawInput).ifEmpty { rawInput.trim() }
+        val candidates = extractCloudSourceInputs(rawInput)
+        val extracted = candidates.firstOrNull { cand ->
+            compiledPatterns.any { it.containsMatchIn(cand) }
+        } ?: candidates.firstOrNull() ?: rawInput.trim()
         val result = runCatching {
             runBlocking(Dispatchers.IO) {
                 runtime.canHandle(extension, rawText = rawInput.trim(), extractedUrl = extracted)

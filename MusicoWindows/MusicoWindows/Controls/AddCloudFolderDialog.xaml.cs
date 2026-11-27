@@ -78,8 +78,15 @@ public partial class AddCloudFolderDialog : UserControl
             ProviderCombo.ItemsSource = options;
             ProviderCombo.SelectedIndex = 0;
 
-            bool hasExtensions = _services.CloudProviders.ExtensionProviders.Any(e => e.IsAvailable && e.SupportsCollectionImport);
-            UrlHintText.Text = hasExtensions ? L.Get("AddCloud_UrlHintDynamic") : L.Get("AddCloud_UrlHint");
+            var extNames = _services.CloudProviders.ExtensionProviders
+                .Where(e => e.IsAvailable && e.SupportsCollectionImport)
+                .Select(e => e.DisplayName)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            UrlHintText.Text = extNames.Count > 0
+                ? L.Format("AddCloud_UrlHintDynamic", string.Join(", ", extNames))
+                : L.Get("AddCloud_UrlHint");
         }
         finally
         {
@@ -207,7 +214,7 @@ public partial class AddCloudFolderDialog : UserControl
         ICloudSourceProvider provider;
         try
         {
-            YouTubeClient.NormalizeProxyUrl(proxy);
+            CloudProxyUtils.NormalizeProxyUrl(proxy);
             var classified = await CloudUrlClassifier.ClassifyAsync(rawUrl, _services.CloudProviders, selectedProviderId);
             provider = classified.Provider;
             effectiveUrl = !string.IsNullOrWhiteSpace(classified.Match.NormalizedUrl)

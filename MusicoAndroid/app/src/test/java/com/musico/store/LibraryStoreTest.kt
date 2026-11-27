@@ -1,17 +1,27 @@
 package com.musico.store
 
 import android.net.Uri
-import com.musico.cloud.BilibiliClient
+import com.musico.cloud.CloudErrorCode
 import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudFolderManifest
 import com.musico.cloud.CloudHttpClient
 import com.musico.cloud.CloudHttpResponse
+import com.musico.cloud.CloudPlaylistResult
 import com.musico.cloud.CloudSource
+import com.musico.cloud.CloudSourceException
+import com.musico.cloud.CloudStreamDownloader
+import com.musico.cloud.CloudStreamPurpose
+import com.musico.cloud.CloudStreamResolver
+import com.musico.cloud.CloudTrackMetadata
 import com.musico.cloud.GoogleDriveClient
-import com.musico.cloud.YouTubeClient
+import com.musico.cloud.ResolvedStream
 import com.musico.core.ArtworkCache
 import com.musico.core.MetadataReading
 import com.musico.core.TrackMetadata
+import com.musico.extensions.CloudProviderIds
+import com.musico.extensions.CloudProviderRegistry
+import com.musico.extensions.CloudSourceProvider
+import com.musico.extensions.CloudUrlMatch
 import com.musico.model.CloudTrackingInfo
 import com.musico.model.LibraryRoot
 import com.musico.model.RootKind
@@ -22,6 +32,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
@@ -284,75 +295,113 @@ class LibraryStoreTest {
     @Test
     fun cloudRootLifecycleAddSyncRetainOnErrorPersistAndRemove() = runBlocking {
         var failNetwork = false
-        var playlistTitle = "Cloud Mix"
+        val playlistTitle = "Cloud Mix"
         var includeSecondTrack = false
 
         val fakeHttp = object : CloudHttpClient {
-            override suspend fun get(url: String, headers: Map<String, String>, followRedirects: Boolean): CloudHttpResponse {
-                if (url.contains("/x/frontend/finger/spi")) {
-                    return CloudHttpResponse(200, url, emptyMap(), """{"code":0,"data":{"b_3":"B3"}}""".toByteArray())
-                }
-                return CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
-            }
+            override suspend fun get(url: String, headers: Map<String, String>, followRedirects: Boolean): CloudHttpResponse =
+                CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
 
-            override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse {
-                if (failNetwork) {
-                    return CloudHttpResponse(503, url, emptyMap(), ByteArray(0))
-                }
-                val second = if (includeSecondTrack) {
-                    """,{
-                      "playlistVideoRenderer": {
-                        "videoId": "vid_two_0002",
-                        "title": { "runs": [ { "text": "Cloud Song 2" } ] },
-                        "shortBylineText": { "runs": [ { "text": "Artist 2" } ] },
-                        "lengthSeconds": "200"
-                      }
-                    }"""
-                } else ""
-                val body = """
-                    {
-                      "header": { "musicDetailHeaderRenderer": { "title": { "runs": [ { "text": "$playlistTitle" } ] } } },
-                      "contents": {
-                        "items": [
-                          {
-                            "playlistVideoRenderer": {
-                              "videoId": "vid_one_0001",
-                              "title": { "runs": [ { "text": "Cloud Song 1" } ] },
-                              "shortBylineText": { "runs": [ { "text": "Artist 1" } ] },
-                              "lengthSeconds": "180"
-                            }
-                          }
-                          $second
-                        ]
-                      }
-                    }
-                """.trimIndent()
-                return CloudHttpResponse(200, url, emptyMap(), body.toByteArray())
-            }
+            override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse =
+                CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
 
             override suspend fun probeRange(url: String, headers: Map<String, String>): Int = 206
         }
 
-        fun makeCloudStore(): LibraryStore = LibraryStore(
-            directory = stateDir,
-            appFolderDir = docsDir,
-            reader = reader,
-            artwork = ArtworkCache(File(stateDir, "artwork")),
-            context = null,
-            cloudHttpClient = fakeHttp,
-            youTubeClient = YouTubeClient(fakeHttp),
-            bilibiliClient = BilibiliClient(fakeHttp),
-        )
+        val ytExtProvider = object : CloudSourceProvider {
+            override val providerId: String = CloudProviderIds.YOUTUBE_EXTENSION
+            override val rootKind: RootKind = RootKind.CLOUD_EXTENSION
+            override val cloudSourceSlug: String = CloudSource.YOUTUBE
+            override val displayName: String = "YouTube Search"
+            override val badgeLabel: String = "YouTube"
+            override val isBuiltin: Boolean = false
+            override val supportsTree: Boolean = false
+            override val supportsCookie: Boolean = true
+            override val usesFlatCloudListing: Boolean = true
 
-        val store = makeCloudStore()
+            override fun canHandle(rawInput: String): CloudUrlMatch? {
+                val match = Regex("list=([A-Za-z0-9_-]+)").find(rawInput) ?: return null
+                val id = match.groupValues[1]
+                return CloudUrlMatch(
+                    normalizedUrl = "https://www.youtube.com/playlist?list=$id",
+                    remoteId = id,
+                )
+            }
+
+            override suspend fun fetchCollection(sourceUrl: String, cookie: String?): CloudPlaylistResult {
+                if (failNetwork) {
+                    throw CloudSourceException(CloudErrorCode.NETWORK_ERROR, "Simulated 503")
+                }
+                val tracks = buildList {
+                    add(
+                        CloudTrackMetadata(
+                            remoteTrackId = "vid_one_0001",
+                            title = "Cloud Song 1",
+                            artist = "Artist 1",
+                            album = playlistTitle,
+                            durationSec = 180.0,
+                        ),
+                    )
+                    if (includeSecondTrack) {
+                        add(
+                            CloudTrackMetadata(
+                                remoteTrackId = "vid_two_0002",
+                                title = "Cloud Song 2",
+                                artist = "Artist 2",
+                                album = playlistTitle,
+                                durationSec = 200.0,
+                            ),
+                        )
+                    }
+                }
+                return CloudPlaylistResult(
+                    source = CloudSource.YOUTUBE,
+                    remoteId = "PLcloud123456",
+                    title = playlistTitle,
+                    tracks = tracks,
+                )
+            }
+
+            override suspend fun resolveStream(
+                remoteTrackId: String,
+                relativePath: String?,
+                cookie: String?,
+                forceRefresh: Boolean,
+                quality: String?,
+                purpose: CloudStreamPurpose,
+            ): ResolvedStream = throw UnsupportedOperationException()
+        }
+
+        fun makeCloudStore(withExtension: Boolean = true): LibraryStore {
+            val registry = CloudProviderRegistry(GoogleDriveClient(fakeHttp))
+            if (withExtension) {
+                registry.registerExtensionProvider(ytExtProvider)
+            }
+            return LibraryStore(
+                directory = stateDir,
+                appFolderDir = docsDir,
+                reader = reader,
+                artwork = ArtworkCache(File(stateDir, "artwork")),
+                context = null,
+                cloudHttpClient = fakeHttp,
+                providerRegistry = registry,
+            )
+        }
+
+        // Bare app without YouTube extension must reject YouTube URL.
+        val bareStore = makeCloudStore(withExtension = false)
+        assertTrue(bareStore.addCloudRoot("https://music.youtube.com/playlist?list=PLcloud123456").isFailure)
+
+        val store = makeCloudStore(withExtension = true)
         val added = store.addCloudRoot("https://music.youtube.com/playlist?list=PLcloud123456")
         assertTrue(added.isSuccess)
 
         val dup = store.addCloudRoot("https://www.youtube.com/playlist?list=PLcloud123456")
         assertTrue(dup.isFailure)
 
-        val cloudRoot = store.state.value.roots.first { it.kind == RootKind.CLOUD_YOUTUBE }
+        val cloudRoot = store.state.value.roots.first { it.kind == RootKind.CLOUD_EXTENSION }
         assertEquals("Cloud Mix", cloudRoot.name)
+        assertEquals(CloudProviderIds.YOUTUBE_EXTENSION, cloudRoot.providerId)
         assertTrue(store.isAvailable(cloudRoot))
         assertEquals(1, store.state.value.tracks.size)
         val firstTrack = store.state.value.tracks.first()
@@ -375,7 +424,7 @@ class LibraryStoreTest {
         assertEquals(originalAddedMs, store.track(firstTrack.id)?.dateAddedEpochMs)
 
         // Persists across store reload.
-        val reloaded = makeCloudStore()
+        val reloaded = makeCloudStore(withExtension = true)
         assertEquals(2, reloaded.state.value.roots.size)
         assertEquals(2, reloaded.state.value.tracks.size)
         assertTrue(reloaded.isAvailable(reloaded.state.value.roots.first { it.kind.isCloud }))
@@ -650,89 +699,90 @@ class LibraryStoreTest {
     }
 
     @Test
-    fun cloudFolderReorderingWorksForYouTubeAndBilibiliAndSurvivesSyncAndReload() = runBlocking {
+    fun cloudFolderReorderingWorksForYouTubeAndBilibiliExtensionsAndSurvivesSyncAndReload() = runBlocking {
         var includeNewYtTrack = false
         var includeNewBiliTrack = false
-
-        val fakeHttp = object : CloudHttpClient {
-            override suspend fun get(url: String, headers: Map<String, String>, followRedirects: Boolean): CloudHttpResponse {
-                if (url.contains("/x/frontend/finger/spi")) {
-                    return CloudHttpResponse(200, url, emptyMap(), """{"code":0,"data":{"b_3":"B3"}}""".toByteArray())
+        val registry = CloudProviderRegistry()
+        registry.registerExtensionProvider(
+            object : CloudSourceProvider {
+                override val providerId: String = CloudProviderIds.YOUTUBE_EXTENSION
+                override val rootKind: RootKind = RootKind.CLOUD_EXTENSION
+                override val cloudSourceSlug: String = providerId
+                override val displayName: String = "YouTube Search"
+                override val badgeLabel: String = "YouTube"
+                override val isBuiltin: Boolean = false
+                override val supportsTree: Boolean = false
+                override val supportsCookie: Boolean = true
+                override val usesFlatCloudListing: Boolean = true
+                override fun canHandle(rawInput: String): CloudUrlMatch? {
+                    val idx = rawInput.indexOf("https://music.youtube.com/")
+                    if (idx < 0) return null
+                    val url = rawInput.substring(idx).trimEnd('。')
+                    return CloudUrlMatch(url, "PLcloudyt1234")
                 }
-                if (url.contains("/x/v3/fav/resource/list")) {
-                    val extra = if (includeNewBiliTrack) {
-                        """,{ "bvid": "BV4444444444", "title": "Bili Four", "upper": { "name": "UP4" }, "duration": 210, "attr": 0 }"""
-                    } else ""
-                    val body = """
-                        {
-                          "code": 0,
-                          "data": {
-                            "info": { "title": "Bili Fav" },
-                            "has_more": false,
-                            "medias": [
-                              { "bvid": "BV1111111111", "title": "Bili One", "upper": { "name": "UP1" }, "duration": 100, "attr": 0 },
-                              { "bvid": "BV2222222222", "title": "Bili Two", "upper": { "name": "UP2" }, "duration": 120, "attr": 0 },
-                              { "bvid": "BV3333333333", "title": "Bili Three", "upper": { "name": "UP3" }, "duration": 140, "attr": 0 }
-                              $extra
-                            ]
-                          }
+
+                override suspend fun fetchCollection(sourceUrl: String, cookie: String?): CloudPlaylistResult {
+                    val tracks = buildList {
+                        add(CloudTrackMetadata("yt_vid_0001", "YT One", "Art 1", "YT Mix", 180.0))
+                        add(CloudTrackMetadata("yt_vid_0002", "YT Two", "Art 2", "YT Mix", 190.0))
+                        add(CloudTrackMetadata("yt_vid_0003", "YT Three", "Art 3", "YT Mix", 200.0))
+                        if (includeNewYtTrack) {
+                            add(CloudTrackMetadata("yt_vid_0004", "YT Four", "Art 4", "YT Mix", 240.0))
                         }
-                    """.trimIndent()
-                    return CloudHttpResponse(200, url, emptyMap(), body.toByteArray())
-                }
-                return CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
-            }
-
-            override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse {
-                val extra = if (includeNewYtTrack) {
-                    """,{
-                      "playlistVideoRenderer": {
-                        "videoId": "yt_vid_0004",
-                        "title": { "runs": [ { "text": "YT Four" } ] },
-                        "shortBylineText": { "runs": [ { "text": "Art 4" } ] },
-                        "lengthSeconds": "240"
-                      }
-                    }"""
-                } else ""
-                val body = """
-                    {
-                      "header": { "musicDetailHeaderRenderer": { "title": { "runs": [ { "text": "YT Mix" } ] } } },
-                      "contents": {
-                        "items": [
-                          {
-                            "playlistVideoRenderer": {
-                              "videoId": "yt_vid_0001",
-                              "title": { "runs": [ { "text": "YT One" } ] },
-                              "shortBylineText": { "runs": [ { "text": "Art 1" } ] },
-                              "lengthSeconds": "180"
-                            }
-                          },
-                          {
-                            "playlistVideoRenderer": {
-                              "videoId": "yt_vid_0002",
-                              "title": { "runs": [ { "text": "YT Two" } ] },
-                              "shortBylineText": { "runs": [ { "text": "Art 2" } ] },
-                              "lengthSeconds": "190"
-                            }
-                          },
-                          {
-                            "playlistVideoRenderer": {
-                              "videoId": "yt_vid_0003",
-                              "title": { "runs": [ { "text": "YT Three" } ] },
-                              "shortBylineText": { "runs": [ { "text": "Art 3" } ] },
-                              "lengthSeconds": "200"
-                            }
-                          }
-                          $extra
-                        ]
-                      }
                     }
-                """.trimIndent()
-                return CloudHttpResponse(200, url, emptyMap(), body.toByteArray())
-            }
+                    return CloudPlaylistResult(providerId, "PLcloudyt1234", "YT Mix", tracks)
+                }
 
-            override suspend fun probeRange(url: String, headers: Map<String, String>): Int = 206
-        }
+                override suspend fun resolveStream(
+                    remoteTrackId: String,
+                    relativePath: String?,
+                    cookie: String?,
+                    forceRefresh: Boolean,
+                    quality: String?,
+                    purpose: CloudStreamPurpose,
+                ): ResolvedStream = ResolvedStream("https://cdn.example.com/$remoteTrackId.m4a")
+            }
+        )
+        registry.registerExtensionProvider(
+            object : CloudSourceProvider {
+                override val providerId: String = CloudProviderIds.BILIBILI_EXTENSION
+                override val rootKind: RootKind = RootKind.CLOUD_EXTENSION
+                override val cloudSourceSlug: String = providerId
+                override val displayName: String = "Bilibili Search"
+                override val badgeLabel: String = "Bilibili"
+                override val isBuiltin: Boolean = false
+                override val supportsTree: Boolean = false
+                override val supportsCookie: Boolean = true
+                override val usesFlatCloudListing: Boolean = true
+                override fun canHandle(rawInput: String): CloudUrlMatch? {
+                    val idx = rawInput.indexOf("https://space.bilibili.com/")
+                    if (idx < 0) return null
+                    val url = rawInput.substring(idx).trim()
+                    return CloudUrlMatch(url, "fav:987654")
+                }
+
+                override suspend fun fetchCollection(sourceUrl: String, cookie: String?): CloudPlaylistResult {
+                    val tracks = buildList {
+                        add(CloudTrackMetadata("BV1111111111", "Bili One", "UP1", "Bili Fav", 100.0))
+                        add(CloudTrackMetadata("BV2222222222", "Bili Two", "UP2", "Bili Fav", 120.0))
+                        add(CloudTrackMetadata("BV3333333333", "Bili Three", "UP3", "Bili Fav", 140.0))
+                        if (includeNewBiliTrack) {
+                            add(CloudTrackMetadata("BV4444444444", "Bili Four", "UP4", "Bili Fav", 210.0))
+                        }
+                    }
+                    return CloudPlaylistResult(providerId, "fav:987654", "Bili Fav", tracks)
+                }
+
+                override suspend fun resolveStream(
+                    remoteTrackId: String,
+                    relativePath: String?,
+                    cookie: String?,
+                    forceRefresh: Boolean,
+                    quality: String?,
+                    purpose: CloudStreamPurpose,
+                ): ResolvedStream = ResolvedStream("https://cdn.example.com/$remoteTrackId.m4a")
+            }
+        )
 
         fun makeCloudStore(): LibraryStore = LibraryStore(
             directory = stateDir,
@@ -740,17 +790,15 @@ class LibraryStoreTest {
             reader = reader,
             artwork = ArtworkCache(File(stateDir, "artwork")),
             context = null,
-            cloudHttpClient = fakeHttp,
-            youTubeClient = YouTubeClient(fakeHttp),
-            bilibiliClient = BilibiliClient(fakeHttp),
+            providerRegistry = registry,
         )
 
         val store = makeCloudStore()
         assertTrue(store.addCloudRoot("My Mix https://music.youtube.com/playlist?list=PLcloudyt1234。").isSuccess)
         assertTrue(store.addCloudRoot("【歌单】深夜听的歌 https://space.bilibili.com/12/favlist?fid=987654").isSuccess)
 
-        val ytRoot = store.state.value.roots.first { it.kind == RootKind.CLOUD_YOUTUBE }
-        val biliRoot = store.state.value.roots.first { it.kind == RootKind.CLOUD_BILIBILI }
+        val ytRoot = store.state.value.roots.first { it.resolvedProviderId == CloudProviderIds.YOUTUBE_EXTENSION }
+        val biliRoot = store.state.value.roots.first { it.resolvedProviderId == CloudProviderIds.BILIBILI_EXTENSION }
         assertEquals("https://music.youtube.com/playlist?list=PLcloudyt1234", ytRoot.sourceUrl)
         assertEquals("https://space.bilibili.com/12/favlist?fid=987654", biliRoot.sourceUrl)
 
@@ -852,8 +900,6 @@ class LibraryStoreTest {
             artwork = ArtworkCache(File(stateDir, "artwork")),
             context = null,
             cloudHttpClient = fakeHttp,
-            youTubeClient = YouTubeClient(fakeHttp),
-            bilibiliClient = BilibiliClient(fakeHttp),
             googleDriveClient = GoogleDriveClient(fakeHttp),
         )
 
@@ -1018,8 +1064,6 @@ class LibraryStoreTest {
             artwork = ArtworkCache(File(stateDir, "artwork")),
             context = null,
             cloudHttpClient = fakeHttp,
-            youTubeClient = YouTubeClient(fakeHttp),
-            bilibiliClient = BilibiliClient(fakeHttp),
             googleDriveClient = GoogleDriveClient(fakeHttp),
         )
         val completedFolderSyncs = mutableListOf<Pair<String, List<String>>>()
@@ -1080,8 +1124,6 @@ class LibraryStoreTest {
             artwork = ArtworkCache(File(stateDir, "artwork2")),
             context = null,
             cloudHttpClient = slowHttp,
-            youTubeClient = YouTubeClient(slowHttp),
-            bilibiliClient = BilibiliClient(slowHttp),
             googleDriveClient = GoogleDriveClient(slowHttp),
         )
         assertTrue(cancelStore.addCloudRoot("https://drive.google.com/drive/folders/1CancelRoot").isSuccess)
@@ -1170,7 +1212,42 @@ class LibraryStoreTest {
 
     @Test
     fun manifestDiscoveryPrunesMissingFoldersAndUpdatesTrackingAddress() = runBlocking {
-        val store = makeStore()
+        val registry = CloudProviderRegistry()
+        registry.registerExtensionProvider(
+            object : CloudSourceProvider {
+                override val providerId: String = CloudProviderIds.BILIBILI_EXTENSION
+                override val rootKind: RootKind = RootKind.CLOUD_EXTENSION
+                override val cloudSourceSlug: String = providerId
+                override val displayName: String = "Bilibili Search"
+                override val badgeLabel: String = "Bilibili"
+                override val isBuiltin: Boolean = false
+                override val supportsTree: Boolean = false
+                override val supportsCookie: Boolean = true
+                override val usesFlatCloudListing: Boolean = true
+                override fun canHandle(rawInput: String): CloudUrlMatch? =
+                    if (rawInput.contains("bilibili.com")) CloudUrlMatch(rawInput.trim(), "BV1newTest01") else null
+
+                override suspend fun fetchCollection(sourceUrl: String, cookie: String?): CloudPlaylistResult =
+                    CloudPlaylistResult(providerId, "BV1newTest01", "Bili", emptyList())
+
+                override suspend fun resolveStream(
+                    remoteTrackId: String,
+                    relativePath: String?,
+                    cookie: String?,
+                    forceRefresh: Boolean,
+                    quality: String?,
+                    purpose: CloudStreamPurpose,
+                ): ResolvedStream = ResolvedStream("https://cdn.example.com/$remoteTrackId.m4a")
+            }
+        )
+        val store = LibraryStore(
+            directory = stateDir,
+            appFolderDir = docsDir,
+            reader = reader,
+            artwork = ArtworkCache(File(stateDir, "artwork")),
+            context = null,
+            providerRegistry = registry,
+        )
         val subDir = File(docsDir, "Nested/Album").apply { mkdirs() }
         touch("Nested/Album/song.mp3")
         val manifest = CloudFolderManifest(
@@ -1207,12 +1284,14 @@ class LibraryStoreTest {
         assertTrue(okResult.isSuccess)
         val updated = store.cloudTracking(LibraryRoot.APP_FOLDER_ID, "Nested/Album")
         assertEquals("https://www.bilibili.com/video/BV1newTest01", updated?.sourceUrl)
-        assertEquals(RootKind.CLOUD_BILIBILI, updated?.cloudKind)
+        assertEquals(RootKind.CLOUD_EXTENSION, updated?.cloudKind)
+        assertEquals(CloudProviderIds.BILIBILI_EXTENSION, updated?.providerId)
         assertEquals("SESSDATA=xyz", updated?.cookie)
 
         val rewritten = json.decodeFromString<CloudFolderManifest>(manifestFile.readText(Charsets.UTF_8))
         assertEquals("https://www.bilibili.com/video/BV1newTest01", rewritten.sourceURL)
-        assertEquals(RootKind.CLOUD_BILIBILI.name, rewritten.cloudKind)
+        assertEquals(RootKind.CLOUD_EXTENSION.name, rewritten.cloudKind)
+        assertEquals(CloudProviderIds.BILIBILI_EXTENSION, rewritten.providerId)
 
         // Deleting the folder on disk prunes stale trackedSubfolders entry during next scan.
         subDir.deleteRecursively()
@@ -1294,6 +1373,297 @@ class LibraryStoreTest {
         store.restoreExcludedFolders(LibraryRoot.APP_FOLDER_ID)
         assertNotNull(store.track(trackKeep.id))
         assertTrue(store.state.value.roots.first { it.id == LibraryRoot.APP_FOLDER_ID }.excludedPaths.isEmpty())
+    }
+
+    @Test
+    fun cloudToLocalStandaloneMergeReplacesRootAtOriginalIndexAndRemapsAllState() = runBlocking {
+        val registry = CloudProviderRegistry()
+        registry.registerExtensionProvider(
+            object : CloudSourceProvider {
+                override val providerId: String = "ext.merge-test"
+                override val rootKind: RootKind = RootKind.CLOUD_EXTENSION
+                override val cloudSourceSlug: String = providerId
+                override val displayName: String = "MergeTest"
+                override val badgeLabel: String = "Merge"
+                override val isBuiltin: Boolean = false
+                override val supportsTree: Boolean = false
+                override val supportsCookie: Boolean = false
+                override val usesFlatCloudListing: Boolean = true
+                override fun canHandle(rawInput: String): CloudUrlMatch? =
+                    if (rawInput.startsWith("https://merge.test/")) CloudUrlMatch(rawInput.trim(), "mix_standalone") else null
+
+                override suspend fun fetchCollection(sourceUrl: String, cookie: String?): CloudPlaylistResult =
+                    CloudPlaylistResult(
+                        source = providerId,
+                        remoteId = "mix_standalone",
+                        title = "Standalone Mix",
+                        tracks = listOf(
+                            CloudTrackMetadata("rm_1", "Alpha", "Artist A", "Standalone Mix", 100.0),
+                            CloudTrackMetadata("rm_2", "Beta", "Artist B", "Standalone Mix", 120.0),
+                        ),
+                    )
+
+                override suspend fun resolveStream(
+                    remoteTrackId: String,
+                    relativePath: String?,
+                    cookie: String?,
+                    forceRefresh: Boolean,
+                    quality: String?,
+                    purpose: CloudStreamPurpose,
+                ): ResolvedStream = ResolvedStream(
+                    url = "https://cdn.merge.test/$remoteTrackId.m4a",
+                    mimeType = "audio/mp4",
+                    fileExtension = "m4a",
+                )
+            }
+        )
+
+        val store = LibraryStore(
+            directory = stateDir,
+            appFolderDir = docsDir,
+            reader = reader,
+            artwork = ArtworkCache(File(stateDir, "artwork")),
+            context = null,
+            providerRegistry = registry,
+        )
+        val queueStore = QueueStore(stateDir)
+        val historyStore = PlayHistoryStore(stateDir)
+        store.onTracksRemapped = { idMap ->
+            queueStore.remapTracks(idMap)
+            historyStore.remapTracks(idMap)
+        }
+
+        // Order roots as: [APP_FOLDER, CloudRoot, OtherLocal]
+        assertTrue(store.addCloudRoot("https://merge.test/mix1").isSuccess)
+        val otherDir = tempFolder.newFolder("OtherLocal")
+        touch("other.mp3", root = otherDir)
+        assertTrue(store.addLocalFolder(otherDir).isSuccess)
+        assertEquals(3, store.state.value.roots.size)
+
+        val cloudRoot = store.state.value.roots[1]
+        assertTrue(cloudRoot.kind.isCloud)
+        val cloudTracks = store.tracksUnder(cloudRoot.id, "")
+        assertEquals(2, cloudTracks.size)
+        val cAlpha = cloudTracks.first { it.title == "Alpha" }
+        val cBeta = cloudTracks.first { it.title == "Beta" }
+
+        // Populate custom folder order, playlist, favourite, metadata override, queue, and play history on cloud tracks
+        store.setFolderTrackOrder(cloudRoot.id, "", listOf(cBeta.id, cAlpha.id))
+        val playlistId = store.createPlaylist("Cloud Favs")
+        store.addToPlaylist(listOf(cBeta.id, cAlpha.id), playlistId)
+        store.toggleFavourite(cAlpha.id)
+        store.updateTrackMetadata(cBeta.id, title = "Beta Custom")
+        val qId = queueStore.addQueue("Standalone Mix")
+        queueStore.update(qId) { it.replace(listOf(cBeta.id, cAlpha.id), startAt = 0) }
+        historyStore.recordPlay(cAlpha.id, 1_000_000L)
+        historyStore.recordPlay(cAlpha.id, 2_000_000L)
+
+        val exporter = CloudExporter(
+            context = null,
+            cloudResolver = CloudStreamResolver(registry),
+            downloader = CloudStreamDownloader { url, _, out -> out.write("audio:$url".toByteArray()) },
+            providerRegistry = registry,
+        )
+        val downloadManager = CloudDownloadManager(libraryStore = store, cloudExporter = exporter)
+        val exportParent = tempFolder.newFolder("unindexed_exports")
+
+        val jobId = downloadManager.startPlaylistExport(
+            tracks = cloudTracks,
+            root = cloudRoot,
+            parentDir = exportParent,
+            folderName = "Standalone Mix",
+            addToLibrary = true,
+            isWholeRootExport = true,
+        )
+        withTimeout(5_000L) {
+            while (downloadManager.job(jobId)?.isActive != false) {
+                delay(15L)
+            }
+        }
+        assertEquals(CloudDownloadStatus.COMPLETED, downloadManager.job(jobId)?.status)
+
+        // Strictly 1 folder replaces cloudRoot at index 1!
+        assertEquals(3, store.state.value.roots.size)
+        assertFalse(store.state.value.roots.any { it.id == cloudRoot.id })
+        val mergedRoot = store.state.value.roots[1]
+        assertEquals(RootKind.PICKED, mergedRoot.kind)
+        assertEquals("Standalone Mix", mergedRoot.name)
+        assertEquals(cloudRoot.sourceUrl, mergedRoot.sourceUrl)
+
+        val localTracks = store.tracksUnder(mergedRoot.id, "")
+        assertEquals(2, localTracks.size)
+        assertTrue(localTracks.none { it.isCloud })
+        // Custom folder order migrated (Beta first, Alpha second) + metadata override migrated onto Beta
+        assertEquals(listOf("Beta Custom", "Alpha"), localTracks.map { it.title })
+        assertEquals(TrackSortOrder.CUSTOM, store.folderSortOrder(mergedRoot.id, ""))
+
+        val lBeta = localTracks[0]
+        val lAlpha = localTracks[1]
+        assertEquals(listOf(lBeta.id, lAlpha.id), store.state.value.playlists.first { it.id == playlistId }.trackIds)
+        assertTrue(store.isFavourite(lAlpha.id))
+        assertFalse(store.isFavourite(cAlpha.id))
+        assertEquals(listOf(lBeta.id, lAlpha.id), queueStore.state.value.queues.first { it.id == qId }.trackIds)
+        assertEquals(2, historyStore.count(lAlpha.id))
+        assertEquals(0, historyStore.count(cAlpha.id))
+        assertEquals(2_000_000L, historyStore.lastPlayed(lAlpha.id))
+        assertEquals(CloudRootMergeEvent(cloudRoot.id, mergedRoot.id, "", store.lastCloudMerge.value!!.timestampMs), store.lastCloudMerge.value)
+    }
+
+    @Test
+    fun cloudToLocalSubfolderMergeAndGuardConditionsBehaveCorrectly() = runBlocking {
+        val registry = CloudProviderRegistry()
+        registry.registerExtensionProvider(
+            object : CloudSourceProvider {
+                override val providerId: String = "ext.sub-merge"
+                override val rootKind: RootKind = RootKind.CLOUD_EXTENSION
+                override val cloudSourceSlug: String = providerId
+                override val displayName: String = "SubMerge"
+                override val badgeLabel: String = "Sub"
+                override val isBuiltin: Boolean = false
+                override val supportsTree: Boolean = false
+                override val supportsCookie: Boolean = false
+                override val usesFlatCloudListing: Boolean = true
+                override fun canHandle(rawInput: String): CloudUrlMatch? =
+                    if (rawInput.startsWith("https://sub.test/")) CloudUrlMatch(rawInput.trim(), rawInput.substringAfterLast('/')) else null
+
+                override suspend fun fetchCollection(sourceUrl: String, cookie: String?): CloudPlaylistResult =
+                    CloudPlaylistResult(
+                        source = providerId,
+                        remoteId = sourceUrl.substringAfterLast('/'),
+                        title = "Sub Mix",
+                        tracks = listOf(
+                            CloudTrackMetadata("s_1", "First", "Art", "Sub Mix", 80.0),
+                            CloudTrackMetadata("s_2", "Second", "Art", "Sub Mix", 90.0),
+                        ),
+                    )
+
+                override suspend fun resolveStream(
+                    remoteTrackId: String,
+                    relativePath: String?,
+                    cookie: String?,
+                    forceRefresh: Boolean,
+                    quality: String?,
+                    purpose: CloudStreamPurpose,
+                ): ResolvedStream = ResolvedStream("https://cdn.sub.test/$remoteTrackId.m4a", mimeType = "audio/mp4")
+            }
+        )
+
+        val store = LibraryStore(
+            directory = stateDir,
+            appFolderDir = docsDir,
+            reader = reader,
+            artwork = ArtworkCache(File(stateDir, "artwork")),
+            context = null,
+            providerRegistry = registry,
+        )
+        val queueStore = QueueStore(stateDir)
+        val historyStore = PlayHistoryStore(stateDir)
+        store.onTracksRemapped = { idMap ->
+            queueStore.remapTracks(idMap)
+            historyStore.remapTracks(idMap)
+        }
+
+        // 1. Subfolder inside existing local root (APP_FOLDER), even with addToLibrary == false, merges cloudRoot cleanly!
+        assertTrue(store.addCloudRoot("https://sub.test/m1").isSuccess)
+        val cloudRoot1 = store.state.value.roots.first { it.kind.isCloud }
+        val cTracks1 = store.tracksUnder(cloudRoot1.id, "")
+        val cFirst = cTracks1.first { it.title == "First" }
+        val cSecond = cTracks1.first { it.title == "Second" }
+        store.setFolderTrackOrder(cloudRoot1.id, "", listOf(cSecond.id, cFirst.id))
+        val plId = store.createPlaylist("Sub Playlist")
+        store.addToPlaylist(listOf(cFirst.id), plId)
+        store.toggleFavourite(cSecond.id)
+        queueStore.update(queueStore.active.id) { it.replace(listOf(cFirst.id, cSecond.id), 0) }
+        historyStore.recordPlay(cFirst.id, 5_000L)
+
+        var failAllDownloads = false
+        val exporter = CloudExporter(
+            context = null,
+            cloudResolver = CloudStreamResolver(registry),
+            downloader = CloudStreamDownloader { url, _, out ->
+                if (failAllDownloads) error("download failed")
+                out.write("audio:$url".toByteArray())
+            },
+            providerRegistry = registry,
+        )
+        val dm = CloudDownloadManager(libraryStore = store, cloudExporter = exporter)
+        suspend fun awaitJob(id: String) {
+            withTimeout(5_000L) {
+                while (dm.job(id)?.isActive != false) delay(15L)
+            }
+        }
+
+        val job1 = dm.startPlaylistExport(
+            tracks = cTracks1,
+            root = cloudRoot1,
+            parentDir = docsDir,
+            folderName = "Saved In App",
+            addToLibrary = false, // target IS already indexed -> still merges to keep 1 folder!
+            isWholeRootExport = true,
+        )
+        awaitJob(job1)
+        assertEquals(1, store.state.value.roots.size)
+        assertFalse(store.state.value.roots.any { it.id == cloudRoot1.id })
+        assertNotNull(store.cloudTracking(LibraryRoot.APP_FOLDER_ID, "Saved In App"))
+        val mergedSubTracks = store.tracksUnder(LibraryRoot.APP_FOLDER_ID, "Saved In App")
+        assertEquals(listOf("Second", "First"), mergedSubTracks.map { it.title })
+        val lSecond = mergedSubTracks[0]
+        val lFirst = mergedSubTracks[1]
+        assertEquals(listOf(lFirst.id), store.state.value.playlists.first { it.id == plId }.trackIds)
+        assertTrue(store.isFavourite(lSecond.id))
+        assertEquals(listOf(lFirst.id, lSecond.id), queueStore.active.trackIds)
+        assertEquals(1, historyStore.count(lFirst.id))
+        assertEquals(LibraryRoot.APP_FOLDER_ID, store.lastCloudMerge.value?.targetRootId)
+        assertEquals("Saved In App", store.lastCloudMerge.value?.targetRelPath)
+
+        // 2. Guard cases leaving cloudRoot untouched:
+        assertTrue(store.addCloudRoot("https://sub.test/m2").isSuccess)
+        val cloudRoot2 = store.state.value.roots.first { it.kind.isCloud }
+        val cTracks2 = store.tracksUnder(cloudRoot2.id, "")
+
+        // 2a. savedCount == 0 leaves cloudRoot untouched
+        failAllDownloads = true
+        val zeroJob = dm.startPlaylistExport(
+            tracks = cTracks2,
+            root = cloudRoot2,
+            parentDir = tempFolder.newFolder("zero_dir"),
+            folderName = "Zero",
+            addToLibrary = true,
+            isWholeRootExport = true,
+        )
+        awaitJob(zeroJob)
+        assertEquals(0, dm.job(zeroJob)?.exportSummary?.savedCount)
+        assertTrue(store.state.value.roots.any { it.id == cloudRoot2.id })
+
+        // 2b. addToLibrary == false on unindexed target leaves cloudRoot untouched
+        failAllDownloads = false
+        val unindexedOut = tempFolder.newFolder("unindexed_out")
+        val noAddJob = dm.startPlaylistExport(
+            tracks = cTracks2,
+            root = cloudRoot2,
+            parentDir = unindexedOut,
+            folderName = "NoAdd",
+            addToLibrary = false,
+            isWholeRootExport = true,
+        )
+        awaitJob(noAddJob)
+        assertEquals(2, dm.job(noAddJob)?.exportSummary?.savedCount)
+        assertTrue(store.state.value.roots.any { it.id == cloudRoot2.id })
+        assertFalse(store.state.value.roots.any { it.name == "NoAdd" })
+
+        // 2c. isWholeRootExport == false leaves cloudRoot untouched (even when addToLibrary == true)
+        val partialParent = tempFolder.newFolder("partial_parent")
+        val partialJob = dm.startPlaylistExport(
+            tracks = cTracks2,
+            root = cloudRoot2,
+            parentDir = partialParent,
+            folderName = "PartialSub",
+            addToLibrary = true,
+            isWholeRootExport = false,
+        )
+        awaitJob(partialJob)
+        assertTrue(store.state.value.roots.any { it.id == cloudRoot2.id })
+        assertTrue(store.state.value.roots.any { it.name == "PartialSub" })
     }
 
     private fun createValidPngBytes(): ByteArray = byteArrayOf(

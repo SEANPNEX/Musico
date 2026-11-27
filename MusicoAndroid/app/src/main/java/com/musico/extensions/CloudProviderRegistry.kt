@@ -1,6 +1,5 @@
 package com.musico.extensions
 
-import com.musico.cloud.BilibiliClient
 import com.musico.cloud.CloudErrorCode
 import com.musico.cloud.CloudPlaylistResult
 import com.musico.cloud.CloudQualityOption
@@ -11,7 +10,6 @@ import com.musico.cloud.CloudTrackMetadata
 import com.musico.cloud.DriveCrawlBatch
 import com.musico.cloud.GoogleDriveClient
 import com.musico.cloud.ResolvedStream
-import com.musico.cloud.YouTubeClient
 import com.musico.cloud.extractCloudSourceInput
 import com.musico.model.CloudTrackingInfo
 import com.musico.model.LibraryRoot
@@ -26,6 +24,8 @@ object CloudProviderIds {
     const val YOUTUBE = "builtin.youtube"
     const val BILIBILI = "builtin.bilibili"
     const val GOOGLE_DRIVE = "builtin.gdrive"
+    const val YOUTUBE_EXTENSION = "ext.youtube-search"
+    const val BILIBILI_EXTENSION = "ext.bilibili-search"
 
     fun extensionProviderId(extensionId: String): String =
         "ext.$extensionId"
@@ -35,6 +35,12 @@ object CloudProviderIds {
 
     fun isBuiltin(providerId: String?): Boolean =
         providerId == YOUTUBE || providerId == BILIBILI || providerId == GOOGLE_DRIVE
+
+    fun legacyExtensionProviderId(providerId: String?): String? = when (fromLegacySlug(providerId)) {
+        YOUTUBE -> YOUTUBE_EXTENSION
+        BILIBILI -> BILIBILI_EXTENSION
+        else -> null
+    }
 
     fun fromLegacySlug(slug: String?): String? = when (slug?.trim()?.lowercase()) {
         YOUTUBE, CloudSource.YOUTUBE, "cloud_youtube" -> YOUTUBE
@@ -137,86 +143,6 @@ interface CloudSourceProvider {
     fun downloadHeaders(stream: ResolvedStream): Map<String, String> = stream.headers
 }
 
-class YouTubeSourceProvider(
-    private val client: YouTubeClient,
-) : CloudSourceProvider {
-    override val providerId: String = CloudProviderIds.YOUTUBE
-    override val rootKind: RootKind = RootKind.CLOUD_YOUTUBE
-    override val cloudSourceSlug: String = CloudSource.YOUTUBE
-    override val displayName: String = "YouTube"
-    override val badgeLabel: String = "YouTube"
-    override val isBuiltin: Boolean = true
-    override val supportsTree: Boolean = false
-    override val supportsCookie: Boolean = true
-    override val usesFlatCloudListing: Boolean = true
-    override val availableQualities: List<CloudQualityOption> = YouTubeClient.AVAILABLE_QUALITIES
-    override val defaultStreamQualityId: String = YouTubeClient.DEFAULT_STREAM_QUALITY_ID
-    override val defaultDownloadQualityId: String = YouTubeClient.DEFAULT_DOWNLOAD_QUALITY_ID
-
-    override fun canHandle(rawInput: String): CloudUrlMatch? {
-        val clean = extractCloudSourceInput(rawInput)
-        if (clean.isEmpty() || !YouTubeClient.canHandle(clean)) return null
-        return CloudUrlMatch(normalizedUrl = clean)
-    }
-
-    override suspend fun fetchCollection(sourceUrl: String, cookie: String?): CloudPlaylistResult =
-        client.fetchPlaylist(sourceUrl, cookie)
-
-    override suspend fun resolveStream(
-        remoteTrackId: String,
-        relativePath: String?,
-        cookie: String?,
-        forceRefresh: Boolean,
-        quality: String?,
-        purpose: CloudStreamPurpose,
-    ): ResolvedStream = client.resolveStream(remoteTrackId, cookie, quality = quality)
-
-    override fun downloadHeaders(stream: ResolvedStream): Map<String, String> {
-        val hasRange = stream.headers.keys.any { it.equals("Range", ignoreCase = true) }
-        return if (hasRange) stream.headers else stream.headers + ("Range" to "bytes=0-")
-    }
-}
-
-class BilibiliSourceProvider(
-    private val client: BilibiliClient,
-) : CloudSourceProvider {
-    override val providerId: String = CloudProviderIds.BILIBILI
-    override val rootKind: RootKind = RootKind.CLOUD_BILIBILI
-    override val cloudSourceSlug: String = CloudSource.BILIBILI
-    override val displayName: String = "Bilibili"
-    override val badgeLabel: String = "Bilibili"
-    override val isBuiltin: Boolean = true
-    override val supportsTree: Boolean = false
-    override val supportsCookie: Boolean = true
-    override val usesFlatCloudListing: Boolean = true
-    override val availableQualities: List<CloudQualityOption> = BilibiliClient.AVAILABLE_QUALITIES
-    override val defaultStreamQualityId: String = BilibiliClient.DEFAULT_STREAM_QUALITY_ID
-    override val defaultDownloadQualityId: String = BilibiliClient.DEFAULT_DOWNLOAD_QUALITY_ID
-
-    override fun canHandle(rawInput: String): CloudUrlMatch? {
-        val clean = extractCloudSourceInput(rawInput)
-        if (clean.isEmpty() || !BilibiliClient.canHandle(clean)) return null
-        return CloudUrlMatch(normalizedUrl = clean)
-    }
-
-    override suspend fun fetchCollection(sourceUrl: String, cookie: String?): CloudPlaylistResult =
-        client.fetchPlaylist(sourceUrl, cookie)
-
-    override suspend fun resolveStream(
-        remoteTrackId: String,
-        relativePath: String?,
-        cookie: String?,
-        forceRefresh: Boolean,
-        quality: String?,
-        purpose: CloudStreamPurpose,
-    ): ResolvedStream = client.resolveStream(remoteTrackId, cookie, quality = quality)
-
-    override fun artworkHeaders(): Map<String, String> = mapOf(
-        "Referer" to "https://www.bilibili.com/",
-        "User-Agent" to "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-    )
-}
-
 class GoogleDriveSourceProvider(
     private val client: GoogleDriveClient,
 ) : CloudSourceProvider {
@@ -276,17 +202,11 @@ class GoogleDriveSourceProvider(
 }
 
 class CloudProviderRegistry(
-    youTubeClient: YouTubeClient = YouTubeClient(),
-    bilibiliClient: BilibiliClient = BilibiliClient(),
     googleDriveClient: GoogleDriveClient = GoogleDriveClient(),
 ) {
-    private val youtubeProvider = YouTubeSourceProvider(youTubeClient)
-    private val bilibiliProvider = BilibiliSourceProvider(bilibiliClient)
     private val googleDriveProvider = GoogleDriveSourceProvider(googleDriveClient)
 
     private val builtinsById: Map<String, CloudSourceProvider> = linkedMapOf(
-        CloudProviderIds.YOUTUBE to youtubeProvider,
-        CloudProviderIds.BILIBILI to bilibiliProvider,
         CloudProviderIds.GOOGLE_DRIVE to googleDriveProvider,
     )
 
@@ -333,32 +253,43 @@ class CloudProviderRegistry(
 
     fun availabilityFor(providerId: String?): CloudProviderAvailability {
         if (providerId.isNullOrBlank()) return CloudProviderAvailability.MISSING
-        if (providerId in builtinsById) return CloudProviderAvailability.AVAILABLE
-        if (extensionProvidersMap.containsKey(providerId)) return CloudProviderAvailability.AVAILABLE
-        return extensionStatusLookup?.invoke(providerId) ?: CloudProviderAvailability.MISSING
+        val resolved = CloudProviderIds.fromLegacySlug(providerId) ?: providerId.trim()
+        if (resolved in builtinsById) return CloudProviderAvailability.AVAILABLE
+        if (extensionProvidersMap.containsKey(resolved)) return CloudProviderAvailability.AVAILABLE
+        CloudProviderIds.legacyExtensionProviderId(resolved)?.let { legacyExtPid ->
+            return if (extensionProvidersMap.containsKey(legacyExtPid)) {
+                CloudProviderAvailability.AVAILABLE
+            } else {
+                CloudProviderAvailability.MISSING
+            }
+        }
+        return extensionStatusLookup?.invoke(resolved) ?: CloudProviderAvailability.MISSING
     }
 
     fun extensionCookieFor(providerId: String?): String? {
         val pid = providerId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        if (CloudProviderIds.isBuiltin(pid)) return null
-        return extensionCookieLookup?.invoke(pid)?.trim()?.takeIf { it.isNotEmpty() }
+        val targetPid = CloudProviderIds.legacyExtensionProviderId(pid) ?: pid
+        if (CloudProviderIds.isBuiltin(targetPid)) return null
+        return extensionCookieLookup?.invoke(targetPid)?.trim()?.takeIf { it.isNotEmpty() }
     }
 
     fun extensionQualityFor(providerId: String?): Pair<String?, String?>? {
         val pid = providerId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        if (CloudProviderIds.isBuiltin(pid)) return null
-        return extensionQualityLookup?.invoke(pid)
+        val targetPid = CloudProviderIds.legacyExtensionProviderId(pid) ?: pid
+        if (CloudProviderIds.isBuiltin(targetPid)) return null
+        return extensionQualityLookup?.invoke(targetPid)
     }
 
     fun compatibleProvidersForUrl(
         rawInput: String?,
         excludingProviderId: String? = null,
     ): List<CloudSourceProvider> {
-        val clean = rawInput?.let { extractCloudSourceInput(it) }?.takeIf { it.isNotEmpty() } ?: return emptyList()
+        val raw = rawInput?.trim()?.takeIf { it.isNotEmpty() } ?: return emptyList()
+        if (extractCloudSourceInput(raw).isEmpty()) return emptyList()
         return _providers.value.filter { provider ->
             provider.supportsCollections &&
                 provider.providerId != excludingProviderId &&
-                provider.matchesUrlPatternFast(clean)
+                provider.matchesUrlPatternFast(raw)
         }
     }
 
@@ -369,23 +300,44 @@ class CloudProviderRegistry(
 
     fun providerForId(providerId: String?): CloudSourceProvider? {
         val resolved = CloudProviderIds.fromLegacySlug(providerId) ?: providerId?.trim()?.takeIf { it.isNotEmpty() } ?: return null
-        return builtinsById[resolved] ?: extensionProvidersMap[resolved]
+        builtinsById[resolved]?.let { return it }
+        extensionProvidersMap[resolved]?.let { return it }
+        CloudProviderIds.legacyExtensionProviderId(resolved)?.let { legacyExtPid ->
+            extensionProvidersMap[legacyExtPid]?.let { return it }
+        }
+        return null
     }
 
     fun providerForKind(kind: RootKind?, providerId: String? = null): CloudSourceProvider? {
         providerForId(providerId)?.let { return it }
         val builtinId = kind?.builtinProviderId ?: return null
-        return builtinsById[builtinId]
+        return providerForId(builtinId)
     }
 
     fun providerForRoot(root: LibraryRoot?): CloudSourceProvider? {
         if (root == null || !root.kind.isCloud) return null
-        return providerForKind(root.kind, root.resolvedProviderId)
+        providerForKind(root.kind, root.resolvedProviderId)?.let { return it }
+        if (root.kind == RootKind.CLOUD_YOUTUBE || root.kind == RootKind.CLOUD_BILIBILI) {
+            val url = root.sourceUrl?.trim()?.takeIf { it.isNotEmpty() }
+                ?: root.remoteId?.trim()?.takeIf { it.isNotEmpty() }
+            if (url != null) {
+                bestCompatibleProviderForUrl(url)?.let { return it }
+            }
+        }
+        return null
     }
 
     fun providerForTracking(tracking: CloudTrackingInfo?): CloudSourceProvider? {
         if (tracking == null) return null
-        return providerForKind(tracking.cloudKind, tracking.resolvedProviderId)
+        providerForKind(tracking.cloudKind, tracking.resolvedProviderId)?.let { return it }
+        if (tracking.cloudKind == RootKind.CLOUD_YOUTUBE || tracking.cloudKind == RootKind.CLOUD_BILIBILI) {
+            val url = tracking.sourceUrl.trim().takeIf { it.isNotEmpty() }
+                ?: tracking.remoteId?.trim()?.takeIf { it.isNotEmpty() }
+            if (url != null) {
+                bestCompatibleProviderForUrl(url)?.let { return it }
+            }
+        }
+        return null
     }
 
     fun providerForTrack(track: Track, root: LibraryRoot? = null): CloudSourceProvider? {
@@ -396,7 +348,8 @@ class CloudProviderRegistry(
         }
         val trackPid = CloudProviderIds.fromLegacySlug(track.cloudSource)
             ?: Track.extensionIdFromEphemeralId(track.id)?.let { CloudProviderIds.extensionProviderId(it) }
-        return providerForId(trackPid) ?: root?.let { providerForKind(it.kind, it.resolvedProviderId) }
+        providerForId(trackPid)?.let { return it }
+        return root?.let { providerForRoot(it) }
     }
 
     /**
@@ -445,22 +398,7 @@ class CloudProviderRegistry(
     }
 
     private fun classifyBuiltin(cleanUrl: String): ClassifiedCloudUrl? {
-        val driveMatch = googleDriveProvider.canHandle(cleanUrl)
-        val biliMatch = bilibiliProvider.canHandle(cleanUrl)
-        val ytMatch = youtubeProvider.canHandle(cleanUrl)
-
-        return when {
-            driveMatch != null -> ClassifiedCloudUrl(googleDriveProvider, driveMatch.normalizedUrl)
-            biliMatch != null && ytMatch == null -> ClassifiedCloudUrl(bilibiliProvider, biliMatch.normalizedUrl)
-            ytMatch != null && biliMatch == null -> ClassifiedCloudUrl(youtubeProvider, ytMatch.normalizedUrl)
-            biliMatch != null && ytMatch != null -> {
-                if (cleanUrl.contains("bilibili", ignoreCase = true) || cleanUrl.contains("b23.tv", ignoreCase = true)) {
-                    ClassifiedCloudUrl(bilibiliProvider, biliMatch.normalizedUrl)
-                } else {
-                    ClassifiedCloudUrl(youtubeProvider, ytMatch.normalizedUrl)
-                }
-            }
-            else -> null
-        }
+        val driveMatch = googleDriveProvider.canHandle(cleanUrl) ?: return null
+        return ClassifiedCloudUrl(googleDriveProvider, driveMatch.normalizedUrl)
     }
 }

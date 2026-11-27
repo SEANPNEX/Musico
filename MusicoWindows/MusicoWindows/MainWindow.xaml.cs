@@ -57,7 +57,7 @@ public partial class MainWindow : Window
             OpenPlaylist = ShowPlaylistDetail,
             OpenAddCloudFolder = () => CloudDialog.Show(_services),
             OpenEditCloudSource = (root, relPath, preselect) => EditCloudDialog.Show(_services, root, relPath, preselect),
-            OpenSaveCloudPlaylist = (root, tracks) => SaveCloudDialog.Show(_services, root, tracks),
+            OpenSaveCloudPlaylist = (root, tracks, isWholeRootExport) => SaveCloudDialog.Show(_services, root, tracks, isWholeRootExport),
             OpenSaveCloudTrack = StartSingleTrackExport,
             OpenUpdateTrackedFolder = root => SaveCloudDialog.ShowTrackedFolderUpdate(_services, root),
             OpenUpdateTrackedSubfolder = (root, relPath) => SaveCloudDialog.ShowTrackedFolderUpdate(_services, root, relPath),

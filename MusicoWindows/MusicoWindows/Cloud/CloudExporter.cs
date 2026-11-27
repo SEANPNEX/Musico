@@ -82,33 +82,11 @@ public sealed class CloudExporter
     };
 
     private readonly CloudAudioCache _cloudCache;
-    private readonly YouTubeClient _youtube;
-    private readonly BilibiliClient _bilibili;
     private readonly GoogleDriveClient _googleDrive;
     private readonly CloudProviderRegistry _providerRegistry;
     private readonly ArtworkCache? _artworkCache;
     private readonly ExtensionStore? _extensions;
     private readonly CloudThumbnailCache? _thumbnailCache;
-
-    public CloudExporter(
-        CloudAudioCache cloudCache,
-        YouTubeClient youtubeClient,
-        BilibiliClient bilibiliClient,
-        ArtworkCache? artworkCache = null,
-        GoogleDriveClient? googleDriveClient = null,
-        CloudProviderRegistry? providerRegistry = null,
-        ExtensionStore? extensions = null,
-        CloudThumbnailCache? thumbnailCache = null)
-    {
-        _cloudCache = cloudCache ?? throw new ArgumentNullException(nameof(cloudCache));
-        _youtube = youtubeClient ?? throw new ArgumentNullException(nameof(youtubeClient));
-        _bilibili = bilibiliClient ?? throw new ArgumentNullException(nameof(bilibiliClient));
-        _artworkCache = artworkCache;
-        _googleDrive = googleDriveClient ?? new GoogleDriveClient();
-        _providerRegistry = providerRegistry ?? new CloudProviderRegistry(_youtube, _bilibili, _googleDrive);
-        _extensions = extensions;
-        _thumbnailCache = thumbnailCache ?? new CloudThumbnailCache(maxEntries: 16);
-    }
 
     public CloudExporter(
         CloudAudioCache cloudCache,
@@ -119,8 +97,6 @@ public sealed class CloudExporter
     {
         _cloudCache = cloudCache ?? throw new ArgumentNullException(nameof(cloudCache));
         _providerRegistry = providerRegistry ?? throw new ArgumentNullException(nameof(providerRegistry));
-        _youtube = _providerRegistry.YouTube;
-        _bilibili = _providerRegistry.Bilibili;
         _googleDrive = _providerRegistry.GoogleDrive;
         _artworkCache = artworkCache;
         _extensions = extensions;
@@ -353,6 +329,11 @@ public sealed class CloudExporter
 
         CloudPlaylistResult playlist;
         ICloudSourceProvider? resolvedProvider = _providerRegistry.GetById(providerIdHint);
+        if (resolvedProvider is null &&
+            kindHint is RootKind.CloudYouTube or RootKind.CloudBilibili)
+        {
+            resolvedProvider = _providerRegistry.GetBestCompatibleProvider(rawSource);
+        }
         if (fetchPlaylist is not null)
         {
             playlist = await fetchPlaylist(rawSource, effectiveCookie, effectiveProxy, kindHint, ct).ConfigureAwait(false);
@@ -390,18 +371,15 @@ public sealed class CloudExporter
 
         string cloudSource = resolvedProvider?.CloudSourceKey ?? playlist.Kind switch
         {
-            RootKind.CloudBilibili => CloudSources.Bilibili,
             RootKind.CloudGoogleDrive => CloudSources.GoogleDrive,
-            RootKind.CloudExtension => playlist.ResolvedProviderId ?? "extension",
-            _ => CloudSources.YouTube
+            RootKind.CloudBilibili => CloudSources.Bilibili,
+            RootKind.CloudYouTube => CloudSources.YouTube,
+            _ => playlist.ResolvedProviderId ?? providerIdHint ?? "extension"
         };
-        string albumArtist = resolvedProvider?.DisplayName ?? playlist.Kind switch
-        {
-            RootKind.CloudBilibili => "Bilibili",
-            RootKind.CloudGoogleDrive => "Google Drive",
-            RootKind.CloudExtension => CloudProviderRegistry.ResolveDisplayLabel(_providerRegistry, playlist.ResolvedProviderId, playlist.Kind),
-            _ => "YouTube"
-        };
+        string albumArtist = resolvedProvider?.DisplayName ?? CloudProviderRegistry.ResolveDisplayLabel(
+            _providerRegistry,
+            playlist.ResolvedProviderId ?? providerIdHint,
+            playlist.Kind);
         string resolvedSourceUrl = !string.IsNullOrWhiteSpace(trackingOverride?.SourceUrl)
             ? trackingOverride!.SourceUrl.Trim()
             : (string.IsNullOrWhiteSpace(playlist.SourceUrl) ? rawSource : playlist.SourceUrl);
@@ -706,14 +684,14 @@ public sealed class CloudExporter
             return null;
         }
 
-        string? referer = root?.Kind == RootKind.CloudBilibili ||
-                          string.Equals(track.CloudSource, CloudSources.Bilibili, StringComparison.OrdinalIgnoreCase)
-            ? BilibiliClient.DefaultReferer
+        var artworkProvider = CloudStreamResolver.GetProvider(_providerRegistry, track, root);
+        Action<System.Net.Http.HttpRequestMessage>? configureArtwork = artworkProvider is not null
+            ? artworkProvider.ConfigureArtworkRequest
             : null;
 
         try
         {
-            return await _thumbnailCache!.GetBytesAsync(normalizedUrl!, referer, ct).ConfigureAwait(false);
+            return await _thumbnailCache!.GetBytesAsync(normalizedUrl!, configureArtwork, ct).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

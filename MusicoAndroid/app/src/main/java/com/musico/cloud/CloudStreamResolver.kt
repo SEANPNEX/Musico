@@ -15,11 +15,9 @@ open class CloudStreamResolver(
     constructor() : this(CloudProviderRegistry(), null)
 
     constructor(
-        youTubeClient: YouTubeClient = YouTubeClient(),
-        bilibiliClient: BilibiliClient = BilibiliClient(),
-        googleDriveClient: GoogleDriveClient = GoogleDriveClient(),
+        googleDriveClient: GoogleDriveClient,
         audioCache: CloudAudioCache? = null,
-    ) : this(CloudProviderRegistry(youTubeClient, bilibiliClient, googleDriveClient), audioCache)
+    ) : this(CloudProviderRegistry(googleDriveClient), audioCache)
 
     private val cache = ConcurrentHashMap<String, ResolvedStream>()
 
@@ -117,10 +115,11 @@ open class CloudStreamResolver(
         val provider = providerRegistry.providerForTrack(track, root)
             ?: run {
                 val pid = root?.resolvedProviderId ?: CloudProviderIds.fromLegacySlug(source)
-                if (CloudProviderIds.extensionIdFromProviderId(pid) != null) {
+                val extPid = CloudProviderIds.legacyExtensionProviderId(pid) ?: pid
+                if (CloudProviderIds.extensionIdFromProviderId(extPid) != null) {
                     throw CloudSourceException(
                         CloudErrorCode.EXTENSION_UNAVAILABLE,
-                        "Extension unavailable for ${track.title} ($pid)",
+                        "Extension unavailable for ${track.title} ($extPid)",
                     )
                 }
                 throw IOException("Unsupported cloud source: $source")

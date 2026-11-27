@@ -4,7 +4,6 @@ import android.net.Uri
 import androidx.media3.common.MediaMetadata
 import com.musico.audio.AudioPlaybackEngine
 import com.musico.audio.PlayerController
-import com.musico.cloud.BilibiliClient
 import com.musico.cloud.CloudAudioCache
 import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudHttpClient
@@ -18,12 +17,10 @@ import com.musico.cloud.CloudStreamResolver
 import com.musico.cloud.CloudTrackMetadata
 import com.musico.cloud.GoogleDriveClient
 import com.musico.cloud.ResolvedStream
-import com.musico.cloud.YouTubeClient
 import com.musico.core.ArtworkCache
 import com.musico.core.MetadataReading
 import com.musico.core.Persistence
 import com.musico.core.TrackMetadata
-import com.musico.extensions.BilibiliSourceProvider
 import com.musico.extensions.CloudProviderAvailability
 import com.musico.extensions.CloudProviderIds
 import com.musico.extensions.CloudProviderRegistry
@@ -37,7 +34,6 @@ import com.musico.extensions.ExtensionQualityOption
 import com.musico.extensions.ExtensionState
 import com.musico.extensions.ExtensionStore
 import com.musico.extensions.GoogleDriveSourceProvider
-import com.musico.extensions.YouTubeSourceProvider
 import com.musico.model.EqSettings
 import com.musico.model.LibraryRoot
 import com.musico.model.RootKind
@@ -329,115 +325,9 @@ class CloudQualityAndRecoveryV127Test {
     }
 
     @Test
-    fun builtinBilibiliYouTubeAndGoogleDriveQualityResolution() = runBlocking {
-        val biliHttp = MockHttp(
-            onGet = { url, _ ->
-                when {
-                    url.contains("/x/frontend/finger/spi") -> CloudHttpResponse(
-                        200, url, emptyMap(), """{"code":0,"data":{"b_3":"BUVID"}}""".toByteArray(),
-                    )
-                    url.contains("/x/web-interface/nav") -> CloudHttpResponse(
-                        200, url, emptyMap(),
-                        """{"code":0,"data":{"wbi_img":{"img_url":"https://i0.hdslb.com/bfs/wbi/7cd084941338484aae1ad9425b84077c.png","sub_url":"https://i0.hdslb.com/bfs/wbi/4932caff0ff746eab6f01bf08b70ac45.png"}}}""".toByteArray(),
-                    )
-                    url.contains("/x/player/") -> CloudHttpResponse(
-                        200, url, emptyMap(),
-                        """
-                        {
-                          "code": 0,
-                          "data": {
-                            "dash": {
-                              "audio": [
-                                { "id": 30216, "bandwidth": 64000, "baseUrl": "https://cdn.bilivideo.com/64k.m4s" },
-                                { "id": 30232, "bandwidth": 132000, "baseUrl": "https://cdn.bilivideo.com/132k.m4s" },
-                                { "id": 30280, "bandwidth": 192000, "baseUrl": "https://cdn.bilivideo.com/192k.m4s" }
-                              ],
-                              "flac": {
-                                "audio": { "id": 30251, "bandwidth": 1411000, "baseUrl": "https://cdn.bilivideo.com/flac.m4s" }
-                              }
-                            }
-                          }
-                        }
-                        """.trimIndent().toByteArray(),
-                    )
-                    else -> CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
-                }
-            },
-        )
-        val biliClient = BilibiliClient(biliHttp)
-        val biliProvider = BilibiliSourceProvider(biliClient)
-        assertEquals("standard", biliProvider.defaultStreamQualityId)
-        assertEquals("highest", biliProvider.defaultDownloadQualityId)
-        assertEquals(listOf("highest", "high", "standard", "low"), biliProvider.availableQualities.map { it.id })
-
-        val biliHighest = biliClient.resolveStream("BV1111111111#999", quality = "highest")
-        assertEquals("https://cdn.bilivideo.com/flac.m4s", biliHighest.url)
-        assertEquals("highest", biliHighest.actualQuality)
-        assertEquals("FLAC", biliHighest.qualityLabel)
-        assertEquals(1411, biliHighest.bitrateKbps)
-
-        val biliHigh = biliClient.resolveStream("BV1111111111#999", quality = "high")
-        assertEquals("https://cdn.bilivideo.com/192k.m4s", biliHigh.url)
-        assertEquals("192k", biliHigh.qualityLabel)
-
-        val biliStd = biliClient.resolveStream("BV1111111111#999", quality = "standard")
-        assertEquals("https://cdn.bilivideo.com/132k.m4s", biliStd.url)
-        assertEquals("132k", biliStd.qualityLabel)
-
-        val biliLow = biliClient.resolveStream("BV1111111111#999", quality = "low")
-        assertEquals("https://cdn.bilivideo.com/64k.m4s", biliLow.url)
-        assertEquals("64k", biliLow.qualityLabel)
-
-        // Built-in YouTube
-        val ytHttp = MockHttp(
-            onPost = { url, _, _ ->
-                if (!url.contains("/youtubei/v1/player")) {
-                    CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
-                } else {
-                    CloudHttpResponse(
-                        200, url, emptyMap(),
-                        """
-                        {
-                          "streamingData": {
-                            "expiresInSeconds": "3600",
-                            "adaptiveFormats": [
-                              { "itag": 139, "url": "https://cdn.yt.test/48k.m4a", "mimeType": "audio/mp4", "bitrate": 48000 },
-                              { "itag": 140, "url": "https://cdn.yt.test/128k.m4a", "mimeType": "audio/mp4", "bitrate": 128000 },
-                              { "itag": 251, "url": "https://cdn.yt.test/160k.webm", "mimeType": "audio/webm", "bitrate": 160000 },
-                              { "itag": 141, "url": "https://cdn.yt.test/256k.m4a", "mimeType": "audio/mp4", "bitrate": 256000 }
-                            ]
-                          }
-                        }
-                        """.trimIndent().toByteArray(),
-                    )
-                }
-            },
-        )
-        val ytClient = YouTubeClient(ytHttp)
-        val ytProvider = YouTubeSourceProvider(ytClient)
-        assertEquals("standard", ytProvider.defaultStreamQualityId)
-        assertEquals("highest", ytProvider.defaultDownloadQualityId)
-        assertEquals(listOf("highest", "high", "standard", "low"), ytProvider.availableQualities.map { it.id })
-
-        val ytHighest = ytClient.resolveStream("dQw4w9WgXcQ", quality = "highest")
-        assertEquals("https://cdn.yt.test/256k.m4a", ytHighest.url)
-        assertEquals("highest", ytHighest.actualQuality)
-        assertEquals("256k", ytHighest.qualityLabel)
-        assertEquals(256, ytHighest.bitrateKbps)
-
-        val ytHigh = ytClient.resolveStream("dQw4w9WgXcQ", quality = "high")
-        assertEquals("https://cdn.yt.test/160k.webm", ytHigh.url)
-        assertEquals("160k", ytHigh.qualityLabel)
-
-        val ytStd = ytClient.resolveStream("dQw4w9WgXcQ", quality = "standard")
-        assertEquals("https://cdn.yt.test/128k.m4a", ytStd.url)
-        assertEquals("128k", ytStd.qualityLabel)
-
-        val ytLow = ytClient.resolveStream("dQw4w9WgXcQ", quality = "low")
-        assertEquals("https://cdn.yt.test/48k.m4a", ytLow.url)
-        assertEquals("48k", ytLow.qualityLabel)
-
-        // Google Drive declares empty qualities
+    fun googleDriveDeclaresEmptyQualitiesAndRegistryHasOnlyGoogleDriveBuiltin() {
+        val registry = CloudProviderRegistry()
+        assertEquals(listOf(CloudProviderIds.GOOGLE_DRIVE), registry.builtinProviders().map { it.providerId })
         val driveProvider = GoogleDriveSourceProvider(GoogleDriveClient(MockHttp()))
         assertTrue(driveProvider.availableQualities.isEmpty())
         assertNull(driveProvider.defaultStreamQualityId)
@@ -742,44 +632,56 @@ class CloudQualityAndRecoveryV127Test {
             ): ResolvedStream = ResolvedStream("https://old.example.com/$remoteTrackId.m4a")
         }
 
-        val biliHttp = MockHttp(
-            onGet = { url, _ ->
-                when {
-                    url.contains("/x/v3/fav/resource/list") -> CloudHttpResponse(
-                        200, url, emptyMap(),
-                        """
-                        {
-                          "code": 0,
-                          "data": {
-                            "info": { "title": "My Bili Fav" },
-                            "has_more": false,
-                            "medias": [
-                              {
-                                "attr": 0,
-                                "bvid": "BV1xx411c7mD",
-                                "title": "Track Alpha",
-                                "duration": 120,
-                                "upper": { "name": "Creator" }
-                              }
-                            ]
-                          }
-                        }
-                        """.trimIndent().toByteArray(),
-                    )
-                    else -> CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
-                }
-            },
-        )
-        val customRegistry = CloudProviderRegistry(bilibiliClient = BilibiliClient(biliHttp))
+        val newBiliProvider = object : CloudSourceProvider {
+            override val providerId: String = CloudProviderIds.BILIBILI_EXTENSION
+            override val rootKind: RootKind = RootKind.CLOUD_EXTENSION
+            override val cloudSourceSlug: String = providerId
+            override val displayName: String = "Bilibili Search"
+            override val badgeLabel: String = "Bilibili"
+            override val isBuiltin: Boolean = false
+            override val supportsTree: Boolean = false
+            override val supportsCookie: Boolean = true
+            override val usesFlatCloudListing: Boolean = true
+            override val availableQualities: List<CloudQualityOption> = listOf(
+                CloudQualityOption("highest", "FLAC", "FLAC", lossless = true),
+                CloudQualityOption("high", "192k", "192k"),
+                CloudQualityOption("standard", "132k", "132k"),
+            )
+            override fun matchesUrlPatternFast(rawInput: String): Boolean = rawInput.contains("bilibili.com")
+            override fun canHandle(rawInput: String): CloudUrlMatch? =
+                if (rawInput.contains("bilibili.com")) CloudUrlMatch(rawInput, remoteId = "fav:42") else null
+
+            override suspend fun fetchCollection(sourceUrl: String, cookie: String?): CloudPlaylistResult =
+                CloudPlaylistResult(
+                    source = providerId,
+                    remoteId = "fav:42",
+                    title = "My Bili Fav",
+                    tracks = listOf(
+                        CloudTrackMetadata("BV1xx411c7mD", "Track Alpha", "Creator", "My Bili Fav", 120.0),
+                    ),
+                )
+
+            override suspend fun resolveStream(
+                remoteTrackId: String,
+                relativePath: String?,
+                cookie: String?,
+                forceRefresh: Boolean,
+                quality: String?,
+                purpose: CloudStreamPurpose,
+            ): ResolvedStream = ResolvedStream("https://new.example.com/$remoteTrackId.m4a")
+        }
+
+        val customRegistry = CloudProviderRegistry()
         customRegistry.extensionStatusLookup = registry.extensionStatusLookup
         customRegistry.registerExtensionProvider(oldProvider)
+        customRegistry.registerExtensionProvider(newBiliProvider)
 
         val store = LibraryStore(
             directory = stateDir,
             appFolderDir = docsDir,
             reader = stubReader(),
             artwork = ArtworkCache(File(stateDir, "art")),
-            cloudHttpClient = biliHttp,
+            cloudHttpClient = MockHttp(),
             providerRegistry = customRegistry,
         )
         val queueStore = QueueStore(stateDir)
@@ -801,7 +703,7 @@ class CloudQualityAndRecoveryV127Test {
         store.addToPlaylist(listOf(originalTrack.id), userPlaylistId)
         store.toggleFavourite(originalTrack.id)
 
-        // Option A: uninstall extension -> root stays visibly unavailable, compatible built-in Bilibili matches URL
+        // Option A: uninstall old extension -> root stays visibly unavailable, compatible Bilibili extension matches URL
         oldExtInstalled = false
         customRegistry.unregisterExtensionProvider("ext.com.old.bili")
         store.refreshAvailability()
@@ -809,14 +711,14 @@ class CloudQualityAndRecoveryV127Test {
         assertFalse(store.isAvailable(originalRoot))
         assertEquals(CloudProviderAvailability.MISSING, store.cloudProviderAvailability(originalRoot))
         val compatible = store.compatibleProvidersForRoot(originalRoot)
-        assertTrue(compatible.any { it.providerId == CloudProviderIds.BILIBILI })
-        assertEquals(CloudProviderIds.BILIBILI, store.bestCompatibleProviderForRoot(originalRoot)?.providerId)
+        assertTrue(compatible.any { it.providerId == CloudProviderIds.BILIBILI_EXTENSION })
+        assertEquals(CloudProviderIds.BILIBILI_EXTENSION, store.bestCompatibleProviderForRoot(originalRoot)?.providerId)
 
-        // Explicit recovery: re-bind to built-in Bilibili with quality preferences
+        // Explicit recovery: re-bind to compatible Bilibili extension with quality preferences
         val rebindRes = store.updateCloudTrackingAddress(
             rootId = originalRoot.id,
             newSourceUrl = "https://space.bilibili.com/1/favlist?fid=42",
-            providerIdHint = CloudProviderIds.BILIBILI,
+            providerIdHint = CloudProviderIds.BILIBILI_EXTENSION,
             streamQualityId = "high",
             downloadQualityId = "highest",
         )
@@ -824,8 +726,8 @@ class CloudQualityAndRecoveryV127Test {
 
         val reboundRoot = store.state.value.roots.first { it.id == originalRoot.id }
         assertEquals(originalRoot.id, reboundRoot.id)
-        assertEquals(RootKind.CLOUD_BILIBILI, reboundRoot.kind)
-        assertEquals(CloudProviderIds.BILIBILI, reboundRoot.resolvedProviderId)
+        assertEquals(RootKind.CLOUD_EXTENSION, reboundRoot.kind)
+        assertEquals(CloudProviderIds.BILIBILI_EXTENSION, reboundRoot.resolvedProviderId)
         assertEquals("high", reboundRoot.streamQualityId)
         assertEquals("highest", reboundRoot.downloadQualityId)
         assertTrue(store.isAvailable(reboundRoot))
@@ -834,7 +736,7 @@ class CloudQualityAndRecoveryV127Test {
         val reboundTracks = store.state.value.tracks.filter { it.rootId == originalRoot.id }
         assertEquals(1, reboundTracks.size)
         val reboundTrack = reboundTracks.single()
-        assertEquals(CloudSource.BILIBILI, reboundTrack.cloudSource)
+        assertEquals(CloudProviderIds.BILIBILI_EXTENSION, reboundTrack.cloudSource)
         assertEquals("BV1xx411c7mD", reboundTrack.remoteTrackId)
         assertNotEquals(originalTrack.id, reboundTrack.id)
         assertEquals(listOf(reboundTrack.id), store.state.value.playlists.first { it.id == userPlaylistId }.trackIds)
@@ -859,23 +761,23 @@ class CloudQualityAndRecoveryV127Test {
             rootId = localRoot.id,
             newSourceUrl = "https://space.bilibili.com/1/favlist?fid=42",
             cookie = "SESSDATA=abc",
-            providerIdHint = CloudProviderIds.BILIBILI,
+            providerIdHint = CloudProviderIds.BILIBILI_EXTENSION,
             streamQualityId = "standard",
             downloadQualityId = "highest",
         )
         assertTrue(localRebind.isSuccess)
 
         val updatedLocalRoot = store.state.value.roots.first { it.id == localRoot.id }
-        assertEquals(RootKind.CLOUD_BILIBILI, updatedLocalRoot.linkedCloudKind)
-        assertEquals(CloudProviderIds.BILIBILI, updatedLocalRoot.linkedProviderId)
+        assertEquals(RootKind.CLOUD_EXTENSION, updatedLocalRoot.linkedCloudKind)
+        assertEquals(CloudProviderIds.BILIBILI_EXTENSION, updatedLocalRoot.linkedProviderId)
         assertEquals("standard", updatedLocalRoot.streamQualityId)
         assertEquals("highest", updatedLocalRoot.downloadQualityId)
         assertEquals("SESSDATA=abc", updatedLocalRoot.cookie)
 
         val manifest = CloudExporter.loadManifest(localDir)
         assertNotNull(manifest)
-        assertEquals(RootKind.CLOUD_BILIBILI.name, manifest!!.cloudKind)
-        assertEquals(CloudProviderIds.BILIBILI, manifest.providerId)
+        assertEquals(RootKind.CLOUD_EXTENSION.name, manifest!!.cloudKind)
+        assertEquals(CloudProviderIds.BILIBILI_EXTENSION, manifest.providerId)
         assertEquals("standard", manifest.streamQualityId)
         assertEquals("highest", manifest.downloadQualityId)
     }

@@ -375,50 +375,32 @@ public sealed class V115FeaturesTests
         TestHelpers.TouchFile(rockFolder, "r1.mp3");
         TestHelpers.TouchFile(rockFolder, "metal/m1.mp3");
 
-        string cloudJson = """
+        var httpHandler = new StubHttpHandler(req =>
         {
-          "header": { "musicDetailHeaderRenderer": { "title": { "runs": [{ "text": "Cloud Synth" }] } } },
-          "contents": {
-            "singleColumnBrowseResultsRenderer": {
-              "tabs": [{
-                "tabRenderer": {
-                  "content": {
-                    "sectionListRenderer": {
-                      "contents": [{
-                        "musicPlaylistShelfRenderer": {
-                          "contents": [
-                            {
-                              "musicResponsiveListItemRenderer": {
-                                "playlistItemData": { "videoId": "synth001" },
-                                "flexColumns": [
-                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Synth Song" }] } } },
-                                  { "musicResponsiveListItemFlexColumnRenderer": { "text": { "runs": [{ "text": "Artist" }] } } }
-                                ]
-                              }
-                            }
-                          ]
-                        }
-                      }]
-                    }
-                  }
-                }
-              }]
+            if (req.RequestUri!.AbsoluteUri.Contains("/drive/folders/gdSynth1", StringComparison.Ordinal))
+            {
+                string html = """
+                <html><head><title>Cloud Synth - Google Drive</title></head><body>
+                <script>window['_DRIVE_ivd'] = '[["gd_s1",["gdSynth1"],"Synth Song.mp3","audio/mpeg"]]';</script>
+                </body></html>
+                """;
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(html, Encoding.UTF8, "text/html")
+                };
             }
-          }
-        }
-        """;
-
-        var httpHandler = new StubHttpHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
-        {
-            Content = new StringContent(cloudJson, Encoding.UTF8, "application/json")
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
+        var gd = new GoogleDriveClient(httpHandler);
+        var registry = new MusicoWindows.Extensions.CloudProviderRegistry(gd);
         var lib = new LibraryStore(
             stateDir,
             musicDir,
             new StubMetadataReader(),
             new ArtworkCache(Path.Combine(stateDir, "Art")),
-            youtubeClient: new YouTubeClient(httpHandler),
+            googleDriveClient: gd,
+            providerRegistry: registry,
             artworkHandler: httpHandler);
         await lib.RescanAsync();
 
@@ -446,7 +428,7 @@ public sealed class V115FeaturesTests
         Assert.True(player.IsPlaying);
 
         // 2. Adding cloud folder creates queue named "Cloud Synth" without disrupting playback.
-        await lib.AddCloudRootAsync("https://music.youtube.com/playlist?list=PLSynthTest");
+        await lib.AddCloudRootAsync("https://drive.google.com/drive/folders/gdSynth1");
         var cloudQueue = Assert.Single(queues.Queues, q => q.Name == "Cloud Synth");
         Assert.Single(cloudQueue.TrackIds);
         Assert.Equal(initialActiveId, queues.ActiveId);

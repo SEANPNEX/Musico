@@ -4,6 +4,10 @@ import android.net.Uri
 import com.musico.core.ArtworkCache
 import com.musico.core.MetadataReading
 import com.musico.core.TrackMetadata
+import com.musico.extensions.CloudProviderIds
+import com.musico.extensions.CloudProviderRegistry
+import com.musico.extensions.CloudSourceProvider
+import com.musico.extensions.CloudUrlMatch
 import com.musico.model.LibraryRoot
 import com.musico.model.RootKind
 import com.musico.model.Track
@@ -148,7 +152,39 @@ class CloudExporterTest {
         }
 
         val progressEvents = mutableListOf<Triple<Int, Int, String>>()
-        val exporter = CloudExporter(context = null, cloudResolver = resolver, downloader = downloader)
+        val registry = CloudProviderRegistry()
+        registry.registerExtensionProvider(
+            object : CloudSourceProvider {
+                override val providerId: String = CloudProviderIds.YOUTUBE_EXTENSION
+                override val rootKind: RootKind = RootKind.CLOUD_EXTENSION
+                override val cloudSourceSlug: String = providerId
+                override val displayName: String = "YouTube Search"
+                override val badgeLabel: String = "YouTube"
+                override val isBuiltin: Boolean = false
+                override val supportsTree: Boolean = false
+                override val supportsCookie: Boolean = true
+                override val usesFlatCloudListing: Boolean = true
+                override fun canHandle(rawInput: String): CloudUrlMatch? = null
+                override suspend fun fetchCollection(sourceUrl: String, cookie: String?): CloudPlaylistResult =
+                    CloudPlaylistResult(providerId, "PL123", "Mix", emptyList())
+                override suspend fun resolveStream(
+                    remoteTrackId: String,
+                    relativePath: String?,
+                    cookie: String?,
+                    forceRefresh: Boolean,
+                    quality: String?,
+                    purpose: CloudStreamPurpose,
+                ): ResolvedStream = ResolvedStream("https://cdn.example.com/$remoteTrackId")
+                override fun downloadHeaders(stream: ResolvedStream): Map<String, String> =
+                    stream.headers + ("Range" to "bytes=0-")
+            }
+        )
+        val exporter = CloudExporter(
+            context = null,
+            cloudResolver = resolver,
+            downloader = downloader,
+            providerRegistry = registry,
+        )
         val summary = exporter.exportPlaylist(
             tracks = tracks,
             root = root,
@@ -874,8 +910,6 @@ class CloudExporterTest {
             artwork = ArtworkCache(File(stateDir, "art")),
             context = null,
             cloudHttpClient = fakeHttp,
-            youTubeClient = YouTubeClient(fakeHttp),
-            bilibiliClient = BilibiliClient(fakeHttp),
             googleDriveClient = GoogleDriveClient(fakeHttp),
         )
 

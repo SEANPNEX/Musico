@@ -166,6 +166,17 @@ data class FolderRef(
     val path: String = ""
 )
 
+private data class SaveCloudTarget(
+    val root: LibraryRoot,
+    val tracks: List<Track>,
+    val isWholeRootExport: Boolean = true,
+)
+
+private val RootKind.requiresExtension: Boolean
+    get() = this == RootKind.CLOUD_EXTENSION ||
+        this == RootKind.CLOUD_YOUTUBE ||
+        this == RootKind.CLOUD_BILIBILI
+
 private data class FolderUpdateTarget(
     val root: LibraryRoot,
     val subfolderPath: String = "",
@@ -212,11 +223,16 @@ private fun displayRootName(root: LibraryRoot, strings: AppStrings): String {
     }
 }
 
-private fun localizeLibraryError(err: Throwable, fallback: String, strings: AppStrings): String {
+private fun localizeLibraryError(
+    err: Throwable,
+    fallback: String,
+    strings: AppStrings,
+    enabledExtensionNames: List<String> = emptyList(),
+): String {
     return when (err) {
         is LibraryException.DuplicateRoot -> strings.errorDuplicateRoot
         is LibraryException.NotAFolder -> strings.errorNotAFolder
-        is LibraryException.UnsupportedCloudUrl -> strings.errorUnsupportedCloudUrl
+        is LibraryException.UnsupportedCloudUrl -> strings.errorUnsupportedCloudUrlFor(enabledExtensionNames)
         is LibraryException.ExtensionUnavailable -> strings.errorExtensionUnavailable
         is CloudSourceException -> when (err.code) {
             CloudErrorCode.EXTENSION_UNAVAILABLE -> strings.errorExtensionUnavailable
@@ -260,6 +276,10 @@ fun FoldersScreen(
     val downloadJobs by cloudDownloadManager.jobs.collectAsStateWithLifecycle()
     val activeDownloadCount = remember(downloadJobs) { downloadJobs.count { it.isActive } }
     val activeProviders by providerRegistry.providers.collectAsStateWithLifecycle()
+    val enabledExtensionNames = remember(activeProviders) {
+        activeProviders.filter { !it.isBuiltin && it.supportsCollections }.map { it.displayName }
+    }
+    val lastCloudMerge by libraryStore.lastCloudMerge.collectAsStateWithLifecycle()
     val pendingExtUpdateCount = if (extensionStore != null) {
         extensionStore.extensions.collectAsStateWithLifecycle().value
         extensionStore.pendingUpdates.collectAsStateWithLifecycle().value.size
@@ -299,7 +319,7 @@ fun FoldersScreen(
     var deleteError by remember { mutableStateOf<String?>(null) }
     var removingRoot by remember { mutableStateOf<LibraryRoot?>(null) }
     var removingSubfolder by remember { mutableStateOf<FolderRef?>(null) }
-    var savingCloudTarget by remember { mutableStateOf<Pair<LibraryRoot, List<Track>>?>(null) }
+    var savingCloudTarget by remember { mutableStateOf<SaveCloudTarget?>(null) }
     var updatingTarget by remember { mutableStateOf<FolderUpdateTarget?>(null) }
     var editingCloudSource by remember { mutableStateOf<EditCloudSourceTarget?>(null) }
     var showAddCloudDialog by remember { mutableStateOf(false) }
@@ -319,6 +339,14 @@ fun FoldersScreen(
 
     val activeRef = currentFolder
     val currentRoot = activeRef?.let { ref -> libraryState.roots.firstOrNull { it.id == ref.rootId } }
+
+    LaunchedEffect(lastCloudMerge) {
+        val event = lastCloudMerge ?: return@LaunchedEffect
+        val open = currentFolder
+        if (open != null && open.rootId == event.cloudRootId) {
+            currentFolder = FolderRef(event.targetRootId, event.targetRelPath)
+        }
+    }
 
     LaunchedEffect(activeRef, currentRoot?.kind, currentRoot?.resolvedProviderId) {
         if (activeRef != null && currentRoot != null && libraryStore.supportsTreeCrawling(currentRoot)) {
@@ -544,7 +572,11 @@ fun FoldersScreen(
                                             enabled = cloudTracks.isNotEmpty(),
                                             onClick = {
                                                 detailMenuExpanded = false
-                                                savingCloudTarget = rootForMenu to cloudTracks
+                                                savingCloudTarget = SaveCloudTarget(
+                                                    root = rootForMenu,
+                                                    tracks = cloudTracks,
+                                                    isWholeRootExport = activeRef.path.isEmpty(),
+                                                )
                                             }
                                         )
                                         DropdownMenuItem(
@@ -693,6 +725,7 @@ fun FoldersScreen(
                         trackActions = trackActions,
                         extensionStore = extensionStore,
                         providerRegistry = providerRegistry,
+                        enabledExtensionNames = enabledExtensionNames,
                         onOpenRoot = { rootId -> currentFolder = FolderRef(rootId, "") },
                         onRelocateRoot = ::launchRelocateFolder,
                         onRequestRemove = { removingRoot = it },
@@ -700,7 +733,11 @@ fun FoldersScreen(
                             val tracks = libraryStore.tracksUnder(root.id, "") { id ->
                                 historyState.entries[id]?.count ?: 0
                             }
-                            savingCloudTarget = root to tracks
+                            savingCloudTarget = SaveCloudTarget(
+                                root = root,
+                                tracks = tracks,
+                                isWholeRootExport = true,
+                            )
                         },
                         onUpdateTrackedRoot = { root -> updatingTarget = FolderUpdateTarget(root, "") },
                         onEditTrackedRootSource = { root, tracking ->
@@ -768,6 +805,7 @@ fun FoldersScreen(
     if (showAddCloudDialog) {
         AddCloudFolderDialog(
             providers = activeProviders.filter { it.supportsCollections },
+            enabledExtensionNames = enabledExtensionNames,
             previewMatchedProvider = { raw -> providerRegistry.previewProvider(raw) },
             onDismiss = { showAddCloudDialog = false },
             onAdd = { url, cookie, providerIdHint ->
@@ -787,8 +825,9 @@ fun FoldersScreen(
     val pendingSaveCloud = savingCloudTarget
     if (pendingSaveCloud != null) {
         SaveCloudPlaylistDialog(
-            root = pendingSaveCloud.first,
-            tracks = pendingSaveCloud.second,
+            root = pendingSaveCloud.root,
+            tracks = pendingSaveCloud.tracks,
+            isWholeRootExport = pendingSaveCloud.isWholeRootExport,
             cloudDownloadManager = cloudDownloadManager,
             onPickFolder = onPickFolder,
             onDismiss = { savingCloudTarget = null },
@@ -808,7 +847,7 @@ fun FoldersScreen(
                 val trackInfo = currentTracking ?: CloudTrackingInfo(
                     sourceUrl = latestRoot.sourceUrl.orEmpty(),
                     remoteId = latestRoot.remoteId,
-                    cloudKind = latestRoot.effectiveCloudKind ?: RootKind.CLOUD_YOUTUBE,
+                    cloudKind = latestRoot.effectiveCloudKind ?: RootKind.CLOUD_EXTENSION,
                     cookie = latestRoot.cookie,
                     lastSyncedEpochMs = latestRoot.lastSyncedEpochMs,
                 )
@@ -830,6 +869,7 @@ fun FoldersScreen(
             target = pendingEditCloud,
             libraryStore = libraryStore,
             activeProviders = activeProviders,
+            enabledExtensionNames = enabledExtensionNames,
             providerRegistry = providerRegistry,
             onDismiss = { editingCloudSource = null },
             onSaved = {
@@ -1017,6 +1057,7 @@ fun FoldersScreen(
 @Composable
 private fun AddCloudFolderDialog(
     providers: List<CloudSourceProvider>,
+    enabledExtensionNames: List<String>,
     previewMatchedProvider: (String) -> CloudSourceProvider?,
     onDismiss: () -> Unit,
     onAdd: suspend (url: String, cookie: String?, providerIdHint: String?) -> Result<Unit>
@@ -1119,7 +1160,7 @@ private fun AddCloudFolderDialog(
                     label = { Text(strings.cloudUrlLabel) },
                     placeholder = { Text(strings.cloudUrlPlaceholder) },
                     supportingText = {
-                        Text(strings.cloudUrlSupportingText)
+                        Text(strings.cloudUrlSupportingTextFor(enabledExtensionNames))
                     },
                     singleLine = true,
                     enabled = !isAdding,
@@ -1164,7 +1205,12 @@ private fun AddCloudFolderDialog(
                         result.onSuccess {
                             onDismiss()
                         }.onFailure { err ->
-                            errorText = localizeLibraryError(err, strings.cloudPlaylistLoadErrorFallback, strings)
+                            errorText = localizeLibraryError(
+                                err = err,
+                                fallback = strings.cloudPlaylistLoadErrorFallback,
+                                strings = strings,
+                                enabledExtensionNames = enabledExtensionNames,
+                            )
                         }
                     }
                 }
@@ -1517,6 +1563,7 @@ private fun DownloadJobCard(
 private fun SaveCloudPlaylistDialog(
     root: LibraryRoot,
     tracks: List<Track>,
+    isWholeRootExport: Boolean,
     cloudDownloadManager: CloudDownloadManager,
     onPickFolder: ((Uri) -> Unit) -> Unit,
     onDismiss: () -> Unit,
@@ -1716,6 +1763,7 @@ private fun SaveCloudPlaylistDialog(
                                 parentUri = parentUri,
                                 folderName = folderName,
                                 addToLibrary = addToLibrary,
+                                isWholeRootExport = isWholeRootExport,
                             )
                         },
                     ) {
@@ -1933,6 +1981,7 @@ private fun EditCloudSourceDialog(
     target: EditCloudSourceTarget,
     libraryStore: LibraryStore,
     activeProviders: List<CloudSourceProvider>,
+    enabledExtensionNames: List<String>,
     providerRegistry: CloudProviderRegistry,
     onDismiss: () -> Unit,
     onSaved: () -> Unit,
@@ -2021,7 +2070,7 @@ private fun EditCloudSourceDialog(
                     },
                     label = { Text(strings.cloudUrlLabel) },
                     placeholder = { Text(strings.cloudUrlPlaceholder) },
-                    supportingText = { Text(strings.cloudUrlSupportingText) },
+                    supportingText = { Text(strings.cloudUrlSupportingTextFor(enabledExtensionNames)) },
                     singleLine = true,
                     enabled = !isSaving,
                     modifier = Modifier.fillMaxWidth(),
@@ -2234,7 +2283,12 @@ private fun EditCloudSourceDialog(
                             onDismiss()
                             onSaved()
                         }.onFailure { err ->
-                            errorText = localizeLibraryError(err, strings.couldNotUpdateFromCloudFallback, strings)
+                            errorText = localizeLibraryError(
+                                err = err,
+                                fallback = strings.couldNotUpdateFromCloudFallback,
+                                strings = strings,
+                                enabledExtensionNames = enabledExtensionNames,
+                            )
                         }
                     }
                 },
@@ -2274,6 +2328,7 @@ private fun FolderRootList(
     trackActions: TrackActionState,
     extensionStore: ExtensionStore?,
     providerRegistry: CloudProviderRegistry,
+    enabledExtensionNames: List<String>,
     onOpenRoot: (String) -> Unit,
     onRelocateRoot: (String) -> Unit,
     onRequestRemove: (LibraryRoot) -> Unit,
@@ -2366,7 +2421,7 @@ private fun FolderRootList(
                             onTrigger = { onRequestRemove(root) },
                         )
                     ) {
-                        val bestRecoveryProvider = if (!available && root.kind == RootKind.CLOUD_EXTENSION) {
+                        val bestRecoveryProvider = if (!available && root.kind.requiresExtension) {
                             libraryStore.bestCompatibleProviderForRoot(root)
                         } else {
                             null
@@ -2449,7 +2504,7 @@ private fun FolderRootList(
                 EmptyState(
                     icon = Icons.Rounded.CreateNewFolder,
                     title = strings.addYourMusicFoldersTitle,
-                    description = strings.addYourMusicFoldersDesc,
+                    description = strings.addYourMusicFoldersDescFor(enabledExtensionNames),
                     actionLabel = strings.addFolder,
                     onAction = onAddFolder
                 )
@@ -2457,7 +2512,7 @@ private fun FolderRootList(
         } else {
             item(key = "footer_hint") {
                 Text(
-                    text = strings.foldersFooterHint,
+                    text = strings.foldersFooterHintFor(enabledExtensionNames),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)
@@ -2506,7 +2561,7 @@ private fun RootItemRow(
             leadingContent = {
                 Icon(
                     imageVector = when {
-                        !available && root.kind == RootKind.CLOUD_EXTENSION -> Icons.Rounded.Extension
+                        !available && root.kind.requiresExtension -> Icons.Rounded.Extension
                         !available -> Icons.Rounded.FolderOff
                         root.kind == RootKind.APP_FOLDER -> Icons.Rounded.LibraryMusic
                         root.kind == RootKind.CLOUD_YOUTUBE -> Icons.Rounded.PlayCircle
@@ -2551,7 +2606,7 @@ private fun RootItemRow(
                     Text(
                         text = when {
                             available -> strings.songCount(songCount)
-                            root.kind == RootKind.CLOUD_EXTENSION -> strings.extensionUnavailableStatus
+                            root.kind.requiresExtension -> strings.extensionUnavailableStatus
                             else -> strings.folderUnavailable
                         },
                         color = if (available) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.error
@@ -2692,7 +2747,7 @@ private fun RootItemRow(
             }
         )
 
-        if (!available && root.kind == RootKind.CLOUD_EXTENSION) {
+        if (!available && root.kind.requiresExtension) {
             ExtensionUnavailableBanner(
                 availability = cloudAvailability,
                 providerId = root.resolvedProviderId,
@@ -2765,10 +2820,10 @@ private fun FolderDetailContent(
     val strings = LocalStrings.current
     val playCounts: (String) -> Int = { id -> historyState.entries[id]?.count ?: 0 }
     val syncProgress = libraryState.cloudSyncProgress[ref.rootId]
-    val extAvailability = root?.takeIf { it.kind == RootKind.CLOUD_EXTENSION }
+    val extAvailability = root?.takeIf { it.kind.requiresExtension }
         ?.let { libraryStore.cloudProviderAvailability(it) }
     val showExtUnavailableBanner = root != null &&
-        root.kind == RootKind.CLOUD_EXTENSION &&
+        root.kind.requiresExtension &&
         extAvailability != null &&
         extAvailability != CloudProviderAvailability.AVAILABLE
     val detailBestRecoveryProvider = remember(root, showExtUnavailableBanner, providerRegistry.providers.collectAsStateWithLifecycle().value) {

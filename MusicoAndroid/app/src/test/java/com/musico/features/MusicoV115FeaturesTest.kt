@@ -4,15 +4,22 @@ import android.net.Uri
 import androidx.media3.common.MediaMetadata
 import com.musico.audio.AudioPlaybackEngine
 import com.musico.audio.PlayerController
-import com.musico.cloud.BilibiliClient
 import com.musico.cloud.CloudHttpClient
 import com.musico.cloud.CloudHttpResponse
-import com.musico.cloud.YouTubeClient
+import com.musico.cloud.CloudPlaylistResult
+import com.musico.cloud.CloudStreamPurpose
+import com.musico.cloud.CloudTrackMetadata
+import com.musico.cloud.ResolvedStream
 import com.musico.core.ArtworkCache
 import com.musico.core.AudioFileInfoReader
 import com.musico.core.MetadataReading
 import com.musico.core.TrackMetadata
+import com.musico.extensions.CloudProviderIds
+import com.musico.extensions.CloudProviderRegistry
+import com.musico.extensions.CloudSourceProvider
+import com.musico.extensions.CloudUrlMatch
 import com.musico.model.EqSettings
+import com.musico.model.RootKind
 import com.musico.model.TrackSortOrder
 import com.musico.store.LibraryStore
 import com.musico.store.PlayHistoryStore
@@ -329,29 +336,56 @@ class MusicoV115FeaturesTest {
             override suspend fun get(url: String, headers: Map<String, String>, followRedirects: Boolean): CloudHttpResponse =
                 CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
 
-            override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse {
-                val body = """
-                    {
-                      "header": { "musicDetailHeaderRenderer": { "title": { "runs": [ { "text": "Anime OST" } ] } } },
-                      "contents": {
-                        "items": [
-                          {
-                            "playlistVideoRenderer": {
-                              "videoId": "vid_001",
-                              "title": { "runs": [ { "text": "Opening" } ] },
-                              "shortBylineText": { "runs": [ { "text": "Band" } ] },
-                              "lengthSeconds": "90"
-                            }
-                          }
-                        ]
-                      }
-                    }
-                """.trimIndent()
-                return CloudHttpResponse(200, url, emptyMap(), body.toByteArray())
-            }
+            override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse =
+                CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
 
             override suspend fun probeRange(url: String, headers: Map<String, String>): Int = 206
         }
+
+        val registry = CloudProviderRegistry()
+        registry.registerExtensionProvider(
+            object : CloudSourceProvider {
+                override val providerId: String = CloudProviderIds.YOUTUBE_EXTENSION
+                override val rootKind: RootKind = RootKind.CLOUD_EXTENSION
+                override val cloudSourceSlug: String = providerId
+                override val displayName: String = "YouTube Search"
+                override val badgeLabel: String = "YouTube"
+                override val isBuiltin: Boolean = false
+                override val supportsTree: Boolean = false
+                override val supportsCookie: Boolean = true
+                override val usesFlatCloudListing: Boolean = true
+
+                override fun canHandle(rawInput: String): CloudUrlMatch? =
+                    if (rawInput.contains("music.youtube.com/playlist")) {
+                        CloudUrlMatch(rawInput.trim(), remoteId = "PLanime001")
+                    } else null
+
+                override suspend fun fetchCollection(sourceUrl: String, cookie: String?): CloudPlaylistResult =
+                    CloudPlaylistResult(
+                        source = providerId,
+                        remoteId = "PLanime001",
+                        title = "Anime OST",
+                        tracks = listOf(
+                            CloudTrackMetadata(
+                                remoteTrackId = "vid_001",
+                                title = "Opening",
+                                artist = "Band",
+                                album = "Anime OST",
+                                durationSec = 90.0,
+                            )
+                        ),
+                    )
+
+                override suspend fun resolveStream(
+                    remoteTrackId: String,
+                    relativePath: String?,
+                    cookie: String?,
+                    forceRefresh: Boolean,
+                    quality: String?,
+                    purpose: CloudStreamPurpose,
+                ): ResolvedStream = ResolvedStream("https://cdn.example.com/$remoteTrackId.m4a")
+            }
+        )
 
         val cloudLibrary = LibraryStore(
             directory = tempFolder.newFolder("c_state"),
@@ -360,8 +394,7 @@ class MusicoV115FeaturesTest {
             artwork = ArtworkCache(tempFolder.newFolder("c_art")),
             context = null,
             cloudHttpClient = fakeHttp,
-            youTubeClient = YouTubeClient(fakeHttp),
-            bilibiliClient = BilibiliClient(fakeHttp),
+            providerRegistry = registry,
         )
         val cQueues = QueueStore(tempFolder.newFolder("c_q"))
         val cController = PlayerController(

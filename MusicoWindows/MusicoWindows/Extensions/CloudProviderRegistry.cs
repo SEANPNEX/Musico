@@ -134,216 +134,6 @@ public interface ICloudSourceProvider
     void ConfigureArtworkRequest(HttpRequestMessage request);
 }
 
-internal sealed class YouTubeCloudProvider : ICloudSourceProvider
-{
-    private static readonly IReadOnlyList<ExtensionQualityOption> YouTubeQualities =
-    [
-        new("highest", "Highest (256k AAC)", "256k"),
-        new("high", "High (128k AAC)", "128k"),
-        new("standard", "Standard (128k AAC)", "128k"),
-        new("low", "Low (48k AAC)", "48k")
-    ];
-
-    private readonly YouTubeClient _client;
-
-    public YouTubeCloudProvider(YouTubeClient client)
-    {
-        _client = client;
-    }
-
-    public string ProviderId => CloudProviderRegistry.BuiltinYouTubeId;
-    public string DisplayName => "YouTube";
-    public string BadgeLabel => "YouTube";
-    public RootKind RootKind => RootKind.CloudYouTube;
-    public string CloudSourceKey => CloudSources.YouTube;
-    public bool SupportsCookies => true;
-    public bool SupportsProxy => true;
-    public bool UsesFlatCloudListing => true;
-    public bool SupportsProgressiveTree => false;
-    public bool SupportsCollectionImport => true;
-    public bool IsAvailable => true;
-    public IReadOnlyList<ExtensionQualityOption> AvailableQualities => YouTubeQualities;
-    public string? DefaultStreamQualityId => "standard";
-    public string? DefaultDownloadQualityId => "highest";
-
-    public bool MatchesUrlPattern(string? candidate)
-    {
-        if (string.IsNullOrWhiteSpace(candidate)) return false;
-        try
-        {
-            return CloudUrlClassifier.TryClassifyBuiltinUrlOrToken(candidate.Trim(), includeRawYouTubeId: true) == RootKind.CloudYouTube;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    public Task<CloudCanHandleResult> TryMatchAsync(string rawInput, string extractedUrl, CancellationToken ct = default)
-    {
-        try
-        {
-            var target = YouTubeClient.ParseInput(extractedUrl);
-            return Task.FromResult(new CloudCanHandleResult(
-                Matched: true,
-                NormalizedUrl: extractedUrl,
-                RemoteId: target.RemoteId,
-                Kind: target.IsPlaylist ? "playlist" : "track"));
-        }
-        catch
-        {
-            return Task.FromResult(new CloudCanHandleResult(false));
-        }
-    }
-
-    public string? TryExtractRemoteId(string url)
-    {
-        try { return YouTubeClient.ParseInput(url).RemoteId; }
-        catch { return null; }
-    }
-
-    public async Task<CloudPlaylistResult> FetchPlaylistAsync(
-        string sourceUrl,
-        string? cookie,
-        string? proxyUrl,
-        CancellationToken ct = default)
-    {
-        var result = await _client.FetchPlaylistAsync(sourceUrl, cookie, proxyUrl, ct).ConfigureAwait(false);
-        return result with { ProviderId = ProviderId };
-    }
-
-    public Task<CloudTreeSession?> StartProgressiveFetchAsync(
-        string sourceUrl,
-        string? cookie,
-        string? proxyUrl,
-        CancellationToken ct = default) => Task.FromResult<CloudTreeSession?>(null);
-
-    public Task<CloudAudioStream> ResolveAudioStreamAsync(
-        string remoteTrackId,
-        string? relativePath,
-        string? cookie,
-        string? proxyUrl,
-        bool forceRefresh = false,
-        CancellationToken ct = default,
-        string? quality = null,
-        CloudStreamPurpose purpose = CloudStreamPurpose.Stream)
-    {
-        string effectiveQuality = string.IsNullOrWhiteSpace(quality)
-            ? (purpose == CloudStreamPurpose.Download ? DefaultDownloadQualityId : DefaultStreamQualityId) ?? "standard"
-            : quality.Trim();
-        return _client.ResolveAudioStreamAsync(remoteTrackId, cookie, proxyUrl, ct, effectiveQuality);
-    }
-
-    public void ConfigureArtworkRequest(HttpRequestMessage request) { }
-}
-
-internal sealed class BilibiliCloudProvider : ICloudSourceProvider
-{
-    private static readonly IReadOnlyList<ExtensionQualityOption> BilibiliQualities =
-    [
-        new("highest", "Highest (FLAC / 192k)", "FLAC", Lossless: true),
-        new("high", "High (192k)", "192k"),
-        new("standard", "Standard (132k)", "132k"),
-        new("low", "Low (64k)", "64k")
-    ];
-
-    private readonly BilibiliClient _client;
-
-    public BilibiliCloudProvider(BilibiliClient client)
-    {
-        _client = client;
-    }
-
-    public string ProviderId => CloudProviderRegistry.BuiltinBilibiliId;
-    public string DisplayName => "Bilibili";
-    public string BadgeLabel => "Bilibili";
-    public RootKind RootKind => RootKind.CloudBilibili;
-    public string CloudSourceKey => CloudSources.Bilibili;
-    public bool SupportsCookies => true;
-    public bool SupportsProxy => false;
-    public bool UsesFlatCloudListing => true;
-    public bool SupportsProgressiveTree => false;
-    public bool SupportsCollectionImport => true;
-    public bool IsAvailable => true;
-    public IReadOnlyList<ExtensionQualityOption> AvailableQualities => BilibiliQualities;
-    public string? DefaultStreamQualityId => "standard";
-    public string? DefaultDownloadQualityId => "highest";
-
-    public bool MatchesUrlPattern(string? candidate)
-    {
-        if (string.IsNullOrWhiteSpace(candidate)) return false;
-        try
-        {
-            return CloudUrlClassifier.TryClassifyBuiltinUrlOrToken(candidate.Trim(), includeRawYouTubeId: false) == RootKind.CloudBilibili;
-        }
-        catch
-        {
-            return false;
-        }
-    }
-
-    public Task<CloudCanHandleResult> TryMatchAsync(string rawInput, string extractedUrl, CancellationToken ct = default)
-    {
-        try
-        {
-            var target = BilibiliClient.ParseTarget(extractedUrl);
-            return Task.FromResult(new CloudCanHandleResult(
-                Matched: true,
-                NormalizedUrl: extractedUrl,
-                RemoteId: target.Id,
-                Kind: target.Kind == BilibiliTargetKind.Video ? "track" : "playlist"));
-        }
-        catch
-        {
-            return Task.FromResult(new CloudCanHandleResult(false));
-        }
-    }
-
-    public string? TryExtractRemoteId(string url)
-    {
-        try { return BilibiliClient.ParseTarget(url).Id; }
-        catch { return null; }
-    }
-
-    public async Task<CloudPlaylistResult> FetchPlaylistAsync(
-        string sourceUrl,
-        string? cookie,
-        string? proxyUrl,
-        CancellationToken ct = default)
-    {
-        var result = await _client.FetchPlaylistAsync(sourceUrl, cookie, proxyUrl, ct).ConfigureAwait(false);
-        return result with { ProviderId = ProviderId };
-    }
-
-    public Task<CloudTreeSession?> StartProgressiveFetchAsync(
-        string sourceUrl,
-        string? cookie,
-        string? proxyUrl,
-        CancellationToken ct = default) => Task.FromResult<CloudTreeSession?>(null);
-
-    public Task<CloudAudioStream> ResolveAudioStreamAsync(
-        string remoteTrackId,
-        string? relativePath,
-        string? cookie,
-        string? proxyUrl,
-        bool forceRefresh = false,
-        CancellationToken ct = default,
-        string? quality = null,
-        CloudStreamPurpose purpose = CloudStreamPurpose.Stream)
-    {
-        string effectiveQuality = string.IsNullOrWhiteSpace(quality)
-            ? (purpose == CloudStreamPurpose.Download ? DefaultDownloadQualityId : DefaultStreamQualityId) ?? "standard"
-            : quality.Trim();
-        return _client.ResolveAudioStreamAsync(remoteTrackId, cookie, proxyUrl, ct, effectiveQuality);
-    }
-
-    public void ConfigureArtworkRequest(HttpRequestMessage request)
-    {
-        request.Headers.TryAddWithoutValidation("Referer", BilibiliClient.DefaultReferer);
-        request.Headers.TryAddWithoutValidation("User-Agent", BilibiliClient.DefaultUserAgent);
-    }
-}
-
 internal sealed class GoogleDriveCloudProvider : ICloudSourceProvider
 {
     private readonly GoogleDriveClient _client;
@@ -373,7 +163,7 @@ internal sealed class GoogleDriveCloudProvider : ICloudSourceProvider
         if (string.IsNullOrWhiteSpace(candidate)) return false;
         try
         {
-            return CloudUrlClassifier.TryClassifyBuiltinUrlOrToken(candidate.Trim(), includeRawYouTubeId: false) == RootKind.CloudGoogleDrive;
+            return CloudUrlClassifier.TryClassifyBuiltinUrlOrToken(candidate.Trim()) == RootKind.CloudGoogleDrive;
         }
         catch
         {
@@ -466,30 +256,23 @@ public sealed class CloudProviderRegistry
     public const string BuiltinYouTubeId = "builtin.youtube";
     public const string BuiltinBilibiliId = "builtin.bilibili";
     public const string BuiltinGoogleDriveId = "builtin.gdrive";
+    public const string LegacyYouTubeExtensionId = "ext.youtube-search";
+    public const string LegacyBilibiliExtensionId = "ext.bilibili-search";
 
     private readonly object _lock = new();
     private readonly List<ICloudSourceProvider> _builtIns;
     private readonly List<ICloudSourceProvider> _extensions = new();
 
-    public CloudProviderRegistry(
-        YouTubeClient? youtubeClient = null,
-        BilibiliClient? bilibiliClient = null,
-        GoogleDriveClient? googleDriveClient = null)
+    public CloudProviderRegistry(GoogleDriveClient? googleDriveClient = null)
     {
-        YouTube = youtubeClient ?? new YouTubeClient();
-        Bilibili = bilibiliClient ?? new BilibiliClient();
         GoogleDrive = googleDriveClient ?? new GoogleDriveClient();
 
         _builtIns =
         [
-            new YouTubeCloudProvider(YouTube),
-            new BilibiliCloudProvider(Bilibili),
             new GoogleDriveCloudProvider(GoogleDrive)
         ];
     }
 
-    public YouTubeClient YouTube { get; }
-    public BilibiliClient Bilibili { get; }
     public GoogleDriveClient GoogleDrive { get; }
     internal Func<string, string?>? ExtensionCookieResolver { get; set; }
 
@@ -551,6 +334,23 @@ public sealed class CloudProviderRegistry
                     return p;
                 }
             }
+
+            string? legacyExtId = target.ToLowerInvariant() switch
+            {
+                BuiltinYouTubeId => LegacyYouTubeExtensionId,
+                BuiltinBilibiliId => LegacyBilibiliExtensionId,
+                _ => null
+            };
+            if (legacyExtId is not null)
+            {
+                foreach (var p in _extensions)
+                {
+                    if (p.IsAvailable && string.Equals(p.ProviderId, legacyExtId, StringComparison.OrdinalIgnoreCase))
+                    {
+                        return p;
+                    }
+                }
+            }
         }
         return null;
     }
@@ -595,13 +395,29 @@ public sealed class CloudProviderRegistry
     public ICloudSourceProvider? GetProvider(LibraryRoot root)
     {
         ArgumentNullException.ThrowIfNull(root);
-        return GetById(root.EffectiveProviderId);
+        var provider = GetById(root.EffectiveProviderId);
+        if (provider is null &&
+            (root.EffectiveCloudKind is RootKind.CloudYouTube or RootKind.CloudBilibili ||
+             string.Equals(root.EffectiveProviderId, BuiltinYouTubeId, StringComparison.OrdinalIgnoreCase) ||
+             string.Equals(root.EffectiveProviderId, BuiltinBilibiliId, StringComparison.OrdinalIgnoreCase)) &&
+            !string.IsNullOrWhiteSpace(root.SourceUrl))
+        {
+            provider = GetBestCompatibleProvider(root.SourceUrl);
+        }
+        return provider;
     }
 
     public ICloudSourceProvider? GetProvider(CloudTrackingInfo tracking)
     {
         ArgumentNullException.ThrowIfNull(tracking);
-        return GetById(tracking.ResolvedProviderId);
+        var provider = GetById(tracking.ResolvedProviderId);
+        if (provider is null &&
+            tracking.CloudKind is RootKind.CloudYouTube or RootKind.CloudBilibili &&
+            !string.IsNullOrWhiteSpace(tracking.SourceUrl))
+        {
+            provider = GetBestCompatibleProvider(tracking.SourceUrl);
+        }
+        return provider;
     }
 
     public bool MatchesAnyExtensionPattern(string? candidate)

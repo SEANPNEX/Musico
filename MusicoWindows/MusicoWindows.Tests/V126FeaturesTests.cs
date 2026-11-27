@@ -392,13 +392,49 @@ public sealed class V126FeaturesTests : IDisposable
         Assert.Equal(".webp", ImageFormatHelper.DetectSidecarExtension(MinimalWebpBytes));
     }
 
-    [Fact]
-    public async Task CloudThumbnailCacheSendsUserAgentAndBilibiliReferer()
+    private sealed class ArtworkHeaderTestProvider : MusicoWindows.Extensions.ICloudSourceProvider
     {
-        HttpRequestMessage? captured = null;
+        public string ProviderId => "ext.artwork-test";
+        public string DisplayName => "Artwork Test";
+        public string BadgeLabel => "ArtTest";
+        public RootKind RootKind => RootKind.CloudExtension;
+        public string CloudSourceKey => "ext.artwork-test";
+        public bool SupportsCookies => false;
+        public bool SupportsProxy => false;
+        public bool UsesFlatCloudListing => true;
+        public bool SupportsProgressiveTree => false;
+        public bool SupportsCollectionImport => true;
+        public bool IsAvailable => true;
+        public IReadOnlyList<MusicoWindows.Extensions.ExtensionQualityOption> AvailableQualities => Array.Empty<MusicoWindows.Extensions.ExtensionQualityOption>();
+        public string? DefaultStreamQualityId => null;
+        public string? DefaultDownloadQualityId => null;
+        public bool MatchesUrlPattern(string? candidate) => false;
+        public Task<MusicoWindows.Extensions.CloudCanHandleResult> TryMatchAsync(string rawInput, string extractedUrl, CancellationToken ct = default) =>
+            Task.FromResult(new MusicoWindows.Extensions.CloudCanHandleResult(false));
+        public string? TryExtractRemoteId(string url) => null;
+        public Task<CloudPlaylistResult> FetchPlaylistAsync(string sourceUrl, string? cookie, string? proxyUrl, CancellationToken ct = default) =>
+            throw new NotSupportedException();
+        public Task<MusicoWindows.Extensions.CloudTreeSession?> StartProgressiveFetchAsync(string sourceUrl, string? cookie, string? proxyUrl, CancellationToken ct = default) =>
+            Task.FromResult<MusicoWindows.Extensions.CloudTreeSession?>(null);
+        public Task<CloudAudioStream> ResolveAudioStreamAsync(string remoteTrackId, string? relativePath, string? cookie, string? proxyUrl, bool forceRefresh = false, CancellationToken ct = default, string? quality = null, CloudStreamPurpose purpose = CloudStreamPurpose.Stream) =>
+            throw new NotSupportedException();
+        public void ConfigureArtworkRequest(HttpRequestMessage request)
+        {
+            request.Headers.TryAddWithoutValidation("Referer", "https://art-provider.example/");
+        }
+    }
+
+    [Fact]
+    public async Task CloudThumbnailCacheSendsDefaultUserAgentAndDelegatesCustomHeadersViaCallback()
+    {
+        HttpRequestMessage? capturedDefault = null;
+        HttpRequestMessage? capturedCustom = null;
         var handler = new StubHttpHandler((req, _) =>
         {
-            captured = req;
+            if (req.RequestUri!.AbsoluteUri.Contains("custom", StringComparison.Ordinal))
+                capturedCustom = req;
+            else
+                capturedDefault = req;
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new ByteArrayContent(ValidPngBytes)
@@ -406,14 +442,20 @@ public sealed class V126FeaturesTests : IDisposable
         });
 
         var cache = new CloudThumbnailCache(handler: handler);
-        byte[]? bytes = await cache.GetBytesAsync("https://i0.hdslb.com/bfs/archive/cover.png");
-
+        byte[]? bytes = await cache.GetBytesAsync("https://cdn.example/cover.png");
         Assert.NotNull(bytes);
         Assert.Equal(ValidPngBytes, bytes);
-        Assert.NotNull(captured);
-        Assert.Equal(BilibiliClient.DefaultUserAgent, captured!.Headers.UserAgent.ToString());
-        Assert.True(captured.Headers.TryGetValues("Referer", out var refs));
-        Assert.Contains(BilibiliClient.DefaultReferer, refs);
+        Assert.NotNull(capturedDefault);
+        Assert.Equal(CloudThumbnailCache.DefaultUserAgent, capturedDefault!.Headers.UserAgent.ToString());
+        Assert.False(capturedDefault.Headers.Contains("Referer"));
+
+        byte[]? customBytes = await cache.GetBytesAsync(
+            "https://cdn.example/custom.png",
+            req => req.Headers.TryAddWithoutValidation("Referer", "https://art-provider.example/"));
+        Assert.NotNull(customBytes);
+        Assert.NotNull(capturedCustom);
+        Assert.True(capturedCustom!.Headers.TryGetValues("Referer", out var refs));
+        Assert.Contains("https://art-provider.example/", refs);
     }
 
     [Fact]
@@ -424,8 +466,8 @@ public sealed class V126FeaturesTests : IDisposable
         string destDir = NewTempDir();
         Directory.CreateDirectory(cacheDir);
 
-        const string pngCoverUrl = "https://i0.hdslb.com/bfs/archive/testcover.png";
-        const string jpgCoverUrl = "https://i0.hdslb.com/bfs/archive/testcover.jpg";
+        const string pngCoverUrl = "https://cdn.example/bfs/archive/testcover.png";
+        const string jpgCoverUrl = "https://cdn.example/bfs/archive/testcover.jpg";
 
         var handler = new StubHttpHandler((req, _) =>
         {
@@ -433,7 +475,7 @@ public sealed class V126FeaturesTests : IDisposable
             if (url == pngCoverUrl)
             {
                 Assert.True(req.Headers.TryGetValues("Referer", out var refs));
-                Assert.Contains(BilibiliClient.DefaultReferer, refs);
+                Assert.Contains("https://art-provider.example/", refs);
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new ByteArrayContent(ValidPngBytes)
@@ -452,10 +494,12 @@ public sealed class V126FeaturesTests : IDisposable
         var thumbCache = new CloudThumbnailCache(handler: handler);
         var audioCache = new CloudAudioCache(cacheDir, handler: handler);
         var artworkCache = new ArtworkCache(Path.Combine(stateDir, "Artwork"));
-        var exporter = new CloudExporter(audioCache, new YouTubeClient(handler), new BilibiliClient(handler), artworkCache, thumbnailCache: thumbCache);
+        var registry = new MusicoWindows.Extensions.CloudProviderRegistry();
+        registry.RegisterExtensionProvider(new ArtworkHeaderTestProvider());
+        var exporter = new CloudExporter(audioCache, registry, artworkCache, thumbnailCache: thumbCache);
 
         var rootId = Guid.NewGuid();
-        var biliRoot = new LibraryRoot(rootId, "Bili Mix", RootKind.CloudBilibili, "https://www.bilibili.com/video/BV1xx411c7mD");
+        var extRoot = new LibraryRoot(rootId, "Art Mix", RootKind.CloudExtension, "https://art-provider.example/mix/1", ProviderId: "ext.artwork-test");
 
         // 1. MP3 with PNG cover fetched from remote URL -> embeds with image/png MIME
         var mp3Track = new Track(
@@ -465,7 +509,7 @@ public sealed class V126FeaturesTests : IDisposable
             Title: "PNG MP3",
             Artist: "Artist",
             Album: "Album",
-            AlbumArtist: "Bilibili",
+            AlbumArtist: "Artwork Test",
             TrackNumber: 1,
             DiscNumber: 1,
             DurationSeconds: 60,
@@ -473,12 +517,12 @@ public sealed class V126FeaturesTests : IDisposable
             ModifiedUtc: DateTimeOffset.UnixEpoch,
             HasEmbeddedLyrics: false,
             DateAddedUtc: DateTimeOffset.UnixEpoch,
-            CloudSource: CloudSources.Bilibili,
-            RemoteTrackId: "bv1_mp3",
+            CloudSource: "ext.artwork-test",
+            RemoteTrackId: "art_mp3",
             RemoteArtworkUrl: pngCoverUrl);
         File.WriteAllBytes(Path.Combine(cacheDir, $"{mp3Track.Id}.mp3"), MakeMinimalMp3Bytes());
 
-        string exportedMp3 = await exporter.ExportTrackAsync(mp3Track, biliRoot, destDir);
+        string exportedMp3 = await exporter.ExportTrackAsync(mp3Track, extRoot, destDir);
         using (var mp3Tag = TagLib.File.Create(exportedMp3))
         {
             Assert.Single(mp3Tag.Tag.Pictures);
@@ -491,11 +535,11 @@ public sealed class V126FeaturesTests : IDisposable
             Id = Track.MakeId(rootId, "t_flac.flac"),
             RelativePath = "t_flac.flac",
             Title = "PNG FLAC",
-            RemoteTrackId = "bv1_flac"
+            RemoteTrackId = "art_flac"
         };
         File.WriteAllBytes(Path.Combine(cacheDir, $"{flacTrack.Id}.flac"), MakeMinimalFlacBytes());
 
-        string exportedFlac = await exporter.ExportTrackAsync(flacTrack, biliRoot, destDir);
+        string exportedFlac = await exporter.ExportTrackAsync(flacTrack, extRoot, destDir);
         using (var flacTag = TagLib.File.Create(exportedFlac))
         {
             Assert.Single(flacTag.Tag.Pictures);
@@ -508,11 +552,11 @@ public sealed class V126FeaturesTests : IDisposable
             Id = Track.MakeId(rootId, "t_webm1.webm"),
             RelativePath = "t_webm1.webm",
             Title = "WebM PNG",
-            RemoteTrackId = "bv1_webm1"
+            RemoteTrackId = "art_webm1"
         };
         File.WriteAllBytes(Path.Combine(cacheDir, $"{webmPngTrack.Id}.webm"), [0x1A, 0x45, 0xDF, 0xA3]);
 
-        string exportedWebmPng = await exporter.ExportTrackAsync(webmPngTrack, biliRoot, destDir);
+        string exportedWebmPng = await exporter.ExportTrackAsync(webmPngTrack, extRoot, destDir);
         string sidecarPng = Path.Combine(destDir, "WebM PNG.png");
         Assert.True(File.Exists(exportedWebmPng));
         Assert.True(File.Exists(sidecarPng));
@@ -524,12 +568,12 @@ public sealed class V126FeaturesTests : IDisposable
             Id = Track.MakeId(rootId, "t_webm2.webm"),
             RelativePath = "t_webm2.webm",
             Title = "WebM JPG",
-            RemoteTrackId = "bv1_webm2",
+            RemoteTrackId = "art_webm2",
             RemoteArtworkUrl = jpgCoverUrl
         };
         File.WriteAllBytes(Path.Combine(cacheDir, $"{webmJpgTrack.Id}.webm"), [0x1A, 0x45, 0xDF, 0xA3]);
 
-        string exportedWebmJpg = await exporter.ExportTrackAsync(webmJpgTrack, biliRoot, destDir);
+        string exportedWebmJpg = await exporter.ExportTrackAsync(webmJpgTrack, extRoot, destDir);
         string sidecarJpg = Path.Combine(destDir, "WebM JPG.jpg");
         Assert.True(File.Exists(exportedWebmJpg));
         Assert.True(File.Exists(sidecarJpg));

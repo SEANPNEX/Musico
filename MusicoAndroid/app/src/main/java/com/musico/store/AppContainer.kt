@@ -4,7 +4,6 @@ import android.content.Context
 import android.os.Environment
 import com.musico.audio.AudioEngine
 import com.musico.audio.PlayerController
-import com.musico.cloud.BilibiliClient
 import com.musico.cloud.CloudAudioCache
 import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudHttpClient
@@ -12,7 +11,6 @@ import com.musico.cloud.CloudStreamResolver
 import com.musico.cloud.GoogleDriveClient
 import com.musico.cloud.GoogleDriveOAuthManager
 import com.musico.cloud.UrlConnectionCloudHttpClient
-import com.musico.cloud.YouTubeClient
 import com.musico.core.AndroidMetadataReader
 import com.musico.core.ArtworkCache
 import com.musico.core.CloudThumbnailCache
@@ -42,16 +40,12 @@ class AppContainer(context: Context) {
     val metadataReader: MetadataReading = AndroidMetadataReader(appContext)
     val cloudHttpClient: CloudHttpClient = UrlConnectionCloudHttpClient()
     val cloudThumbnailCache: CloudThumbnailCache = CloudThumbnailCache(cloudHttpClient)
-    val youTubeClient: YouTubeClient = YouTubeClient(cloudHttpClient)
-    val bilibiliClient: BilibiliClient = BilibiliClient(cloudHttpClient)
     val googleDriveOAuthManager: GoogleDriveOAuthManager = GoogleDriveOAuthManager(appContext, cloudHttpClient)
     val googleDriveClient: GoogleDriveClient = GoogleDriveClient(
         httpClient = cloudHttpClient,
         oauthTokenProvider = { forceRefresh -> googleDriveOAuthManager.validAccessToken(forceRefresh) },
     )
     val cloudProviderRegistry: CloudProviderRegistry = CloudProviderRegistry(
-        youTubeClient = youTubeClient,
-        bilibiliClient = bilibiliClient,
         googleDriveClient = googleDriveClient,
     )
     val extensionStore: ExtensionStore = ExtensionStore(
@@ -76,8 +70,6 @@ class AppContainer(context: Context) {
         artwork = artworkCache,
         context = appContext,
         cloudHttpClient = cloudHttpClient,
-        youTubeClient = youTubeClient,
-        bilibiliClient = bilibiliClient,
         googleDriveClient = googleDriveClient,
         providerRegistry = cloudProviderRegistry,
     ).also { store ->
@@ -108,7 +100,12 @@ class AppContainer(context: Context) {
         engine = audioEngine,
         settingsFile = File(stateDir, "settings.json"),
         cloudResolver = cloudStreamResolver,
-    )
+    ).also { controller ->
+        libraryStore.onTracksRemapped = { idMap ->
+            controller.tracksRemapped(idMap)
+            historyStore.remapTracks(idMap)
+        }
+    }
     val cloudDownloadManager: CloudDownloadManager = CloudDownloadManager(
         libraryStore = libraryStore,
         cloudExporter = cloudExporter,
