@@ -100,9 +100,10 @@ struct TrackRows: View {
 
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
+    @Environment(DeleteItemPrompt.self) private var deletePrompt: DeleteItemPrompt?
+    @Environment(\.lyricsStore) private var lyricsStore
     @Environment(\.themeManager) private var themeManager
     @Environment(\.toastManager) private var toastManager
-    @State private var favouriteFeedbackTrigger = 0
 
     var body: some View {
         ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
@@ -136,37 +137,16 @@ struct TrackRows: View {
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 if !track.isEphemeral {
-                    let isFavourite = library.isFavourite(track.id)
-                    Button {
-                        library.toggleFavourite(track.id)
-                        favouriteFeedbackTrigger += 1
-                        toastManager.show(
-                            isFavourite ? L10n.tr("Removed from favourites") : L10n.tr("Added to favourites"),
-                            systemImage: isFavourite ? "heart.slash" : "heart.fill"
-                        )
+                    Button(role: .destructive) {
+                        deletePrompt?.confirmTrack(track, library: library, lyricsStore: lyricsStore)
                     } label: {
-                        Label(
-                            isFavourite ? L10n.tr("Remove from Favourites") : L10n.tr("Add to Favourites"),
-                            systemImage: isFavourite ? "heart.slash" : "heart"
-                        )
+                        Label(L10n.tr("Delete"), systemImage: "trash")
                     }
-                    .tint(.pink)
-                }
-                if library.isAvailable(track) {
-                    Button {
-                        player.addToQueue([track.id], queue: nil)
-                        toastManager.show(L10n.tr("Added to queue"), systemImage: "text.append")
-                    } label: {
-                        Label(L10n.tr("Add to Queue"), systemImage: "text.append")
-                    }
-                    .tint(.indigo)
+                    .tint(.red)
                 }
             }
             #endif
         }
-        #if !targetEnvironment(macCatalyst)
-        .sensoryFeedback(.impact(weight: .light), trigger: favouriteFeedbackTrigger)
-        #endif
     }
 }
 

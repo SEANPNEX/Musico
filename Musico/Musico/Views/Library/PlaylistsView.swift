@@ -476,6 +476,27 @@ struct PlaylistDetailView: View {
                             removePlaylistOffsets(IndexSet(integer: index), playlistID: id)
                         }
                     }
+                    #if !targetEnvironment(macCatalyst)
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        if library.isAvailable(track) {
+                            Button {
+                                player.playNext([track.id])
+                                toastManager.show(L10n.tr("Playing next"), systemImage: "text.line.first.and.arrowtriangle.forward")
+                            } label: {
+                                Label(L10n.tr("Play Next"), systemImage: "text.line.first.and.arrowtriangle.forward")
+                            }
+                            .tint(themeManager.accentColor)
+                        }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            removePlaylistOffsets(IndexSet(integer: index), playlistID: id)
+                        } label: {
+                            Label(L10n.tr("Remove"), systemImage: "minus.circle")
+                        }
+                        .tint(.red)
+                    }
+                    #endif
                 }
                 .onDelete { removePlaylistOffsets($0, playlistID: id) }
                 .onMove { source, destination in
@@ -498,6 +519,36 @@ struct PlaylistDetailView: View {
                         }
                     )
                     .contextMenu { TrackMenuItems(ids: [track.id], favouriteID: track.id) }
+                    #if !targetEnvironment(macCatalyst)
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        if library.isAvailable(track) {
+                            Button {
+                                player.playNext([track.id])
+                                toastManager.show(L10n.tr("Playing next"), systemImage: "text.line.first.and.arrowtriangle.forward")
+                            } label: {
+                                Label(L10n.tr("Play Next"), systemImage: "text.line.first.and.arrowtriangle.forward")
+                            }
+                            .tint(themeManager.accentColor)
+                        }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            library.toggleFavourite(track.id)
+                            toastManager.show(
+                                L10n.tr("Removed from favourites"),
+                                systemImage: "heart.slash",
+                                undoTitle: L10n.tr("Undo")
+                            ) {
+                                if !library.isFavourite(track.id) {
+                                    library.toggleFavourite(track.id)
+                                }
+                            }
+                        } label: {
+                            Label(L10n.tr("Remove"), systemImage: "heart.slash")
+                        }
+                        .tint(.red)
+                    }
+                    #endif
                 }
                 .onMove { source, destination in
                     reorderFeedbackTrigger += 1

@@ -3,6 +3,34 @@ import MediaPlayer
 import Observation
 import UIKit
 
+struct RemovedQueueEntry: Sendable, Equatable {
+    let queueID: UUID
+    let trackID: String
+    let index: Int
+    let wasCurrent: Bool
+    let position: TimeInterval
+    let wasPlaying: Bool
+    let ephemeralTrack: Track?
+
+    init(
+        queueID: UUID,
+        trackID: String,
+        index: Int,
+        wasCurrent: Bool,
+        position: TimeInterval,
+        wasPlaying: Bool,
+        ephemeralTrack: Track? = nil
+    ) {
+        self.queueID = queueID
+        self.trackID = trackID
+        self.index = index
+        self.wasCurrent = wasCurrent
+        self.position = position
+        self.wasPlaying = wasPlaying
+        self.ephemeralTrack = ephemeralTrack
+    }
+}
+
 /// Drives playback from the active queue and talks to the system: audio session,
 /// lock-screen controls, Now Playing info, sleep timer.
 @MainActor @Observable
@@ -918,6 +946,48 @@ final class PlayerController {
             if removingCurrent { startCurrent(autoplay: wasPlaying) }
         } else {
             queues.update(target) { $0.remove(at: index) }
+        }
+    }
+
+    func removeFromQueueWithUndo(at index: Int, inQueue queueID: UUID? = nil) -> RemovedQueueEntry? {
+        let target = queueID ?? queues.viewedQueueID
+        guard let targetQueue = queues.queues.first(where: { $0.id == target }),
+              targetQueue.trackIDs.indices.contains(index) else {
+            return nil
+        }
+        let trackID = targetQueue.trackIDs[index]
+        let wasCurrent = (target == queues.activeID && index == targetQueue.currentIndex)
+        let wasPlaying = isPlaying || isBuffering
+        let pos = (wasCurrent && isLoaded) ? engine.currentTime : targetQueue.position
+        let ephemeral = library.track(trackID).flatMap { $0.isEphemeral ? $0 : nil }
+        let entry = RemovedQueueEntry(
+            queueID: target,
+            trackID: trackID,
+            index: index,
+            wasCurrent: wasCurrent,
+            position: pos,
+            wasPlaying: wasPlaying,
+            ephemeralTrack: ephemeral
+        )
+        removeFromQueue(at: index, inQueue: target)
+        return entry
+    }
+
+    func restoreToQueue(_ entry: RemovedQueueEntry) {
+        guard queues.queues.contains(where: { $0.id == entry.queueID }) else { return }
+        if let ephemeralTrack = entry.ephemeralTrack {
+            library.registerEphemeralTracks([ephemeralTrack])
+        }
+        queues.update(entry.queueID) {
+            $0.restore(
+                at: entry.index,
+                trackID: entry.trackID,
+                makeCurrent: entry.wasCurrent,
+                restoredPosition: entry.position
+            )
+        }
+        if entry.wasCurrent && entry.queueID == queues.activeID {
+            startCurrent(autoplay: entry.wasPlaying, at: entry.position)
         }
     }
 

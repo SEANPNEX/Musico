@@ -224,7 +224,7 @@ struct QueuesView: View {
                                         onMove: { from, to in
                                             player.moveInQueue(from: IndexSet(integer: from), to: to, inQueue: viewed.id)
                                         },
-                                        onRemove: { player.removeFromQueue(at: index, inQueue: viewed.id) }
+                                        onRemove: { removeQueueTrack(at: index, inQueue: viewed.id) }
                                     )
                                     if index < viewed.trackIDs.count - 1 {
                                         Divider().padding(.leading, 68)
@@ -304,7 +304,7 @@ struct QueuesView: View {
                                     reorderFeedbackTrigger += 1
                                     player.moveInQueue(from: IndexSet(integer: from), to: to, inQueue: viewed.id)
                                 },
-                                onRemove: { player.removeFromQueue(at: index, inQueue: viewed.id) },
+                                onRemove: { removeQueueTrack(at: index, inQueue: viewed.id) },
                                 removeHelp: L10n.tr("Remove from Queue")
                             )
                         } else {
@@ -325,12 +325,37 @@ struct QueuesView: View {
                         TrackMenuItems(ids: [id], favouriteID: isEphemeral ? nil : id)
                         Divider()
                         Button(L10n.tr("Remove from Queue"), systemImage: "minus.circle", role: .destructive) {
-                            player.removeFromQueue(at: index, inQueue: viewed.id)
+                            removeQueueTrack(at: index, inQueue: viewed.id)
                         }
                     }
+                    #if !targetEnvironment(macCatalyst)
+                    .swipeActions(edge: .leading, allowsFullSwipe: true) {
+                        if let track = library.track(id), library.isAvailable(track) {
+                            Button {
+                                player.playNext([track.id])
+                                toastManager.show(L10n.tr("Playing next"), systemImage: "text.line.first.and.arrowtriangle.forward")
+                            } label: {
+                                Label(L10n.tr("Play Next"), systemImage: "text.line.first.and.arrowtriangle.forward")
+                            }
+                            .tint(themeManager.accentColor)
+                        }
+                    }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button(role: .destructive) {
+                            removeQueueTrack(at: index, inQueue: viewed.id)
+                        } label: {
+                            Label(L10n.tr("Remove"), systemImage: "minus.circle")
+                        }
+                        .tint(.red)
+                    }
+                    #endif
                 }
                 .onDelete { offsets in
-                    for index in offsets.sorted(by: >) { player.removeFromQueue(at: index, inQueue: viewed.id) }
+                    if offsets.count == 1, let index = offsets.first {
+                        removeQueueTrack(at: index, inQueue: viewed.id)
+                    } else {
+                        for index in offsets.sorted(by: >) { player.removeFromQueue(at: index, inQueue: viewed.id) }
+                    }
                 }
                 .onMove { source, destination in
                     reorderFeedbackTrigger += 1
@@ -357,6 +382,17 @@ struct QueuesView: View {
             .textCase(nil)
         }
         .hiddenScrollBackgroundIfThemed(themeManager)
+    }
+
+    private func removeQueueTrack(at index: Int, inQueue queueID: UUID) {
+        guard let entry = player.removeFromQueueWithUndo(at: index, inQueue: queueID) else { return }
+        toastManager.show(
+            L10n.tr("Removed from queue"),
+            systemImage: "minus.circle",
+            undoTitle: L10n.tr("Undo")
+        ) {
+            player.restoreToQueue(entry)
+        }
     }
 }
 

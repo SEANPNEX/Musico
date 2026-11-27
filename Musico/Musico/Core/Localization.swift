@@ -1052,6 +1052,7 @@ enum L10n {
         "Added to favourites": "已添加到我喜欢",
         "Removed from favourites": "已从我喜欢移除",
         "Cleared queue": "已清空队列",
+        "Removed from queue": "已从队列移除",
         "Removed from playlist": "已从歌单移除",
         "Background Blur": "背景模糊",
         "Low Contrast Warning": "低对比度警告",
