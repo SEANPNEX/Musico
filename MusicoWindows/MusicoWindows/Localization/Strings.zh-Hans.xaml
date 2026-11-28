@@ -133,6 +133,7 @@
     <sys:String x:Key="Str_CloudLyrics_IncludeTranslation">包含翻译</sys:String>
     <sys:String x:Key="Str_CloudLyrics_AlsoExportSidecar">同时保存 .lrc 到歌曲文件夹</sys:String>
     <sys:String x:Key="Str_CloudLyrics_UseLyrics">使用歌词</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_ProviderNote">内置在线搜索使用 LRCLIB。可在“扩展”页面安装扩展以添加更多歌词来源（如网易云音乐、Apple Music）。</sys:String>
 
     <!-- EqualizerDialog -->
     <sys:String x:Key="Str_Equalizer_Title">均衡器</sys:String>
@@ -345,5 +346,13 @@
     <sys:String x:Key="Str_Stats_LibraryExplored">曲库探索进度</sys:String>
     <sys:String x:Key="Str_Stats_TopArtists">最常听艺术家</sys:String>
     <sys:String x:Key="Str_Stats_TopAlbums">最常听专辑</sys:String>
+
+    <!-- Multi-Select & Batch Tag Editing -->
+    <sys:String x:Key="Str_Select_Select">选择</sys:String>
+    <sys:String x:Key="Str_Select_SelectAll">全选</sys:String>
+    <sys:String x:Key="Str_Select_EditTags">编辑标签...</sys:String>
+    <sys:String x:Key="Str_BatchTag_Title">批量编辑标签</sys:String>
+    <sys:String x:Key="Str_BatchTag_MixedHint">留空某字段将保留每首歌曲的当前值。</sys:String>
+    <sys:String x:Key="Str_BatchTag_Apply">应用</sys:String>
 
 </ResourceDictionary>

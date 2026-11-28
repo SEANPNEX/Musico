@@ -612,4 +612,204 @@ public sealed class LibraryStoreTests
         Assert.Null(store.GetRoot(pickedRoot.Id));
         Assert.Equal(["keep.mp3"], store.Tracks.Select(t => t.RelativePath));
     }
+
+    [Fact]
+    public async Task EnrichCachedGoogleDriveTrackAndMergeDoesNotCarryPlaceholderOverride()
+    {
+        string stateDir = TestHelpers.MakeTempDir();
+        string musicDir = TestHelpers.MakeTempDir();
+        string cacheDir = TestHelpers.MakeTempDir();
+        string exportDir = TestHelpers.MakeTempDir();
+
+        var handler = new DelegatingStubHandler(req =>
+        {
+            string uri = req.RequestUri!.AbsoluteUri;
+            if (uri.Contains("/drive/folders/gdEnrich1", StringComparison.Ordinal))
+            {
+                const string rows = """["gd_e1",["gdEnrich1"],"Sunset.mp3","audio/mpeg"]""";
+                string html = $"<html><head><title>Drive Folder - Google Drive</title></head><body><script>window['_DRIVE_ivd'] = '[[{rows}]]';</script></body></html>";
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(html, Encoding.UTF8, "text/html")
+                };
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var artwork = new ArtworkCache(Path.Combine(stateDir, "Artwork"));
+        var cloudCache = new CloudAudioCache(cacheDir, handler: handler);
+        var gdrive = new GoogleDriveClient(handler);
+        var store = new LibraryStore(
+            stateDir,
+            musicDir,
+            new TagLibMetadataReader(),
+            artwork,
+            cloudCache: cloudCache,
+            googleDriveClient: gdrive,
+            artworkHandler: handler);
+
+        var cloudRoot = await store.AddCloudRootAsync("https://drive.google.com/drive/folders/gdEnrich1");
+        var initial = Assert.Single(store.Tracks);
+        Assert.Equal("Google Drive", initial.Artist);
+        Assert.Null(initial.ArtworkKey);
+
+        // Seed cached audio file with real embedded ID3 tags and album art.
+        Directory.CreateDirectory(cacheDir);
+        string cachedMp3 = Path.Combine(cacheDir, CloudAudioCache.BuildCacheFileStem(initial.Id) + ".mp3");
+        WriteTaggedMp3(cachedMp3, "Sunset Boulevard", "Real Drive Artist", "Real Drive Album", "Dream Pop", ValidPngBytes);
+
+        // Rescan enriches cached Google Drive tracks from the downloaded cache file.
+        await store.RescanAsync();
+        var enriched = Assert.Single(store.Tracks);
+        Assert.Equal("Sunset Boulevard", enriched.Title);
+        Assert.Equal("Real Drive Artist", enriched.Artist);
+        Assert.Equal("Real Drive Album", enriched.Album);
+        Assert.Equal("Dream Pop", enriched.Genre);
+        Assert.False(string.IsNullOrEmpty(enriched.ArtworkKey));
+
+        // Even if a stale placeholder override existed before cloud-to-local merge, local track never inherits "Google Drive".
+        string exportedMp3 = Path.Combine(exportDir, "Sunset.mp3");
+        File.Copy(cachedMp3, exportedMp3);
+        CloudExporter.SaveManifest(exportDir, new CloudFolderManifest(
+            SourceUrl: cloudRoot.SourceUrl!,
+            RemoteId: cloudRoot.RemoteId,
+            CloudKind: RootKind.CloudGoogleDrive.ToString(),
+            LastSyncedUtc: DateTimeOffset.UtcNow,
+            Tracks: new Dictionary<string, string>(StringComparer.Ordinal) { ["gd_e1"] = "Sunset.mp3" }));
+
+        await store.UpdateTrackMetadataAsync(
+            enriched.Id,
+            title: "Sunset Boulevard",
+            artist: "Google Drive",
+            album: "Unknown Album",
+            genre: null);
+        await store.RegisterExportedCloudFolderAsync(exportDir, cloudRoot, mergeCloudRoot: true);
+
+        var localTrack = Assert.Single(store.Tracks);
+        Assert.False(localTrack.IsCloud);
+        Assert.Equal("Real Drive Artist", localTrack.Artist);
+        Assert.Equal("Real Drive Album", localTrack.Album);
+    }
+
+    [Fact]
+    public async Task BatchUpdateTrackMetadataAsyncUpdatesArtistAndAlbumPreservingTitleGenreAndCoverArt()
+    {
+        string stateDir = TestHelpers.MakeTempDir();
+        string musicDir = TestHelpers.MakeTempDir();
+        var artwork = new ArtworkCache(Path.Combine(stateDir, "Artwork"));
+        var reader = new TagLibMetadataReader();
+
+        string p1 = Path.Combine(musicDir, "song1.mp3");
+        string p2 = Path.Combine(musicDir, "song2.mp3");
+        string p3 = Path.Combine(musicDir, "song3.mp3");
+        WriteTaggedMp3(p1, "Song One", "Artist A", "Album One", "Jazz", ValidPngBytes);
+        WriteTaggedMp3(p2, "Song Two", "Artist B", "Album Two", "Lo-Fi", ValidPngBytes);
+        WriteTaggedMp3(p3, "Song Three", "Keep Artist", "Keep Album", "Classical", ValidPngBytes);
+
+        var store = new LibraryStore(stateDir, musicDir, reader, artwork);
+        await store.RescanAsync();
+
+        var t1 = store.Tracks.First(t => t.Title == "Song One");
+        var t2 = store.Tracks.First(t => t.Title == "Song Two");
+        var t3 = store.Tracks.First(t => t.Title == "Song Three");
+        string? t1OrigArt = t1.ArtworkKey;
+
+        var updatedIds = new List<string>();
+        store.TrackUpdated += tr => updatedIds.Add(tr.Id);
+
+        // Batch edit Artist only (album == null leaves each track's existing album intact; ephemeral skipped).
+        int countArtist = await store.BatchUpdateTrackMetadataAsync(
+            [t1.Id, t2.Id, Track.MakeEphemeralId("ext.test", "ep-1")],
+            artist: "Unified Band",
+            album: null);
+        Assert.Equal(2, countArtist);
+        Assert.Equal([t1.Id, t2.Id], updatedIds);
+
+        var t1After = store.GetTrack(t1.Id)!;
+        var t2After = store.GetTrack(t2.Id)!;
+        var t3After = store.GetTrack(t3.Id)!;
+
+        Assert.Equal("Unified Band", t1After.Artist);
+        Assert.Equal("Unified Band", t1After.AlbumArtist);
+        Assert.Equal("Album One", t1After.Album);
+        Assert.Equal("Song One", t1After.Title);
+        Assert.Equal("Jazz", t1After.Genre);
+        Assert.Equal(t1OrigArt, t1After.ArtworkKey);
+
+        Assert.Equal("Unified Band", t2After.Artist);
+        Assert.Equal("Album Two", t2After.Album);
+        Assert.Equal("Lo-Fi", t2After.Genre);
+
+        Assert.Equal("Keep Artist", t3After.Artist);
+        Assert.Equal("Keep Album", t3After.Album);
+
+        // Verify disk ID3 tags preserve title, genre, album, and picture while updating artist.
+        using (var file1 = TagLib.File.Create(p1))
+        {
+            Assert.Equal("Song One", file1.Tag.Title);
+            Assert.Equal(["Unified Band"], file1.Tag.Performers);
+            Assert.Equal(["Unified Band"], file1.Tag.AlbumArtists);
+            Assert.Equal("Album One", file1.Tag.Album);
+            Assert.Equal(["Jazz"], file1.Tag.Genres);
+            Assert.Single(file1.Tag.Pictures);
+            Assert.Equal(ValidPngBytes, file1.Tag.Pictures[0].Data.Data);
+        }
+
+        // Batch edit Album only keeps previously updated Artist.
+        int countAlbum = await store.BatchUpdateTrackMetadataAsync([t1.Id, t2.Id], artist: null, album: "Unified Album");
+        Assert.Equal(2, countAlbum);
+
+        var reloaded = new LibraryStore(stateDir, musicDir, reader, artwork);
+        var r1 = reloaded.GetTrack(t1.Id)!;
+        var r2 = reloaded.GetTrack(t2.Id)!;
+        Assert.Equal("Unified Band", r1.Artist);
+        Assert.Equal("Unified Album", r1.Album);
+        Assert.Equal("Unified Band", r2.Artist);
+        Assert.Equal("Unified Album", r2.Album);
+    }
+
+    private static readonly byte[] ValidPngBytes =
+    [
+        0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+        0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+        0xDE, 0x00, 0x00, 0x00, 0x0C, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9C, 0x63, 0xF8, 0x1F, 0xEA, 0x02,
+        0x00, 0x03, 0xEF, 0x01, 0x99, 0xC3, 0x49, 0xF5, 0x60, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E,
+        0x44, 0xAE, 0x42, 0x60, 0x82
+    ];
+
+    private static void WriteTaggedMp3(
+        string path,
+        string title,
+        string artist,
+        string album,
+        string genre,
+        byte[] pictureBytes)
+    {
+        const int frameSize = 417;
+        byte[] data = new byte[frameSize * 2];
+        for (int f = 0; f < 2; f++)
+        {
+            int offset = f * frameSize;
+            data[offset] = 0xFF;
+            data[offset + 1] = 0xFB;
+            data[offset + 2] = 0x90;
+            data[offset + 3] = 0x00;
+        }
+        File.WriteAllBytes(path, data);
+        using var tagFile = TagLib.File.Create(path);
+        tagFile.Tag.Title = title;
+        tagFile.Tag.Performers = [artist];
+        tagFile.Tag.AlbumArtists = [artist];
+        tagFile.Tag.Album = album;
+        tagFile.Tag.Genres = [genre];
+        tagFile.Tag.Pictures =
+        [
+            new TagLib.Picture(new TagLib.ByteVector(pictureBytes))
+            {
+                Type = TagLib.PictureType.FrontCover,
+                MimeType = "image/png"
+            }
+        ];
+        tagFile.Save();
+    }
 }

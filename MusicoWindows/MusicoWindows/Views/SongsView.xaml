@@ -113,32 +113,80 @@
             </Grid>
         </Border>
 
-        <!-- Action Bar: Local (Play All / Shuffle) OR Cloud Search (Kind Filter Pills + Status) -->
+        <!-- Action Bar: Local (Play All / Shuffle / Select + Selection Bar) OR Cloud Search (Kind Filter Pills + Status) -->
         <Border x:Name="ActionBar"
                 Grid.Row="1"
                 Padding="24,10"
                 BorderBrush="{DynamicResource DividerBrush}"
                 BorderThickness="0,0,0,1">
             <Grid>
-                <StackPanel x:Name="LocalActionPanel" Orientation="Horizontal">
-                    <Button x:Name="PlayAllButton"
-                            Style="{StaticResource Win10PrimaryButtonStyle}"
-                            Margin="0,0,8,0"
-                            Click="PlayAll_Click">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBlock Text="{DynamicResource Str_Common_PlayAll}" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-                    <Button x:Name="ShuffleAllButton"
-                            Style="{StaticResource Win10ButtonStyle}"
-                            Click="ShuffleAll_Click">
-                        <StackPanel Orientation="Horizontal">
-                            <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
-                            <TextBlock Text="{DynamicResource Str_Common_Shuffle}" VerticalAlignment="Center" />
-                        </StackPanel>
-                    </Button>
-                </StackPanel>
+                <Grid x:Name="LocalActionGrid">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel x:Name="LocalActionPanel" Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="PlayAllButton"
+                                Style="{StaticResource Win10PrimaryButtonStyle}"
+                                Margin="0,0,8,0"
+                                Click="PlayAll_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE768;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                <TextBlock Text="{DynamicResource Str_Common_PlayAll}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="ShuffleAllButton"
+                                Style="{StaticResource Win10ButtonStyle}"
+                                Margin="0,0,8,0"
+                                Click="ShuffleAll_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE8B1;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                <TextBlock Text="{DynamicResource Str_Common_Shuffle}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="SelectTracksButton"
+                                Style="{StaticResource Win10ButtonStyle}"
+                                Click="SelectTracks_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE762;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
+                                <TextBlock Text="{DynamicResource Str_Select_Select}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+
+                    <StackPanel x:Name="SelectionBar"
+                                Grid.Column="1"
+                                Orientation="Horizontal"
+                                HorizontalAlignment="Right"
+                                VerticalAlignment="Center"
+                                Visibility="Collapsed">
+                        <TextBlock x:Name="SelectionCountText"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="12.5"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource AccentBrush}"
+                                   VerticalAlignment="Center"
+                                   Margin="12,0,12,0" />
+                        <Button x:Name="SelectAllButton"
+                                Style="{StaticResource Win10ButtonStyle}"
+                                Margin="0,0,8,0"
+                                Content="{DynamicResource Str_Select_SelectAll}"
+                                Click="SelectAll_Click" />
+                        <Button x:Name="BatchEditTagsButton"
+                                Style="{StaticResource Win10PrimaryButtonStyle}"
+                                Margin="0,0,8,0"
+                                Click="BatchEditTags_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="&#xE70F;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
+                                <TextBlock Text="{DynamicResource Str_Select_EditTags}" VerticalAlignment="Center" />
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="CancelSelectionButton"
+                                Style="{StaticResource Win10ButtonStyle}"
+                                Content="{DynamicResource Str_Common_Cancel}"
+                                Click="CancelSelection_Click" />
+                    </StackPanel>
+                </Grid>
 
                 <Grid x:Name="CloudActionBarGrid" Visibility="Collapsed">
                     <Grid.ColumnDefinitions>
@@ -263,37 +311,17 @@
             <!-- Virtualized Songs / Cloud Results List -->
             <Grid Grid.Row="1">
                 <ListBox x:Name="SongsList"
-                         Background="Transparent"
-                         BorderThickness="0"
+                         Style="{StaticResource Win10SelectableListBoxStyle}"
+                         SelectionMode="Extended"
                          Padding="16,8"
-                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          ScrollViewer.CanContentScroll="True"
                          VirtualizingPanel.IsVirtualizing="True"
                          VirtualizingPanel.VirtualizationMode="Standard"
-                         HorizontalContentAlignment="Stretch"
                          SelectionChanged="SongsList_SelectionChanged"
                          PreviewKeyDown="SongsList_PreviewKeyDown">
-                    <ListBox.ItemContainerStyle>
-                        <Style TargetType="ListBoxItem">
-                            <Setter Property="Padding" Value="0" />
-                            <Setter Property="Margin" Value="0" />
-                            <Setter Property="Background" Value="Transparent" />
-                            <Setter Property="BorderThickness" Value="0" />
-                            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
-                            <Setter Property="Template">
-                                <Setter.Value>
-                                    <ControlTemplate TargetType="ListBoxItem">
-                                        <ContentPresenter />
-                                    </ControlTemplate>
-                                </Setter.Value>
-                            </Setter>
-                        </Style>
-                    </ListBox.ItemContainerStyle>
                     <ListBox.ItemTemplate>
                         <DataTemplate>
                             <Border x:Name="RowBorder"
-                                    Background="{Binding RowBackground}"
-                                    BorderBrush="Transparent"
                                     BorderThickness="1"
                                     CornerRadius="4"
                                     Padding="10,7"
@@ -303,8 +331,21 @@
                                     MouseLeave="SongRow_MouseLeave"
                                     MouseLeftButtonUp="SongRow_MouseLeftButtonUp"
                                     MouseRightButtonUp="SongRow_MouseRightButtonUp">
+                                <Border.Style>
+                                    <Style TargetType="Border">
+                                        <Setter Property="Background" Value="{Binding RowBackground}" />
+                                        <Setter Property="BorderBrush" Value="Transparent" />
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                <Setter Property="Background" Value="{DynamicResource AccentSubtleBrush}" />
+                                                <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Border.Style>
                                 <Grid>
                                     <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="Auto" />
                                         <ColumnDefinition Width="42" />
                                         <ColumnDefinition Width="*" />
@@ -312,14 +353,53 @@
                                         <ColumnDefinition Width="64" />
                                     </Grid.ColumnDefinitions>
 
-                                    <Rectangle Grid.Column="0"
+                                    <Border Grid.Column="0"
+                                            Width="18"
+                                            Height="18"
+                                            Margin="0,0,10,0"
+                                            BorderThickness="2"
+                                            CornerRadius="4"
+                                            VerticalAlignment="Center"
+                                            Visibility="{Binding SelectionCheckVisibility}">
+                                        <Border.Style>
+                                            <Style TargetType="Border">
+                                                <Setter Property="Background" Value="Transparent" />
+                                                <Setter Property="BorderBrush" Value="{DynamicResource ControlBorderBrush}" />
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                        <Setter Property="Background" Value="{DynamicResource AccentBrush}" />
+                                                        <Setter Property="BorderBrush" Value="{DynamicResource AccentBrush}" />
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </Border.Style>
+                                        <TextBlock Text="&#xE73E;"
+                                                   FontFamily="{StaticResource Win10GlyphFont}"
+                                                   FontSize="11"
+                                                   Foreground="{DynamicResource TextOnAccentBrush}"
+                                                   HorizontalAlignment="Center"
+                                                   VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Visibility" Value="Collapsed" />
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsSelected, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                                            <Setter Property="Visibility" Value="Visible" />
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </Border>
+
+                                    <Rectangle Grid.Column="1"
                                                Width="3"
                                                Height="24"
                                                Margin="0,0,8,0"
                                                Fill="{DynamicResource AccentBrush}"
                                                Visibility="{Binding ActiveVisibility}" />
 
-                                    <controls:ArtworkImage Grid.Column="1"
+                                    <controls:ArtworkImage Grid.Column="2"
                                                            Width="40"
                                                            Height="40"
                                                            GlyphSize="{Binding PlaceholderGlyphSize}"
@@ -329,7 +409,7 @@
                                                            ThumbnailCache="{Binding ThumbnailCache}"
                                                            RemoteArtworkUrl="{Binding RemoteArtworkUrl}" />
 
-                                    <StackPanel Grid.Column="2" Margin="12,0,12,0" VerticalAlignment="Center">
+                                    <StackPanel Grid.Column="3" Margin="12,0,12,0" VerticalAlignment="Center">
                                         <TextBlock Text="{Binding Title}"
                                                    FontFamily="{StaticResource Win10Font}"
                                                    FontSize="14"
@@ -344,7 +424,7 @@
                                                    Margin="0,1,0,0" />
                                     </StackPanel>
 
-                                    <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Center">
+                                    <StackPanel Grid.Column="4" Orientation="Horizontal" VerticalAlignment="Center">
                                         <Border Background="{DynamicResource SubtleFillBrush}"
                                                 BorderBrush="{DynamicResource ControlBorderBrush}"
                                                 BorderThickness="1"
@@ -367,7 +447,7 @@
                                                    Visibility="{Binding ActiveVisibility}" />
                                     </StackPanel>
 
-                                    <TextBlock Grid.Column="4"
+                                    <TextBlock Grid.Column="5"
                                                Text="{Binding TrailingText}"
                                                FontFamily="{StaticResource Win10Font}"
                                                FontSize="12"

@@ -825,6 +825,123 @@ public sealed class CloudExporterTests
         Assert.Null(cache.TryGetCachedPath(track.Id, "highest"));
     }
 
+    [Fact]
+    public async Task GoogleDriveExportPreservesRealEmbeddedTagsAndArtworkWhenPlaceholderSupplied()
+    {
+        string cacheDir = TestHelpers.MakeTempDir();
+        string destDir = TestHelpers.MakeTempDir();
+        string fixturePath = Path.Combine(TestHelpers.MakeTempDir(), "tagged-drive-fixture.mp3");
+        File.WriteAllBytes(fixturePath, MakeMinimalMp3Bytes());
+        using (var tagFile = TagLib.File.Create(fixturePath))
+        {
+            tagFile.Tag.Title = "Midnight Reverie";
+            tagFile.Tag.Performers = ["Real Studio Artist"];
+            tagFile.Tag.Album = "Real Studio Album";
+            tagFile.Tag.AlbumArtists = ["Real Album Artist"];
+            tagFile.Tag.Genres = ["Jazz"];
+            tagFile.Tag.Pictures =
+            [
+                new TagLib.Picture(new TagLib.ByteVector(ValidPngBytes))
+                {
+                    Type = TagLib.PictureType.FrontCover,
+                    MimeType = "image/png"
+                }
+            ];
+            tagFile.Save();
+        }
+        byte[] taggedMp3Bytes = File.ReadAllBytes(fixturePath);
+
+        var cloudId = Guid.NewGuid();
+        var gdriveTrack = MakeCloudTrack(
+            cloudId,
+            "gd_tagged_1",
+            "Midnight Reverie",
+            artist: "Google Drive",
+            album: "Drive Folder",
+            trackNumber: 1,
+            source: CloudSources.GoogleDrive);
+        var cloudRoot = new LibraryRoot(
+            Id: cloudId,
+            Name: "Drive Folder",
+            Kind: RootKind.CloudGoogleDrive,
+            Path: "https://drive.google.com/drive/folders/gdFolderTagged",
+            SourceUrl: "https://drive.google.com/drive/folders/gdFolderTagged",
+            RemoteId: "gdFolderTagged");
+
+        var handler = new StubHttpHandler(req =>
+        {
+            string uri = req.RequestUri!.AbsoluteUri;
+            if (uri.StartsWith("https://drive.usercontent.google.com/download", StringComparison.Ordinal))
+            {
+                var resp = new HttpResponseMessage(req.Headers.Range is not null ? HttpStatusCode.PartialContent : HttpStatusCode.OK)
+                {
+                    Content = new ByteArrayContent(taggedMp3Bytes)
+                };
+                resp.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("audio/mpeg");
+                return resp;
+            }
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        });
+
+        var exporter = new CloudExporter(
+            new CloudAudioCache(cacheDir, handler: handler),
+            new CloudProviderRegistry(new GoogleDriveClient(handler)));
+
+        string savedPath = await exporter.ExportTrackAsync(gdriveTrack, cloudRoot, destDir);
+        Assert.True(File.Exists(savedPath));
+
+        using var exportedTag = TagLib.File.Create(savedPath);
+        Assert.Equal("Midnight Reverie", exportedTag.Tag.Title);
+        Assert.Equal(["Real Studio Artist"], exportedTag.Tag.Performers);
+        Assert.Equal("Real Studio Album", exportedTag.Tag.Album);
+        Assert.Equal(["Real Album Artist"], exportedTag.Tag.AlbumArtists);
+        Assert.Equal(["Jazz"], exportedTag.Tag.Genres);
+        Assert.Single(exportedTag.Tag.Pictures);
+        Assert.Equal(ValidPngBytes, exportedTag.Tag.Pictures[0].Data.Data);
+    }
+
+    [Fact]
+    public void TagLibMetadataReaderTryWriteTagsPreservesExistingEmbeddedTagsAndPicturesAgainstPlaceholders()
+    {
+        string mp3Path = Path.Combine(TestHelpers.MakeTempDir(), "preserve.mp3");
+        File.WriteAllBytes(mp3Path, MakeMinimalMp3Bytes());
+        using (var initial = TagLib.File.Create(mp3Path))
+        {
+            initial.Tag.Title = "Original Title";
+            initial.Tag.Performers = ["Original Artist"];
+            initial.Tag.Album = "Original Album";
+            initial.Tag.AlbumArtists = ["Original Album Artist"];
+            initial.Tag.Genres = ["Ambient"];
+            initial.Tag.Pictures =
+            [
+                new TagLib.Picture(new TagLib.ByteVector(ValidPngBytes))
+                {
+                    Type = TagLib.PictureType.FrontCover,
+                    MimeType = "image/png"
+                }
+            ];
+            initial.Save();
+        }
+
+        bool ok = TagLibMetadataReader.TryWriteTags(
+            mp3Path,
+            title: "Updated Title",
+            artist: "Google Drive",
+            album: "Unknown Album",
+            genre: null,
+            artworkBytes: null);
+        Assert.True(ok);
+
+        using var after = TagLib.File.Create(mp3Path);
+        Assert.Equal("Updated Title", after.Tag.Title);
+        Assert.Equal(["Original Artist"], after.Tag.Performers);
+        Assert.Equal("Original Album", after.Tag.Album);
+        Assert.Equal(["Original Album Artist"], after.Tag.AlbumArtists);
+        Assert.Equal(["Ambient"], after.Tag.Genres);
+        Assert.Single(after.Tag.Pictures);
+        Assert.Equal(ValidPngBytes, after.Tag.Pictures[0].Data.Data);
+    }
+
     private sealed class SynchronousProgress<T> : IProgress<T>
     {
         private readonly Action<T> _handler;

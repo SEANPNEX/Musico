@@ -55,6 +55,14 @@ public partial class QueuesView : UserControl
             HeaderBorder.Padding = value ? new Thickness(16, 12, 16, 10) : new Thickness(24, 20, 24, 14);
             TitleText.FontSize = value ? 16 : 24;
             QueuesSelectorPanel.Padding = value ? new Thickness(16, 10, 16, 10) : new Thickness(24, 12, 24, 12);
+            if (value)
+            {
+                QueuesSelectorPanel.Background = Brushes.Transparent;
+            }
+            else
+            {
+                QueuesSelectorPanel.SetResourceReference(Border.BackgroundProperty, "CardBackgroundBrush");
+            }
             TracksScroll.Padding = value ? new Thickness(10, 8, 10, 8) : new Thickness(20, 12, 20, 12);
         }
     }

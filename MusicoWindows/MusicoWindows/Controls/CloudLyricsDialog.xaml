@@ -92,13 +92,19 @@
                             Click="Search_Click" />
                 </Grid>
 
-                <!-- Source Switcher -->
-                <ScrollViewer Grid.Row="2"
-                              HorizontalScrollBarVisibility="Auto"
-                              VerticalScrollBarVisibility="Disabled"
-                              Margin="0,0,0,12">
-                    <StackPanel x:Name="SourceChipsPanel" Orientation="Horizontal" />
-                </ScrollViewer>
+                <!-- Source Switcher & Built-in Provider Note -->
+                <StackPanel Grid.Row="2" Margin="0,0,0,12">
+                    <ScrollViewer HorizontalScrollBarVisibility="Auto"
+                                  VerticalScrollBarVisibility="Disabled">
+                        <StackPanel x:Name="SourceChipsPanel" Orientation="Horizontal" />
+                    </ScrollViewer>
+                    <TextBlock Text="{DynamicResource Str_CloudLyrics_ProviderNote}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="11"
+                               Foreground="{DynamicResource TextTertiaryBrush}"
+                               TextWrapping="Wrap"
+                               Margin="0,6,0,0" />
+                </StackPanel>
 
                 <!-- Main body: status or split candidate list + preview -->
                 <Grid Grid.Row="3">

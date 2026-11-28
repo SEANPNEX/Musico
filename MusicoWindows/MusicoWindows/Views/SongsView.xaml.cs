@@ -37,6 +37,7 @@ public sealed class SongRowItem
     public required bool IsPlaying { get; init; }
     public required Brush RowBackground { get; init; }
     public required Brush TitleBrush { get; init; }
+    public Visibility SelectionCheckVisibility { get; init; } = Visibility.Collapsed;
 
     public bool IsCloudSearchItem => CloudResult is not null;
     public double RowOpacity => IsAvailable ? 1.0 : 0.42;
@@ -65,6 +66,8 @@ public partial class SongsView : UserControl
     private bool _isProgrammaticSearch;
     private bool _suppressSortSelection;
     private bool _suppressSourceSelection;
+    private bool _isSelectionMode;
+    private bool _suppressSelectionChanged;
     private List<Track> _displayedTracks = new();
 
     public SongsView()
@@ -280,13 +283,15 @@ public partial class SongsView : UserControl
         SearchPlaceholder.Text = L.Get("Songs_SearchPlaceholder");
         SortCombo.Visibility = Visibility.Visible;
         CloudSearchButton.Visibility = Visibility.Collapsed;
-        LocalActionPanel.Visibility = Visibility.Visible;
+        LocalActionGrid.Visibility = Visibility.Visible;
         CloudActionBarGrid.Visibility = Visibility.Collapsed;
         CloudLoadingBanner.Visibility = Visibility.Collapsed;
         CloudErrorBanner.Visibility = Visibility.Collapsed;
         CloudSkeletonScroll.Visibility = Visibility.Collapsed;
         CloudSkeletonHost.Children.Clear();
         LoadMoreBar.Visibility = Visibility.Collapsed;
+
+        var selectedIds = GetSelectedLocalTrackIds();
 
         bool showFieldChip = _searchField != SearchField.Keyword && !string.IsNullOrEmpty(query);
         SearchFieldChip.Visibility = showFieldChip ? Visibility.Visible : Visibility.Collapsed;
@@ -315,11 +320,20 @@ public partial class SongsView : UserControl
 
         _displayedTracks = list.ToList();
         CountText.Text = L.SongsCount(_displayedTracks.Count);
-        ActionBar.Visibility = string.IsNullOrEmpty(query) && _displayedTracks.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        ActionBar.Visibility = _displayedTracks.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
         if (_displayedTracks.Count == 0)
         {
-            SongsList.ItemsSource = null;
+            _isSelectionMode = false;
+            _suppressSelectionChanged = true;
+            try
+            {
+                SongsList.ItemsSource = null;
+            }
+            finally
+            {
+                _suppressSelectionChanged = false;
+            }
             SongsList.Visibility = Visibility.Collapsed;
             EmptyState.Visibility = Visibility.Visible;
             EmptyGlyph.Text = "\uE8D6";
@@ -334,6 +348,7 @@ public partial class SongsView : UserControl
                 EmptyTitleText.Text = L.Format("Songs_NoSearchResultsTitle", query);
                 EmptyDescText.Text = L.Get("Songs_NoSearchResultsDesc");
             }
+            UpdateSelectionBar();
             return;
         }
 
@@ -345,6 +360,7 @@ public partial class SongsView : UserControl
         var accentSubtle = (Brush)FindResource("AccentSubtleBrush");
         var accentBrush = (Brush)FindResource("AccentBrush");
         var primaryBrush = (Brush)FindResource("TextPrimaryBrush");
+        Visibility checkVis = _isSelectionMode ? Visibility.Visible : Visibility.Collapsed;
 
         var items = new List<SongRowItem>(_displayedTracks.Count);
         for (int i = 0; i < _displayedTracks.Count; i++)
@@ -369,11 +385,32 @@ public partial class SongsView : UserControl
                 IsCurrent = isCurr,
                 IsPlaying = isCurr && isPlaying,
                 RowBackground = isCurr ? accentSubtle : Brushes.Transparent,
-                TitleBrush = isCurr ? accentBrush : primaryBrush
+                TitleBrush = isCurr ? accentBrush : primaryBrush,
+                SelectionCheckVisibility = checkVis
             });
         }
 
-        SongsList.ItemsSource = items;
+        _suppressSelectionChanged = true;
+        try
+        {
+            SongsList.ItemsSource = items;
+            if (selectedIds.Count > 0)
+            {
+                var selectedSet = new HashSet<string>(selectedIds, StringComparer.Ordinal);
+                foreach (var row in items)
+                {
+                    if (row.Track is not null && selectedSet.Contains(row.Track.Id))
+                    {
+                        SongsList.SelectedItems.Add(row);
+                    }
+                }
+            }
+        }
+        finally
+        {
+            _suppressSelectionChanged = false;
+        }
+        UpdateSelectionBar();
     }
 
     private void RefreshCloudMode()
@@ -389,13 +426,14 @@ public partial class SongsView : UserControl
         }
 
         _displayedTracks = new();
+        _isSelectionMode = false;
         SearchFieldChip.Visibility = Visibility.Collapsed;
         SortCombo.Visibility = Visibility.Collapsed;
         CloudSearchButton.Visibility = Visibility.Visible;
         SearchPlaceholder.Text = L.Format("Songs_CloudSearchPlaceholder", ext.DisplayName);
 
         ActionBar.Visibility = Visibility.Visible;
-        LocalActionPanel.Visibility = Visibility.Collapsed;
+        LocalActionGrid.Visibility = Visibility.Collapsed;
         CloudActionBarGrid.Visibility = Visibility.Visible;
         UpdateKindFilterPills(ext);
 
@@ -722,13 +760,103 @@ public partial class SongsView : UserControl
         _ctx.Services.Player.PlayInNamedQueue("Songs", ids, startAt: Random.Shared.Next(ids.Count), shuffle: true);
     }
 
+    private List<Track> GetSelectedLocalTracks() =>
+        SongsList.SelectedItems
+            .OfType<SongRowItem>()
+            .Where(r => r.Track is not null)
+            .Select(r => r.Track!)
+            .ToList();
+
+    private List<string> GetSelectedLocalTrackIds() =>
+        GetSelectedLocalTracks().Select(t => t.Id).ToList();
+
+    private void UpdateSelectionBar()
+    {
+        if (_searchController is { IsCloudMode: true })
+        {
+            SelectionBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        int count = GetSelectedLocalTracks().Count;
+        bool showBar = _isSelectionMode || count > 0;
+        SelectionBar.Visibility = showBar ? Visibility.Visible : Visibility.Collapsed;
+        SelectionCountText.Text = L.Format("Select_SelectedCount", count);
+        BatchEditTagsButton.IsEnabled = count > 0;
+        SelectAllButton.IsEnabled = _displayedTracks.Count > 0;
+        SelectTracksButton.Style = (Style)FindResource(_isSelectionMode ? "Win10PrimaryButtonStyle" : "Win10ButtonStyle");
+    }
+
+    private void SelectTracks_Click(object sender, RoutedEventArgs e)
+    {
+        _isSelectionMode = !_isSelectionMode;
+        if (!_isSelectionMode)
+        {
+            ClearSelection();
+        }
+        else
+        {
+            RefreshLocalMode();
+        }
+    }
+
+    private void SelectAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (_searchController is { IsCloudMode: true } || SongsList.Items.Count == 0) return;
+        _isSelectionMode = true;
+        SongsList.SelectAll();
+        UpdateSelectionBar();
+    }
+
+    private void BatchEditTags_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ctx is null) return;
+        var selected = GetSelectedLocalTracks();
+        if (selected.Count == 0) return;
+        MultiSelectUiHelper.OpenBatchTagEdit(_ctx, selected);
+    }
+
+    private void CancelSelection_Click(object sender, RoutedEventArgs e)
+    {
+        _isSelectionMode = false;
+        ClearSelection();
+        RefreshLocalMode();
+    }
+
+    private void ClearSelection()
+    {
+        _suppressSelectionChanged = true;
+        try
+        {
+            SongsList.UnselectAll();
+        }
+        finally
+        {
+            _suppressSelectionChanged = false;
+        }
+        UpdateSelectionBar();
+    }
+
     private void SongsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        SongsList.SelectedItem = null;
+        if (_suppressSelectionChanged) return;
+        if (_searchController is { IsCloudMode: true })
+        {
+            _suppressSelectionChanged = true;
+            try { SongsList.SelectedItem = null; } finally { _suppressSelectionChanged = false; }
+            return;
+        }
+        UpdateSelectionBar();
     }
 
     private void SongsList_PreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (_searchController is not { IsCloudMode: true } &&
+            MultiSelectUiHelper.HandleListKeyboardShortcuts(SongsList, e, () => CancelSelection_Click(sender, e)))
+        {
+            return;
+        }
+
         if (e.Key != Key.Enter) return;
         if (e.OriginalSource is DependencyObject dep)
         {
@@ -745,6 +873,8 @@ public partial class SongsView : UserControl
     {
         if (sender is Border border && border.DataContext is SongRowItem item)
         {
+            var container = ItemsControl.ContainerFromElement(SongsList, border) as ListBoxItem;
+            if (container?.IsSelected == true) return;
             if (!item.IsCurrent)
                 border.SetResourceReference(Border.BackgroundProperty, "SubtleHoverBrush");
             border.SetResourceReference(Border.BorderBrushProperty, "RevealBorderBrush");
@@ -753,10 +883,10 @@ public partial class SongsView : UserControl
 
     private void SongRow_MouseLeave(object sender, MouseEventArgs e)
     {
-        if (sender is Border border && border.DataContext is SongRowItem item)
+        if (sender is Border border)
         {
-            border.Background = item.RowBackground;
-            border.BorderBrush = Brushes.Transparent;
+            border.ClearValue(Border.BackgroundProperty);
+            border.ClearValue(Border.BorderBrushProperty);
         }
     }
 
@@ -765,6 +895,18 @@ public partial class SongsView : UserControl
         if (e.ClickCount != 1) return;
         if (sender is Border { DataContext: SongRowItem item })
         {
+            if (_searchController is not { IsCloudMode: true })
+            {
+                if (MultiSelectUiHelper.IsSelectionModifierHeld())
+                {
+                    return;
+                }
+                if (_isSelectionMode)
+                {
+                    MultiSelectUiHelper.ToggleListBoxItemSelection(SongsList, item);
+                    return;
+                }
+            }
             ActivateRow(item);
         }
     }
@@ -852,14 +994,31 @@ public partial class SongsView : UserControl
         }
         else if (item.Track is not null)
         {
-            menu = TrackMenuHelper.BuildTrackMenu(
-                _ctx.Services,
-                [item.Track.Id],
-                item.Track.Id,
-                _ctx.OpenTextPrompt,
-                null,
-                _ctx.OpenSaveCloudTrack,
-                _ctx.OpenSongInfo);
+            var selected = GetSelectedLocalTracks();
+            if (selected.Count > 1 && selected.Any(t => t.Id == item.Track.Id))
+            {
+                menu = TrackMenuHelper.BuildTrackMenu(
+                    _ctx.Services,
+                    selected.Select(t => t.Id).ToList(),
+                    null,
+                    _ctx.OpenTextPrompt,
+                    null,
+                    _ctx.OpenSaveCloudTrack,
+                    _ctx.OpenSongInfo,
+                    openBatchTagEdit: _ctx.OpenBatchTagEdit);
+            }
+            else
+            {
+                menu = TrackMenuHelper.BuildTrackMenu(
+                    _ctx.Services,
+                    [item.Track.Id],
+                    item.Track.Id,
+                    _ctx.OpenTextPrompt,
+                    null,
+                    _ctx.OpenSaveCloudTrack,
+                    _ctx.OpenSongInfo,
+                    openBatchTagEdit: _ctx.OpenBatchTagEdit);
+            }
         }
         else
         {

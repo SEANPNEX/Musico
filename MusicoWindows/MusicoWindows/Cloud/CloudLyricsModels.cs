@@ -7,14 +7,12 @@ namespace MusicoWindows.Cloud;
 public static class CloudLyricsProviderIds
 {
     public const string Lrclib = "builtin.lrclib";
-    public const string Netease = "builtin.netease";
 }
 
 public enum CloudLyricsSourceKind
 {
     Auto,
     Lrclib,
-    Netease,
     Extension
 }
 
@@ -22,7 +20,6 @@ public sealed record CloudLyricsSourceSelection(CloudLyricsSourceKind Kind, stri
 {
     public static CloudLyricsSourceSelection Auto { get; } = new(CloudLyricsSourceKind.Auto);
     public static CloudLyricsSourceSelection Lrclib { get; } = new(CloudLyricsSourceKind.Lrclib);
-    public static CloudLyricsSourceSelection Netease { get; } = new(CloudLyricsSourceKind.Netease);
     public static CloudLyricsSourceSelection Extension(string extensionId) => new(CloudLyricsSourceKind.Extension, extensionId);
 }
 

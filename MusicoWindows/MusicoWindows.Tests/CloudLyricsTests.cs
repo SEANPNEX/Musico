@@ -116,52 +116,43 @@ public sealed class CloudLyricsTests : IDisposable
     }
 
     [Fact]
-    public async Task NeteaseFallbackSearchAndBilingualMergeWithin50ms()
+    public async Task BuiltInSearchUsesLrclibOnlyAndAutoPickerRequiresEnabledLyricsExtensions()
     {
+        var ext = new CloudLyricsExtensionDescriptor("sample.lyrics", "Sample Lyrics");
+
+        // Built-in options have only LRCLIB; Auto only appears when >= 1 lyrics extension is enabled.
+        var builtInOnly = CloudLyricsService.BuildSourceOptions([], "Auto");
+        Assert.Equal([CloudLyricsSourceSelection.Lrclib], builtInOnly.Select(o => o.Selection));
+
+        var withExtension = CloudLyricsService.BuildSourceOptions([ext], "Auto");
+        Assert.Equal(
+            [CloudLyricsSourceSelection.Auto, CloudLyricsSourceSelection.Lrclib, CloudLyricsSourceSelection.Extension("sample.lyrics")],
+            withExtension.Select(o => o.Selection));
+
+        // Bilingual translation merge within <=50ms still formats both lines properly.
+        const string mainLrc = "[00:28.90]故事的小黄花\n[00:32.10]从出生那年就飘着";
+        const string transLrc = "[00:28.93]Little yellow flower\n[00:32.12]Floating since birth";
+        var merged = LrcParser.Parse(CloudLyricsFormatter.MergeSyncedWithTranslation(mainLrc, transLrc) ?? string.Empty)
+            .Lines.Select(l => l.Text).ToList();
+        Assert.Equal(["故事的小黄花", "Little yellow flower", "从出生那年就飘着", "Floating since birth"], merged);
+
+        var hostsCalled = new List<string>();
         using var handler = new MockCloudLyricsHandler(req =>
         {
-            var uri = req.RequestUri!;
-            Assert.Equal("https://music.163.com/", req.Headers.GetValues("Referer").First());
-            Assert.Equal("https://music.163.com", req.Headers.GetValues("Origin").First());
-
-            if (uri.AbsolutePath == "/api/search/get")
-            {
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent("""{"code":200,"result":{"songs":[]}}""", Encoding.UTF8, "application/json")
-                };
-            }
-            if (uri.AbsolutePath == "/api/cloudsearch/pc")
+            hostsCalled.Add(req.RequestUri!.Host);
+            if (req.RequestUri.Host == "lrclib.net" && req.RequestUri.AbsolutePath == "/api/search")
             {
                 const string json = """
-                {
-                  "code": 200,
-                  "result": {
-                    "songs": [
-                      {
-                        "id": 991,
-                        "name": "晴天",
-                        "ar": [{ "name": "周杰伦" }],
-                        "al": { "name": "叶惠美" },
-                        "dt": 269000
-                      }
-                    ]
+                [
+                  {
+                    "id": 7,
+                    "trackName": "晴天",
+                    "artistName": "周杰伦",
+                    "albumName": "叶惠美",
+                    "duration": 269,
+                    "syncedLyrics": "[00:28.90]故事的小黄花"
                   }
-                }
-                """;
-                return new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(json, Encoding.UTF8, "application/json")
-                };
-            }
-            if (uri.AbsolutePath == "/api/song/lyric")
-            {
-                const string json = """
-                {
-                  "code": 200,
-                  "lrc": { "lyric": "[00:28.90]故事的小黄花\n[00:32.10]从出生那年就飘着" },
-                  "tlyric": { "lyric": "[00:28.93]Little yellow flower\n[00:32.12]Floating since birth" }
-                }
+                ]
                 """;
                 return new HttpResponseMessage(HttpStatusCode.OK)
                 {
@@ -171,18 +162,13 @@ public sealed class CloudLyricsTests : IDisposable
             return new HttpResponseMessage(HttpStatusCode.NotFound);
         });
 
-        var client = new NeteaseLyricsClient(handler);
-        var results = await client.SearchAsync(new CloudLyricsQuery("晴天", "周杰伦", null, 269));
-        Assert.Single(results);
-        var hit = results[0];
-        Assert.True(hit.IsTimed);
-        Assert.True(hit.HasTranslation);
+        var service = new CloudLyricsService(customHandler: handler, appVersion: "1.2.3");
+        var resp = await service.SearchAsync(new CloudLyricsQuery("晴天", "周杰伦", null, 269), CloudLyricsSourceSelection.Auto, []);
 
-        var merged = LrcParser.Parse(hit.FormattedText(includeTranslation: true)).Lines.Select(l => l.Text).ToList();
-        Assert.Equal(["故事的小黄花", "Little yellow flower", "从出生那年就飘着", "Floating since birth"], merged);
-
-        var unmerged = LrcParser.Parse(hit.FormattedText(includeTranslation: false)).Lines.Select(l => l.Text).ToList();
-        Assert.Equal(["故事的小黄花", "从出生那年就飘着"], unmerged);
+        Assert.Single(resp.Candidates);
+        Assert.Equal(CloudLyricsProviderIds.Lrclib, resp.Candidates[0].ProviderId);
+        Assert.Empty(resp.Failures);
+        Assert.DoesNotContain("music.163.com", hostsCalled);
     }
 
     [Fact]
@@ -207,11 +193,16 @@ public sealed class CloudLyricsTests : IDisposable
         };
         """;
 
+        bool failExtension = false;
         using var handler = new MockCloudLyricsHandler(req =>
         {
             string host = req.RequestUri!.Host;
             if (host == "lyrics.example.com")
             {
+                if (failExtension)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+                }
                 const string json = """
                 {
                   "items": [
@@ -229,10 +220,6 @@ public sealed class CloudLyricsTests : IDisposable
                 {
                     Content = new StringContent(json, Encoding.UTF8, "application/json")
                 };
-            }
-            if (host == "music.163.com")
-            {
-                return new HttpResponseMessage(HttpStatusCode.InternalServerError);
             }
             if (host == "lrclib.net" && req.RequestUri.AbsolutePath == "/api/search")
             {
@@ -278,7 +265,7 @@ public sealed class CloudLyricsTests : IDisposable
 
         Assert.Equal("SampleLrc", autoResp.Candidates.First().SourceName);
         Assert.Equal(2, autoResp.Candidates.Count);
-        Assert.NotEmpty(autoResp.Failures);
+        Assert.Empty(autoResp.Failures);
         Assert.False(lyricsStore.HasImported("track-1"));
 
         var lrclibOnly = await service.SearchAsync(query, CloudLyricsSourceSelection.Lrclib, extStore.GetActiveLyricsExtensions());
@@ -286,5 +273,11 @@ public sealed class CloudLyricsTests : IDisposable
 
         var extOnly = await service.SearchAsync(query, CloudLyricsSourceSelection.Extension("sample.lyrics"), extStore.GetActiveLyricsExtensions());
         Assert.Equal(["SampleLrc"], extOnly.Candidates.Select(c => c.SourceName));
+
+        // When extension fails in Auto mode, LRCLIB still returns and extension failure is captured.
+        failExtension = true;
+        var degradedResp = await service.SearchAsync(query, CloudLyricsSourceSelection.Auto, extStore.GetActiveLyricsExtensions());
+        Assert.Equal([CloudLyricsProviderIds.Lrclib], degradedResp.Candidates.Select(c => c.ProviderId));
+        Assert.NotEmpty(degradedResp.Failures);
     }
 }

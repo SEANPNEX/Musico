@@ -4,6 +4,7 @@
     <Grid>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
         </Grid.RowDefinitions>
 
@@ -20,20 +21,73 @@
                                Foreground="{DynamicResource TextSecondaryBrush}"
                                Margin="0,3,0,0" />
                 </StackPanel>
-                <Button Style="{StaticResource Win10PrimaryButtonStyle}"
-                        HorizontalAlignment="Right"
-                        VerticalAlignment="Center"
-                        Click="NewPlaylist_Click">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="&#xE710;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
-                        <TextBlock Text="{DynamicResource Str_Nav_NewPlaylist}" VerticalAlignment="Center" />
-                    </StackPanel>
-                </Button>
+                <StackPanel Orientation="Horizontal"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center">
+                    <Button x:Name="SelectPlaylistsButton"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            Margin="0,0,8,0"
+                            Click="SelectPlaylists_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE762;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
+                            <TextBlock Text="{DynamicResource Str_Select_Select}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button Style="{StaticResource Win10PrimaryButtonStyle}"
+                            Click="NewPlaylist_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE710;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,8,0" />
+                            <TextBlock Text="{DynamicResource Str_Nav_NewPlaylist}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
             </Grid>
         </Border>
 
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="24,16">
-            <StackPanel x:Name="PlaylistsStack" Margin="0,0,0,28" />
+        <!-- Multi-Select Action Bar -->
+        <Border x:Name="SelectionBar"
+                Grid.Row="1"
+                Background="{DynamicResource CardBackgroundBrush}"
+                BorderBrush="{DynamicResource DividerBrush}"
+                BorderThickness="0,0,0,1"
+                Padding="24,8"
+                Visibility="Collapsed">
+            <WrapPanel Orientation="Horizontal">
+                <TextBlock x:Name="SelectionCountText"
+                           FontFamily="{StaticResource Win10Font}"
+                           FontSize="12.5"
+                           FontWeight="SemiBold"
+                           Foreground="{DynamicResource AccentBrush}"
+                           VerticalAlignment="Center"
+                           Margin="0,0,12,0" />
+                <Button x:Name="SelectAllButton"
+                        Style="{StaticResource Win10ButtonStyle}"
+                        Margin="0,0,8,0"
+                        Content="{DynamicResource Str_Select_SelectAll}"
+                        Click="SelectAll_Click" />
+                <Button x:Name="BatchEditTagsButton"
+                        Style="{StaticResource Win10PrimaryButtonStyle}"
+                        Margin="0,0,8,0"
+                        Click="BatchEditTags_Click">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="&#xE70F;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
+                        <TextBlock Text="{DynamicResource Str_Select_EditTags}" VerticalAlignment="Center" />
+                    </StackPanel>
+                </Button>
+                <Button x:Name="CancelSelectionButton"
+                        Style="{StaticResource Win10ButtonStyle}"
+                        Content="{DynamicResource Str_Common_Cancel}"
+                        Click="CancelSelection_Click" />
+            </WrapPanel>
+        </Border>
+
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto" Padding="24,16">
+            <ListBox x:Name="PlaylistsList"
+                     Style="{StaticResource Win10EmbeddedListBoxStyle}"
+                     SelectionMode="Extended"
+                     Margin="0,0,0,28"
+                     SelectionChanged="PlaylistsList_SelectionChanged"
+                     PreviewKeyDown="PlaylistsList_PreviewKeyDown" />
         </ScrollViewer>
     </Grid>
 </UserControl>

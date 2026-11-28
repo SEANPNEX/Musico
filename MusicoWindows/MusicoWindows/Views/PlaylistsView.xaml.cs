@@ -15,7 +15,11 @@ namespace MusicoWindows.Views;
 
 public partial class PlaylistsView : UserControl
 {
+    private sealed record PlaylistCardState(string Key, IReadOnlyList<string> TrackIds);
+
     private ViewContext? _ctx;
+    private bool _isSelectionMode;
+    private bool _suppressSelectionChanged;
 
     public PlaylistsView()
     {
@@ -45,7 +49,7 @@ public partial class PlaylistsView : UserControl
 
     private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e)
     {
-        if (e.PropertyName is nameof(LibraryStore.Playlists) or nameof(LibraryStore.Favourites))
+        if (e.PropertyName is nameof(LibraryStore.Playlists) or nameof(LibraryStore.Favourites) or nameof(LibraryStore.Tracks))
             Refresh();
     }
 
@@ -54,37 +58,69 @@ public partial class PlaylistsView : UserControl
         if (_ctx is null) return;
         var lib = _ctx.Services.Library;
 
+        var prevSelectedKeys = PlaylistsList.SelectedItems
+            .OfType<Border>()
+            .Select(b => (b.Tag as PlaylistCardState)?.Key)
+            .Where(k => !string.IsNullOrEmpty(k))
+            .ToHashSet(StringComparer.Ordinal);
+
         int total = 1 + lib.Playlists.Count;
         CountText.Text = L.PlaylistsCount(total);
 
-        PlaylistsStack.Children.Clear();
-
-        // Favourites built-in playlist
-        var favIds = lib.GetFavouriteTracks(_ctx.Services.History).Select(t => t.Id).ToList();
-        PlaylistsStack.Children.Add(CreatePlaylistCard(
-            title: L.Get("Nav_Favourites"),
-            count: lib.Favourites.Count,
-            glyph: "\uEB52",
-            trackIds: favIds,
-            onClick: () => _ctx.OpenPlaylist(PlaylistRef.Favourites),
-            playlist: null));
-
-        // User playlists
-        foreach (var pl in lib.Playlists)
+        _suppressSelectionChanged = true;
+        try
         {
-            var captured = pl;
-            var plTrackIds = lib.GetPlaylistTracks(pl.Id, _ctx.Services.History).Select(t => t.Id).ToList();
-            PlaylistsStack.Children.Add(CreatePlaylistCard(
-                title: pl.Name,
-                count: pl.TrackIds.Count,
-                glyph: "\uE8D6",
-                trackIds: plTrackIds,
-                onClick: () => _ctx.OpenPlaylist(PlaylistRef.User(captured.Id)),
-                playlist: captured));
+            PlaylistsList.UnselectAll();
+            PlaylistsList.Items.Clear();
+
+            // Favourites built-in playlist
+            var favIds = lib.GetFavouriteTracks(_ctx.Services.History).Select(t => t.Id).ToList();
+            var favCard = CreatePlaylistCard(
+                key: "favourites",
+                title: L.Get("Nav_Favourites"),
+                count: lib.Favourites.Count,
+                glyph: "\uEB52",
+                trackIds: favIds,
+                onClick: () => _ctx.OpenPlaylist(PlaylistRef.Favourites),
+                playlist: null);
+            PlaylistsList.Items.Add(favCard);
+            if (prevSelectedKeys.Contains("favourites"))
+            {
+                PlaylistsList.SelectedItems.Add(favCard);
+            }
+
+            // User playlists
+            foreach (var pl in lib.Playlists)
+            {
+                var captured = pl;
+                string key = pl.Id.ToString("D");
+                var plTrackIds = lib.GetPlaylistTracks(pl.Id, _ctx.Services.History).Select(t => t.Id).ToList();
+                var card = CreatePlaylistCard(
+                    key: key,
+                    title: pl.Name,
+                    count: pl.TrackIds.Count,
+                    glyph: "\uE8D6",
+                    trackIds: plTrackIds,
+                    onClick: () => _ctx.OpenPlaylist(PlaylistRef.User(captured.Id)),
+                    playlist: captured);
+                PlaylistsList.Items.Add(card);
+                if (prevSelectedKeys.Contains(key))
+                {
+                    PlaylistsList.SelectedItems.Add(card);
+                }
+            }
         }
+        finally
+        {
+            _suppressSelectionChanged = false;
+        }
+
+        SyncPlaylistCards();
+        UpdateSelectionBar();
     }
 
     private Border CreatePlaylistCard(
+        string key,
         string title,
         int count,
         string glyph,
@@ -98,7 +134,8 @@ public partial class PlaylistsView : UserControl
             Padding = new Thickness(16, 12, 16, 12),
             BorderThickness = new Thickness(1),
             CornerRadius = new CornerRadius(4),
-            Cursor = Cursors.Hand
+            Cursor = Cursors.Hand,
+            Tag = new PlaylistCardState(key, trackIds)
         };
         card.SetResourceReference(Border.BackgroundProperty, "CardBackgroundBrush");
         card.SetResourceReference(Border.BorderBrushProperty, "ControlBorderBrush");
@@ -181,15 +218,32 @@ public partial class PlaylistsView : UserControl
 
         card.MouseEnter += (_, _) =>
         {
+            if (PlaylistsList.SelectedItems.Contains(card)) return;
             card.SetResourceReference(Border.BackgroundProperty, "CardHoverBrush");
             card.SetResourceReference(Border.BorderBrushProperty, "RevealBorderBrush");
         };
         card.MouseLeave += (_, _) =>
         {
-            card.SetResourceReference(Border.BackgroundProperty, "CardBackgroundBrush");
-            card.SetResourceReference(Border.BorderBrushProperty, "ControlBorderBrush");
+            ApplyPlaylistCardVisual(card, PlaylistsList.SelectedItems.Contains(card));
         };
-        card.MouseLeftButtonUp += (_, _) => onClick();
+        card.MouseLeftButtonDown += (_, e) =>
+        {
+            if (_isSelectionMode && !MultiSelectUiHelper.IsSelectionModifierHeld())
+            {
+                e.Handled = true;
+            }
+        };
+        card.MouseLeftButtonUp += (_, e) =>
+        {
+            if (MultiSelectUiHelper.IsSelectionModifierHeld()) return;
+            if (_isSelectionMode)
+            {
+                MultiSelectUiHelper.ToggleListBoxItemSelection(PlaylistsList, card);
+                e.Handled = true;
+                return;
+            }
+            onClick();
+        };
 
         card.ContextMenu = TrackMenuHelper.BuildTrackMenu(
             _ctx!.Services,
@@ -212,9 +266,146 @@ public partial class PlaylistsView : UserControl
                     menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Common_RenameEllipsis"), "\uE70F", () => PromptRename(playlist)));
                     menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("Common_Delete"), "\uE74D", () => ConfirmDelete(playlist)));
                 }
-            });
+            },
+            openBatchTagEdit: _ctx.OpenBatchTagEdit);
+
+        card.ContextMenuOpening += (_, e) =>
+        {
+            if (PlaylistsList.SelectedItems.Count <= 1 || !PlaylistsList.SelectedItems.Contains(card))
+            {
+                return;
+            }
+
+            var selectedTrackIds = GetSelectedTrackIds();
+            if (selectedTrackIds.Count == 0) return;
+
+            var multiMenu = TrackMenuHelper.BuildTrackMenu(
+                _ctx!.Services,
+                selectedTrackIds,
+                null,
+                _ctx.OpenTextPrompt,
+                openBatchTagEdit: _ctx.OpenBatchTagEdit);
+            e.Handled = true;
+            multiMenu.PlacementTarget = card;
+            multiMenu.IsOpen = true;
+        };
 
         return card;
+    }
+
+    private static void ApplyPlaylistCardVisual(Border card, bool selected)
+    {
+        if (selected)
+        {
+            card.SetResourceReference(Border.BackgroundProperty, "AccentSubtleBrush");
+            card.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
+        }
+        else
+        {
+            card.SetResourceReference(Border.BackgroundProperty, "CardBackgroundBrush");
+            card.SetResourceReference(Border.BorderBrushProperty, "ControlBorderBrush");
+        }
+    }
+
+    private List<string> GetSelectedTrackIds()
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        var ids = new List<string>();
+        foreach (var card in PlaylistsList.SelectedItems.OfType<Border>())
+        {
+            if (card.Tag is not PlaylistCardState state) continue;
+            foreach (var id in state.TrackIds)
+            {
+                if (seen.Add(id)) ids.Add(id);
+            }
+        }
+        return ids;
+    }
+
+    private List<Track> GetSelectedEditableTracks()
+    {
+        if (_ctx is null) return [];
+        return _ctx.Services.Library.GetTracks(GetSelectedTrackIds())
+            .Where(t => !t.IsEphemeral && !Track.HasEphemeralIdPrefix(t.Id))
+            .ToList();
+    }
+
+    private void SyncPlaylistCards()
+    {
+        var selectedSet = new HashSet<object>(PlaylistsList.SelectedItems.Cast<object>());
+        foreach (var card in PlaylistsList.Items.OfType<Border>())
+        {
+            ApplyPlaylistCardVisual(card, selectedSet.Contains(card));
+        }
+    }
+
+    private void UpdateSelectionBar()
+    {
+        int selectedPlaylists = PlaylistsList.SelectedItems.Count;
+        bool showBar = PlaylistsList.Items.Count > 0 && (_isSelectionMode || selectedPlaylists > 0);
+        SelectionBar.Visibility = showBar ? Visibility.Visible : Visibility.Collapsed;
+        SelectionCountText.Text = L.Format("Select_SelectedCount", selectedPlaylists);
+        BatchEditTagsButton.IsEnabled = GetSelectedEditableTracks().Count > 0;
+        SelectAllButton.IsEnabled = PlaylistsList.Items.Count > 0;
+        SelectPlaylistsButton.Style = (Style)FindResource(_isSelectionMode ? "Win10PrimaryButtonStyle" : "Win10ButtonStyle");
+    }
+
+    private void PlaylistsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressSelectionChanged) return;
+        SyncPlaylistCards();
+        UpdateSelectionBar();
+    }
+
+    private void PlaylistsList_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        MultiSelectUiHelper.HandleListKeyboardShortcuts(PlaylistsList, e, () => CancelSelection_Click(sender, e));
+    }
+
+    private void SelectPlaylists_Click(object sender, RoutedEventArgs e)
+    {
+        _isSelectionMode = !_isSelectionMode;
+        if (!_isSelectionMode)
+        {
+            CancelSelection_Click(sender, e);
+        }
+        else
+        {
+            UpdateSelectionBar();
+        }
+    }
+
+    private void SelectAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (PlaylistsList.Items.Count == 0) return;
+        _isSelectionMode = true;
+        PlaylistsList.SelectAll();
+        SyncPlaylistCards();
+        UpdateSelectionBar();
+    }
+
+    private void BatchEditTags_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ctx is null) return;
+        var tracks = GetSelectedEditableTracks();
+        if (tracks.Count == 0) return;
+        MultiSelectUiHelper.OpenBatchTagEdit(_ctx, tracks);
+    }
+
+    private void CancelSelection_Click(object sender, RoutedEventArgs e)
+    {
+        _isSelectionMode = false;
+        _suppressSelectionChanged = true;
+        try
+        {
+            PlaylistsList.UnselectAll();
+        }
+        finally
+        {
+            _suppressSelectionChanged = false;
+        }
+        SyncPlaylistCards();
+        UpdateSelectionBar();
     }
 
     private void PromptRename(Playlist playlist)

@@ -9,15 +9,19 @@
                 BorderThickness="1"
                 CornerRadius="4"
                 Padding="10,7"
+                Margin="0,0,0,0"
                 Cursor="Hand"
                 MouseEnter="Row_MouseEnter"
                 MouseLeave="Row_MouseLeave"
+                MouseLeftButtonDown="Row_MouseLeftButtonDown"
                 MouseLeftButtonUp="Row_MouseLeftButtonUp"
+                ContextMenuOpening="Row_ContextMenuOpening"
                 DragOver="Row_DragOver"
                 DragLeave="Row_DragLeave"
                 Drop="Row_Drop">
             <Grid>
                 <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="42" />
@@ -27,9 +31,31 @@
                     <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
+                <!-- Multi-Select Check Box Indicator (shown when selection mode is active) -->
+                <Border x:Name="SelectCheckBox"
+                        Grid.Column="0"
+                        Width="18"
+                        Height="18"
+                        Margin="0,0,10,0"
+                        Background="Transparent"
+                        BorderBrush="{DynamicResource ControlBorderBrush}"
+                        BorderThickness="2"
+                        CornerRadius="4"
+                        VerticalAlignment="Center"
+                        Visibility="Collapsed">
+                    <TextBlock x:Name="SelectCheckGlyph"
+                               Text="&#xE73E;"
+                               FontFamily="{StaticResource Win10GlyphFont}"
+                               FontSize="11"
+                               Foreground="{DynamicResource TextOnAccentBrush}"
+                               HorizontalAlignment="Center"
+                               VerticalAlignment="Center"
+                               Visibility="Collapsed" />
+                </Border>
+
                 <!-- Visible Drag Handle (enabled for Queue, Playlist, and Folder rows) -->
                 <Border x:Name="DragHandle"
-                        Grid.Column="0"
+                        Grid.Column="1"
                         Width="24"
                         Height="32"
                         Margin="0,0,6,0"
@@ -49,7 +75,7 @@
 
                 <!-- Active playing indicator strip -->
                 <Rectangle x:Name="ActiveBar"
-                           Grid.Column="1"
+                           Grid.Column="2"
                            Width="3"
                            Height="24"
                            Margin="0,0,8,0"
@@ -58,13 +84,13 @@
 
                 <!-- Cover artwork -->
                 <controls:ArtworkImage x:Name="CoverArt"
-                                       Grid.Column="2"
+                                       Grid.Column="3"
                                        Width="40"
                                        Height="40"
                                        GlyphSize="15" />
 
                 <!-- Title & Subtitle -->
-                <StackPanel Grid.Column="3"
+                <StackPanel Grid.Column="4"
                             Margin="12,0,12,0"
                             VerticalAlignment="Center">
                     <TextBlock x:Name="TitleText"
@@ -83,7 +109,7 @@
 
                 <!-- Playing / Paused glyph -->
                 <TextBlock x:Name="StateGlyph"
-                           Grid.Column="4"
+                           Grid.Column="5"
                            FontFamily="{StaticResource Win10GlyphFont}"
                            FontSize="13"
                            Foreground="{DynamicResource AccentBrush}"
@@ -93,7 +119,7 @@
 
                 <!-- Duration -->
                 <TextBlock x:Name="DurationText"
-                           Grid.Column="5"
+                           Grid.Column="6"
                            FontFamily="{StaticResource Win10Font}"
                            FontSize="12"
                            Foreground="{DynamicResource TextSecondaryBrush}"
@@ -102,7 +128,7 @@
 
                 <!-- Optional row action buttons (e.g. Move Up/Down/Remove in Playlist/Queue) -->
                 <StackPanel x:Name="ActionHost"
-                            Grid.Column="6"
+                            Grid.Column="7"
                             Orientation="Horizontal"
                             VerticalAlignment="Center"
                             Margin="8,0,0,0"

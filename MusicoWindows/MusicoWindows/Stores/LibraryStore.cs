@@ -717,6 +717,11 @@ public sealed class LibraryStore : ObservableStore
             MigrateTrackReferences(trackIdMap);
 
             var migratedLocalIds = new HashSet<string>(trackIdMap.Values, StringComparer.Ordinal);
+            foreach (string localId in migratedLocalIds)
+            {
+                SanitizeMergedLocalMetadataOverride(localId);
+            }
+
             bool appliedAnyOverride = false;
             var refreshedTracks = new List<Track>(_tracks.Count);
             foreach (var t in _tracks)
@@ -2328,7 +2333,9 @@ public sealed class LibraryStore : ObservableStore
             var provider = _providerRegistry.GetProvider(root);
             if (provider is null || !provider.IsAvailable)
             {
-                kept.AddRange(existingTracks);
+                var (enrichedList, anyChanged) = await EnrichCachedCloudTracksAsync(root, existingTracks, CancellationToken.None);
+                kept.AddRange(enrichedList);
+                if (anyChanged) cloudSynced = true;
                 continue;
             }
 
@@ -2377,7 +2384,9 @@ public sealed class LibraryStore : ObservableStore
             }
             catch
             {
-                kept.AddRange(existingTracks);
+                var (enrichedList, anyChanged) = await EnrichCachedCloudTracksAsync(root, existingTracks, CancellationToken.None);
+                kept.AddRange(enrichedList);
+                if (anyChanged) cloudSynced = true;
             }
         }
 
@@ -2673,7 +2682,7 @@ public sealed class LibraryStore : ObservableStore
                 }
             }
 
-            built.Add(MakeCloudTrack(
+            built.Add(await BuildAndEnrichCloudTrackAsync(
                 root: root,
                 trackId: trackId,
                 relPath: relPath,
@@ -2682,11 +2691,273 @@ public sealed class LibraryStore : ObservableStore
                 albumArtist: albumArtist,
                 cloudSource: cloudSource,
                 artworkKey: artKey,
+                old: old,
                 dateAddedUtc: old?.DateAddedUtc ?? now,
-                now: now));
+                now: now,
+                ct: ct).ConfigureAwait(false));
         }
 
         return built;
+    }
+
+    private async Task<Track> BuildAndEnrichCloudTrackAsync(
+        LibraryRoot root,
+        string trackId,
+        string relPath,
+        CloudPlaylistItem item,
+        string fallbackAlbum,
+        string albumArtist,
+        string cloudSource,
+        string? artworkKey,
+        Track? old,
+        DateTimeOffset dateAddedUtc,
+        DateTimeOffset now,
+        CancellationToken ct)
+    {
+        Track track = MakeCloudTrack(
+            root: root,
+            trackId: trackId,
+            relPath: relPath,
+            item: item,
+            fallbackAlbum: fallbackAlbum,
+            albumArtist: albumArtist,
+            cloudSource: cloudSource,
+            artworkKey: artworkKey,
+            dateAddedUtc: dateAddedUtc,
+            now: now);
+
+        if (IsGoogleDriveRoot(root) && old is not null)
+        {
+            track = MergePreviousGoogleDriveEnrichment(track, old);
+        }
+
+        if (IsGoogleDriveRoot(root) &&
+            _cloudCache is not null &&
+            NeedsCloudMetadataEnrichment(track) &&
+            _cloudCache.TryGetCachedPath(track.Id) is string cachedPath)
+        {
+            var enrichment = await ReadCloudEnrichmentAsync(track, cachedPath, ct).ConfigureAwait(false);
+            if (enrichment is not null)
+            {
+                track = ApplyCloudEnrichmentToTrack(track, enrichment.Value.Meta, enrichment.Value.ArtworkKey);
+            }
+        }
+
+        return ApplyMetadataOverride(track);
+    }
+
+    private async Task<(List<Track> Tracks, bool AnyChanged)> EnrichCachedCloudTracksAsync(
+        LibraryRoot root,
+        List<Track> existingTracks,
+        CancellationToken ct)
+    {
+        if (!IsGoogleDriveRoot(root) || _cloudCache is null || existingTracks.Count == 0)
+        {
+            return (existingTracks, false);
+        }
+
+        bool anyChanged = false;
+        var result = new List<Track>(existingTracks.Count);
+        foreach (var t in existingTracks)
+        {
+            if (NeedsCloudMetadataEnrichment(t) && _cloudCache.TryGetCachedPath(t.Id) is string cachedPath)
+            {
+                var enrichment = await ReadCloudEnrichmentAsync(t, cachedPath, ct).ConfigureAwait(false);
+                if (enrichment is not null)
+                {
+                    var enriched = ApplyCloudEnrichmentToTrack(t, enrichment.Value.Meta, enrichment.Value.ArtworkKey);
+                    if (!Equals(enriched, t)) anyChanged = true;
+                    result.Add(enriched);
+                    continue;
+                }
+            }
+            result.Add(t);
+        }
+        return (result, anyChanged);
+    }
+
+    private static bool IsGoogleDriveRoot(LibraryRoot root) =>
+        root.EffectiveCloudKind == RootKind.CloudGoogleDrive ||
+        string.Equals(root.EffectiveProviderId, CloudProviderRegistry.BuiltinGoogleDriveId, StringComparison.OrdinalIgnoreCase);
+
+    internal static bool IsGoogleDriveTrack(Track track) =>
+        string.Equals(track.CloudSource, CloudSources.GoogleDrive, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(track.CloudSource, CloudProviderRegistry.BuiltinGoogleDriveId, StringComparison.OrdinalIgnoreCase);
+
+    internal static bool NeedsCloudMetadataEnrichment(Track track) =>
+        track.IsCloud &&
+        IsGoogleDriveTrack(track) &&
+        (TagLibMetadataReader.IsPlaceholderArtist(track.Artist) ||
+         TagLibMetadataReader.IsPlaceholderArtist(track.AlbumArtist) ||
+         string.IsNullOrWhiteSpace(track.ArtworkKey) ||
+         track.DurationSeconds <= 0);
+
+    private static Track MergePreviousGoogleDriveEnrichment(Track fresh, Track old)
+    {
+        string title = !string.IsNullOrWhiteSpace(old.Title) && !string.Equals(old.Title, fresh.Title, StringComparison.Ordinal)
+            ? old.Title
+            : fresh.Title;
+        string artist = TagLibMetadataReader.IsPlaceholderArtist(fresh.Artist) && !TagLibMetadataReader.IsPlaceholderArtist(old.Artist)
+            ? old.Artist
+            : fresh.Artist;
+        string album = !TagLibMetadataReader.IsPlaceholderAlbum(old.Album) &&
+                       !string.Equals(old.Album, fresh.Album, StringComparison.Ordinal)
+            ? old.Album
+            : fresh.Album;
+        string albumArtist = TagLibMetadataReader.IsPlaceholderArtist(fresh.AlbumArtist) && !TagLibMetadataReader.IsPlaceholderArtist(old.AlbumArtist)
+            ? old.AlbumArtist
+            : fresh.AlbumArtist;
+        string? artKey = string.IsNullOrWhiteSpace(fresh.ArtworkKey) ? old.ArtworkKey : fresh.ArtworkKey;
+        string? genre = string.IsNullOrWhiteSpace(fresh.Genre) ? old.Genre : fresh.Genre;
+        double duration = fresh.DurationSeconds <= 0 && old.DurationSeconds > 0 ? old.DurationSeconds : fresh.DurationSeconds;
+        int? trackNo = old.TrackNumber ?? fresh.TrackNumber;
+        int? discNo = old.DiscNumber ?? fresh.DiscNumber;
+
+        return fresh with
+        {
+            Title = title,
+            Artist = artist,
+            Album = album,
+            AlbumArtist = albumArtist,
+            ArtworkKey = artKey,
+            Genre = genre,
+            DurationSeconds = duration,
+            TrackNumber = trackNo,
+            DiscNumber = discNo,
+            HasEmbeddedLyrics = fresh.HasEmbeddedLyrics || old.HasEmbeddedLyrics
+        };
+    }
+
+    internal async Task<(TrackMetadata Meta, string? ArtworkKey)?> ReadCloudEnrichmentAsync(
+        Track track,
+        string filePath,
+        CancellationToken ct = default)
+    {
+        if (!track.IsCloud || string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath))
+        {
+            return null;
+        }
+
+        try
+        {
+            var meta = await _reader.ReadAsync(filePath, ct).ConfigureAwait(false);
+            string? artKey = null;
+            if (string.IsNullOrWhiteSpace(track.ArtworkKey) && meta.ArtworkBytes is { Length: > 0 })
+            {
+                artKey = Artwork.Store(meta.ArtworkBytes);
+            }
+            return (meta, artKey);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async Task<Track?> EnrichCloudTrackFromFileAsync(
+        string trackId,
+        string filePath,
+        CancellationToken ct = default)
+    {
+        var track = GetTrack(trackId);
+        if (track is null || !track.IsCloud || !NeedsCloudMetadataEnrichment(track))
+        {
+            return null;
+        }
+
+        var enrichment = await ReadCloudEnrichmentAsync(track, filePath, ct).ConfigureAwait(false);
+        if (enrichment is null)
+        {
+            return null;
+        }
+
+        return ApplyCloudEnrichment(trackId, enrichment.Value.Meta, enrichment.Value.ArtworkKey);
+    }
+
+    internal Track? ApplyCloudEnrichment(string trackId, TrackMetadata meta, string? artKey)
+    {
+        var current = GetTrack(trackId);
+        if (current is null || !current.IsCloud) return null;
+
+        var enriched = ApplyCloudEnrichmentToTrack(current, meta, artKey);
+        if (Equals(enriched, current)) return current;
+
+        var nextTracks = _tracks.Select(t => t.Id == trackId ? enriched : t).ToList();
+        Publish(nextTracks);
+        TrackUpdated?.Invoke(enriched);
+        return enriched;
+    }
+
+    private Track ApplyCloudEnrichmentToTrack(Track track, TrackMetadata meta, string? artKey)
+    {
+        _metadataOverrides.TryGetValue(track.Id, out var ov);
+
+        string title = (ov is null || string.IsNullOrWhiteSpace(ov.Title)) && !string.IsNullOrWhiteSpace(meta.Title)
+            ? meta.Title!
+            : track.Title;
+
+        string artist = (ov is null || TagLibMetadataReader.IsPlaceholderArtist(ov.Artist)) &&
+                        TagLibMetadataReader.IsPlaceholderArtist(track.Artist) &&
+                        !TagLibMetadataReader.IsPlaceholderArtist(meta.Artist)
+            ? meta.Artist!
+            : track.Artist;
+
+        string album = (ov is null || string.IsNullOrWhiteSpace(ov.Album)) &&
+                       !TagLibMetadataReader.IsPlaceholderAlbum(meta.Album) &&
+                       (TagLibMetadataReader.IsPlaceholderAlbum(track.Album) || IsGoogleDriveTrack(track))
+            ? meta.Album!
+            : track.Album;
+
+        string albumArtist = track.AlbumArtist;
+        if (TagLibMetadataReader.IsPlaceholderArtist(albumArtist))
+        {
+            if (!TagLibMetadataReader.IsPlaceholderArtist(meta.AlbumArtist))
+            {
+                albumArtist = meta.AlbumArtist!;
+            }
+            else if (!TagLibMetadataReader.IsPlaceholderArtist(artist))
+            {
+                albumArtist = artist;
+            }
+        }
+
+        string? genre = (ov is null || !ov.HasGenreOverride) &&
+                        string.IsNullOrWhiteSpace(track.Genre) &&
+                        !string.IsNullOrWhiteSpace(meta.Genre)
+            ? meta.Genre
+            : track.Genre;
+
+        string? finalArtKey = (ov is null || string.IsNullOrWhiteSpace(ov.ArtworkKey)) &&
+                              string.IsNullOrWhiteSpace(track.ArtworkKey) &&
+                              !string.IsNullOrWhiteSpace(artKey)
+            ? artKey
+            : track.ArtworkKey;
+
+        double duration = track.DurationSeconds <= 0 && meta.DurationSeconds > 0
+            ? meta.DurationSeconds
+            : track.DurationSeconds;
+
+        int? trackNo = meta.TrackNumber is > 0 ? meta.TrackNumber : track.TrackNumber;
+        int? discNo = meta.DiscNumber is > 0 ? meta.DiscNumber : track.DiscNumber;
+        bool hasEmbeddedLyrics = track.HasEmbeddedLyrics || meta.Lyrics is not null;
+
+        return ApplyMetadataOverride(track with
+        {
+            Title = title,
+            Artist = artist,
+            Album = album,
+            AlbumArtist = albumArtist,
+            Genre = genre,
+            ArtworkKey = finalArtKey,
+            DurationSeconds = duration,
+            TrackNumber = trackNo,
+            DiscNumber = discNo,
+            HasEmbeddedLyrics = hasEmbeddedLyrics
+        });
     }
 
     private Track MakeCloudTrack(
@@ -2831,15 +3102,58 @@ public sealed class LibraryStore : ObservableStore
         return ApplyMetadataOverride(track);
     }
 
+    internal TrackMetadataOverride? GetMetadataOverride(string trackId) =>
+        !string.IsNullOrWhiteSpace(trackId) && _metadataOverrides.TryGetValue(trackId, out var ov) ? ov : null;
+
+    private void SanitizeMergedLocalMetadataOverride(string localTrackId)
+    {
+        if (!_metadataOverrides.TryGetValue(localTrackId, out var ov)) return;
+
+        bool stripArtist = !string.IsNullOrWhiteSpace(ov.Artist) &&
+                           TagLibMetadataReader.IsPlaceholderArtist(ov.Artist);
+        bool stripAlbum = !string.IsNullOrWhiteSpace(ov.Album) &&
+                          TagLibMetadataReader.IsPlaceholderAlbum(ov.Album);
+        if (!stripArtist && !stripAlbum) return;
+
+        var cleaned = ov with
+        {
+            Artist = stripArtist ? null : ov.Artist,
+            Album = stripAlbum ? null : ov.Album
+        };
+        if (string.IsNullOrWhiteSpace(cleaned.Title) &&
+            string.IsNullOrWhiteSpace(cleaned.Artist) &&
+            string.IsNullOrWhiteSpace(cleaned.Album) &&
+            !cleaned.HasGenreOverride &&
+            string.IsNullOrWhiteSpace(cleaned.ArtworkKey))
+        {
+            _metadataOverrides.Remove(localTrackId);
+        }
+        else
+        {
+            _metadataOverrides[localTrackId] = cleaned;
+        }
+    }
+
     private Track ApplyMetadataOverride(Track track)
     {
         if (!_metadataOverrides.TryGetValue(track.Id, out var ov)) return track;
 
         string title = !string.IsNullOrWhiteSpace(ov.Title) ? ov.Title! : track.Title;
-        string artist = !string.IsNullOrWhiteSpace(ov.Artist) ? ov.Artist! : track.Artist;
-        string album = !string.IsNullOrWhiteSpace(ov.Album) ? ov.Album! : track.Album;
+        bool ignorePlaceholderArtist = !track.IsCloud &&
+            TagLibMetadataReader.IsPlaceholderArtist(ov.Artist) &&
+            !TagLibMetadataReader.IsPlaceholderArtist(track.Artist);
+        string artist = !string.IsNullOrWhiteSpace(ov.Artist) && !ignorePlaceholderArtist
+            ? ov.Artist!
+            : track.Artist;
+        bool ignorePlaceholderAlbum = !track.IsCloud &&
+            TagLibMetadataReader.IsPlaceholderAlbum(ov.Album) &&
+            !TagLibMetadataReader.IsPlaceholderAlbum(track.Album);
+        string album = !string.IsNullOrWhiteSpace(ov.Album) && !ignorePlaceholderAlbum
+            ? ov.Album!
+            : track.Album;
         string albumArtist = string.Equals(track.AlbumArtist, track.Artist, StringComparison.Ordinal) ||
-                             string.IsNullOrWhiteSpace(track.AlbumArtist)
+                             string.IsNullOrWhiteSpace(track.AlbumArtist) ||
+                             TagLibMetadataReader.IsPlaceholderArtist(track.AlbumArtist)
             ? artist
             : track.AlbumArtist;
         string? genre = ov.HasGenreOverride ? ov.Genre : track.Genre;
@@ -2858,6 +3172,128 @@ public sealed class LibraryStore : ObservableStore
             ArtworkKey = artKey,
             ModifiedUtc = modifiedUtc
         };
+    }
+
+    public Task<int> BatchUpdateTrackMetadataAsync(
+        IEnumerable<string> trackIds,
+        string? artist,
+        string? album) =>
+        BatchUpdateTrackMetadataAsync(trackIds, artist, album, CancellationToken.None);
+
+    public async Task<int> BatchUpdateTrackMetadataAsync(
+        IEnumerable<string> trackIds,
+        string? artist,
+        string? album,
+        CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(trackIds);
+
+        string? normalizedArtist = string.IsNullOrWhiteSpace(artist) ? null : artist.Trim();
+        string? normalizedAlbum = string.IsNullOrWhiteSpace(album) ? null : album.Trim();
+        if (normalizedArtist is null && normalizedAlbum is null)
+        {
+            return 0;
+        }
+
+        var targetIds = new List<string>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string id in trackIds)
+        {
+            if (string.IsNullOrWhiteSpace(id) || !seen.Add(id)) continue;
+            var track = GetTrack(id);
+            if (track is null || track.IsEphemeral || Track.HasEphemeralIdPrefix(track.Id)) continue;
+            targetIds.Add(id);
+        }
+
+        if (targetIds.Count == 0)
+        {
+            return 0;
+        }
+
+        var updatesById = new Dictionary<string, Track>(targetIds.Count, StringComparer.Ordinal);
+        var nowUtc = DateTimeOffset.UtcNow;
+
+        foreach (string trackId in targetIds)
+        {
+            ct.ThrowIfCancellationRequested();
+            var track = GetTrack(trackId);
+            if (track is null || track.IsEphemeral || Track.HasEphemeralIdPrefix(track.Id)) continue;
+
+            string finalArtist = normalizedArtist ?? track.Artist;
+            string finalAlbum = normalizedAlbum ?? track.Album;
+
+            string finalAlbumArtist = track.AlbumArtist;
+            if (normalizedArtist is not null)
+            {
+                bool shouldAlignAlbumArtist =
+                    !string.Equals(finalArtist, track.Artist, StringComparison.Ordinal) ||
+                    string.Equals(track.AlbumArtist, track.Artist, StringComparison.Ordinal) ||
+                    TagLibMetadataReader.IsPlaceholderArtist(track.AlbumArtist);
+                if (shouldAlignAlbumArtist)
+                {
+                    finalAlbumArtist = finalArtist;
+                }
+            }
+
+            long fileSize = track.FileSize;
+            var modifiedUtc = nowUtc;
+            string? filePath = !track.IsCloud ? GetFilePath(track) : null;
+
+            if (!string.IsNullOrWhiteSpace(filePath) && File.Exists(filePath))
+            {
+                string? albumArtistForFile = normalizedArtist is not null ? finalAlbumArtist : null;
+                await Task.Run(() =>
+                {
+                    if (TagLibMetadataReader.TryWriteArtistAlbumTags(filePath, normalizedArtist, normalizedAlbum, albumArtistForFile))
+                    {
+                        try
+                        {
+                            var fi = new FileInfo(filePath);
+                            fileSize = fi.Length;
+                            modifiedUtc = new DateTimeOffset(DateTime.SpecifyKind(fi.LastWriteTimeUtc, DateTimeKind.Utc));
+                        }
+                        catch
+                        {
+                            // Keep fallback timestamp/size if FileInfo fails.
+                        }
+                    }
+                }, ct).ConfigureAwait(false);
+            }
+
+            _metadataOverrides.TryGetValue(trackId, out var existingOv);
+            _metadataOverrides[trackId] = new TrackMetadataOverride(
+                Title: existingOv?.Title,
+                Artist: normalizedArtist ?? existingOv?.Artist,
+                Album: normalizedAlbum ?? existingOv?.Album,
+                Genre: existingOv?.Genre,
+                HasGenreOverride: existingOv?.HasGenreOverride ?? false,
+                ArtworkKey: existingOv?.ArtworkKey,
+                EditedUtc: modifiedUtc);
+
+            updatesById[trackId] = track with
+            {
+                Artist = finalArtist,
+                Album = finalAlbum,
+                AlbumArtist = finalAlbumArtist,
+                FileSize = fileSize,
+                ModifiedUtc = modifiedUtc
+            };
+        }
+
+        if (updatesById.Count == 0)
+        {
+            return 0;
+        }
+
+        var nextTracks = _tracks.Select(t => updatesById.TryGetValue(t.Id, out var updated) ? updated : t).ToList();
+        Publish(nextTracks);
+
+        foreach (var updated in updatesById.Values)
+        {
+            TrackUpdated?.Invoke(updated);
+        }
+
+        return updatesById.Count;
     }
 
     public async Task<Track?> UpdateTrackMetadataAsync(
