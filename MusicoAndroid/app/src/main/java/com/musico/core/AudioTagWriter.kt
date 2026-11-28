@@ -6,9 +6,10 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 data class AudioTagPayload(
-    val title: String,
-    val artist: String,
-    val album: String,
+    val title: String = "",
+    val artist: String = "",
+    val album: String = "",
+    val albumArtist: String = "",
     val genre: String = "",
     val trackNumber: Int? = null,
     val artworkBytes: ByteArray? = null,
@@ -20,6 +21,7 @@ data class AudioTagPayload(
         return title == other.title &&
             artist == other.artist &&
             album == other.album &&
+            albumArtist == other.albumArtist &&
             genre == other.genre &&
             trackNumber == other.trackNumber &&
             artworkMimeType == other.artworkMimeType &&
@@ -31,12 +33,32 @@ data class AudioTagPayload(
         var result = title.hashCode()
         result = 31 * result + artist.hashCode()
         result = 31 * result + album.hashCode()
+        result = 31 * result + albumArtist.hashCode()
         result = 31 * result + genre.hashCode()
         result = 31 * result + (trackNumber ?: 0)
         result = 31 * result + (artworkBytes?.contentHashCode() ?: 0)
         result = 31 * result + (artworkMimeType?.hashCode() ?: 0)
         return result
     }
+}
+
+data class EmbeddedTagSummary(
+    val title: String? = null,
+    val artist: String? = null,
+    val album: String? = null,
+    val albumArtist: String? = null,
+    val genre: String? = null,
+    val trackNumber: Int? = null,
+    val hasArtwork: Boolean = false,
+) {
+    val hasAnyTagOrArtwork: Boolean
+        get() = !title.isNullOrBlank() ||
+            !artist.isNullOrBlank() ||
+            !album.isNullOrBlank() ||
+            !albumArtist.isNullOrBlank() ||
+            !genre.isNullOrBlank() ||
+            (trackNumber != null && trackNumber > 0) ||
+            hasArtwork
 }
 
 data class DetectedImageInfo(
@@ -100,6 +122,38 @@ object AudioTagWriter {
                 DetectedImageInfo(bytes = bytes, mimeType = "image/gif", extension = "gif", mp4DataType = 12)
             }
             else -> null
+        }
+    }
+
+    fun readEmbeddedSummary(
+        file: File,
+        formatExtension: String = file.extension,
+    ): EmbeddedTagSummary {
+        if (!file.exists() || !file.isFile) return EmbeddedTagSummary()
+        val ext = formatExtension.trim().trimStart('.').lowercase()
+        val extractedArtwork = runCatching {
+            EmbeddedArtworkExtractor.extract(file, needArtwork = true, needLyrics = false).artwork != null
+        }.getOrDefault(false)
+        return when (ext) {
+            "flac" -> {
+                val flac = runCatching { FlacTags.read(file) }.getOrNull()
+                fun commentValue(vararg keys: String): String? = keys.firstNotNullOfOrNull { k ->
+                    flac?.comments?.entries?.firstOrNull { it.key.equals(k, ignoreCase = true) }?.value
+                        ?.trim()?.takeIf { it.isNotEmpty() }
+                }
+                EmbeddedTagSummary(
+                    title = commentValue("TITLE"),
+                    artist = commentValue("ARTIST"),
+                    album = commentValue("ALBUM"),
+                    albumArtist = commentValue("ALBUMARTIST", "ALBUM ARTIST"),
+                    genre = commentValue("GENRE"),
+                    trackNumber = commentValue("TRACKNUMBER")?.substringBefore('/')?.trim()?.toIntOrNull()?.takeIf { it > 0 },
+                    hasArtwork = extractedArtwork || flac?.picture != null,
+                )
+            }
+            "mp3" -> readMp3Summary(file, extractedArtwork)
+            "m4a", "mp4" -> readMp4Summary(file, extractedArtwork)
+            else -> EmbeddedTagSummary(hasArtwork = extractedArtwork)
         }
     }
 
@@ -187,7 +241,14 @@ object AudioTagWriter {
         }
         if (!hasLast) return false
 
-        val managedKeys = mutableSetOf("TITLE", "ARTIST", "ALBUM")
+        val managedKeys = mutableSetOf<String>()
+        if (payload.title.isNotBlank()) managedKeys.add("TITLE")
+        if (payload.artist.isNotBlank()) managedKeys.add("ARTIST")
+        if (payload.album.isNotBlank()) managedKeys.add("ALBUM")
+        if (payload.albumArtist.isNotBlank()) {
+            managedKeys.add("ALBUMARTIST")
+            managedKeys.add("ALBUM ARTIST")
+        }
         if (payload.genre.isNotBlank()) managedKeys.add("GENRE")
         if (payload.trackNumber != null && payload.trackNumber > 0) managedKeys.add("TRACKNUMBER")
 
@@ -197,6 +258,7 @@ object AudioTagWriter {
         if (payload.title.isNotBlank()) mergedComments.add("TITLE" to payload.title)
         if (payload.artist.isNotBlank()) mergedComments.add("ARTIST" to payload.artist)
         if (payload.album.isNotBlank()) mergedComments.add("ALBUM" to payload.album)
+        if (payload.albumArtist.isNotBlank()) mergedComments.add("ALBUMARTIST" to payload.albumArtist)
         if (payload.genre.isNotBlank()) mergedComments.add("GENRE" to payload.genre)
         if (payload.trackNumber != null && payload.trackNumber > 0) {
             mergedComments.add("TRACKNUMBER" to payload.trackNumber.toString())
@@ -316,6 +378,7 @@ object AudioTagWriter {
         val artwork = detectImage(payload.artworkBytes)
         var audioOffset = 0
         val preserved = ByteArrayOutputStream()
+        var preservedV22Artwork = false
 
         if (data.size >= 10 &&
             data[0] == 'I'.code.toByte() &&
@@ -327,15 +390,60 @@ object AudioTagWriter {
             val tagSize = synchsafeInt(data, 6)
             val footerSize = if (major == 4 && (flags and 0x10) != 0) 10 else 0
             audioOffset = (10 + tagSize + footerSize).coerceAtMost(data.size)
-            if (major == 3 && (flags and 0x80) == 0 && audioOffset > 10) {
-                val tagBody = data.copyOfRange(10, (10 + tagSize).coerceAtMost(data.size))
-                extractPreservedId3v23Frames(
-                    tagBody = tagBody,
-                    droppingTrackNumber = payload.trackNumber != null && payload.trackNumber > 0,
-                    droppingGenre = payload.genre.isNotBlank(),
-                    droppingArtwork = artwork != null,
-                    out = preserved,
-                )
+            val tagBodyEnd = (10 + tagSize).coerceAtMost(data.size)
+            if (tagBodyEnd > 10 && (major == 3 || major == 4) && (flags and 0x80) == 0) {
+                var bodyStart = 10
+                if ((flags and 0x40) != 0 && tagBodyEnd - bodyStart >= 4) {
+                    val extHeaderSize = if (major == 4) {
+                        synchsafeInt(data, bodyStart).coerceAtLeast(4)
+                    } else {
+                        4 + bigEndianInt(data, bodyStart).coerceAtLeast(0)
+                    }
+                    bodyStart = (bodyStart + extHeaderSize).coerceAtMost(tagBodyEnd)
+                }
+                if (bodyStart < tagBodyEnd) {
+                    val tagBody = data.copyOfRange(bodyStart, tagBodyEnd)
+                    extractPreservedId3v2Frames(
+                        major = major,
+                        tagBody = tagBody,
+                        droppingTitle = payload.title.isNotBlank(),
+                        droppingArtist = payload.artist.isNotBlank(),
+                        droppingAlbum = payload.album.isNotBlank(),
+                        droppingAlbumArtist = payload.albumArtist.isNotBlank(),
+                        droppingTrackNumber = payload.trackNumber != null && payload.trackNumber > 0,
+                        droppingGenre = payload.genre.isNotBlank(),
+                        droppingArtwork = artwork != null,
+                        out = preserved,
+                    )
+                }
+            } else if (major == 2 && tagBodyEnd > 10) {
+                val existingSummary = readMp3Summary(file, hasArtworkHint = false)
+                if (payload.title.isBlank() && !existingSummary.title.isNullOrBlank()) {
+                    preserved.write(makeId3TextFrame("TIT2", existingSummary.title))
+                }
+                if (payload.artist.isBlank() && !existingSummary.artist.isNullOrBlank()) {
+                    preserved.write(makeId3TextFrame("TPE1", existingSummary.artist))
+                }
+                if (payload.album.isBlank() && !existingSummary.album.isNullOrBlank()) {
+                    preserved.write(makeId3TextFrame("TALB", existingSummary.album))
+                }
+                if (payload.albumArtist.isBlank() && !existingSummary.albumArtist.isNullOrBlank()) {
+                    preserved.write(makeId3TextFrame("TPE2", existingSummary.albumArtist))
+                }
+                if (payload.genre.isBlank() && !existingSummary.genre.isNullOrBlank()) {
+                    preserved.write(makeId3TextFrame("TCON", existingSummary.genre))
+                }
+                if ((payload.trackNumber == null || payload.trackNumber <= 0) && existingSummary.trackNumber != null) {
+                    preserved.write(makeId3TextFrame("TRCK", existingSummary.trackNumber.toString()))
+                }
+                if (artwork == null) {
+                    val existingArt = EmbeddedArtworkExtractor.extract(file, needArtwork = true, needLyrics = false).artwork
+                    val detectedExisting = detectImage(existingArt)
+                    if (detectedExisting != null) {
+                        preserved.write(makeId3ApicFrame(detectedExisting.bytes, detectedExisting.mimeType))
+                        preservedV22Artwork = true
+                    }
+                }
             }
         }
 
@@ -344,6 +452,7 @@ object AudioTagWriter {
         if (payload.title.isNotBlank()) frames.write(makeId3TextFrame("TIT2", payload.title))
         if (payload.artist.isNotBlank()) frames.write(makeId3TextFrame("TPE1", payload.artist))
         if (payload.album.isNotBlank()) frames.write(makeId3TextFrame("TALB", payload.album))
+        if (payload.albumArtist.isNotBlank()) frames.write(makeId3TextFrame("TPE2", payload.albumArtist))
         if (payload.genre.isNotBlank()) frames.write(makeId3TextFrame("TCON", payload.genre))
         if (payload.trackNumber != null && payload.trackNumber > 0) {
             frames.write(makeId3TextFrame("TRCK", payload.trackNumber.toString()))
@@ -360,19 +469,29 @@ object AudioTagWriter {
         out.write(frameBytes)
         out.write(data, audioOffset, data.size - audioOffset)
 
+        val shouldValidateArtwork = artwork != null || preservedV22Artwork
         return atomicReplace(file, out.toByteArray()) { tempFile ->
-            if (artwork == null) true else EmbeddedArtworkExtractor.extract(tempFile, needArtwork = true, needLyrics = false).artwork != null
+            if (!shouldValidateArtwork) true else EmbeddedArtworkExtractor.extract(tempFile, needArtwork = true, needLyrics = false).artwork != null
         }
     }
 
-    private fun extractPreservedId3v23Frames(
+    private fun extractPreservedId3v2Frames(
+        major: Int,
         tagBody: ByteArray,
+        droppingTitle: Boolean,
+        droppingArtist: Boolean,
+        droppingAlbum: Boolean,
+        droppingAlbumArtist: Boolean,
         droppingTrackNumber: Boolean,
         droppingGenre: Boolean,
         droppingArtwork: Boolean,
         out: ByteArrayOutputStream,
     ) {
-        val excluded = hashSetOf("TIT2", "TPE1", "TALB")
+        val excluded = hashSetOf<String>()
+        if (droppingTitle) excluded.add("TIT2")
+        if (droppingArtist) excluded.add("TPE1")
+        if (droppingAlbum) excluded.add("TALB")
+        if (droppingAlbumArtist) excluded.add("TPE2")
         if (droppingGenre) excluded.add("TCON")
         if (droppingTrackNumber) excluded.add("TRCK")
         if (droppingArtwork) excluded.add("APIC")
@@ -381,13 +500,208 @@ object AudioTagWriter {
         while (cursor + 10 <= tagBody.size) {
             if (tagBody[cursor] == 0.toByte()) break
             val id = String(tagBody, cursor, 4, Charsets.ISO_8859_1)
-            val size = bigEndianInt(tagBody, cursor + 4)
-            if (size <= 0 || cursor + 10 + size > tagBody.size) break
+            if (!id.all { it in 'A'..'Z' || it in '0'..'9' }) break
+            val rawSize = resolveId3v2FrameSize(major, tagBody, cursor, excluded) ?: break
+            val frameFlags = tagBody[cursor + 9].toInt() and 0xFF
             if (id !in excluded) {
-                out.write(tagBody, cursor, 10 + size)
+                val framePayloadStart = cursor + 10
+                val framePayloadEnd = cursor + 10 + rawSize
+                var normalizedPayload = tagBody.copyOfRange(framePayloadStart, framePayloadEnd)
+                var skipFrame = false
+                if (major == 4) {
+                    if ((frameFlags and 0x0C) != 0) {
+                        // Compressed/encrypted ID3v2.4 frames cannot be safely rewritten without v2.4 header flags
+                        skipFrame = true
+                    } else {
+                        var offset = 0
+                        if ((frameFlags and 0x01) != 0 && normalizedPayload.size >= 4) {
+                            offset = 4 // data-length indicator
+                        }
+                        if (offset > 0) {
+                            normalizedPayload = normalizedPayload.copyOfRange(offset, normalizedPayload.size)
+                        }
+                        if ((frameFlags and 0x02) != 0) {
+                            normalizedPayload = deUnsync(normalizedPayload)
+                        }
+                    }
+                }
+                if (!skipFrame) {
+                    if (id.startsWith("T") && id != "TXXX" && normalizedPayload.isNotEmpty() && normalizedPayload[0] == 0x03.toByte()) {
+                        val decoded = decodeId3TextPayload(normalizedPayload)
+                        if (decoded != null) {
+                            out.write(makeId3TextFrame(id, decoded))
+                        }
+                    } else {
+                        out.write(id.toByteArray(Charsets.ISO_8859_1), 0, 4)
+                        out.write(bigEndianIntBytes(normalizedPayload.size))
+                        out.write(byteArrayOf(0x00, 0x00))
+                        out.write(normalizedPayload)
+                    }
+                }
             }
-            cursor += 10 + size
+            cursor += 10 + rawSize
         }
+    }
+
+    private fun resolveId3v2FrameSize(
+        major: Int,
+        tagBody: ByteArray,
+        cursor: Int,
+        knownIds: Set<String>,
+    ): Int? {
+        val rawBe = bigEndianInt(tagBody, cursor + 4)
+        if (major != 4) {
+            return if (rawBe > 0 && cursor + 10 + rawBe <= tagBody.size) rawBe else null
+        }
+        val synch = synchsafeInt(tagBody, cursor + 4)
+        fun looksValidAt(size: Int): Boolean {
+            if (size <= 0 || cursor + 10 + size > tagBody.size) return false
+            val next = cursor + 10 + size
+            if (next == tagBody.size) return true
+            if (tagBody[next] == 0.toByte()) return true
+            if (next + 4 <= tagBody.size) {
+                val nextId = String(tagBody, next, 4, Charsets.ISO_8859_1)
+                return nextId in knownIds || nextId.all { it in 'A'..'Z' || it in '0'..'9' }
+            }
+            return false
+        }
+        return when {
+            looksValidAt(synch) -> synch
+            looksValidAt(rawBe) -> rawBe
+            synch > 0 && cursor + 10 + synch <= tagBody.size -> synch
+            rawBe > 0 && cursor + 10 + rawBe <= tagBody.size -> rawBe
+            else -> null
+        }
+    }
+
+    private fun deUnsync(bytes: ByteArray): ByteArray {
+        val out = ByteArrayOutputStream(bytes.size)
+        var i = 0
+        while (i < bytes.size) {
+            val b = bytes[i]
+            out.write(b.toInt() and 0xFF)
+            if (b == 0xFF.toByte() && i + 1 < bytes.size && bytes[i + 1] == 0x00.toByte()) {
+                i += 2
+            } else {
+                i++
+            }
+        }
+        return out.toByteArray()
+    }
+
+    private fun decodeId3TextPayload(payload: ByteArray): String? {
+        if (payload.isEmpty()) return null
+        val encoding = payload[0].toInt() and 0xFF
+        val textBytes = payload.copyOfRange(1, payload.size)
+        val raw = when (encoding) {
+            0 -> String(textBytes, Charsets.ISO_8859_1)
+            1 -> String(textBytes, Charsets.UTF_16)
+            2 -> String(textBytes, Charsets.UTF_16BE)
+            3 -> String(textBytes, Charsets.UTF_8)
+            else -> return null
+        }
+        return raw.substringBefore('\u0000').trim().takeIf { it.isNotEmpty() }
+    }
+
+    private fun readMp3Summary(file: File, hasArtworkHint: Boolean): EmbeddedTagSummary {
+        val data = runCatching { file.readBytes() }.getOrNull() ?: return EmbeddedTagSummary(hasArtwork = hasArtworkHint)
+        if (data.size < 10 ||
+            data[0] != 'I'.code.toByte() ||
+            data[1] != 'D'.code.toByte() ||
+            data[2] != '3'.code.toByte()
+        ) {
+            return EmbeddedTagSummary(hasArtwork = hasArtworkHint)
+        }
+        val major = data[3].toInt() and 0xFF
+        val flags = data[5].toInt() and 0xFF
+        val tagSize = synchsafeInt(data, 6)
+        val tagBodyEnd = (10 + tagSize).coerceAtMost(data.size)
+        if (tagBodyEnd <= 10 || (flags and 0x80) != 0) {
+            return EmbeddedTagSummary(hasArtwork = hasArtworkHint)
+        }
+
+        var title: String? = null
+        var artist: String? = null
+        var album: String? = null
+        var albumArtist: String? = null
+        var genre: String? = null
+        var trackNumber: Int? = null
+        var hasArtwork = hasArtworkHint
+
+        if (major == 2) {
+            var cursor = 10
+            while (cursor + 6 <= tagBodyEnd) {
+                if (data[cursor] == 0.toByte()) break
+                val id = String(data, cursor, 3, Charsets.ISO_8859_1)
+                val size = ((data[cursor + 3].toInt() and 0xFF) shl 16) or
+                    ((data[cursor + 4].toInt() and 0xFF) shl 8) or
+                    (data[cursor + 5].toInt() and 0xFF)
+                if (size <= 0 || cursor + 6 + size > tagBodyEnd) break
+                val payload = data.copyOfRange(cursor + 6, cursor + 6 + size)
+                when (id) {
+                    "TT2" -> if (title == null) title = decodeId3TextPayload(payload)
+                    "TP1" -> if (artist == null) artist = decodeId3TextPayload(payload)
+                    "TAL" -> if (album == null) album = decodeId3TextPayload(payload)
+                    "TP2" -> if (albumArtist == null) albumArtist = decodeId3TextPayload(payload)
+                    "TCO" -> if (genre == null) genre = decodeId3TextPayload(payload)
+                    "TRK" -> if (trackNumber == null) {
+                        trackNumber = decodeId3TextPayload(payload)?.substringBefore('/')?.trim()?.toIntOrNull()?.takeIf { it > 0 }
+                    }
+                    "PIC" -> hasArtwork = true
+                }
+                cursor += 6 + size
+            }
+        } else if (major == 3 || major == 4) {
+            var bodyStart = 10
+            if ((flags and 0x40) != 0 && tagBodyEnd - bodyStart >= 4) {
+                val extHeaderSize = if (major == 4) {
+                    synchsafeInt(data, bodyStart).coerceAtLeast(4)
+                } else {
+                    4 + bigEndianInt(data, bodyStart).coerceAtLeast(0)
+                }
+                bodyStart = (bodyStart + extHeaderSize).coerceAtMost(tagBodyEnd)
+            }
+            val tagBody = data.copyOfRange(bodyStart, tagBodyEnd)
+            var cursor = 0
+            while (cursor + 10 <= tagBody.size) {
+                if (tagBody[cursor] == 0.toByte()) break
+                val id = String(tagBody, cursor, 4, Charsets.ISO_8859_1)
+                if (!id.all { it in 'A'..'Z' || it in '0'..'9' }) break
+                val size = resolveId3v2FrameSize(major, tagBody, cursor, emptySet()) ?: break
+                var payload = tagBody.copyOfRange(cursor + 10, cursor + 10 + size)
+                val frameFlags = tagBody[cursor + 9].toInt() and 0xFF
+                if (major == 4 && (frameFlags and 0x0C) == 0) {
+                    if ((frameFlags and 0x01) != 0 && payload.size >= 4) {
+                        payload = payload.copyOfRange(4, payload.size)
+                    }
+                    if ((frameFlags and 0x02) != 0) {
+                        payload = deUnsync(payload)
+                    }
+                }
+                when (id) {
+                    "TIT2" -> if (title == null) title = decodeId3TextPayload(payload)
+                    "TPE1" -> if (artist == null) artist = decodeId3TextPayload(payload)
+                    "TALB" -> if (album == null) album = decodeId3TextPayload(payload)
+                    "TPE2" -> if (albumArtist == null) albumArtist = decodeId3TextPayload(payload)
+                    "TCON" -> if (genre == null) genre = decodeId3TextPayload(payload)
+                    "TRCK" -> if (trackNumber == null) {
+                        trackNumber = decodeId3TextPayload(payload)?.substringBefore('/')?.trim()?.toIntOrNull()?.takeIf { it > 0 }
+                    }
+                    "APIC" -> hasArtwork = true
+                }
+                cursor += 10 + size
+            }
+        }
+
+        return EmbeddedTagSummary(
+            title = title,
+            artist = artist,
+            album = album,
+            albumArtist = albumArtist,
+            genre = genre,
+            trackNumber = trackNumber,
+            hasArtwork = hasArtwork,
+        )
     }
 
     private fun makeId3TextFrame(frameId: String, text: String): ByteArray {
@@ -456,11 +770,11 @@ object AudioTagWriter {
         val existingIlstItems = extractExistingMp4IlstItems(data, sourceMeta)
 
         val artwork = detectImage(payload.artworkBytes)
-        val replacedKeys = hashSetOf(
-            mp4Key("\u00A9nam"),
-            mp4Key("\u00A9ART"),
-            mp4Key("\u00A9alb"),
-        )
+        val replacedKeys = hashSetOf<String>()
+        if (payload.title.isNotBlank()) replacedKeys.add(mp4Key("\u00A9nam"))
+        if (payload.artist.isNotBlank()) replacedKeys.add(mp4Key("\u00A9ART"))
+        if (payload.album.isNotBlank()) replacedKeys.add(mp4Key("\u00A9alb"))
+        if (payload.albumArtist.isNotBlank()) replacedKeys.add("aART")
         if (payload.genre.isNotBlank()) replacedKeys.add(mp4Key("\u00A9gen"))
         if (payload.trackNumber != null && payload.trackNumber > 0) replacedKeys.add("trkn")
         if (artwork != null) replacedKeys.add("covr")
@@ -479,6 +793,9 @@ object AudioTagWriter {
         }
         if (payload.album.isNotBlank()) {
             ilstBody.write(makeMp4TextItem("\u00A9alb", payload.album))
+        }
+        if (payload.albumArtist.isNotBlank()) {
+            ilstBody.write(makeMp4TextItem("aART", payload.albumArtist))
         }
         if (payload.genre.isNotBlank()) {
             ilstBody.write(makeMp4TextItem("\u00A9gen", payload.genre))
@@ -604,6 +921,64 @@ object AudioTagWriter {
         val ilst = metaChildren.firstOrNull { it.type == "ilst" } ?: return emptyList()
         val ilstItems = parseMp4Boxes(data, ilst.payloadStart, ilst.end) ?: return emptyList()
         return ilstItems.map { box -> box.type to data.copyOfRange(box.start, box.end) }
+    }
+
+    private fun readMp4Summary(file: File, hasArtworkHint: Boolean): EmbeddedTagSummary {
+        val data = runCatching { file.readBytes() }.getOrNull() ?: return EmbeddedTagSummary(hasArtwork = hasArtworkHint)
+        if (data.size < 16) return EmbeddedTagSummary(hasArtwork = hasArtworkHint)
+        val topBoxes = parseMp4Boxes(data, 0, data.size) ?: return EmbeddedTagSummary(hasArtwork = hasArtworkHint)
+        val moovBox = topBoxes.firstOrNull { it.type == "moov" } ?: return EmbeddedTagSummary(hasArtwork = hasArtworkHint)
+        val moovChildren = parseMp4Boxes(data, moovBox.payloadStart, moovBox.end) ?: return EmbeddedTagSummary(hasArtwork = hasArtworkHint)
+        val existingUdta = moovChildren.firstOrNull { it.type == "udta" }
+        val existingDirectMeta = moovChildren.firstOrNull { it.type == "meta" }
+        val udtaMeta = existingUdta?.let { udta ->
+            parseMp4Boxes(data, udta.payloadStart, udta.end)?.firstOrNull { it.type == "meta" }
+        }
+        val sourceMeta = udtaMeta ?: existingDirectMeta ?: return EmbeddedTagSummary(hasArtwork = hasArtworkHint)
+        val items = extractExistingMp4IlstItems(data, sourceMeta)
+
+        var title: String? = null
+        var artist: String? = null
+        var album: String? = null
+        var albumArtist: String? = null
+        var genre: String? = null
+        var trackNumber: Int? = null
+        var hasArtwork = hasArtworkHint
+
+        val keyTitle = mp4Key("\u00A9nam")
+        val keyArtist = mp4Key("\u00A9ART")
+        val keyAlbum = mp4Key("\u00A9alb")
+        val keyGenre = mp4Key("\u00A9gen")
+
+        for ((itemKey, rawBox) in items) {
+            val childBoxes = parseMp4Boxes(rawBox, 8, rawBox.size) ?: continue
+            val dataBox = childBoxes.firstOrNull { it.type == "data" } ?: continue
+            val dataPayloadStart = dataBox.payloadStart + 8
+            if (dataPayloadStart > dataBox.end) continue
+            when (itemKey) {
+                keyTitle -> if (title == null) title = String(rawBox, dataPayloadStart, dataBox.end - dataPayloadStart, Charsets.UTF_8).trim().takeIf { it.isNotEmpty() }
+                keyArtist -> if (artist == null) artist = String(rawBox, dataPayloadStart, dataBox.end - dataPayloadStart, Charsets.UTF_8).trim().takeIf { it.isNotEmpty() }
+                keyAlbum -> if (album == null) album = String(rawBox, dataPayloadStart, dataBox.end - dataPayloadStart, Charsets.UTF_8).trim().takeIf { it.isNotEmpty() }
+                "aART" -> if (albumArtist == null) albumArtist = String(rawBox, dataPayloadStart, dataBox.end - dataPayloadStart, Charsets.UTF_8).trim().takeIf { it.isNotEmpty() }
+                keyGenre -> if (genre == null) genre = String(rawBox, dataPayloadStart, dataBox.end - dataPayloadStart, Charsets.UTF_8).trim().takeIf { it.isNotEmpty() }
+                "trkn" -> if (trackNumber == null && dataBox.end - dataPayloadStart >= 4) {
+                    val num = ((rawBox[dataPayloadStart + 2].toInt() and 0xFF) shl 8) or
+                        (rawBox[dataPayloadStart + 3].toInt() and 0xFF)
+                    if (num > 0) trackNumber = num
+                }
+                "covr" -> hasArtwork = true
+            }
+        }
+
+        return EmbeddedTagSummary(
+            title = title,
+            artist = artist,
+            album = album,
+            albumArtist = albumArtist,
+            genre = genre,
+            trackNumber = trackNumber,
+            hasArtwork = hasArtwork,
+        )
     }
 
     private fun adjustMp4ChunkOffsets(

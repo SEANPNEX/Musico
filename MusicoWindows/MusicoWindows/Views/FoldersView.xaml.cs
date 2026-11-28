@@ -23,6 +23,9 @@ public partial class FoldersView : UserControl
     private Guid? _currentRootId;
     private string _currentPath = string.Empty;
     private bool _suppressSortSelection;
+    private bool _isSelectionMode;
+    private bool _suppressSelectionChanged;
+    private int _directTrackCount;
 
     public FoldersView()
     {
@@ -67,6 +70,8 @@ public partial class FoldersView : UserControl
         bool wasDrilled = _currentRootId is not null;
         _currentRootId = null;
         _currentPath = string.Empty;
+        _isSelectionMode = false;
+        ClearTracksList();
         Refresh();
         if (wasDrilled)
         {
@@ -208,7 +213,11 @@ public partial class FoldersView : UserControl
         TitleText.Text = L.Get("Folders_Title");
         SubtitleText.Text = L.Get("Folders_RootsSubtitle");
         DrillBar.Visibility = Visibility.Collapsed;
+        _isSelectionMode = false;
+        _directTrackCount = 0;
+        ClearTracksList();
         ContentStack.Children.Clear();
+        UpdateSelectionBar();
 
         foreach (var root in lib.Roots)
         {
@@ -454,6 +463,8 @@ public partial class FoldersView : UserControl
             {
                 _currentRootId = rootId;
                 _currentPath = string.Empty;
+                _isSelectionMode = false;
+                ClearTracksList();
                 Refresh();
                 Win10Animations.AnimateSlideX(ContentStack, 24);
             };
@@ -612,13 +623,17 @@ public partial class FoldersView : UserControl
 
         var (subfolders, directTracks) = lib.GetFolderContents(rootId, _currentPath, history);
         var allTracksUnder = lib.GetTracksUnder(rootId, _currentPath, history);
+        var previouslySelectedIds = GetSelectedTrackIds();
+        _directTrackCount = directTracks.Count;
 
         SortCombo.IsEnabled = directTracks.Count > 1;
         PlayFolderButton.IsEnabled = allTracksUnder.Count > 0;
         ShuffleFolderButton.IsEnabled = allTracksUnder.Count > 0;
+        SelectTracksButton.Visibility = directTracks.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
         SaveCloudFolderButton.IsEnabled = root.IsCloud && lib.IsAvailable(root) && allTracksUnder.Count > 0;
 
         ContentStack.Children.Clear();
+        ClearTracksList();
 
         if (root.IsCloud && !lib.IsAvailable(root))
         {
@@ -791,6 +806,8 @@ public partial class FoldersView : UserControl
             row.MouseLeftButtonUp += (_, _) =>
             {
                 _currentPath = childPath;
+                _isSelectionMode = false;
+                ClearTracksList();
                 Refresh();
                 Win10Animations.AnimateSlideX(ContentStack, 24);
             };
@@ -835,34 +852,172 @@ public partial class FoldersView : UserControl
 
         // Direct tracks in this folder
         var directIds = directTracks.Select(t => t.Id).ToList();
-        for (int i = 0; i < directTracks.Count; i++)
+        var prevSelectedSet = new HashSet<string>(previouslySelectedIds, StringComparer.Ordinal);
+        TracksList.Visibility = directTracks.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+
+        _suppressSelectionChanged = true;
+        try
         {
-            int idx = i;
-            var track = directTracks[i];
-            bool isCurrent = _ctx.Services.Player.CurrentTrack?.Id == track.Id;
-            bool isPlaying = isCurrent && _ctx.Services.Player.IsPlaying;
-            bool isAvail = lib.IsAvailable(track);
+            for (int i = 0; i < directTracks.Count; i++)
+            {
+                int idx = i;
+                var track = directTracks[i];
+                bool isCurrent = _ctx.Services.Player.CurrentTrack?.Id == track.Id;
+                bool isPlaying = isCurrent && _ctx.Services.Player.IsPlaying;
+                bool isAvail = lib.IsAvailable(track);
 
-            var row = new TrackRowControl();
-            row.Bind(
-                _ctx.Services,
-                track,
-                track.IsCloud ? L.DisplayArtist(track.Artist) : track.FileName,
-                isCurrent,
-                isPlaying,
-                isAvail,
-                () => _ctx.Services.Player.PlayInNamedQueue(leafName, directIds, idx),
-                _ctx.OpenTextPrompt,
-                null,
-                _ctx.OpenSaveCloudTrack,
-                _ctx.OpenSongInfo,
-                openDeleteChoice: _ctx.OpenDeleteChoice,
-                showToast: _ctx.ShowToast);
+                var row = new TrackRowControl();
+                row.Bind(
+                    _ctx.Services,
+                    track,
+                    track.IsCloud ? L.DisplayArtist(track.Artist) : track.FileName,
+                    isCurrent,
+                    isPlaying,
+                    isAvail,
+                    () => _ctx.Services.Player.PlayInNamedQueue(leafName, directIds, idx),
+                    _ctx.OpenTextPrompt,
+                    null,
+                    _ctx.OpenSaveCloudTrack,
+                    _ctx.OpenSongInfo,
+                    openDeleteChoice: _ctx.OpenDeleteChoice,
+                    showToast: _ctx.ShowToast,
+                    openBatchTagEdit: _ctx.OpenBatchTagEdit);
 
-            row.EnableDragReorder($"folder:{rootId:D}:{_currentPath}", idx, directTracks.Count,
-                (from, to) => lib.MoveFolderTrack(rootId, _currentPath, from, to, history));
-            ContentStack.Children.Add(row);
+                row.MultiSelectContextMenuFactory = () =>
+                {
+                    var selectedTracks = GetSelectedTracks();
+                    if (selectedTracks.Count > 1 && selectedTracks.Any(t => t.Id == track.Id))
+                    {
+                        return TrackMenuHelper.BuildTrackMenu(
+                            _ctx.Services,
+                            selectedTracks.Select(t => t.Id).ToList(),
+                            null,
+                            _ctx.OpenTextPrompt,
+                            null,
+                            _ctx.OpenSaveCloudTrack,
+                            _ctx.OpenSongInfo,
+                            openDeleteChoice: _ctx.OpenDeleteChoice,
+                            showToast: _ctx.ShowToast,
+                            openBatchTagEdit: _ctx.OpenBatchTagEdit);
+                    }
+                    return null;
+                };
+
+                row.EnableDragReorder($"folder:{rootId:D}:{_currentPath}", idx, directTracks.Count,
+                    (from, to) => lib.MoveFolderTrack(rootId, _currentPath, from, to, history));
+                TracksList.Items.Add(row);
+                if (prevSelectedSet.Contains(track.Id))
+                {
+                    TracksList.SelectedItems.Add(row);
+                }
+            }
         }
+        finally
+        {
+            _suppressSelectionChanged = false;
+        }
+
+        if (directTracks.Count == 0)
+        {
+            _isSelectionMode = false;
+        }
+        MultiSelectUiHelper.SyncTrackRowControls(TracksList, _isSelectionMode);
+        UpdateSelectionBar();
+    }
+
+    private void ClearTracksList()
+    {
+        _suppressSelectionChanged = true;
+        try
+        {
+            TracksList.UnselectAll();
+            TracksList.Items.Clear();
+            TracksList.Visibility = Visibility.Collapsed;
+        }
+        finally
+        {
+            _suppressSelectionChanged = false;
+        }
+    }
+
+    private List<Track> GetSelectedTracks() =>
+        TracksList.SelectedItems
+            .OfType<TrackRowControl>()
+            .Where(r => r.BoundTrack is not null)
+            .Select(r => r.BoundTrack!)
+            .ToList();
+
+    private List<string> GetSelectedTrackIds() =>
+        GetSelectedTracks().Select(t => t.Id).ToList();
+
+    private void UpdateSelectionBar()
+    {
+        int count = GetSelectedTracks().Count;
+        bool showBar = _currentRootId is not null && _directTrackCount > 0 && (_isSelectionMode || count > 0);
+        SelectionBar.Visibility = showBar ? Visibility.Visible : Visibility.Collapsed;
+        SelectionCountText.Text = L.Format("Select_SelectedCount", count);
+        BatchEditTagsButton.IsEnabled = count > 0;
+        SelectAllButton.IsEnabled = _directTrackCount > 0;
+        SelectTracksButton.Style = (Style)FindResource(_isSelectionMode ? "Win10PrimaryButtonStyle" : "Win10ButtonStyle");
+    }
+
+    private void SelectTracks_Click(object sender, RoutedEventArgs e)
+    {
+        _isSelectionMode = !_isSelectionMode;
+        if (!_isSelectionMode)
+        {
+            CancelSelection_Click(sender, e);
+        }
+        else
+        {
+            MultiSelectUiHelper.SyncTrackRowControls(TracksList, true);
+            UpdateSelectionBar();
+        }
+    }
+
+    private void SelectAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (TracksList.Items.Count == 0) return;
+        _isSelectionMode = true;
+        TracksList.SelectAll();
+        MultiSelectUiHelper.SyncTrackRowControls(TracksList, _isSelectionMode);
+        UpdateSelectionBar();
+    }
+
+    private void BatchEditTags_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ctx is null) return;
+        var selected = GetSelectedTracks();
+        if (selected.Count == 0) return;
+        MultiSelectUiHelper.OpenBatchTagEdit(_ctx, selected);
+    }
+
+    private void CancelSelection_Click(object sender, RoutedEventArgs e)
+    {
+        _isSelectionMode = false;
+        _suppressSelectionChanged = true;
+        try
+        {
+            TracksList.UnselectAll();
+        }
+        finally
+        {
+            _suppressSelectionChanged = false;
+        }
+        MultiSelectUiHelper.SyncTrackRowControls(TracksList, false);
+        UpdateSelectionBar();
+    }
+
+    private void TracksList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressSelectionChanged) return;
+        MultiSelectUiHelper.SyncTrackRowControls(TracksList, _isSelectionMode);
+        UpdateSelectionBar();
+    }
+
+    private void TracksList_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        MultiSelectUiHelper.HandleListKeyboardShortcuts(TracksList, e, () => CancelSelection_Click(sender, e));
     }
 
     private void BuildBreadcrumbs(LibraryRoot root)
@@ -912,14 +1067,14 @@ public partial class FoldersView : UserControl
 
         string[] segments = string.IsNullOrEmpty(_currentPath) ? Array.Empty<string>() : _currentPath.Split('/');
         AddCrumb(L.Get("Folders_Title"), ResetToRoots, false);
-        AddCrumb(L.DisplayRootName(root), () => { _currentPath = string.Empty; Refresh(); Win10Animations.AnimateSlideX(ContentStack, -24); }, segments.Length == 0);
+        AddCrumb(L.DisplayRootName(root), () => { _currentPath = string.Empty; _isSelectionMode = false; ClearTracksList(); Refresh(); Win10Animations.AnimateSlideX(ContentStack, -24); }, segments.Length == 0);
 
         string accum = string.Empty;
         for (int i = 0; i < segments.Length; i++)
         {
             accum = i == 0 ? segments[i] : $"{accum}/{segments[i]}";
             string target = accum;
-            AddCrumb(segments[i], () => { _currentPath = target; Refresh(); Win10Animations.AnimateSlideX(ContentStack, -24); }, i == segments.Length - 1);
+            AddCrumb(segments[i], () => { _currentPath = target; _isSelectionMode = false; ClearTracksList(); Refresh(); Win10Animations.AnimateSlideX(ContentStack, -24); }, i == segments.Length - 1);
         }
     }
 

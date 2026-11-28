@@ -1,6 +1,7 @@
 package com.musico.store
 
 import android.net.Uri
+import com.musico.cloud.CloudAudioCache
 import com.musico.cloud.CloudErrorCode
 import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudFolderManifest
@@ -16,6 +17,9 @@ import com.musico.cloud.CloudTrackMetadata
 import com.musico.cloud.GoogleDriveClient
 import com.musico.cloud.ResolvedStream
 import com.musico.core.ArtworkCache
+import com.musico.core.AudioTagPayload
+import com.musico.core.AudioTagWriter
+import com.musico.core.EmbeddedArtworkExtractor
 import com.musico.core.MetadataReading
 import com.musico.core.TrackMetadata
 import com.musico.extensions.CloudProviderIds
@@ -37,6 +41,7 @@ import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
@@ -1664,6 +1669,345 @@ class LibraryStoreTest {
         awaitJob(partialJob)
         assertTrue(store.state.value.roots.any { it.id == cloudRoot2.id })
         assertTrue(store.state.value.roots.any { it.name == "PartialSub" })
+    }
+
+    @Test
+    fun googleDriveCacheEnrichmentAndMergeNeverCopiesPlaceholderMetadata() = runBlocking {
+        val stateDir = tempFolder.newFolder("gd_enrich_state")
+        val appDir = tempFolder.newFolder("gd_enrich_app")
+        val artDir = tempFolder.newFolder("gd_enrich_art")
+        val audioCache = CloudAudioCache(tempFolder.newFolder("gd_audio_cache"))
+        val artCache = ArtworkCache(artDir)
+
+        val flacOut = java.io.ByteArrayOutputStream().apply {
+            write("fLaC".toByteArray(Charsets.US_ASCII))
+            write(0x80)
+            write(0x00)
+            write(0x00)
+            write(34)
+            write(ByteArray(34))
+            write(byteArrayOf(0xFF.toByte(), 0xF8.toByte(), 0x01, 0x02))
+        }.toByteArray()
+        val artBytes = createValidPngBytes()
+        val expectedArtKey = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(artBytes)
+            .joinToString("") { "%02x".format(it) }
+        // On JVM unit tests Android's BitmapFactory is stubbed; pre-populating the content-addressed
+        // JPEG file verifies enrichCloudTrackFromFile extracted the exact embedded bytes and called artwork.store(bytes).
+        File(artDir, "$expectedArtKey.jpg").writeBytes(byteArrayOf(1, 2, 3))
+
+        val taggedFlac = tempFolder.newFile("drive_cached_seed.flac").apply {
+            writeBytes(flacOut)
+            assertTrue(
+                AudioTagWriter.write(
+                    this,
+                    AudioTagPayload(
+                        title = "Real Embedded Song",
+                        artist = "Real Drive Artist",
+                        album = "Real Drive Album",
+                        genre = "Jazz",
+                        trackNumber = 2,
+                        artworkBytes = artBytes,
+                    ),
+                    "flac",
+                ),
+            )
+        }
+
+        val googleHttp = object : CloudHttpClient {
+            override suspend fun get(url: String, headers: Map<String, String>, followRedirects: Boolean): CloudHttpResponse {
+                if (url.contains("www.googleapis.com/drive/v3/files/drv_root") && !url.contains("q=")) {
+                    return CloudHttpResponse(200, url, emptyMap(), """{"id":"drv_root","name":"Drive Folder","mimeType":"application/vnd.google-apps.folder"}""".toByteArray())
+                }
+                if (url.contains("www.googleapis.com/drive/v3/files")) {
+                    val body = """{"files":[{"id":"gd_file_1","name":"song.flac","mimeType":"audio/flac"}]}"""
+                    return CloudHttpResponse(200, url, emptyMap(), body.toByteArray())
+                }
+                return CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+            }
+
+            override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse =
+                CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+
+            override suspend fun probeRange(url: String, headers: Map<String, String>): Int = 200
+        }
+        val gdClient = GoogleDriveClient(googleHttp, oauthTokenProvider = { "token" })
+        val gdRegistry = CloudProviderRegistry(googleDriveClient = gdClient)
+        val reader = object : MetadataReading {
+            override suspend fun read(uri: Uri, fileNameHint: String?): TrackMetadata = TrackMetadata()
+            override suspend fun read(file: File): TrackMetadata {
+                val s = AudioTagWriter.readEmbeddedSummary(file)
+                return TrackMetadata(
+                    title = s.title,
+                    artist = s.artist,
+                    album = s.album,
+                    albumArtist = s.albumArtist,
+                    genre = s.genre,
+                    trackNumber = s.trackNumber,
+                    durationSec = if (file.extension == "flac") 198.0 else 0.0,
+                    artwork = EmbeddedArtworkExtractor.extract(file).artwork,
+                )
+            }
+        }
+        val store = LibraryStore(
+            directory = stateDir,
+            appFolderDir = appDir,
+            reader = reader,
+            artwork = artCache,
+            context = null,
+            cloudHttpClient = googleHttp,
+            googleDriveClient = gdClient,
+            providerRegistry = gdRegistry,
+            cloudAudioCache = audioCache,
+        )
+        assertTrue(store.addCloudRoot("https://drive.google.com/drive/folders/drv_root").isSuccess)
+        val initialTrack = store.state.value.tracks.single()
+        assertEquals(GoogleDriveClient.DEFAULT_ARTIST, initialTrack.artist)
+
+        // Caching audio enriches the cloud track & survives subsequent cloud resyncs.
+        audioCache.storeBytes(initialTrack.id, qualityId = null, fileExtension = "flac", bytes = taggedFlac.readBytes())
+        val enriched = store.enrichCloudTrackFromFile(initialTrack.id, audioCache.latestCachedFile(initialTrack.id)!!)!!
+        assertEquals("Real Embedded Song", enriched.title)
+        assertEquals("Real Drive Artist", enriched.artist)
+        assertEquals("Real Drive Album", enriched.album)
+        assertEquals("Jazz", enriched.genre)
+        assertEquals(198.0, enriched.durationSec, 0.01)
+        assertEquals(expectedArtKey, enriched.artworkKey)
+
+        // Cloud resync still retains enriched metadata & reads from audioCache if needed.
+        store.rescan()
+        store.awaitCloudSync(initialTrack.rootId)
+        val afterResync = store.state.value.tracks.single()
+        assertEquals("Real Drive Artist", afterResync.artist)
+        assertEquals("Real Drive Album", afterResync.album)
+        assertEquals(expectedArtKey, afterResync.artworkKey)
+
+        // Placeholder "Google Drive" artist/root name must NEVER copy onto a local track during fallback/merge.
+        val unknownFile = File(appDir, "plain.mp3").apply {
+            writeBytes(byteArrayOf(0xFF.toByte(), 0xFB.toByte(), 0x90.toByte(), 0x00))
+        }
+        store.rescan()
+        val localUnknown = store.state.value.tracks.first { !it.isCloud && it.fileName == "plain.mp3" }
+        val placeholderCloudTrack = Track(
+            id = "gd_placeholder",
+            rootId = initialTrack.rootId,
+            relativePath = "google_drive/plain.mp3",
+            title = "Plain Title",
+            artist = GoogleDriveClient.DEFAULT_ARTIST,
+            album = "Drive Folder",
+            albumArtist = GoogleDriveClient.DEFAULT_ARTIST,
+            durationSec = 100.0,
+            fileSize = 0L,
+            modifiedEpochMs = 0L,
+            dateAddedEpochMs = 1L,
+            cloudSource = CloudSource.GOOGLE_DRIVE,
+            remoteTrackId = "plain_id",
+        )
+        store.applyFallbackMetadataForSavedFile(
+            savedFileName = unknownFile.name,
+            sourceTrack = placeholderCloudTrack,
+            targetDir = appDir,
+        )
+        val localAfter = store.state.value.tracks.first { it.id == localUnknown.id }
+        assertEquals("Unknown Artist", localAfter.artist)
+        assertNotEquals(GoogleDriveClient.DEFAULT_ARTIST, localAfter.artist)
+    }
+
+    @Test
+    fun batchUpdateTrackMetadataUpdatesLibrarySkipsEphemeralAndWritesLocalAudioTags() = runBlocking {
+        val stateDir = tempFolder.newFolder("batch_state")
+        val appDir = tempFolder.newFolder("batch_app")
+        val artCache = ArtworkCache(tempFolder.newFolder("batch_art"))
+        val png = createValidPngBytes() + byteArrayOf(0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52, 0, 0, 0, 1, 0, 0, 0, 1, 8, 2, 0, 0, 0)
+
+        val flacFile = File(appDir, "one.flac").apply {
+            val out = java.io.ByteArrayOutputStream()
+            out.write("fLaC".toByteArray(Charsets.US_ASCII))
+            out.write(0x80); out.write(0x00); out.write(0x00); out.write(34)
+            out.write(ByteArray(34))
+            out.write(byteArrayOf(0xFF.toByte(), 0xF8.toByte(), 0x01, 0x02))
+            writeBytes(out.toByteArray())
+            assertTrue(
+                AudioTagWriter.write(
+                    this,
+                    AudioTagPayload(
+                        title = "Track One",
+                        artist = "Old Artist One",
+                        album = "Old Album One",
+                        genre = "Rock",
+                        artworkBytes = png,
+                    ),
+                    "flac",
+                ),
+            )
+        }
+        val mp3File = File(appDir, "two.mp3").apply {
+            writeBytes(byteArrayOf(0xFF.toByte(), 0xFB.toByte(), 0x90.toByte(), 0x00, 0x11, 0x22, 0x33, 0x44))
+            assertTrue(
+                AudioTagWriter.write(
+                    this,
+                    AudioTagPayload(
+                        title = "Track Two",
+                        artist = "Old Artist Two",
+                        album = "Old Album Two",
+                        genre = "Pop",
+                        artworkBytes = png,
+                    ),
+                    "mp3",
+                ),
+            )
+        }
+
+        val biliHttp = object : CloudHttpClient {
+            override suspend fun get(url: String, headers: Map<String, String>, followRedirects: Boolean): CloudHttpResponse =
+                CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+
+            override suspend fun postJson(url: String, jsonBody: String, headers: Map<String, String>): CloudHttpResponse =
+                CloudHttpResponse(404, url, emptyMap(), ByteArray(0))
+
+            override suspend fun probeRange(url: String, headers: Map<String, String>): Int = 200
+        }
+        val registry = CloudProviderRegistry()
+        registry.registerExtensionProvider(
+            object : CloudSourceProvider {
+                override val providerId: String = "ext.bili"
+                override val rootKind: RootKind = RootKind.CLOUD_EXTENSION
+                override val cloudSourceSlug: String = CloudSource.BILIBILI
+                override val displayName: String = "Bili"
+                override val badgeLabel: String = "Bili"
+                override val isBuiltin: Boolean = false
+                override val supportsTree: Boolean = false
+                override val supportsCookie: Boolean = false
+                override val usesFlatCloudListing: Boolean = true
+                override fun canHandle(rawInput: String): CloudUrlMatch? =
+                    if (rawInput.startsWith("https://bili.test/")) CloudUrlMatch(rawInput.trim(), "bv1") else null
+
+                override suspend fun fetchCollection(sourceUrl: String, cookie: String?): CloudPlaylistResult =
+                    CloudPlaylistResult(
+                        source = CloudSource.BILIBILI,
+                        remoteId = "bv1",
+                        title = "Cloud Mix",
+                        tracks = listOf(CloudTrackMetadata("p1", "Cloud Song", "Old Cloud Artist", "Cloud Mix", 90.0)),
+                    )
+
+                override suspend fun resolveStream(
+                    remoteTrackId: String,
+                    relativePath: String?,
+                    cookie: String?,
+                    forceRefresh: Boolean,
+                    quality: String?,
+                    purpose: CloudStreamPurpose,
+                ): ResolvedStream = ResolvedStream("https://bili.test/stream")
+            },
+        )
+
+        val reader = object : MetadataReading {
+            override suspend fun read(uri: Uri, fileNameHint: String?): TrackMetadata = TrackMetadata()
+            override suspend fun read(file: File): TrackMetadata {
+                val s = AudioTagWriter.readEmbeddedSummary(file)
+                return TrackMetadata(
+                    title = s.title,
+                    artist = s.artist,
+                    album = s.album,
+                    albumArtist = s.albumArtist,
+                    genre = s.genre,
+                    durationSec = 120.0,
+                    artwork = EmbeddedArtworkExtractor.extract(file).artwork,
+                )
+            }
+        }
+        val store = LibraryStore(
+            directory = stateDir,
+            appFolderDir = appDir,
+            reader = reader,
+            artwork = artCache,
+            context = null,
+            cloudHttpClient = biliHttp,
+            providerRegistry = registry,
+        )
+        store.rescan()
+        assertTrue(store.addCloudRoot("https://bili.test/1").isSuccess)
+
+        val localTracks = store.state.value.tracks.filter { !it.isCloud }.associateBy { it.fileName }
+        val flacTrack = localTracks.getValue("one.flac")
+        val mp3Track = localTracks.getValue("two.mp3")
+        val cloudTrack = store.state.value.tracks.single { it.isCloud }
+        val ephemeral = Track(
+            id = "ephem_1",
+            rootId = "ephemeral",
+            relativePath = "ephem_1",
+            title = "Ephemeral",
+            artist = "Ephem Artist",
+            album = "Ephem Album",
+            albumArtist = "Ephem Artist",
+            durationSec = 60.0,
+            fileSize = 0L,
+            modifiedEpochMs = 0L,
+            dateAddedEpochMs = 1L,
+            isEphemeral = true,
+        )
+        store.registerEphemeralTrack(ephemeral)
+
+        val updatedCount = store.batchUpdateTrackMetadata(
+            trackIds = listOf(flacTrack.id, mp3Track.id, cloudTrack.id, ephemeral.id),
+            artist = "Unified Artist",
+            album = "Unified Album",
+        )
+        assertEquals(3, updatedCount)
+
+        // Ephemeral track was skipped.
+        assertEquals("Ephem Artist", store.track(ephemeral.id)!!.artist)
+
+        val updatedFlacTrack = store.track(flacTrack.id)!!
+        val updatedMp3Track = store.track(mp3Track.id)!!
+        val updatedCloudTrack = store.track(cloudTrack.id)!!
+        assertEquals("Track One", updatedFlacTrack.title)
+        assertEquals("Rock", updatedFlacTrack.genre)
+        assertEquals("Unified Artist", updatedFlacTrack.artist)
+        assertEquals("Unified Artist", updatedFlacTrack.albumArtist)
+        assertEquals("Unified Album", updatedFlacTrack.album)
+        assertEquals(flacTrack.artworkKey, updatedFlacTrack.artworkKey)
+        assertEquals("Unified Artist", updatedCloudTrack.artist)
+        assertEquals("Unified Album", updatedCloudTrack.album)
+        assertEquals("Cloud Song", updatedCloudTrack.title)
+
+        // Artist-only update preserves album.
+        assertEquals(1, store.batchUpdateTrackMetadata(listOf(mp3Track.id), artist = "Artist Only", album = null))
+        assertEquals("Unified Album", store.track(mp3Track.id)!!.album)
+        assertEquals("Artist Only", store.track(mp3Track.id)!!.artist)
+        assertEquals("Artist Only", store.track(mp3Track.id)!!.albumArtist)
+
+        // Physical local files preserve title, genre, and embedded artwork while reflecting artist/album updates.
+        val flacSummary = AudioTagWriter.readEmbeddedSummary(flacFile)
+        assertEquals("Track One", flacSummary.title)
+        assertEquals("Rock", flacSummary.genre)
+        assertEquals("Unified Artist", flacSummary.artist)
+        assertEquals("Unified Artist", flacSummary.albumArtist)
+        assertEquals("Unified Album", flacSummary.album)
+        assertTrue(flacSummary.hasArtwork)
+
+        val mp3Summary = AudioTagWriter.readEmbeddedSummary(mp3File)
+        assertEquals("Track Two", mp3Summary.title)
+        assertEquals("Pop", mp3Summary.genre)
+        assertEquals("Artist Only", mp3Summary.artist)
+        assertEquals("Artist Only", mp3Summary.albumArtist)
+        assertEquals("Unified Album", mp3Summary.album)
+        assertTrue(mp3Summary.hasArtwork)
+
+        // Reload from disk verifies cloud override persistence.
+        val reloaded = LibraryStore(
+            directory = stateDir,
+            appFolderDir = appDir,
+            reader = reader,
+            artwork = artCache,
+            context = null,
+            cloudHttpClient = biliHttp,
+            providerRegistry = registry,
+        )
+        val reloadedCloud = reloaded.track(cloudTrack.id)!!
+        assertEquals("Unified Artist", reloadedCloud.artist)
+        assertEquals("Unified Artist", reloadedCloud.albumArtist)
+        assertEquals("Unified Album", reloadedCloud.album)
     }
 
     private fun createValidPngBytes(): ByteArray = byteArrayOf(

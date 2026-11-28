@@ -5,6 +5,8 @@ using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using MusicoWindows.Cloud;
 using MusicoWindows.Converters;
@@ -24,6 +26,9 @@ public partial class FullPlayerView : UserControl
     private string? _lastTrackId;
     private string? _ambientArtworkSignature;
     private CancellationTokenSource? _ambientCts;
+    private string? _cachedCustomBgPath;
+    private DateTime _cachedCustomBgWriteUtc;
+    private bool _isShowingLyricsPivot = true;
 
     public event Action? CloseRequested;
     public event Action? OpenEqualizerRequested;
@@ -39,6 +44,8 @@ public partial class FullPlayerView : UserControl
         EmbeddedLyrics.ErrorOccurred += (title, msg) => ErrorOccurred?.Invoke(title, msg);
         EmbeddedLyrics.InfoOccurred += (title, msg) => InfoOccurred?.Invoke(title, msg);
         LocalizationManager.LanguageChanged += _ => RefreshAll();
+        ThemeManager.AppearanceChanged += _ => Dispatcher.BeginInvoke(RefreshCustomBackgroundLayer);
+        RefreshCustomBackgroundLayer();
     }
 
     public bool IsOpen => Visibility == Visibility.Visible;
@@ -255,8 +262,21 @@ public partial class FullPlayerView : UserControl
     {
         if (EmbeddedLyrics is null || EmbeddedQueues is null) return;
         bool showLyrics = LyricsPivotTab.IsChecked == true;
-        EmbeddedLyrics.Visibility = showLyrics ? Visibility.Visible : Visibility.Collapsed;
-        EmbeddedQueues.Visibility = showLyrics ? Visibility.Collapsed : Visibility.Visible;
+        if (showLyrics == _isShowingLyricsPivot)
+        {
+            EmbeddedLyrics.Visibility = showLyrics ? Visibility.Visible : Visibility.Collapsed;
+            EmbeddedQueues.Visibility = showLyrics ? Visibility.Collapsed : Visibility.Visible;
+            return;
+        }
+
+        _isShowingLyricsPivot = showLyrics;
+        UIElement incoming = showLyrics ? EmbeddedLyrics : EmbeddedQueues;
+        UIElement outgoing = showLyrics ? EmbeddedQueues : EmbeddedLyrics;
+        outgoing.Visibility = Visibility.Collapsed;
+        incoming.Visibility = Visibility.Visible;
+
+        double slideOffset = showLyrics ? -14.0 : 14.0;
+        Win10Animations.AnimatePivotSwitch(incoming, slideOffset, 240);
     }
 
     private void Scrubber_PreviewMouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -366,6 +386,69 @@ public partial class FullPlayerView : UserControl
         AmbientBackdropImage.Source = bmp;
         AmbientBackdropHost.Visibility = Visibility.Visible;
         Win10Animations.AnimateFadeIn(AmbientBackdropImage, 0.0, 280);
+    }
+
+    private void RefreshCustomBackgroundLayer()
+    {
+        AppearanceSettings settings = ThemeManager.CurrentSettings;
+        string? imagePath = ThemeManager.ResolveBackgroundImagePath();
+        if (string.IsNullOrWhiteSpace(imagePath) || !File.Exists(imagePath))
+        {
+            _cachedCustomBgPath = null;
+            CustomBackdropImage.Source = null;
+            CustomBackdropImage.Visibility = Visibility.Collapsed;
+            CustomBackdropScrim.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        try
+        {
+            DateTime writeUtc = File.GetLastWriteTimeUtc(imagePath);
+            if (!string.Equals(_cachedCustomBgPath, imagePath, StringComparison.OrdinalIgnoreCase) ||
+                _cachedCustomBgWriteUtc != writeUtc ||
+                CustomBackdropImage.Source is null)
+            {
+                byte[] bytes = File.ReadAllBytes(imagePath);
+                using var ms = new MemoryStream(bytes);
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                bmp.StreamSource = ms;
+                bmp.EndInit();
+                bmp.Freeze();
+
+                CustomBackdropImage.Source = bmp;
+                _cachedCustomBgPath = imagePath;
+                _cachedCustomBgWriteUtc = writeUtc;
+            }
+
+            CustomBackdropImage.Opacity = settings.BackgroundImageOpacity;
+            CustomBackdropImage.Effect = settings.BackgroundImageBlur > 0.05
+                ? new BlurEffect
+                {
+                    Radius = settings.BackgroundImageBlur,
+                    KernelType = KernelType.Gaussian
+                }
+                : null;
+            CustomBackdropImage.Visibility = Visibility.Visible;
+
+            ThemePalette? palette = ThemeManager.CurrentPalette;
+            RgbColor scrimBase = palette is not null
+                ? new RgbColor(palette.ContentBackground.R, palette.ContentBackground.G, palette.ContentBackground.B)
+                : (ThemeManager.IsDark ? new RgbColor(0x14, 0x14, 0x14) : new RgbColor(0xF2, 0xF2, 0xF2));
+            byte scrimAlpha = ColorMath.ComputeBackgroundScrimAlpha(settings);
+
+            var scrimBrush = new SolidColorBrush(Color.FromArgb(scrimAlpha, scrimBase.R, scrimBase.G, scrimBase.B));
+            scrimBrush.Freeze();
+            CustomBackdropScrim.Background = scrimBrush;
+            CustomBackdropScrim.Visibility = Visibility.Visible;
+        }
+        catch
+        {
+            CustomBackdropImage.Source = null;
+            CustomBackdropImage.Visibility = Visibility.Collapsed;
+            CustomBackdropScrim.Visibility = Visibility.Collapsed;
+        }
     }
 
     private void Scrubber_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)

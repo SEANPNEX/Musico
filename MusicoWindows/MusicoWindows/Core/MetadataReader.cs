@@ -240,13 +240,31 @@ public sealed class TagLibMetadataReader : IMetadataReader
         return new AudioFileDetails(bitDepth, sampleRate, bitRate, channels, duration, fileSize);
     }
 
+    internal static bool IsPlaceholderArtist(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return true;
+        string trimmed = value.Trim();
+        return trimmed.Equals("Google Drive", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.Equals("Unknown Artist", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool IsPlaceholderAlbum(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return true;
+        return value.Trim().Equals("Unknown Album", StringComparison.OrdinalIgnoreCase);
+    }
+
+    internal static bool HasNonEmptyStrings(string[]? values) =>
+        values is { Length: > 0 } && values.Any(v => !string.IsNullOrWhiteSpace(v));
+
     public static bool TryWriteTags(
         string filePath,
-        string title,
-        string artist,
-        string album,
+        string? title,
+        string? artist,
+        string? album,
         string? genre,
-        byte[]? artworkBytes = null)
+        byte[]? artworkBytes = null,
+        string? albumArtist = null)
     {
         if (string.IsNullOrWhiteSpace(filePath) || !System.IO.File.Exists(filePath))
         {
@@ -264,10 +282,39 @@ public sealed class TagLibMetadataReader : IMetadataReader
             using var file = TagLib.File.Create(filePath);
             if (file.Tag is null) return false;
 
-            file.Tag.Title = title;
-            file.Tag.Performers = string.IsNullOrWhiteSpace(artist) ? Array.Empty<string>() : [artist];
-            file.Tag.Album = album;
-            file.Tag.Genres = string.IsNullOrWhiteSpace(genre) ? Array.Empty<string>() : [genre];
+            if (!string.IsNullOrWhiteSpace(title))
+            {
+                file.Tag.Title = title.Trim();
+            }
+
+            if (!string.IsNullOrWhiteSpace(artist))
+            {
+                if (!IsPlaceholderArtist(artist) || !HasNonEmptyStrings(file.Tag.Performers))
+                {
+                    file.Tag.Performers = [artist.Trim()];
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(album))
+            {
+                if (!IsPlaceholderAlbum(album) || string.IsNullOrWhiteSpace(file.Tag.Album))
+                {
+                    file.Tag.Album = album.Trim();
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(albumArtist))
+            {
+                if (!IsPlaceholderArtist(albumArtist) || !HasNonEmptyStrings(file.Tag.AlbumArtists))
+                {
+                    file.Tag.AlbumArtists = [albumArtist.Trim()];
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(genre))
+            {
+                file.Tag.Genres = [genre.Trim()];
+            }
 
             if (artworkBytes is { Length: > 0 })
             {
@@ -278,6 +325,58 @@ public sealed class TagLibMetadataReader : IMetadataReader
                     Description = "Cover"
                 };
                 file.Tag.Pictures = [picture];
+            }
+
+            file.Save();
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    public static bool TryWriteArtistAlbumTags(
+        string filePath,
+        string? artist,
+        string? album,
+        string? albumArtist = null)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !System.IO.File.Exists(filePath))
+        {
+            return false;
+        }
+
+        string? normalizedArtist = string.IsNullOrWhiteSpace(artist) ? null : artist.Trim();
+        string? normalizedAlbum = string.IsNullOrWhiteSpace(album) ? null : album.Trim();
+        string? normalizedAlbumArtist = string.IsNullOrWhiteSpace(albumArtist) ? null : albumArtist.Trim();
+        if (normalizedArtist is null && normalizedAlbum is null && normalizedAlbumArtist is null)
+        {
+            return false;
+        }
+
+        try
+        {
+            var attrs = System.IO.File.GetAttributes(filePath);
+            if ((attrs & FileAttributes.ReadOnly) != 0)
+            {
+                return false;
+            }
+
+            using var file = TagLib.File.Create(filePath);
+            if (file.Tag is null) return false;
+
+            if (normalizedArtist is not null)
+            {
+                file.Tag.Performers = [normalizedArtist];
+            }
+            if (normalizedAlbumArtist is not null)
+            {
+                file.Tag.AlbumArtists = [normalizedAlbumArtist];
+            }
+            if (normalizedAlbum is not null)
+            {
+                file.Tag.Album = normalizedAlbum;
             }
 
             file.Save();

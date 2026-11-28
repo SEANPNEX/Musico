@@ -87,13 +87,15 @@ public sealed class CloudExporter
     private readonly ArtworkCache? _artworkCache;
     private readonly ExtensionStore? _extensions;
     private readonly CloudThumbnailCache? _thumbnailCache;
+    internal Func<string, TrackMetadataOverride?>? MetadataOverrideLookup { get; set; }
 
     public CloudExporter(
         CloudAudioCache cloudCache,
         CloudProviderRegistry providerRegistry,
         ArtworkCache? artworkCache = null,
         ExtensionStore? extensions = null,
-        CloudThumbnailCache? thumbnailCache = null)
+        CloudThumbnailCache? thumbnailCache = null,
+        Func<string, TrackMetadataOverride?>? metadataOverrideLookup = null)
     {
         _cloudCache = cloudCache ?? throw new ArgumentNullException(nameof(cloudCache));
         _providerRegistry = providerRegistry ?? throw new ArgumentNullException(nameof(providerRegistry));
@@ -101,6 +103,7 @@ public sealed class CloudExporter
         _artworkCache = artworkCache;
         _extensions = extensions;
         _thumbnailCache = thumbnailCache ?? new CloudThumbnailCache(maxEntries: 16);
+        MetadataOverrideLookup = metadataOverrideLookup;
     }
 
     public static string SanitizeFileName(string? raw, string fallback = "Untitled")
@@ -624,7 +627,18 @@ public sealed class CloudExporter
         }
 
         byte[]? resolvedArtBytes = await ResolveCoverBytesAsync(track, root, suppliedArtworkBytes, ct).ConfigureAwait(false);
-        TryWriteTagsAndSidecar(destPath, track, resolvedArtBytes);
+        bool isGoogleDrive = IsGoogleDriveTrack(track, root);
+        TrackMetadataOverride? customOverride = MetadataOverrideLookup?.Invoke(track.Id);
+        bool hasCustomOverride = HasCustomUserOverride(customOverride);
+
+        if (isGoogleDrive && !hasCustomOverride && resolvedArtBytes is null && HasEmbeddedTagsOrPictures(destPath))
+        {
+            // Keep real embedded tags and artwork intact on downloaded Google Drive audio files.
+        }
+        else
+        {
+            TryWriteTagsAndSidecar(destPath, track, resolvedArtBytes, isGoogleDrive, customOverride);
+        }
 
         if (progress is not null)
         {
@@ -752,7 +766,51 @@ public sealed class CloudExporter
                string.Equals(ext, ".weba", StringComparison.OrdinalIgnoreCase);
     }
 
-    private static void TryWriteTagsAndSidecar(string destPath, Track track, byte[]? artBytes)
+    private static bool IsGoogleDriveTrack(Track track, LibraryRoot? root) =>
+        string.Equals(track.CloudSource, CloudSources.GoogleDrive, StringComparison.OrdinalIgnoreCase) ||
+        string.Equals(track.CloudSource, CloudProviderRegistry.BuiltinGoogleDriveId, StringComparison.OrdinalIgnoreCase) ||
+        root?.EffectiveCloudKind == RootKind.CloudGoogleDrive;
+
+    private static bool HasCustomUserOverride(TrackMetadataOverride? ov)
+    {
+        if (ov is null) return false;
+        return !string.IsNullOrWhiteSpace(ov.Title) ||
+               !TagLibMetadataReader.IsPlaceholderArtist(ov.Artist) ||
+               !string.IsNullOrWhiteSpace(ov.Album) ||
+               ov.HasGenreOverride ||
+               !string.IsNullOrWhiteSpace(ov.ArtworkKey);
+    }
+
+    private static bool HasEmbeddedTagsOrPictures(string destPath)
+    {
+        if (IsNonEmbeddableContainer(destPath)) return false;
+        try
+        {
+            using var file = TagLib.File.Create(destPath);
+            var tag = file.Tag;
+            if (tag is null) return false;
+
+            bool hasTags = !string.IsNullOrWhiteSpace(tag.Title) ||
+                           TagLibMetadataReader.HasNonEmptyStrings(tag.Performers) ||
+                           !string.IsNullOrWhiteSpace(tag.Album) ||
+                           TagLibMetadataReader.HasNonEmptyStrings(tag.AlbumArtists) ||
+                           TagLibMetadataReader.HasNonEmptyStrings(tag.Genres);
+            bool hasPictures = tag.Pictures is { Length: > 0 } pics &&
+                               pics.Any(p => p?.Data?.Data is { Length: > 0 });
+            return hasTags || hasPictures;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static void TryWriteTagsAndSidecar(
+        string destPath,
+        Track track,
+        byte[]? artBytes,
+        bool isGoogleDrive = false,
+        TrackMetadataOverride? customOverride = null)
     {
         if (IsNonEmbeddableContainer(destPath))
         {
@@ -767,29 +825,50 @@ public sealed class CloudExporter
         try
         {
             using var file = TagLib.File.Create(destPath);
-            if (!string.IsNullOrWhiteSpace(track.Title))
+            var tag = file.Tag;
+            if (tag is null) return;
+
+            bool hasTitleOverride = !string.IsNullOrWhiteSpace(customOverride?.Title);
+            bool hasArtistOverride = !TagLibMetadataReader.IsPlaceholderArtist(customOverride?.Artist);
+            bool hasAlbumOverride = !string.IsNullOrWhiteSpace(customOverride?.Album);
+
+            if (!string.IsNullOrWhiteSpace(track.Title) &&
+                (hasTitleOverride || !isGoogleDrive || string.IsNullOrWhiteSpace(tag.Title)))
             {
-                file.Tag.Title = track.Title;
+                tag.Title = track.Title;
             }
-            if (!string.IsNullOrWhiteSpace(track.Artist))
+
+            if (!TagLibMetadataReader.IsPlaceholderArtist(track.Artist) &&
+                (hasArtistOverride || !isGoogleDrive || !TagLibMetadataReader.HasNonEmptyStrings(tag.Performers)))
             {
-                file.Tag.Performers = [track.Artist];
+                tag.Performers = [track.Artist];
             }
-            if (!string.IsNullOrWhiteSpace(track.Album))
+
+            if (!TagLibMetadataReader.IsPlaceholderAlbum(track.Album) &&
+                (hasAlbumOverride || !isGoogleDrive || string.IsNullOrWhiteSpace(tag.Album)))
             {
-                file.Tag.Album = track.Album;
+                tag.Album = track.Album;
             }
-            if (!string.IsNullOrWhiteSpace(track.AlbumArtist))
+
+            if (!TagLibMetadataReader.IsPlaceholderArtist(track.AlbumArtist) &&
+                (hasArtistOverride || !isGoogleDrive || !TagLibMetadataReader.HasNonEmptyStrings(tag.AlbumArtists)))
             {
-                file.Tag.AlbumArtists = [track.AlbumArtist];
+                tag.AlbumArtists = [track.AlbumArtist];
             }
-            if (track.TrackNumber is int tn && tn > 0)
+
+            if (!string.IsNullOrWhiteSpace(track.Genre) &&
+                (customOverride?.HasGenreOverride == true || !TagLibMetadataReader.HasNonEmptyStrings(tag.Genres)))
             {
-                file.Tag.Track = (uint)tn;
+                tag.Genres = [track.Genre];
             }
-            if (track.DiscNumber is int dn && dn > 0)
+
+            if (track.TrackNumber is int tn && tn > 0 && tag.Track == 0)
             {
-                file.Tag.Disc = (uint)dn;
+                tag.Track = (uint)tn;
+            }
+            if (track.DiscNumber is int dn && dn > 0 && tag.Disc == 0)
+            {
+                tag.Disc = (uint)dn;
             }
 
             if (artBytes is { Length: > 0 })
@@ -801,7 +880,7 @@ public sealed class CloudExporter
                     MimeType = mimeType,
                     Description = "Cover"
                 };
-                file.Tag.Pictures = [picture];
+                tag.Pictures = [picture];
             }
 
             file.Save();

@@ -429,6 +429,7 @@ interface AppStrings {
     val retryAction: String
     val selectResultToPreview: String
     val partialSourcesFailedHint: String
+    val builtInLyricsSourceHint: String
     val couldNotSaveLyricsTitle: String
     val couldNotSearchLyricsTitle: String
 
@@ -463,6 +464,18 @@ interface AppStrings {
     val genreLabel: String
     val addGenrePlaceholder: String
     val saveChanges: String
+
+    // Multi-select batch tag editing
+    val selectAction: String
+    val selectAllAction: String
+    val deselectAllAction: String
+    val editTagsAction: String
+    val editTagsEllipsis: String
+    val batchEditTagsTitle: String
+    val mixedValuesPlaceholder: String
+    val applyAction: String
+    fun selectedCountLabel(count: Int): String
+    fun batchTagsUpdatedNotice(count: Int): String
     val quickSearch: String
     val fileAndPlaybackInfo: String
     val infoPrecision: String
@@ -1177,6 +1190,8 @@ object EnStrings : AppStrings {
     override val retryAction = "Try Again"
     override val selectResultToPreview = "Select a result to preview"
     override val partialSourcesFailedHint = "Some sources could not be reached."
+    override val builtInLyricsSourceHint =
+        "Built-in search uses LRCLIB. Additional sources (e.g. NetEase Cloud Music, Apple Music) can be added via Extensions."
     override val couldNotSaveLyricsTitle = "Couldn’t Save Lyrics"
     override val couldNotSearchLyricsTitle = "Couldn’t Search Lyrics"
 
@@ -1208,6 +1223,18 @@ object EnStrings : AppStrings {
     override val genreLabel = "Genre"
     override val addGenrePlaceholder = "Add genre"
     override val saveChanges = "Save Changes"
+
+    override val selectAction = "Select"
+    override val selectAllAction = "Select All"
+    override val deselectAllAction = "Deselect All"
+    override val editTagsAction = "Edit Tags"
+    override val editTagsEllipsis = "Edit Tags…"
+    override val batchEditTagsTitle = "Batch Edit Tags"
+    override val mixedValuesPlaceholder = "Multiple values (leave blank to keep)"
+    override val applyAction = "Apply"
+    override fun selectedCountLabel(count: Int): String = "$count selected"
+    override fun batchTagsUpdatedNotice(count: Int): String =
+        if (count == 1) "Updated tags for 1 song" else "Updated tags for $count songs"
     override val quickSearch = "Quick Search"
     override val fileAndPlaybackInfo = "File & Playback Info"
     override val infoPrecision = "Precision"
@@ -1909,6 +1936,8 @@ object ZhHansStrings : AppStrings {
     override val retryAction = "重试"
     override val selectResultToPreview = "选择一条结果以预览"
     override val partialSourcesFailedHint = "部分来源暂时无法访问。"
+    override val builtInLyricsSourceHint =
+        "内置搜索使用 LRCLIB；如需网易云音乐、Apple Music 等更多歌词来源，可在扩展中添加。"
     override val couldNotSaveLyricsTitle = "无法保存歌词"
     override val couldNotSearchLyricsTitle = "无法搜索歌词"
 
@@ -1940,6 +1969,17 @@ object ZhHansStrings : AppStrings {
     override val genreLabel = "流派"
     override val addGenrePlaceholder = "添加流派"
     override val saveChanges = "保存更改"
+
+    override val selectAction = "选择"
+    override val selectAllAction = "全选"
+    override val deselectAllAction = "取消全选"
+    override val editTagsAction = "编辑标签"
+    override val editTagsEllipsis = "编辑标签…"
+    override val batchEditTagsTitle = "批量编辑标签"
+    override val mixedValuesPlaceholder = "多个值（留空保持不变）"
+    override val applyAction = "应用"
+    override fun selectedCountLabel(count: Int): String = "已选 $count 项"
+    override fun batchTagsUpdatedNotice(count: Int): String = "已更新 $count 首歌曲的标签"
     override val quickSearch = "快速搜索"
     override val fileAndPlaybackInfo = "文件与播放信息"
     override val infoPrecision = "采样精度"

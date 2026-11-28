@@ -17,14 +17,20 @@ public partial class TrackRowControl : UserControl
     private sealed record DragPayload(string ScopeKey, int SourceIndex);
 
     private Action? _onClick;
+    private Action? _onSelectionToggle;
     private bool _isAvailable = true;
     private bool _isCurrent;
+    private bool _isSelected;
+    private bool _selectionModeActive;
     private string? _dragScopeKey;
     private int _dragIndex = -1;
     private int _dragItemCount;
     private Action<int, int>? _onDropReorder;
     private Point _dragStartPoint;
     private bool _dragArmed;
+
+    public Func<ContextMenu?>? MultiSelectContextMenuFactory { get; set; }
+    public Track? BoundTrack { get; private set; }
 
     public TrackRowControl()
     {
@@ -45,8 +51,10 @@ public partial class TrackRowControl : UserControl
         Action<Track>? openSongInfo = null,
         Guid? targetQueueId = null,
         Action<DeleteChoiceRequest>? openDeleteChoice = null,
-        Action<string, string?, Action?>? showToast = null)
+        Action<string, string?, Action?>? showToast = null,
+        Action<IReadOnlyList<Track>>? openBatchTagEdit = null)
     {
+        BoundTrack = track;
         _onClick = onClick;
         _isAvailable = isAvailable;
         _isCurrent = isCurrent;
@@ -62,7 +70,7 @@ public partial class TrackRowControl : UserControl
         ActiveBar.Visibility = isCurrent ? Visibility.Visible : Visibility.Collapsed;
         TitleText.SetResourceReference(TextBlock.ForegroundProperty, isCurrent ? "AccentBrush" : "TextPrimaryBrush");
         TitleText.FontWeight = isCurrent ? FontWeights.SemiBold : FontWeights.Normal;
-        RowBorder.SetResourceReference(Border.BackgroundProperty, isCurrent ? "AccentSubtleBrush" : "SubtleFillBrush");
+        ApplyRowRestVisual();
 
         if (isCurrent)
         {
@@ -85,7 +93,45 @@ public partial class TrackRowControl : UserControl
             explicitTrack: track,
             targetQueueId: targetQueueId,
             openDeleteChoice: openDeleteChoice,
-            showToast: showToast);
+            showToast: showToast,
+            openBatchTagEdit: openBatchTagEdit);
+    }
+
+    public void SetSelectionState(bool isSelected, bool selectionModeActive, Action? onSelectionToggle = null)
+    {
+        _isSelected = isSelected;
+        _selectionModeActive = selectionModeActive;
+        _onSelectionToggle = onSelectionToggle;
+
+        SelectCheckBox.Visibility = selectionModeActive ? Visibility.Visible : Visibility.Collapsed;
+        if (isSelected)
+        {
+            SelectCheckBox.SetResourceReference(Border.BackgroundProperty, "AccentBrush");
+            SelectCheckBox.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
+            SelectCheckGlyph.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            SelectCheckBox.Background = Brushes.Transparent;
+            SelectCheckBox.SetResourceReference(Border.BorderBrushProperty, "ControlBorderBrush");
+            SelectCheckGlyph.Visibility = Visibility.Collapsed;
+        }
+
+        ApplyRowRestVisual();
+    }
+
+    private void ApplyRowRestVisual()
+    {
+        if (_isSelected)
+        {
+            RowBorder.SetResourceReference(Border.BackgroundProperty, "AccentSubtleBrush");
+            RowBorder.SetResourceReference(Border.BorderBrushProperty, "AccentBrush");
+        }
+        else
+        {
+            RowBorder.SetResourceReference(Border.BackgroundProperty, _isCurrent ? "AccentSubtleBrush" : "SubtleFillBrush");
+            RowBorder.BorderBrush = Brushes.Transparent;
+        }
     }
 
     public void EnableDragReorder(string scopeKey, int index, int itemCount, Action<int, int> onDropReorder)
@@ -218,23 +264,54 @@ public partial class TrackRowControl : UserControl
 
     private void Row_MouseEnter(object sender, MouseEventArgs e)
     {
-        if (!_isCurrent)
+        if (!_isCurrent && !_isSelected)
         {
             RowBorder.SetResourceReference(Border.BackgroundProperty, "SubtleHoverBrush");
         }
-        RowBorder.SetResourceReference(Border.BorderBrushProperty, "RevealBorderBrush");
+        if (!_isSelected)
+        {
+            RowBorder.SetResourceReference(Border.BorderBrushProperty, "RevealBorderBrush");
+        }
     }
 
     private void Row_MouseLeave(object sender, MouseEventArgs e)
     {
-        RowBorder.SetResourceReference(Border.BackgroundProperty, _isCurrent ? "AccentSubtleBrush" : "SubtleFillBrush");
-        RowBorder.BorderBrush = Brushes.Transparent;
+        ApplyRowRestVisual();
+    }
+
+    private void Row_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+    {
+        if (_selectionModeActive && !MultiSelectUiHelper.IsSelectionModifierHeld())
+        {
+            // Prevent ListBoxItem from clearing existing selections before MouseLeftButtonUp toggles this row.
+            e.Handled = true;
+        }
     }
 
     private void Row_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
     {
         _dragArmed = false;
+        if (MultiSelectUiHelper.IsSelectionModifierHeld())
+        {
+            return;
+        }
+        if (_selectionModeActive)
+        {
+            _onSelectionToggle?.Invoke();
+            e.Handled = true;
+            return;
+        }
         if (!_isAvailable) return;
         _onClick?.Invoke();
+    }
+
+    private void Row_ContextMenuOpening(object sender, ContextMenuEventArgs e)
+    {
+        if (MultiSelectContextMenuFactory?.Invoke() is { } multiMenu)
+        {
+            e.Handled = true;
+            multiMenu.PlacementTarget = this;
+            multiMenu.IsOpen = true;
+        }
     }
 }

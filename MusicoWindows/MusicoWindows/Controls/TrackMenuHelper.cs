@@ -31,7 +31,8 @@ public static class TrackMenuHelper
         Track? explicitTrack = null,
         Guid? targetQueueId = null,
         Action<DeleteChoiceRequest>? openDeleteChoice = null,
-        Action<string, string?, Action?>? showToast = null)
+        Action<string, string?, Action?>? showToast = null,
+        Action<IReadOnlyList<Track>>? openBatchTagEdit = null)
     {
         var menu = new ContextMenu();
         var ids = trackIds.ToList();
@@ -170,6 +171,29 @@ public static class TrackMenuHelper
                         mw.ShowSongInfo(singleTrack);
                     }
                 }));
+        }
+        else if (ids.Count > 1 && !isEphemeral)
+        {
+            var editableTracks = services.Library.GetTracks(ids)
+                .Where(t => !t.IsEphemeral && !Track.HasEphemeralIdPrefix(t.Id))
+                .ToList();
+            if (editableTracks.Count > 0)
+            {
+                menu.Items.Add(CreateItem(
+                    L.Get("Menu_EditTagsEllipsis"),
+                    "\uE70F",
+                    () =>
+                    {
+                        if (openBatchTagEdit is not null)
+                        {
+                            openBatchTagEdit(editableTracks);
+                        }
+                        else if (Application.Current?.MainWindow is MainWindow mw)
+                        {
+                            mw.ShowBatchTagEdit(editableTracks);
+                        }
+                    }));
+            }
         }
 
         if (ids.Count == 1 && singleTrack is { IsCloud: true } cloudTrack && CanExportCloudTrack(services, cloudTrack))

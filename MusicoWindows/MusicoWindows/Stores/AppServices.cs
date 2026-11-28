@@ -44,6 +44,7 @@ public sealed class AppServices : IDisposable
             googleDriveClient: GoogleDrive,
             providerRegistry: CloudProviders);
 
+        CloudExporter.MetadataOverrideLookup = Library.GetMetadataOverride;
         Downloads = new DownloadManager(CloudExporter, Library);
         Queues = new QueueStore(StateDirectory);
         History = new PlayHistoryStore(StateDirectory);

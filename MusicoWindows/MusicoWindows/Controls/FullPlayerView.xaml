@@ -5,9 +5,18 @@
              xmlns:views="clr-namespace:MusicoWindows.Views"
              Visibility="Collapsed">
     <Grid x:Name="BackdropGrid" Background="{DynamicResource ContentBackgroundBrush}" ClipToBounds="True">
+        <!-- Custom Global Background Layer -->
+        <Image x:Name="CustomBackdropImage"
+               Stretch="UniformToFill"
+               IsHitTestVisible="False"
+               Visibility="Collapsed" />
+        <Border x:Name="CustomBackdropScrim"
+                IsHitTestVisible="False"
+                Visibility="Collapsed" />
+
         <!-- Blurred Ambient Artwork Backdrop -->
         <Grid x:Name="AmbientBackdropHost"
-              Opacity="0.22"
+              Opacity="0.28"
               IsHitTestVisible="False"
               Visibility="Collapsed">
             <Image x:Name="AmbientBackdropImage"
@@ -21,6 +30,20 @@
                 </Image.Effect>
             </Image>
         </Grid>
+
+        <!-- Soft Vertical Readability Gradient Scrim -->
+        <Border x:Name="AmbientReadabilityScrim"
+                Background="{DynamicResource ContentBackgroundBrush}"
+                IsHitTestVisible="False">
+            <Border.OpacityMask>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0,1">
+                    <GradientStop Color="#B8000000" Offset="0.0" />
+                    <GradientStop Color="#38000000" Offset="0.34" />
+                    <GradientStop Color="#44000000" Offset="0.72" />
+                    <GradientStop Color="#CC000000" Offset="1.0" />
+                </LinearGradientBrush>
+            </Border.OpacityMask>
+        </Border>
 
         <Grid x:Name="PlayerCard">
             <Grid.RowDefinitions>
@@ -310,8 +333,8 @@
                 </Border>
 
                 <Grid Grid.Row="1">
-                    <controls:LyricsPanel x:Name="EmbeddedLyrics" Embedded="True" />
-                    <views:QueuesView x:Name="EmbeddedQueues" Compact="True" Visibility="Collapsed" />
+                    <controls:LyricsPanel x:Name="EmbeddedLyrics" Embedded="True" Background="Transparent" />
+                    <views:QueuesView x:Name="EmbeddedQueues" Compact="True" Background="Transparent" Visibility="Collapsed" />
                 </Grid>
             </Grid>
         </Grid>

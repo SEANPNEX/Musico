@@ -1,7 +1,9 @@
 package com.musico.ui.components
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
@@ -18,6 +20,7 @@ import androidx.compose.material.icons.rounded.DragHandle
 import androidx.compose.material.icons.rounded.GraphicEq
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material.icons.rounded.Pause
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -61,6 +64,7 @@ sealed interface TrackEndSwipeBehavior {
 
 val LocalTrackSwipeActions = staticCompositionLocalOf<TrackSwipeActions?> { null }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun TrackRow(
     track: Track,
@@ -77,6 +81,10 @@ fun TrackRow(
     swipeEnabled: Boolean = true,
     onSwipePlayNext: (() -> Unit)? = null,
     endSwipeBehavior: TrackEndSwipeBehavior = TrackEndSwipeBehavior.DefaultDelete,
+    selectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onToggleSelect: (() -> Unit)? = null,
+    onLongClick: (() -> Unit)? = null,
     menuContent: (@Composable ColumnScope.(onDismiss: () -> Unit) -> Unit)? = null
 ) {
     val strings = LocalStrings.current
@@ -85,15 +93,30 @@ fun TrackRow(
     var menuExpanded by remember { mutableStateOf(false) }
 
     val rowContent: @Composable (Modifier) -> Unit = { rowMod ->
+        val clickModifier = when {
+            selectionMode && onToggleSelect != null -> Modifier.clickable(onClick = onToggleSelect)
+            onLongClick != null -> Modifier.combinedClickable(
+                enabled = isAvailable,
+                onClick = onClick,
+                onLongClick = onLongClick,
+            )
+            else -> Modifier.clickable(enabled = isAvailable, onClick = onClick)
+        }
         Row(
             modifier = rowMod
                 .fillMaxWidth()
                 .background(backgroundColor)
-                .clickable(enabled = isAvailable, onClick = onClick)
+                .then(clickModifier)
                 .alpha(if (isAvailable) 1f else 0.4f)
-                .padding(start = 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
+                .padding(start = if (selectionMode) 8.dp else 16.dp, end = 4.dp, top = 8.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (selectionMode) {
+                Checkbox(
+                    checked = isSelected,
+                    onCheckedChange = { onToggleSelect?.invoke() },
+                )
+            }
             ArtworkImage(
                 artworkKey = track.artworkKey,
                 artworkCache = artworkCache,
@@ -135,10 +158,10 @@ fun TrackRow(
                 style = MaterialTheme.typography.bodySmall.copy(fontFeatureSettings = "tnum"),
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
-            if (trailingActions != null) {
+            if (!selectionMode && trailingActions != null) {
                 trailingActions()
             }
-            if (dragHandleModifier != null) {
+            if (!selectionMode && dragHandleModifier != null) {
                 Icon(
                     imageVector = Icons.Rounded.DragHandle,
                     contentDescription = strings.reorder,
@@ -146,7 +169,7 @@ fun TrackRow(
                     modifier = dragHandleModifier.padding(horizontal = 8.dp, vertical = 10.dp)
                 )
             }
-            if (menuContent != null) {
+            if (!selectionMode && menuContent != null) {
                 Box {
                     IconButton(onClick = { menuExpanded = true }) {
                         Icon(
@@ -162,7 +185,7 @@ fun TrackRow(
                         menuContent { menuExpanded = false }
                     }
                 }
-            } else if (trailingActions == null && dragHandleModifier == null) {
+            } else if (selectionMode || (trailingActions == null && dragHandleModifier == null)) {
                 Spacer(Modifier.width(12.dp))
             }
         }
@@ -221,7 +244,7 @@ fun TrackRow(
         modifier = modifier,
         startAction = startAction,
         endAction = endAction,
-        enabled = swipeEnabled,
+        enabled = swipeEnabled && !selectionMode,
     ) {
         rowContent(Modifier)
     }

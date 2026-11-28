@@ -3,7 +3,7 @@ using System.Net.Http;
 namespace MusicoWindows.Cloud;
 
 /// <summary>
-/// Coordinates on-demand cloud lyrics search across built-in providers (LRCLIB, NetEase)
+/// Coordinates on-demand cloud lyrics search across built-in LRCLIB
 /// and active JS extensions declaring `capabilities: ["lyrics"]`.
 /// Never invoked automatically during track playback.
 /// </summary>
@@ -22,24 +22,23 @@ public sealed class CloudLyricsService
         ExtensionLyricsSearcher? extensionSearch = null)
     {
         Lrclib = new LrclibClient(customHandler, appVersion);
-        Netease = new NeteaseLyricsClient(customHandler);
         _extensionSearch = extensionSearch;
     }
 
     public LrclibClient Lrclib { get; }
-    public NeteaseLyricsClient Netease { get; }
 
     public static List<CloudLyricsSourceOption> BuildSourceOptions(
         IEnumerable<CloudLyricsExtensionDescriptor> extensions,
         string autoLabel)
     {
-        var list = new List<CloudLyricsSourceOption>
+        var extList = extensions as IReadOnlyList<CloudLyricsExtensionDescriptor> ?? extensions.ToList();
+        var list = new List<CloudLyricsSourceOption>();
+        if (extList.Count > 0)
         {
-            new("auto", CloudLyricsSourceSelection.Auto, autoLabel),
-            new("lrclib", CloudLyricsSourceSelection.Lrclib, "LRCLIB"),
-            new("netease", CloudLyricsSourceSelection.Netease, "NetEase")
-        };
-        foreach (CloudLyricsExtensionDescriptor ext in extensions)
+            list.Add(new("auto", CloudLyricsSourceSelection.Auto, autoLabel));
+        }
+        list.Add(new("lrclib", CloudLyricsSourceSelection.Lrclib, "LRCLIB"));
+        foreach (CloudLyricsExtensionDescriptor ext in extList)
         {
             list.Add(new CloudLyricsSourceOption($"ext.{ext.Id}", CloudLyricsSourceSelection.Extension(ext.Id), ext.Name));
         }
@@ -60,11 +59,6 @@ public sealed class CloudLyricsService
             case CloudLyricsSourceKind.Lrclib:
             {
                 List<CloudLyricsCandidate> list = await Lrclib.SearchAsync(query, proxyUrl, ct).ConfigureAwait(false);
-                return new CloudLyricsSearchResponse(list, []);
-            }
-            case CloudLyricsSourceKind.Netease:
-            {
-                List<CloudLyricsCandidate> list = await Netease.SearchAsync(query, proxyUrl, ct).ConfigureAwait(false);
                 return new CloudLyricsSearchResponse(list, []);
             }
             case CloudLyricsSourceKind.Extension:
@@ -95,12 +89,6 @@ public sealed class CloudLyricsService
             CloudLyricsProviderIds.Lrclib,
             "LRCLIB",
             () => Lrclib.SearchAsync(query, proxyUrl, ct),
-            ct));
-
-        tasks.Add(RunSourceAsync(
-            CloudLyricsProviderIds.Netease,
-            "NetEase",
-            () => Netease.SearchAsync(query, proxyUrl, ct),
             ct));
 
         if (_extensionSearch is not null)

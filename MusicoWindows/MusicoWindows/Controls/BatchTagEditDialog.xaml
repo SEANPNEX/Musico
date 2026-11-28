@@ -1,0 +1,130 @@
+<UserControl x:Class="MusicoWindows.Controls.BatchTagEditDialog"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             Visibility="Collapsed">
+    <!-- Windows 10 ContentDialog backdrop -->
+    <Grid x:Name="BackdropGrid"
+          Background="{DynamicResource DialogOverlayBrush}"
+          MouseDown="Overlay_MouseDown">
+        <Border x:Name="DialogCard"
+                Width="440"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Background="{DynamicResource DialogSurfaceBrush}"
+                BorderBrush="{DynamicResource ControlBorderBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="24"
+                MouseDown="Card_MouseDown">
+            <Grid>
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                </Grid.RowDefinitions>
+
+                <!-- Header -->
+                <Grid Grid.Row="0" Margin="0,0,0,14">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Grid.Column="0" VerticalAlignment="Center">
+                        <TextBlock Text="{DynamicResource Str_BatchTag_Title}"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="18"
+                                   FontWeight="SemiBold"
+                                   Foreground="{DynamicResource TextPrimaryBrush}" />
+                        <TextBlock x:Name="SubtitleText"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="12"
+                                   Foreground="{DynamicResource TextSecondaryBrush}"
+                                   TextTrimming="CharacterEllipsis"
+                                   Margin="0,2,0,0" />
+                    </StackPanel>
+                    <Button x:Name="CloseIconButton"
+                            Grid.Column="1"
+                            Style="{StaticResource Win10IconButtonStyle}"
+                            Width="30"
+                            Height="30"
+                            FontSize="11"
+                            Content="&#xE8BB;"
+                            ToolTip="{DynamicResource Str_Common_Close}"
+                            AutomationProperties.Name="{DynamicResource Str_Common_Close}"
+                            Click="CloseIcon_Click" />
+                </Grid>
+
+                <!-- Fields -->
+                <StackPanel Grid.Row="1">
+                    <TextBlock Text="{DynamicResource Str_BatchTag_MixedHint}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               TextWrapping="Wrap"
+                               Margin="0,0,0,12" />
+
+                    <TextBlock Text="{DynamicResource Str_SongInfo_FieldArtist}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="0,0,0,4" />
+                    <Grid Margin="0,0,0,12">
+                        <TextBox x:Name="ArtistBox"
+                                 Style="{StaticResource Win10TextBoxStyle}"
+                                 Height="34"
+                                 Padding="8,6"
+                                 TextChanged="ArtistBox_TextChanged"
+                                 KeyDown="InputBox_KeyDown" />
+                        <TextBlock x:Name="ArtistPlaceholder"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="12.5"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   IsHitTestVisible="False"
+                                   VerticalAlignment="Center"
+                                   Margin="10,0,10,0" />
+                    </Grid>
+
+                    <TextBlock Text="{DynamicResource Str_SongInfo_FieldAlbum}"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="12"
+                               Foreground="{DynamicResource TextSecondaryBrush}"
+                               Margin="0,0,0,4" />
+                    <Grid Margin="0,0,0,4">
+                        <TextBox x:Name="AlbumBox"
+                                 Style="{StaticResource Win10TextBoxStyle}"
+                                 Height="34"
+                                 Padding="8,6"
+                                 TextChanged="AlbumBox_TextChanged"
+                                 KeyDown="InputBox_KeyDown" />
+                        <TextBlock x:Name="AlbumPlaceholder"
+                                   FontFamily="{StaticResource Win10Font}"
+                                   FontSize="12.5"
+                                   Foreground="{DynamicResource TextTertiaryBrush}"
+                                   IsHitTestVisible="False"
+                                   VerticalAlignment="Center"
+                                   Margin="10,0,10,0" />
+                    </Grid>
+                </StackPanel>
+
+                <!-- Footer -->
+                <Grid Grid.Row="2" Margin="0,18,0,0">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="8" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button x:Name="CancelButton"
+                            Grid.Column="0"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            Content="{DynamicResource Str_Common_Cancel}"
+                            Click="Cancel_Click" />
+                    <Button x:Name="ApplyButton"
+                            Grid.Column="2"
+                            Style="{StaticResource Win10PrimaryButtonStyle}"
+                            Content="{DynamicResource Str_BatchTag_Apply}"
+                            Click="Apply_Click" />
+                </Grid>
+            </Grid>
+        </Border>
+    </Grid>
+</UserControl>

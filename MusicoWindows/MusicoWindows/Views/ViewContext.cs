@@ -46,6 +46,7 @@ public sealed class ViewContext
     public Action<LibraryRoot>? OpenUpdateTrackedFolder { get; init; }
     public Action<LibraryRoot, string>? OpenUpdateTrackedSubfolder { get; init; }
     public Action<Track>? OpenSongInfo { get; init; }
+    public Action<IReadOnlyList<Track>>? OpenBatchTagEdit { get; init; }
     public Action<string, SearchField>? OpenSearch { get; init; }
     public Action? OpenExtensions { get; init; }
     public Action? OpenUpdateDialog { get; init; }

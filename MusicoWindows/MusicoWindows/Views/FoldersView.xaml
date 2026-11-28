@@ -120,6 +120,16 @@
                             <TextBlock Text="{DynamicResource Str_Common_Shuffle}" VerticalAlignment="Center" />
                         </StackPanel>
                     </Button>
+                    <Button x:Name="SelectTracksButton"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            Margin="0,0,8,6"
+                            Visibility="Collapsed"
+                            Click="SelectTracks_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE762;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="13" VerticalAlignment="Center" Margin="0,0,6,0" />
+                            <TextBlock Text="{DynamicResource Str_Select_Select}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
                     <Button x:Name="NewFolderButton"
                             Style="{StaticResource Win10ButtonStyle}"
                             Margin="0,0,8,6"
@@ -171,12 +181,51 @@
                         </StackPanel>
                     </Button>
                 </WrapPanel>
+                <WrapPanel x:Name="SelectionBar"
+                           Orientation="Horizontal"
+                           Margin="0,2,0,2"
+                           Visibility="Collapsed">
+                    <TextBlock x:Name="SelectionCountText"
+                               FontFamily="{StaticResource Win10Font}"
+                               FontSize="12.5"
+                               FontWeight="SemiBold"
+                               Foreground="{DynamicResource AccentBrush}"
+                               VerticalAlignment="Center"
+                               Margin="0,0,12,6" />
+                    <Button x:Name="SelectAllButton"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            Margin="0,0,8,6"
+                            Content="{DynamicResource Str_Select_SelectAll}"
+                            Click="SelectAll_Click" />
+                    <Button x:Name="BatchEditTagsButton"
+                            Style="{StaticResource Win10PrimaryButtonStyle}"
+                            Margin="0,0,8,6"
+                            Click="BatchEditTags_Click">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="&#xE70F;" FontFamily="{StaticResource Win10GlyphFont}" FontSize="12" VerticalAlignment="Center" Margin="0,0,6,0" />
+                            <TextBlock Text="{DynamicResource Str_Select_EditTags}" VerticalAlignment="Center" />
+                        </StackPanel>
+                    </Button>
+                    <Button x:Name="CancelSelectionButton"
+                            Style="{StaticResource Win10ButtonStyle}"
+                            Margin="0,0,0,6"
+                            Content="{DynamicResource Str_Common_Cancel}"
+                            Click="CancelSelection_Click" />
+                </WrapPanel>
             </StackPanel>
         </Border>
 
         <!-- Scrollable Folder / Track List -->
         <ScrollViewer Grid.Row="3" VerticalScrollBarVisibility="Auto" Padding="24,16">
-            <StackPanel x:Name="ContentStack" Margin="0,0,0,32" />
+            <StackPanel Margin="0,0,0,32">
+                <StackPanel x:Name="ContentStack" />
+                <ListBox x:Name="TracksList"
+                         Style="{StaticResource Win10EmbeddedListBoxStyle}"
+                         SelectionMode="Extended"
+                         Visibility="Collapsed"
+                         SelectionChanged="TracksList_SelectionChanged"
+                         PreviewKeyDown="TracksList_PreviewKeyDown" />
+            </StackPanel>
         </ScrollViewer>
     </Grid>
 </UserControl>

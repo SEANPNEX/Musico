@@ -134,6 +134,39 @@ public static class Win10Animations
         transform.BeginAnimation(TranslateTransform.XProperty, slideX, HandoffBehavior.SnapshotAndReplace);
     }
 
+    public static void AnimatePivotSwitch(UIElement? target, double fromOffset, int durationMs = 240)
+    {
+        if (target is null) return;
+
+        var transform = EnsureTranslateTransform(target);
+        transform.BeginAnimation(TranslateTransform.XProperty, null);
+        target.BeginAnimation(UIElement.OpacityProperty, null);
+
+        if (!IsMotionEnabled)
+        {
+            transform.X = 0;
+            target.Opacity = 1;
+            return;
+        }
+
+        transform.X = fromOffset;
+        target.Opacity = 0;
+
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        var duration = TimeSpan.FromMilliseconds(durationMs);
+
+        var slideX = new DoubleAnimation(fromOffset, 0, duration) { EasingFunction = ease };
+        var fade = new DoubleAnimation(0, 1, duration) { EasingFunction = ease };
+
+        var sb = new Storyboard();
+        Storyboard.SetTarget(fade, target);
+        Storyboard.SetTargetProperty(fade, new PropertyPath(UIElement.OpacityProperty));
+        sb.Children.Add(fade);
+
+        sb.Begin();
+        transform.BeginAnimation(TranslateTransform.XProperty, slideX, HandoffBehavior.SnapshotAndReplace);
+    }
+
     public static void AnimatePanelIn(UIElement? target, double fromX = 28)
     {
         if (target is null) return;
@@ -158,6 +191,39 @@ public static class Win10Animations
         {
             EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut }
         };
+
+        var sb = new Storyboard();
+        Storyboard.SetTarget(fade, target);
+        Storyboard.SetTargetProperty(fade, new PropertyPath(UIElement.OpacityProperty));
+        sb.Children.Add(fade);
+
+        sb.Begin();
+        transform.BeginAnimation(TranslateTransform.XProperty, slideX, HandoffBehavior.SnapshotAndReplace);
+    }
+
+    public static void AnimatePivotSwitch(UIElement? target, double fromOffset, int durationMs = 240)
+    {
+        if (target is null) return;
+
+        var transform = EnsureTranslateTransform(target);
+        transform.BeginAnimation(TranslateTransform.XProperty, null);
+        target.BeginAnimation(UIElement.OpacityProperty, null);
+
+        if (!IsMotionEnabled)
+        {
+            transform.X = 0;
+            target.Opacity = 1;
+            return;
+        }
+
+        transform.X = fromOffset;
+        target.Opacity = 0;
+
+        var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
+        var duration = TimeSpan.FromMilliseconds(durationMs);
+
+        var slideX = new DoubleAnimation(fromOffset, 0, duration) { EasingFunction = ease };
+        var fade = new DoubleAnimation(0, 1, duration) { EasingFunction = ease };
 
         var sb = new Storyboard();
         Storyboard.SetTarget(fade, target);

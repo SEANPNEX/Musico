@@ -7,6 +7,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -92,6 +93,7 @@ import com.musico.model.LyricsSource
 import com.musico.store.LibraryStore
 import com.musico.ui.LocalShowMessage
 import com.musico.ui.LocalSnackbarHost
+import com.musico.ui.components.ArtworkImage
 import com.musico.ui.components.MusicoSnackbarHost
 import com.musico.ui.components.EmptyState
 import com.musico.ui.theme.AppearanceSettings
@@ -123,7 +125,9 @@ fun LyricsSheet(
     val snackbarHostState = LocalSnackbarHost.current
     ModalBottomSheet(
         onDismissRequest = onDismiss,
-        sheetState = sheetState
+        sheetState = sheetState,
+        containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.88f),
+        scrimColor = Color.Black.copy(alpha = 0.45f),
     ) {
         Box(
             modifier = Modifier
@@ -248,14 +252,23 @@ fun LyricsContent(
         }
     }
 
-    Column(modifier = modifier) {
+    Column(modifier = modifier.background(Color.Transparent)) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 20.dp, end = 12.dp, top = 6.dp, bottom = 10.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                .padding(start = 20.dp, end = 12.dp, top = 8.dp, bottom = 10.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            if (!embedded && track != null) {
+                ArtworkImage(
+                    artworkKey = track.artworkKey,
+                    artworkCache = libraryStore.artwork,
+                    size = 42.dp,
+                    cornerRadius = 8.dp,
+                    remoteArtworkUrl = track.remoteArtworkUrl,
+                )
+            }
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = track?.title ?: strings.lyrics,
@@ -265,10 +278,39 @@ fun LyricsContent(
                     overflow = TextOverflow.Ellipsis
                 )
                 val source = resolvedSource
-                if (source != null) {
+                if (!embedded && track != null) {
+                    Spacer(Modifier.height(2.dp))
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        Text(
+                            text = strings.displayArtist(track.artist),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f, fill = false),
+                        )
+                        if (source != null) {
+                            Surface(
+                                color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.72f),
+                                shape = MaterialTheme.shapes.extraSmall
+                            ) {
+                                Text(
+                                    text = strings.lyricsSourceBadge(source),
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSecondaryContainer,
+                                    maxLines = 1,
+                                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 1.dp)
+                                )
+                            }
+                        }
+                    }
+                } else if (source != null) {
                     Spacer(Modifier.height(4.dp))
                     Surface(
-                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        color = MaterialTheme.colorScheme.secondaryContainer.copy(alpha = 0.78f),
                         shape = MaterialTheme.shapes.extraSmall
                     ) {
                         Text(
@@ -302,7 +344,7 @@ fun LyricsContent(
                                 enabled = false,
                                 onClick = {}
                             )
-                            HorizontalDivider()
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
                         }
                         if (cloudLyricsService != null) {
                             DropdownMenuItem(
@@ -365,7 +407,7 @@ fun LyricsContent(
                             )
                         }
                         if (themeStore != null) {
-                            HorizontalDivider()
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
                             DropdownMenuItem(
                                 text = { Text(strings.lyricsFontSizeLabel) },
                                 leadingIcon = { Icon(Icons.Rounded.FormatSize, contentDescription = null) },
@@ -389,7 +431,7 @@ fun LyricsContent(
                                     },
                                 )
                             }
-                            HorizontalDivider()
+                            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
                             DropdownMenuItem(
                                 text = { Text(strings.lyricsAlignmentLabel) },
                                 leadingIcon = {
@@ -433,7 +475,7 @@ fun LyricsContent(
             }
         }
 
-        HorizontalDivider()
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.35f))
 
         val lyrics = resolvedLyrics
         if (lyrics == null) {

@@ -13,7 +13,6 @@ class CloudLyricsService(
     private val extensionSearch: (suspend (extensionId: String, query: CloudLyricsQuery) -> List<CloudLyricsCandidate>)? = null,
 ) {
     val lrclib = LrclibClient(httpClient, appVersion)
-    val netease = NeteaseLyricsClient(httpClient)
 
     suspend fun search(
         query: CloudLyricsQuery,
@@ -25,9 +24,6 @@ class CloudLyricsService(
         return when (source) {
             CloudLyricsSourceSelection.Lrclib -> {
                 CloudLyricsSearchResponse(candidates = lrclib.search(query))
-            }
-            CloudLyricsSourceSelection.Netease -> {
-                CloudLyricsSearchResponse(candidates = netease.search(query))
             }
             is CloudLyricsSourceSelection.Extension -> {
                 val ext = activeExtensions.firstOrNull { it.id == source.extensionId }
@@ -52,7 +48,7 @@ class CloudLyricsService(
         activeExtensions: List<CloudLyricsExtensionDescriptor>,
     ): CloudLyricsSearchResponse = coroutineScope {
 
-        val tasks = ArrayList<Deferred<TaskOutcome>>(2 + activeExtensions.size)
+        val tasks = ArrayList<Deferred<TaskOutcome>>(1 + activeExtensions.size)
         tasks.add(
             async {
                 try {
@@ -65,23 +61,6 @@ class CloudLyricsService(
                             providerId = CloudLyricsProviderId.LRCLIB,
                             sourceName = "LRCLIB",
                             message = ex.message ?: "LRCLIB search failed",
-                        )
-                    )
-                }
-            }
-        )
-        tasks.add(
-            async {
-                try {
-                    TaskOutcome.Success(netease.search(query))
-                } catch (c: CancellationException) {
-                    throw c
-                } catch (ex: Exception) {
-                    TaskOutcome.Failure(
-                        CloudLyricsSourceFailure(
-                            providerId = CloudLyricsProviderId.NETEASE,
-                            sourceName = "NetEase",
-                            message = ex.message ?: "NetEase search failed",
                         )
                     )
                 }
@@ -142,10 +121,14 @@ class CloudLyricsService(
             extensions: List<CloudLyricsExtensionDescriptor>,
             autoLabel: String,
         ): List<CloudLyricsSourceOption> {
-            val options = ArrayList<CloudLyricsSourceOption>(3 + extensions.size)
+            if (extensions.isEmpty()) {
+                return listOf(
+                    CloudLyricsSourceOption("lrclib", CloudLyricsSourceSelection.Lrclib, "LRCLIB"),
+                )
+            }
+            val options = ArrayList<CloudLyricsSourceOption>(2 + extensions.size)
             options.add(CloudLyricsSourceOption("auto", CloudLyricsSourceSelection.Auto, autoLabel))
             options.add(CloudLyricsSourceOption("lrclib", CloudLyricsSourceSelection.Lrclib, "LRCLIB"))
-            options.add(CloudLyricsSourceOption("netease", CloudLyricsSourceSelection.Netease, "NetEase"))
             for (ext in extensions) {
                 options.add(CloudLyricsSourceOption("ext.${ext.id}", CloudLyricsSourceSelection.Extension(ext.id), ext.name))
             }

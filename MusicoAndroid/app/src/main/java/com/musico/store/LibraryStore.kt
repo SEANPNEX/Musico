@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import androidx.documentfile.provider.DocumentFile
+import com.musico.cloud.CloudAudioCache
 import com.musico.cloud.CloudErrorCode
 import com.musico.cloud.CloudExporter
 import com.musico.cloud.CloudFolderManifest
@@ -17,7 +18,10 @@ import com.musico.cloud.GoogleDriveClient
 import com.musico.cloud.UrlConnectionCloudHttpClient
 import com.musico.cloud.extractCloudSourceInput
 import com.musico.core.ArtworkCache
+import com.musico.core.AudioTagPayload
+import com.musico.core.AudioTagWriter
 import com.musico.core.CloudThumbnailCache
+import com.musico.core.EmbeddedArtworkExtractor
 import com.musico.core.FolderScanner
 import com.musico.core.LocalCloudDiscovery
 import com.musico.core.LrcParser
@@ -111,6 +115,7 @@ class LibraryStore(
     val providerRegistry: CloudProviderRegistry = CloudProviderRegistry(
         googleDriveClient = googleDriveClient,
     ),
+    private val cloudAudioCache: CloudAudioCache? = null,
 ) {
     @Serializable
     private data class LibraryFile(
@@ -978,9 +983,21 @@ class LibraryStore(
                 return false
             }
 
+            val oldCloudById = oldCloudTracks.associateBy { it.id }
             for ((oldId, newId) in trackIdMap) {
                 metadataOverrides.remove(oldId)?.let { ov ->
-                    metadataOverrides.putIfAbsent(newId, ov)
+                    val wasGoogleDrive = oldCloudById[oldId]?.cloudSource == CloudSource.GOOGLE_DRIVE
+                    val sanitized = if (wasGoogleDrive || isPlaceholderGoogleDriveArtist(ov.artist)) {
+                        ov.copy(
+                            artist = ov.artist?.takeUnless { isPlaceholderGoogleDriveArtist(it) },
+                            albumArtist = ov.albumArtist?.takeUnless { isPlaceholderGoogleDriveArtist(it) },
+                        )
+                    } else {
+                        ov
+                    }
+                    if (!sanitized.isEmpty()) {
+                        metadataOverrides.putIfAbsent(newId, sanitized)
+                    }
                 }
             }
 
@@ -2940,30 +2957,63 @@ class LibraryStore(
                 else -> old?.artworkKey
             }
 
-            result.add(
-                applyMetadataOverride(
-                    Track(
-                        id = Track.makeId(root.id, relPath),
-                        rootId = root.id,
-                        relativePath = relPath,
-                        title = meta.title.ifBlank { meta.remoteTrackId },
-                        artist = meta.artist.ifBlank { root.name },
-                        album = meta.album.ifBlank { root.name },
-                        albumArtist = meta.artist.ifBlank { root.name },
-                        trackNumber = meta.trackNumber ?: (index + 1),
-                        discNumber = null,
-                        durationSec = meta.durationSec,
-                        fileSize = 0L,
-                        modifiedEpochMs = 0L,
-                        hasEmbeddedLyrics = false,
-                        dateAddedEpochMs = old?.dateAddedEpochMs ?: nowMs,
-                        artworkKey = artworkKey,
-                        cloudSource = cloudSource,
-                        remoteTrackId = meta.remoteTrackId,
-                        remoteArtworkUrl = artUrl,
-                    )
-                )
+            val trackId = Track.makeId(root.id, relPath)
+            val isGoogleDrive = cloudSource == CloudSource.GOOGLE_DRIVE || root.kind == RootKind.CLOUD_GOOGLE_DRIVE
+            val metaArtistIsPlaceholder = isGoogleDrive && isPlaceholderGoogleDriveArtist(meta.artist)
+            val resolvedArtist = when {
+                !metaArtistIsPlaceholder && meta.artist.isNotBlank() -> meta.artist
+                old != null && old.artist.isNotBlank() && !isPlaceholderGoogleDriveArtist(old.artist) && old.artist != root.name -> old.artist
+                else -> meta.artist.ifBlank { root.name }
+            }
+            val resolvedAlbumArtist = when {
+                !metaArtistIsPlaceholder && meta.artist.isNotBlank() -> meta.artist
+                old != null && old.albumArtist.isNotBlank() && !isPlaceholderGoogleDriveArtist(old.albumArtist) && old.albumArtist != root.name -> old.albumArtist
+                else -> resolvedArtist
+            }
+            val resolvedAlbum = when {
+                meta.album.isNotBlank() -> meta.album
+                isGoogleDrive && old != null && old.album.isNotBlank() && old.album != root.name -> old.album
+                else -> root.name
+            }
+            val resolvedGenre = old?.genre?.takeIf { it.isNotBlank() }.orEmpty()
+            val resolvedDuration = if (meta.durationSec > 0.0) meta.durationSec else (old?.durationSec ?: 0.0)
+
+            val baseTrack = Track(
+                id = trackId,
+                rootId = root.id,
+                relativePath = relPath,
+                title = meta.title.ifBlank { meta.remoteTrackId }.let { fallbackTitle ->
+                    if (isGoogleDrive && old != null && old.title.isNotBlank() && old.title != fallbackTitle && !isPlaceholderGoogleDriveArtist(old.title)) {
+                        old.title
+                    } else {
+                        fallbackTitle
+                    }
+                },
+                artist = resolvedArtist,
+                album = resolvedAlbum,
+                albumArtist = resolvedAlbumArtist,
+                genre = resolvedGenre,
+                trackNumber = meta.trackNumber ?: old?.trackNumber ?: (index + 1),
+                discNumber = null,
+                durationSec = resolvedDuration,
+                fileSize = 0L,
+                modifiedEpochMs = 0L,
+                hasEmbeddedLyrics = old?.hasEmbeddedLyrics ?: false,
+                dateAddedEpochMs = old?.dateAddedEpochMs ?: nowMs,
+                artworkKey = artworkKey,
+                cloudSource = cloudSource,
+                remoteTrackId = meta.remoteTrackId,
+                remoteArtworkUrl = artUrl,
             )
+            val cachedAudio = if (isGoogleDrive) cloudAudioCache?.latestCachedFile(trackId) else null
+            val maybeEnriched = if (cachedAudio != null) {
+                val enrichment = readCloudFileEnrichmentData(cachedAudio, needArtwork = baseTrack.artworkKey == null || artwork.file(baseTrack.artworkKey) == null)
+                applyCloudFileEnrichmentLocked(baseTrack, root, enrichment) ?: baseTrack
+            } else {
+                baseTrack
+            }
+
+            result.add(applyMetadataOverride(maybeEnriched))
         }
         return result
     }
@@ -3069,13 +3119,31 @@ class LibraryStore(
         )
     }
 
+    fun metadataOverrideFor(trackId: String): TrackMetadataOverride? = synchronized(stateLock) {
+        metadataOverrides[trackId]
+    }
+
+    private fun isPlaceholderGoogleDriveArtist(value: String?): Boolean {
+        val trimmed = value?.trim().orEmpty()
+        return trimmed.equals(GoogleDriveClient.DEFAULT_ARTIST, ignoreCase = true)
+    }
+
+    private fun TrackMetadataOverride.isEmpty(): Boolean =
+        title == null &&
+            artist == null &&
+            album == null &&
+            albumArtist == null &&
+            genre == null &&
+            artworkKey == null
+
     private fun applyMetadataOverride(track: Track): Track {
         val ov = metadataOverrides[track.id] ?: return track
         val nextArtist = ov.artist ?: track.artist
-        val nextAlbumArtist = if (ov.artist != null && track.albumArtist == track.artist) {
-            ov.artist
-        } else {
-            track.albumArtist
+        val nextAlbumArtist = when {
+            ov.albumArtist != null -> ov.albumArtist
+            ov.artist != null && track.albumArtist == track.artist -> ov.artist
+            ov.artist != null && isPlaceholderGoogleDriveArtist(track.albumArtist) -> ov.artist
+            else -> track.albumArtist
         }
         return track.copy(
             title = ov.title ?: track.title,
@@ -3087,6 +3155,166 @@ class LibraryStore(
         )
     }
 
+    private data class CloudFileEnrichmentData(
+        val title: String?,
+        val artist: String?,
+        val albumArtist: String?,
+        val album: String?,
+        val genre: String?,
+        val trackNumber: Int?,
+        val durationSec: Double,
+        val storedArtKey: String?,
+    )
+
+    private suspend fun readCloudFileEnrichmentData(
+        file: File,
+        needArtwork: Boolean,
+    ): CloudFileEnrichmentData {
+        val embedded = AudioTagWriter.readEmbeddedSummary(file)
+        val readerMeta = runCatching { reader.read(file) }.getOrNull()
+        val extractedArtBytes = if (needArtwork) {
+            readerMeta?.artwork?.takeIf { it.isNotEmpty() }
+                ?: runCatching {
+                    EmbeddedArtworkExtractor.extract(file, needArtwork = true, needLyrics = false).artwork
+                }.getOrNull()
+        } else {
+            null
+        }
+        val storedArtKey = extractedArtBytes?.takeIf { it.isNotEmpty() }?.let { bytes ->
+            runCatching { artwork.store(bytes) }.getOrNull()
+        }
+        val title = readerMeta?.title?.trim()?.takeIf { it.isNotEmpty() }
+            ?: embedded.title?.trim()?.takeIf { it.isNotEmpty() }
+        val artist = readerMeta?.artist?.trim()?.takeIf { it.isNotEmpty() }
+            ?: embedded.artist?.trim()?.takeIf { it.isNotEmpty() }
+        val albumArtist = readerMeta?.albumArtist?.trim()?.takeIf { it.isNotEmpty() }
+            ?: embedded.albumArtist?.trim()?.takeIf { it.isNotEmpty() }
+            ?: artist
+        val album = readerMeta?.album?.trim()?.takeIf { it.isNotEmpty() }
+            ?: embedded.album?.trim()?.takeIf { it.isNotEmpty() }
+        val genre = readerMeta?.genre?.trim()?.takeIf { it.isNotEmpty() }
+            ?: embedded.genre?.trim()?.takeIf { it.isNotEmpty() }
+        val trackNumber = readerMeta?.trackNumber ?: embedded.trackNumber
+        val durationSec = readerMeta?.durationSec?.takeIf { it > 0.0 } ?: 0.0
+        return CloudFileEnrichmentData(
+            title = title,
+            artist = artist,
+            albumArtist = albumArtist,
+            album = album,
+            genre = genre,
+            trackNumber = trackNumber,
+            durationSec = durationSec,
+            storedArtKey = storedArtKey,
+        )
+    }
+
+    private fun needsCloudFileEnrichment(track: Track, root: LibraryRoot?): Boolean {
+        if (!track.isCloud) return false
+        val rootDisplayName = root?.name
+        val needArtist = track.artist.isBlank() ||
+            isPlaceholderGoogleDriveArtist(track.artist) ||
+            track.artist.equals("Unknown Artist", ignoreCase = true) ||
+            (rootDisplayName != null && track.artist == rootDisplayName)
+        val needAlbumArtist = track.albumArtist.isBlank() ||
+            isPlaceholderGoogleDriveArtist(track.albumArtist) ||
+            track.albumArtist.equals("Unknown Artist", ignoreCase = true) ||
+            (rootDisplayName != null && track.albumArtist == rootDisplayName)
+        val needAlbum = track.album.isBlank() ||
+            track.album.equals("Unknown Album", ignoreCase = true) ||
+            (rootDisplayName != null && track.album == rootDisplayName)
+        val needGenre = track.genre.isBlank()
+        val needTrackNumber = track.trackNumber == null
+        val needDuration = track.durationSec <= 0.0
+        val needArtwork = track.artworkKey == null || artwork.file(track.artworkKey) == null
+        return needArtist || needAlbumArtist || needAlbum || needGenre || needTrackNumber || needDuration || needArtwork
+    }
+
+    private fun applyCloudFileEnrichmentLocked(
+        track: Track,
+        root: LibraryRoot?,
+        data: CloudFileEnrichmentData,
+    ): Track? {
+        if (!track.isCloud) return null
+        val rootDisplayName = root?.name
+        val needArtist = track.artist.isBlank() ||
+            isPlaceholderGoogleDriveArtist(track.artist) ||
+            track.artist.equals("Unknown Artist", ignoreCase = true) ||
+            (rootDisplayName != null && track.artist == rootDisplayName)
+        val needAlbumArtist = track.albumArtist.isBlank() ||
+            isPlaceholderGoogleDriveArtist(track.albumArtist) ||
+            track.albumArtist.equals("Unknown Artist", ignoreCase = true) ||
+            (rootDisplayName != null && track.albumArtist == rootDisplayName)
+        val needAlbum = track.album.isBlank() ||
+            track.album.equals("Unknown Album", ignoreCase = true) ||
+            (rootDisplayName != null && track.album == rootDisplayName)
+        val needGenre = track.genre.isBlank()
+        val needTrackNumber = track.trackNumber == null
+        val needDuration = track.durationSec <= 0.0
+        val needArtwork = track.artworkKey == null || artwork.file(track.artworkKey) == null
+
+        val ov = metadataOverrides[track.id]
+        val nextTitle = if (ov?.title == null && data.title != null) data.title else track.title
+        val nextArtist = if (ov?.artist == null && needArtist && data.artist != null) data.artist else track.artist
+        val nextAlbumArtist = if (ov?.albumArtist == null && needAlbumArtist && data.albumArtist != null) {
+            data.albumArtist
+        } else {
+            track.albumArtist
+        }
+        val nextAlbum = if (ov?.album == null && needAlbum && data.album != null) data.album else track.album
+        val nextGenre = if (ov?.genre == null && needGenre && data.genre != null) data.genre else track.genre
+        val nextTrackNumber = if (needTrackNumber && data.trackNumber != null) data.trackNumber else track.trackNumber
+        val nextDuration = if (needDuration && data.durationSec > 0.0) data.durationSec else track.durationSec
+        val nextArtworkKey = ov?.artworkKey ?: if (needArtwork && data.storedArtKey != null) data.storedArtKey else track.artworkKey
+
+        val enriched = track.copy(
+            title = nextTitle,
+            artist = nextArtist,
+            albumArtist = nextAlbumArtist,
+            album = nextAlbum,
+            genre = nextGenre,
+            trackNumber = nextTrackNumber,
+            durationSec = nextDuration,
+            artworkKey = nextArtworkKey,
+        )
+        return if (enriched != track) enriched else null
+    }
+
+    suspend fun enrichCloudTrackFromFile(trackId: String, file: File): Track? =
+        withContext(Dispatchers.IO) {
+            if (!file.exists() || !file.isFile) return@withContext null
+            val snapshot = synchronized(stateLock) {
+                val existing = _state.value.tracks.firstOrNull { it.id == trackId } ?: return@synchronized null
+                val root = _state.value.roots.firstOrNull { it.id == existing.rootId }
+                if (!needsCloudFileEnrichment(existing, root)) return@synchronized null
+                existing to root
+            } ?: return@withContext null
+            val needArt = snapshot.first.artworkKey == null || artwork.file(snapshot.first.artworkKey) == null
+            val data = readCloudFileEnrichmentData(file, needArtwork = needArt)
+            var updated: Track? = null
+            synchronized(stateLock) {
+                val current = _state.value
+                val existing = current.tracks.firstOrNull { it.id == trackId } ?: return@synchronized
+                val root = current.roots.firstOrNull { it.id == existing.rootId }
+                val enriched = applyCloudFileEnrichmentLocked(existing, root, data) ?: return@synchronized
+                val finalTrack = applyMetadataOverride(enriched)
+                if (finalTrack == existing) return@synchronized
+                val nextTracks = current.tracks.map { if (it.id == trackId) finalTrack else it }
+                val (albums, artists, idMap) = buildIndices(nextTracks)
+                byId = idMap
+                _state.value = current.copy(
+                    tracks = nextTracks,
+                    albums = albums,
+                    artists = artists,
+                )
+                updated = finalTrack
+            }
+            updated?.let { tr ->
+                saveLibrary()
+                onTrackUpdated?.invoke(tr)
+            }
+            updated
+        }
+
     fun updateTrackMetadata(
         trackId: String,
         title: String? = null,
@@ -3097,11 +3325,13 @@ class LibraryStore(
     ): Track? {
         val current = _state.value
         val existing = current.tracks.firstOrNull { it.id == trackId } ?: return null
+        val cleanArtist = artist?.trim()?.takeIf { it.isNotEmpty() }
         val prevOverride = metadataOverrides[trackId]
         val nextOverride = TrackMetadataOverride(
             title = title?.trim()?.takeIf { it.isNotEmpty() } ?: prevOverride?.title,
-            artist = artist?.trim()?.takeIf { it.isNotEmpty() } ?: prevOverride?.artist,
+            artist = cleanArtist ?: prevOverride?.artist,
             album = album?.trim()?.takeIf { it.isNotEmpty() } ?: prevOverride?.album,
+            albumArtist = cleanArtist ?: prevOverride?.albumArtist,
             genre = genre?.trim() ?: prevOverride?.genre,
             artworkKey = artworkKey ?: prevOverride?.artworkKey,
         )
@@ -3118,6 +3348,109 @@ class LibraryStore(
         saveLibrary()
         onTrackUpdated?.invoke(updatedTrack)
         return updatedTrack
+    }
+
+    suspend fun batchUpdateTrackMetadata(
+        trackIds: Collection<String>,
+        artist: String?,
+        album: String?,
+    ): Int {
+        val cleanArtist = artist?.trim()?.takeIf { it.isNotEmpty() }
+        val cleanAlbum = album?.trim()?.takeIf { it.isNotEmpty() }
+        if (cleanArtist == null && cleanAlbum == null) return 0
+        val targetIds = trackIds.toSet()
+        if (targetIds.isEmpty()) return 0
+
+        val updatedTracks = ArrayList<Track>()
+        synchronized(stateLock) {
+            val current = _state.value
+            val matching = current.tracks.filter { it.id in targetIds }
+            if (matching.isEmpty()) return 0
+
+            val updatedById = HashMap<String, Track>(matching.size)
+            for (existing in matching) {
+                val prevOverride = metadataOverrides[existing.id]
+                val nextOverride = TrackMetadataOverride(
+                    title = prevOverride?.title,
+                    artist = cleanArtist ?: prevOverride?.artist,
+                    album = cleanAlbum ?: prevOverride?.album,
+                    albumArtist = cleanArtist ?: prevOverride?.albumArtist,
+                    genre = prevOverride?.genre,
+                    artworkKey = prevOverride?.artworkKey,
+                )
+                metadataOverrides[existing.id] = nextOverride
+                val updatedTrack = applyMetadataOverride(existing)
+                updatedById[existing.id] = updatedTrack
+                updatedTracks.add(updatedTrack)
+            }
+            val nextTracks = current.tracks.map { updatedById[it.id] ?: it }
+            val (albums, artists, idMap) = buildIndices(nextTracks)
+            byId = idMap
+            _state.value = current.copy(
+                tracks = nextTracks,
+                albums = albums,
+                artists = artists,
+            )
+        }
+
+        saveLibrary()
+        for (updatedTrack in updatedTracks) {
+            onTrackUpdated?.invoke(updatedTrack)
+        }
+
+        val tagPayload = AudioTagPayload(
+            artist = cleanArtist.orEmpty(),
+            album = cleanAlbum.orEmpty(),
+            albumArtist = cleanArtist.orEmpty(),
+        )
+        withContext(Dispatchers.IO) {
+            for (track in updatedTracks) {
+                if (track.isCloud) continue
+                val ext = track.fileName.substringAfterLast('.', "").lowercase()
+                if (!AudioTagWriter.isEmbeddableExtension(ext)) continue
+                val localFile = localFileFor(track)
+                if (localFile != null && localFile.exists() && localFile.canWrite()) {
+                    runCatching {
+                        AudioTagWriter.write(
+                            file = localFile,
+                            payload = tagPayload,
+                            formatExtension = ext,
+                        )
+                    }
+                    continue
+                }
+                val ctx = context ?: continue
+                val uriStr = synchronized(stateLock) { trackUris[track.id] } ?: continue
+                val uri = runCatching { Uri.parse(uriStr) }.getOrNull() ?: continue
+                runCatching {
+                    val cacheDir = (ctx.cacheDir ?: ctx.filesDir).apply { mkdirs() }
+                    val tempFile = File.createTempFile("musico_batch_tag_", ".$ext", cacheDir)
+                    try {
+                        ctx.contentResolver.openInputStream(uri)?.use { input ->
+                            tempFile.outputStream().use { out ->
+                                input.copyTo(out)
+                            }
+                        } ?: return@runCatching
+                        if (!AudioTagWriter.write(tempFile, tagPayload, formatExtension = ext)) {
+                            return@runCatching
+                        }
+                        val outStream = runCatching {
+                            ctx.contentResolver.openOutputStream(uri, "wt")
+                        }.getOrNull() ?: ctx.contentResolver.openOutputStream(uri, "w")
+                        outStream?.use { out ->
+                            tempFile.inputStream().use { input ->
+                                input.copyTo(out)
+                            }
+                            out.flush()
+                        }
+                    } finally {
+                        runCatching { tempFile.delete() }
+                    }
+                }
+            }
+        }
+
+        return updatedTracks.size
     }
 
     suspend fun applyFallbackMetadataForSavedFile(
@@ -3144,14 +3477,23 @@ class LibraryStore(
                 }
             } ?: return
 
+        val sourceCloudRootName = sourceTrack.takeIf { it.isCloud }?.let { rootFor(it)?.name }
+        val cleanSourceArtist = sourceTrack.artist.trim().takeUnless {
+            it.isEmpty() ||
+                it == "Unknown Artist" ||
+                isPlaceholderGoogleDriveArtist(it) ||
+                (sourceTrack.cloudSource == CloudSource.GOOGLE_DRIVE && sourceCloudRootName != null && it == sourceCloudRootName)
+        }
+        val cleanSourceAlbum = sourceTrack.album.trim().takeUnless {
+            it.isEmpty() ||
+                it == "Unknown Album" ||
+                (sourceTrack.cloudSource == CloudSource.GOOGLE_DRIVE && sourceCloudRootName != null && it == sourceCloudRootName)
+        }
+
         val needTitle = sourceTrack.title.isNotBlank() &&
             candidate.title.equals(candidate.fileName.substringBeforeLast('.', candidate.fileName), ignoreCase = true)
-        val needArtist = candidate.artist == "Unknown Artist" &&
-            sourceTrack.artist.isNotBlank() &&
-            sourceTrack.artist != "Unknown Artist"
-        val needAlbum = candidate.album == "Unknown Album" &&
-            sourceTrack.album.isNotBlank() &&
-            sourceTrack.album != "Unknown Album"
+        val needArtist = candidate.artist == "Unknown Artist" && cleanSourceArtist != null
+        val needAlbum = candidate.album == "Unknown Album" && cleanSourceAlbum != null
         val needGenre = candidate.genre.isBlank() && sourceTrack.genre.isNotBlank()
         val artUrl = sourceTrack.remoteArtworkUrl
             ?.takeIf { CloudThumbnailCache.isAllowedUrl(it) }
@@ -3179,8 +3521,8 @@ class LibraryStore(
             updateTrackMetadata(
                 trackId = candidate.id,
                 title = if (needTitle) sourceTrack.title else null,
-                artist = if (needArtist) sourceTrack.artist else null,
-                album = if (needAlbum) sourceTrack.album else null,
+                artist = if (needArtist) cleanSourceArtist else null,
+                album = if (needAlbum) cleanSourceAlbum else null,
                 genre = if (needGenre) sourceTrack.genre else null,
                 artworkKey = resolvedArtKey,
             )

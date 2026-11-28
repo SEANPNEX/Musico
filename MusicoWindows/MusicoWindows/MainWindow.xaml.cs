@@ -62,6 +62,7 @@ public partial class MainWindow : Window
             OpenUpdateTrackedFolder = root => SaveCloudDialog.ShowTrackedFolderUpdate(_services, root),
             OpenUpdateTrackedSubfolder = (root, relPath) => SaveCloudDialog.ShowTrackedFolderUpdate(_services, root, relPath),
             OpenSongInfo = ShowSongInfo,
+            OpenBatchTagEdit = ShowBatchTagEdit,
             OpenSearch = OpenSearchWithField,
             OpenCollectionPreview = (extId, extName, item, canImport) =>
                 ShowCollectionPreview(extId, extName, item, canImport),
@@ -633,6 +634,11 @@ public partial class MainWindow : Window
         SongInfoDialog.Show(_ctx, track);
     }
 
+    internal void ShowBatchTagEdit(IReadOnlyList<MusicoWindows.Models.Track> tracks)
+    {
+        BatchTagEditOverlay.Show(_ctx, tracks);
+    }
+
     internal void ShowCollectionPreview(
         string extensionId,
         string extensionName,
@@ -797,6 +803,7 @@ public partial class MainWindow : Window
             if (ConfirmOverlay.IsOpen) { ConfirmOverlay.Close(); e.Handled = true; return; }
             if (PromptDialog.IsOpen) { PromptDialog.Close(); e.Handled = true; return; }
             if (CommandPaletteOverlay.IsOpen) { CommandPaletteOverlay.Close(); e.Handled = true; return; }
+            if (BatchTagEditOverlay.IsOpen) { BatchTagEditOverlay.Close(); e.Handled = true; return; }
             if (SongInfoDialog.IsOpen) { SongInfoDialog.Close(); e.Handled = true; return; }
             if (UpdateDialog.IsOpen) { UpdateDialog.Close(); e.Handled = true; return; }
             if (DownloadsOverlay.IsOpen) { DownloadsOverlay.Close(); e.Handled = true; return; }
@@ -822,7 +829,8 @@ public partial class MainWindow : Window
                                 CloudLyricsOverlay.IsOpen ||
                                 DownloadsOverlay.IsOpen ||
                                 UpdateDialog.IsOpen ||
-                                SongInfoDialog.IsOpen;
+                                SongInfoDialog.IsOpen ||
+                                BatchTagEditOverlay.IsOpen;
 
         if (Keyboard.Modifiers == ModifierKeys.Control)
         {

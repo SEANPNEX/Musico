@@ -2,6 +2,9 @@ package com.musico.cloud
 
 import android.net.Uri
 import com.musico.core.ArtworkCache
+import com.musico.core.AudioTagPayload
+import com.musico.core.AudioTagWriter
+import com.musico.core.EmbeddedArtworkExtractor
 import com.musico.core.MetadataReading
 import com.musico.core.TrackMetadata
 import com.musico.extensions.CloudProviderIds
@@ -1054,5 +1057,134 @@ class CloudExporterTest {
         assertEquals("Lossless Song.m4a", savedName)
         assertTrue(File(targetDir, savedName).isFile)
         assertEquals(listOf("alac"), resolver.requestedQualities)
+    }
+
+    @Test
+    fun googleDriveExportRetainsEmbeddedArtistAlbumTitleAndCoverArt() = runBlocking {
+        val samplePng = byteArrayOf(
+            0x89.toByte(), 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x02, 0x00, 0x00, 0x00, 0x90.toByte(), 0x77, 0x53,
+        )
+        val sourceFlac = File(tempFolder.root, "seed.flac").apply {
+            val out = ByteArrayOutputStream()
+            out.write("fLaC".toByteArray(Charsets.US_ASCII))
+            out.write(0x80)
+            out.write(0x00)
+            out.write(0x00)
+            out.write(34)
+            out.write(ByteArray(34))
+            out.write(byteArrayOf(0xFF.toByte(), 0xF8.toByte(), 0x01, 0x02))
+            writeBytes(out.toByteArray())
+            assertTrue(
+                AudioTagWriter.write(
+                    this,
+                    AudioTagPayload(
+                        title = "Embedded Real Title",
+                        artist = "Real Original Artist",
+                        album = "Real Original Album",
+                        genre = "Electronic",
+                        trackNumber = 3,
+                        artworkBytes = samplePng,
+                    ),
+                    "flac",
+                ),
+            )
+        }
+        val sourceMp3 = File(tempFolder.root, "seed.mp3").apply {
+            writeBytes(byteArrayOf(0xFF.toByte(), 0xFB.toByte(), 0x90.toByte(), 0x00, 0x11, 0x22, 0x33, 0x44))
+            assertTrue(
+                AudioTagWriter.write(
+                    this,
+                    AudioTagPayload(
+                        title = "MP3 Real Title",
+                        artist = "Real MP3 Artist",
+                        album = "Real MP3 Album",
+                        genre = "Indie",
+                        artworkBytes = samplePng,
+                    ),
+                    "mp3",
+                ),
+            )
+        }
+
+        val driveRoot = LibraryRoot(
+            id = "cloud_gdrive_1",
+            name = "My Drive Music",
+            kind = RootKind.CLOUD_GOOGLE_DRIVE,
+            sourceUrl = "https://drive.google.com/drive/folders/1DriveFolder",
+            remoteId = "1DriveFolder",
+        )
+        val tracks = listOf(
+            Track(
+                id = "gd_flac",
+                rootId = driveRoot.id,
+                relativePath = "google_drive/file1.flac",
+                title = "seed",
+                artist = GoogleDriveClient.DEFAULT_ARTIST,
+                album = "My Drive Music",
+                albumArtist = GoogleDriveClient.DEFAULT_ARTIST,
+                durationSec = 0.0,
+                fileSize = 0L,
+                modifiedEpochMs = 0L,
+                dateAddedEpochMs = 1L,
+                cloudSource = CloudSource.GOOGLE_DRIVE,
+                remoteTrackId = "file1",
+            ),
+            Track(
+                id = "gd_mp3",
+                rootId = driveRoot.id,
+                relativePath = "google_drive/file2.mp3",
+                title = "seed2",
+                artist = GoogleDriveClient.DEFAULT_ARTIST,
+                album = "My Drive Music",
+                albumArtist = GoogleDriveClient.DEFAULT_ARTIST,
+                durationSec = 0.0,
+                fileSize = 0L,
+                modifiedEpochMs = 0L,
+                dateAddedEpochMs = 2L,
+                cloudSource = CloudSource.GOOGLE_DRIVE,
+                remoteTrackId = "file2",
+            ),
+        )
+        val resolver = FakeCloudStreamResolver { track, _, _ ->
+            when (track.remoteTrackId) {
+                "file1" -> ResolvedStream("https://drive.test/file1", mimeType = "audio/flac", fileExtension = "flac")
+                else -> ResolvedStream("https://drive.test/file2", mimeType = "audio/mpeg", fileExtension = "mp3")
+            }
+        }
+        val downloader = object : CloudStreamDownloader {
+            override suspend fun download(url: String, headers: Map<String, String>, output: OutputStream) {
+                val src = if (url.endsWith("file1")) sourceFlac else sourceMp3
+                output.write(src.readBytes())
+            }
+        }
+        val exporter = CloudExporter(
+            context = null,
+            cloudResolver = resolver,
+            downloader = downloader,
+        )
+        val exportParent = tempFolder.newFolder("gdrive_export")
+        val summary = exporter.exportPlaylist(tracks, driveRoot, exportParent, "My Drive Music")
+        assertEquals(2, summary.savedCount)
+        assertEquals(0, summary.failedCount)
+
+        val exportedFlac = File(summary.targetDir!!, "seed.flac")
+        val flacSummary = AudioTagWriter.readEmbeddedSummary(exportedFlac)
+        assertEquals("Embedded Real Title", flacSummary.title)
+        assertEquals("Real Original Artist", flacSummary.artist)
+        assertEquals("Real Original Album", flacSummary.album)
+        assertEquals("Electronic", flacSummary.genre)
+        assertEquals(3, flacSummary.trackNumber)
+        assertArrayEquals(samplePng, EmbeddedArtworkExtractor.extract(exportedFlac).artwork!!)
+
+        val exportedMp3 = File(summary.targetDir!!, "seed2.mp3")
+        val mp3Summary = AudioTagWriter.readEmbeddedSummary(exportedMp3)
+        assertEquals("MP3 Real Title", mp3Summary.title)
+        assertEquals("Real MP3 Artist", mp3Summary.artist)
+        assertEquals("Real MP3 Album", mp3Summary.album)
+        assertEquals("Indie", mp3Summary.genre)
+        assertArrayEquals(samplePng, EmbeddedArtworkExtractor.extract(exportedMp3).artwork!!)
     }
 }

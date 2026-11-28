@@ -20,7 +20,7 @@ public partial class CloudLyricsDialog : UserControl
     private AppServices? _services;
     private Track? _track;
     private string? _audioPath;
-    private CloudLyricsSourceSelection _selectedSource = CloudLyricsSourceSelection.Auto;
+    private CloudLyricsSourceSelection _selectedSource = CloudLyricsSourceSelection.Lrclib;
     private List<CloudLyricsCandidate> _candidates = new();
     private CloudLyricsCandidate? _selectedCandidate;
     private CancellationTokenSource? _searchCts;
@@ -48,7 +48,10 @@ public partial class CloudLyricsDialog : UserControl
         _services = services;
         _track = track;
         _audioPath = services.Library.GetFilePath(track);
-        _selectedSource = CloudLyricsSourceSelection.Auto;
+        var initialExts = services.Extensions.GetActiveLyricsExtensions();
+        _selectedSource = initialExts.Count > 0
+            ? CloudLyricsSourceSelection.Auto
+            : CloudLyricsSourceSelection.Lrclib;
         _candidates = new();
         _selectedCandidate = null;
         _isSearching = false;
@@ -92,6 +95,10 @@ public partial class CloudLyricsDialog : UserControl
 
         var activeExts = _services.Extensions.GetActiveLyricsExtensions();
         var options = CloudLyricsService.BuildSourceOptions(activeExts, L.Get("CloudLyrics_SourceAuto"));
+        if (options.Count > 0 && !options.Any(o => o.Selection == _selectedSource))
+        {
+            _selectedSource = options[0].Selection;
+        }
 
         foreach (var opt in options)
         {

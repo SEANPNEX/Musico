@@ -100,7 +100,23 @@ fun CloudLyricsPickerSheet(
         val cleaned = if (track.artist == "Unknown Artist" || track.artist == strings.unknownArtist) "" else track.artist
         mutableStateOf(cleaned)
     }
-    var selectedSource by remember { mutableStateOf<CloudLyricsSourceSelection>(CloudLyricsSourceSelection.Auto) }
+    var selectedSource by remember(activeLyricsExts.isEmpty()) {
+        mutableStateOf<CloudLyricsSourceSelection>(
+            if (activeLyricsExts.isEmpty()) CloudLyricsSourceSelection.Lrclib else CloudLyricsSourceSelection.Auto,
+        )
+    }
+    LaunchedEffect(activeLyricsExts) {
+        if (activeLyricsExts.isEmpty()) {
+            if (selectedSource != CloudLyricsSourceSelection.Lrclib) {
+                selectedSource = CloudLyricsSourceSelection.Lrclib
+            }
+        } else if (selectedSource is CloudLyricsSourceSelection.Extension) {
+            val extId = (selectedSource as CloudLyricsSourceSelection.Extension).extensionId
+            if (activeLyricsExts.none { it.id == extId }) {
+                selectedSource = CloudLyricsSourceSelection.Auto
+            }
+        }
+    }
     var candidates by remember { mutableStateOf<List<CloudLyricsCandidate>>(emptyList()) }
     var partialFailures by remember { mutableStateOf<List<CloudLyricsSourceFailure>>(emptyList()) }
     var selectedId by remember { mutableStateOf<String?>(null) }
@@ -319,6 +335,14 @@ fun CloudLyricsPickerSheet(
                             label = { Text(option.label, maxLines = 1) },
                         )
                     }
+                }
+                if (activeLyricsExts.isEmpty()) {
+                    Text(
+                        text = strings.builtInLyricsSourceHint,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(start = 16.dp, end = 16.dp, bottom = 6.dp),
+                    )
                 }
 
                 HorizontalDivider()

@@ -1,11 +1,15 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using Microsoft.Win32;
 using MusicoWindows.Cloud;
@@ -19,6 +23,7 @@ namespace MusicoWindows.Controls;
 public partial class LyricsPanel : UserControl
 {
     private readonly List<TextBlock> _lineBlocks = new();
+    private readonly List<Border> _lineContainers = new();
     private readonly DispatcherTimer _manualScrollGraceTimer;
     private AppServices? _services;
     private Lyrics? _lyrics;
@@ -28,6 +33,8 @@ public partial class LyricsPanel : UserControl
     private bool _embedded;
     private bool _isManualScrolling;
     private int _programmaticScrollDepth;
+    private string? _sideAmbientSignature;
+    private CancellationTokenSource? _sideAmbientCts;
 
     public event Action? CloseRequested;
     public event Action<Track>? SearchOnlineRequested;
@@ -48,6 +55,9 @@ public partial class LyricsPanel : UserControl
         Unloaded += (_, _) =>
         {
             _manualScrollGraceTimer.Stop();
+            _sideAmbientCts?.Cancel();
+            _sideAmbientCts?.Dispose();
+            _sideAmbientCts = null;
             LocalizationManager.LanguageChanged -= OnLanguageChanged;
             ThemeManager.AppearanceChanged -= OnAppearanceChanged;
         };
@@ -62,9 +72,34 @@ public partial class LyricsPanel : UserControl
 
     private void RefreshLocalizedText()
     {
-        var track = _services?.Player.CurrentTrack;
-        HeaderTitleText.Text = track?.Title ?? L.Get("Lyrics_Title");
+        UpdateHeaderMetadata(_services?.Player.CurrentTrack);
         UpdateSourceTagText();
+    }
+
+    private void UpdateHeaderMetadata(Track? track)
+    {
+        HeaderTitleText.Text = track?.Title ?? L.Get("Lyrics_Title");
+        if (track is not null)
+        {
+            string artistDisplay = L.DisplayArtist(track.Artist);
+            HeaderArtistText.Text = artistDisplay;
+            HeaderArtistText.Visibility = string.IsNullOrWhiteSpace(artistDisplay)
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+        }
+        else
+        {
+            HeaderArtistText.Text = string.Empty;
+            HeaderArtistText.Visibility = Visibility.Collapsed;
+        }
+        UpdateSourceTagBadgeMargin();
+    }
+
+    private void UpdateSourceTagBadgeMargin()
+    {
+        SourceTagBadge.Margin = HeaderArtistText.Visibility == Visibility.Visible
+            ? new Thickness(8, 0, 0, 0)
+            : new Thickness(0);
     }
 
     private void UpdateSourceTagText()
@@ -79,11 +114,14 @@ public partial class LyricsPanel : UserControl
                 LyricsSource.Embedded => L.Get("Lyrics_SourceEmbedded"),
                 _ => string.Empty
             };
-            SourceTagText.Visibility = Visibility.Visible;
+            SourceTagBadge.Visibility = string.IsNullOrEmpty(SourceTagText.Text)
+                ? Visibility.Collapsed
+                : Visibility.Visible;
+            UpdateSourceTagBadgeMargin();
         }
         else
         {
-            SourceTagText.Visibility = Visibility.Collapsed;
+            SourceTagBadge.Visibility = Visibility.Collapsed;
         }
     }
 
@@ -94,6 +132,7 @@ public partial class LyricsPanel : UserControl
         {
             _embedded = value;
             CloseButton.Visibility = value ? Visibility.Collapsed : Visibility.Visible;
+            UpdateSideAmbientBackdrop(_services, _services?.Player.CurrentTrack);
         }
     }
 
@@ -103,11 +142,25 @@ public partial class LyricsPanel : UserControl
         {
             _services.Player.PropertyChanged -= OnPlayerChanged;
             _services.Lyrics.LyricsChanged -= OnLyricsStoreChanged;
+            _services.Library.TrackUpdated -= OnLibraryTrackUpdated;
         }
         _services = services;
         _services.Player.PropertyChanged += OnPlayerChanged;
         _services.Lyrics.LyricsChanged += OnLyricsStoreChanged;
+        _services.Library.TrackUpdated += OnLibraryTrackUpdated;
         _ = LoadLyricsAsync(forceReload: true);
+    }
+
+    private void OnLibraryTrackUpdated(Track updated)
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            if (_services?.Player.CurrentTrack?.Id == updated.Id)
+            {
+                UpdateHeaderMetadata(updated);
+                UpdateSideAmbientBackdrop(_services, updated);
+            }
+        });
     }
 
     private void OnLyricsStoreChanged(string trackId)
@@ -138,8 +191,11 @@ public partial class LyricsPanel : UserControl
         if (_services is null) return;
         var track = _services.Player.CurrentTrack;
 
+        UpdateSideAmbientBackdrop(_services, track);
+
         if (!forceReload && track?.Id == _loadedTrackId)
         {
+            UpdateHeaderMetadata(track);
             UpdateActiveLine();
             return;
         }
@@ -147,7 +203,7 @@ public partial class LyricsPanel : UserControl
         _loadedTrackId = track?.Id;
         _activeLineIndex = null;
         EndManualScrollGracePeriod(scrollToActive: false);
-        HeaderTitleText.Text = track?.Title ?? L.Get("Lyrics_Title");
+        UpdateHeaderMetadata(track);
         SearchOnlineButton.IsEnabled = track != null;
         EmptySearchOnlineButton.IsEnabled = track != null;
         ImportButton.IsEnabled = track != null;
@@ -201,13 +257,18 @@ public partial class LyricsPanel : UserControl
     {
         if (_lyrics is null || _lineBlocks.Count == 0) return;
         var (timed, untimed, align) = ResolveTypography();
-        double baseSize = _lyrics.IsTimed ? timed : untimed;
         for (int i = 0; i < _lineBlocks.Count; i++)
         {
             var tb = _lineBlocks[i];
-            bool isActive = _lyrics.IsTimed && _activeLineIndex == i;
-            tb.FontSize = isActive ? baseSize + 2 : baseSize;
             tb.TextAlignment = align;
+            if (_lyrics.IsTimed)
+            {
+                ApplyTimedLineVisual(tb, i, _activeLineIndex, timed);
+            }
+            else
+            {
+                tb.FontSize = untimed;
+            }
         }
         if (!_isManualScrolling && _activeLineIndex is int activeIdx)
         {
@@ -219,6 +280,7 @@ public partial class LyricsPanel : UserControl
     {
         LinesStack.Children.Clear();
         _lineBlocks.Clear();
+        _lineContainers.Clear();
         EndManualScrollGracePeriod(scrollToActive: false);
 
         bool hasTrack = _services?.Player.CurrentTrack != null;
@@ -248,19 +310,39 @@ public partial class LyricsPanel : UserControl
             var tb = new TextBlock
             {
                 Text = string.IsNullOrEmpty(line.Text) ? "♪" : line.Text,
-                FontFamily = (System.Windows.Media.FontFamily)FindResource("Win10Font"),
+                FontFamily = (FontFamily)FindResource("Win10Font"),
                 FontSize = fontSize,
                 TextAlignment = align,
-                TextWrapping = TextWrapping.Wrap,
-                Margin = new Thickness(0, 0, 0, _lyrics.IsTimed ? 16 : 10)
+                TextWrapping = TextWrapping.Wrap
+            };
+
+            var container = new Border
+            {
+                Background = Brushes.Transparent,
+                BorderBrush = Brushes.Transparent,
+                BorderThickness = new Thickness(1),
+                CornerRadius = new CornerRadius(8),
+                Padding = new Thickness(10, 6, 10, 6),
+                Margin = new Thickness(0, 0, 0, _lyrics.IsTimed ? 4 : 2),
+                Child = tb
             };
 
             if (_lyrics.IsTimed && line.TimeSeconds is double seekTime)
             {
-                tb.Cursor = Cursors.Hand;
+                container.Cursor = Cursors.Hand;
                 tb.Opacity = 0.72;
                 tb.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
-                tb.MouseLeftButtonUp += (_, _) =>
+                container.MouseEnter += (_, _) =>
+                {
+                    container.SetResourceReference(Border.BackgroundProperty, "SubtleHoverBrush");
+                    container.SetResourceReference(Border.BorderBrushProperty, "RevealBorderBrush");
+                };
+                container.MouseLeave += (_, _) =>
+                {
+                    container.Background = Brushes.Transparent;
+                    container.BorderBrush = Brushes.Transparent;
+                };
+                container.MouseLeftButtonUp += (_, _) =>
                 {
                     EndManualScrollGracePeriod(scrollToActive: false);
                     _services?.Player.Seek(seekTime);
@@ -272,7 +354,8 @@ public partial class LyricsPanel : UserControl
                 tb.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
             }
 
-            LinesStack.Children.Add(tb);
+            LinesStack.Children.Add(container);
+            _lineContainers.Add(container);
             _lineBlocks.Add(tb);
         }
 
@@ -292,37 +375,7 @@ public partial class LyricsPanel : UserControl
 
         for (int i = 0; i < _lineBlocks.Count; i++)
         {
-            var block = _lineBlocks[i];
-            if (nextIndex is int activeIdx)
-            {
-                int distance = Math.Abs(i - activeIdx);
-                if (distance == 0)
-                {
-                    block.FontWeight = FontWeights.SemiBold;
-                    block.FontSize = timedSize + 2;
-                    block.Opacity = 1.0;
-                    block.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
-                }
-                else
-                {
-                    block.FontWeight = FontWeights.Normal;
-                    block.FontSize = timedSize;
-                    block.Opacity = distance switch
-                    {
-                        1 => 0.72,
-                        2 => 0.50,
-                        _ => 0.34
-                    };
-                    block.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
-                }
-            }
-            else
-            {
-                block.FontWeight = FontWeights.Normal;
-                block.FontSize = timedSize;
-                block.Opacity = 0.78;
-                block.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
-            }
+            ApplyTimedLineVisual(_lineBlocks[i], i, nextIndex, timedSize);
         }
 
         if (nextIndex is int targetIdx && !_isManualScrolling)
@@ -331,19 +384,53 @@ public partial class LyricsPanel : UserControl
         }
     }
 
+    private static void ApplyTimedLineVisual(TextBlock block, int index, int? activeIndex, double timedSize)
+    {
+        if (activeIndex is int activeIdx)
+        {
+            int distance = Math.Abs(index - activeIdx);
+            if (distance == 0)
+            {
+                block.FontWeight = FontWeights.Bold;
+                block.FontSize = timedSize + 3.0;
+                block.Opacity = 1.0;
+                block.SetResourceReference(TextBlock.ForegroundProperty, "TextPrimaryBrush");
+            }
+            else
+            {
+                block.FontWeight = distance == 1 ? FontWeights.Medium : FontWeights.Normal;
+                block.FontSize = distance >= 3 ? Math.Max(11.0, timedSize - 0.5) : timedSize;
+                block.Opacity = distance switch
+                {
+                    1 => 0.72,
+                    2 => 0.46,
+                    _ => 0.28
+                };
+                block.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+            }
+        }
+        else
+        {
+            block.FontWeight = FontWeights.Normal;
+            block.FontSize = timedSize;
+            block.Opacity = 0.75;
+            block.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondaryBrush");
+        }
+    }
+
     private void ScrollToLine(int lineIndex)
     {
-        if (lineIndex < 0 || lineIndex >= _lineBlocks.Count) return;
-        var activeBlock = _lineBlocks[lineIndex];
+        if (lineIndex < 0 || lineIndex >= _lineContainers.Count) return;
+        var activeContainer = _lineContainers[lineIndex];
 
         Dispatcher.BeginInvoke(() =>
         {
             if (LyricsScroll.ViewportHeight <= 0) return;
             try
             {
-                var transform = activeBlock.TransformToAncestor(LinesStack);
+                var transform = activeContainer.TransformToAncestor(LinesStack);
                 var point = transform.Transform(new Point(0, 0));
-                double targetOffset = point.Y - (LyricsScroll.ViewportHeight / 2.0) + (activeBlock.ActualHeight / 2.0);
+                double targetOffset = point.Y - (LyricsScroll.ViewportHeight / 2.0) + (activeContainer.ActualHeight / 2.0);
                 _programmaticScrollDepth++;
                 try
                 {
@@ -361,6 +448,103 @@ public partial class LyricsPanel : UserControl
                 // Element not yet measured
             }
         });
+    }
+
+    private void UpdateSideAmbientBackdrop(AppServices? services, Track? track)
+    {
+        if (SideAmbientBackdropHost is null || SideAmbientBackdropImage is null || SideAmbientScrim is null)
+            return;
+
+        if (_embedded || services is null || track is null)
+        {
+            _sideAmbientSignature = null;
+            _sideAmbientCts?.Cancel();
+            _sideAmbientCts?.Dispose();
+            _sideAmbientCts = null;
+            SideAmbientBackdropImage.Source = null;
+            SideAmbientBackdropHost.Visibility = Visibility.Collapsed;
+            SideAmbientScrim.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        string sig = $"{track.Id}|{track.ArtworkKey}|{track.RemoteArtworkUrl}";
+        if (string.Equals(_sideAmbientSignature, sig, StringComparison.Ordinal))
+            return;
+        _sideAmbientSignature = sig;
+
+        _sideAmbientCts?.Cancel();
+        _sideAmbientCts?.Dispose();
+        _sideAmbientCts = null;
+
+        if (!string.IsNullOrWhiteSpace(track.ArtworkKey))
+        {
+            string? path = services.Library.Artwork.GetImagePath(track.ArtworkKey);
+            if (!string.IsNullOrEmpty(path) && File.Exists(path))
+            {
+                try
+                {
+                    var bmp = new BitmapImage();
+                    bmp.BeginInit();
+                    bmp.UriSource = new Uri(path, UriKind.Absolute);
+                    bmp.CacheOption = BitmapCacheOption.OnLoad;
+                    bmp.DecodePixelWidth = 180;
+                    bmp.EndInit();
+                    bmp.Freeze();
+                    ShowSideAmbientBitmap(bmp);
+                    return;
+                }
+                catch
+                {
+                    // Fall through to remote or hide.
+                }
+            }
+        }
+
+        if (CloudThumbnailCache.IsAllowedHttpsUrl(track.RemoteArtworkUrl))
+        {
+            string remoteUrl = track.RemoteArtworkUrl!.Trim();
+            if (services.Thumbnails.TryGetBitmap(remoteUrl, 180, out var cached) && cached is not null)
+            {
+                ShowSideAmbientBitmap(cached);
+                return;
+            }
+
+            var cts = new CancellationTokenSource();
+            _sideAmbientCts = cts;
+            _ = LoadSideAmbientRemoteAsync(services.Thumbnails, remoteUrl, sig, cts.Token);
+        }
+
+        SideAmbientBackdropImage.Source = null;
+        SideAmbientBackdropHost.Visibility = Visibility.Collapsed;
+        SideAmbientScrim.Visibility = Visibility.Collapsed;
+    }
+
+    private async Task LoadSideAmbientRemoteAsync(
+        CloudThumbnailCache cache,
+        string url,
+        string expectedSig,
+        CancellationToken ct)
+    {
+        try
+        {
+            var bmp = await cache.GetBitmapAsync(url, 180, ct);
+            if (ct.IsCancellationRequested || bmp is null || _embedded) return;
+            if (!string.Equals(_sideAmbientSignature, expectedSig, StringComparison.Ordinal)) return;
+            ShowSideAmbientBitmap(bmp);
+        }
+        catch
+        {
+            // Ignore remote ambient artwork errors.
+        }
+    }
+
+    private void ShowSideAmbientBitmap(BitmapImage bmp)
+    {
+        if (_embedded) return;
+        SideAmbientBackdropImage.Source = bmp;
+        SideAmbientBackdropHost.Visibility = Visibility.Visible;
+        SideAmbientScrim.Visibility = Visibility.Visible;
+        Win10Animations.AnimateFadeIn(SideAmbientBackdropImage, 0.0, 260);
     }
 
     private void BeginManualScrollGracePeriod()

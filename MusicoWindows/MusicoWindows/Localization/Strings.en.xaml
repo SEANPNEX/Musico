@@ -133,6 +133,7 @@
     <sys:String x:Key="Str_CloudLyrics_IncludeTranslation">Include translation</sys:String>
     <sys:String x:Key="Str_CloudLyrics_AlsoExportSidecar">Also save .lrc to song folder</sys:String>
     <sys:String x:Key="Str_CloudLyrics_UseLyrics">Use Lyrics</sys:String>
+    <sys:String x:Key="Str_CloudLyrics_ProviderNote">Built-in online search uses LRCLIB. Install extensions in Extensions to add more lyrics providers (such as NetEase Cloud Music or Apple Music).</sys:String>
 
     <!-- EqualizerDialog -->
     <sys:String x:Key="Str_Equalizer_Title">Equalizer</sys:String>
@@ -345,5 +346,13 @@
     <sys:String x:Key="Str_Stats_LibraryExplored">Library Explored</sys:String>
     <sys:String x:Key="Str_Stats_TopArtists">Top Artists</sys:String>
     <sys:String x:Key="Str_Stats_TopAlbums">Top Albums</sys:String>
+
+    <!-- Multi-Select & Batch Tag Editing -->
+    <sys:String x:Key="Str_Select_Select">Select</sys:String>
+    <sys:String x:Key="Str_Select_SelectAll">Select All</sys:String>
+    <sys:String x:Key="Str_Select_EditTags">Edit Tags...</sys:String>
+    <sys:String x:Key="Str_BatchTag_Title">Edit Tags</sys:String>
+    <sys:String x:Key="Str_BatchTag_MixedHint">Leave a field blank to keep each song's current value.</sys:String>
+    <sys:String x:Key="Str_BatchTag_Apply">Apply</sys:String>
 
 </ResourceDictionary>

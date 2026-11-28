@@ -416,12 +416,27 @@ public sealed class PlayerController : ObservableStore, IDisposable
 
             if (ct.IsCancellationRequested || gen != _loadGeneration || _disposed) return;
 
+            (TrackMetadata Meta, string? ArtworkKey)? pendingEnrichment = null;
+            if (!string.IsNullOrEmpty(filePath) && track.IsCloud && LibraryStore.NeedsCloudMetadataEnrichment(track))
+            {
+                pendingEnrichment = await Library.ReadCloudEnrichmentAsync(track, filePath, ct).ConfigureAwait(false);
+                if (ct.IsCancellationRequested || gen != _loadGeneration || _disposed) return;
+            }
+
             bool loaded = false;
             if (!string.IsNullOrEmpty(filePath))
             {
                 loaded = await RunOnUiAsync(() =>
                 {
                     if (ct.IsCancellationRequested || gen != _loadGeneration || _disposed) return true;
+                    if (pendingEnrichment is { } enrichment)
+                    {
+                        track = Library.ApplyCloudEnrichment(track.Id, enrichment.Meta, enrichment.ArtworkKey) ?? track;
+                    }
+                    else
+                    {
+                        track = Library.GetTrack(track.Id) ?? track;
+                    }
                     CurrentTrack = track;
                     DurationSeconds = track.DurationSeconds;
                     CurrentTimeSeconds = 0;

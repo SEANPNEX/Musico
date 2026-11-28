@@ -439,6 +439,7 @@
             <controls:DownloadsDialog x:Name="DownloadsOverlay" />
             <controls:UpdateDialog x:Name="UpdateDialog" />
             <controls:SongInfoDialog x:Name="SongInfoDialog" />
+            <controls:BatchTagEditDialog x:Name="BatchTagEditOverlay" />
             <controls:TextInputDialog x:Name="PromptDialog" />
             <controls:ConfirmDialog x:Name="ConfirmOverlay" />
         </Grid>

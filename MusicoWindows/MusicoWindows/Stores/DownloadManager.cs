@@ -93,6 +93,7 @@ public sealed class DownloadManager
     {
         _exporter = exporter ?? throw new ArgumentNullException(nameof(exporter));
         _library = library ?? throw new ArgumentNullException(nameof(library));
+        _exporter.MetadataOverrideLookup ??= _library.GetMetadataOverride;
     }
 
     public event Action? Changed;

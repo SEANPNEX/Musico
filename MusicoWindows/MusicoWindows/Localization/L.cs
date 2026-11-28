@@ -739,6 +739,15 @@ public static class L
         ["Toast_DroppedFilesPlayed"] = "Playing {0} dropped song(s)",
         ["Toast_DroppedFoldersAdded"] = "Added {0} folder(s) to library",
         ["Stats_LibraryExploredSummary"] = "{0}% · {1} / {2} songs",
+
+        // Multi-Select & Batch Tag Editing
+        ["Menu_EditTagsEllipsis"] = "Edit Tags...",
+        ["Select_SelectedCount"] = "{0} selected",
+        ["BatchTag_SelectedCount"] = "{0} song(s) selected",
+        ["BatchTag_KeepExistingPlaceholder"] = "Keep existing",
+        ["BatchTag_MixedPlaceholder"] = "Keep existing (mixed)",
+        ["BatchTag_CouldNotSaveTitle"] = "Couldn't Save Tags",
+        ["Toast_BatchTagsUpdated"] = "Updated tags for {0} song(s)",
     };
 
     private static readonly Dictionary<string, string> ZhHans = new(StringComparer.Ordinal)
@@ -1357,5 +1366,14 @@ public static class L
         ["Toast_DroppedFilesPlayed"] = "正在播放 {0} 首拖放歌曲",
         ["Toast_DroppedFoldersAdded"] = "已将 {0} 个文件夹添加到音乐库",
         ["Stats_LibraryExploredSummary"] = "{0}% · {1} / {2} 首歌曲",
+
+        // Multi-Select & Batch Tag Editing
+        ["Menu_EditTagsEllipsis"] = "编辑标签...",
+        ["Select_SelectedCount"] = "已选择 {0} 项",
+        ["BatchTag_SelectedCount"] = "已选择 {0} 首歌曲",
+        ["BatchTag_KeepExistingPlaceholder"] = "保留原值",
+        ["BatchTag_MixedPlaceholder"] = "保留原值（混合）",
+        ["BatchTag_CouldNotSaveTitle"] = "无法保存标签",
+        ["Toast_BatchTagsUpdated"] = "已更新 {0} 首歌曲的标签",
     };
 }

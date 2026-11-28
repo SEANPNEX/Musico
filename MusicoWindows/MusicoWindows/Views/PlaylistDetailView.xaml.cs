@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using MusicoWindows.Controls;
 using MusicoWindows.Converters;
 using MusicoWindows.Core;
@@ -19,6 +20,8 @@ public partial class PlaylistDetailView : UserControl
     private PlaylistRef _ref = PlaylistRef.Favourites;
     private IReadOnlyList<Track> _tracks = Array.Empty<Track>();
     private bool _suppressSortSelection;
+    private bool _isSelectionMode;
+    private bool _suppressSelectionChanged;
 
     public event Action? BackRequested;
 
@@ -54,6 +57,8 @@ public partial class PlaylistDetailView : UserControl
         Detach();
         _ctx = ctx;
         _ref = playlistRef;
+        _isSelectionMode = false;
+        ClearTracksList();
         BackBar.Visibility = showBackButton ? Visibility.Visible : Visibility.Collapsed;
         _ctx.Services.Library.PropertyChanged += OnLibraryChanged;
         _ctx.Services.Player.PropertyChanged += OnPlayerChanged;
@@ -77,8 +82,13 @@ public partial class PlaylistDetailView : UserControl
         Refresh(syncNamedQueue: false);
     }
 
-    private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e) =>
-        Refresh(syncNamedQueue: e.PropertyName is nameof(LibraryStore.Playlists) or nameof(LibraryStore.Favourites));
+    private void OnLibraryChanged(object? sender, PropertyChangedEventArgs e)
+    {
+        if (e.PropertyName is nameof(LibraryStore.Playlists) or nameof(LibraryStore.Favourites) or nameof(LibraryStore.Tracks))
+        {
+            Refresh(syncNamedQueue: e.PropertyName is nameof(LibraryStore.Playlists) or nameof(LibraryStore.Favourites));
+        }
+    }
 
     private void OnPlayerChanged(object? sender, PropertyChangedEventArgs e)
     {
@@ -136,69 +146,207 @@ public partial class PlaylistDetailView : UserControl
             : L.SongsCount(0);
         PlayAllButton.IsEnabled = _tracks.Count > 0;
         ShuffleAllButton.IsEnabled = _tracks.Count > 0;
+        SelectTracksButton.Visibility = _tracks.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
 
-        TracksStack.Children.Clear();
-        if (_tracks.Count == 0)
+        var previouslySelectedIds = GetSelectedTrackIds();
+        var prevSelectedSet = new HashSet<string>(previouslySelectedIds, StringComparer.Ordinal);
+
+        _suppressSelectionChanged = true;
+        try
         {
-            TracksScroll.Visibility = Visibility.Collapsed;
-            EmptyState.Visibility = Visibility.Visible;
-            return;
-        }
+            TracksList.UnselectAll();
+            TracksList.Items.Clear();
 
-        TracksScroll.Visibility = Visibility.Visible;
-        EmptyState.Visibility = Visibility.Collapsed;
+            if (_tracks.Count == 0)
+            {
+                _isSelectionMode = false;
+                TracksScroll.Visibility = Visibility.Collapsed;
+                EmptyState.Visibility = Visibility.Visible;
+                UpdateSelectionBar();
+                return;
+            }
 
-        var ids = _tracks.Select(t => t.Id).ToList();
-        if (syncNamedQueue && ids.Count > 0)
-        {
-            _ctx.Services.Player.SyncNamedQueue(TitleText.Text, ids);
-        }
+            TracksScroll.Visibility = Visibility.Visible;
+            EmptyState.Visibility = Visibility.Collapsed;
 
-        bool isUser = _ref.Kind == PlaylistKind.User && _ref.Id.HasValue;
-        Guid userPlaylistId = _ref.Id ?? Guid.Empty;
+            var ids = _tracks.Select(t => t.Id).ToList();
+            if (syncNamedQueue && ids.Count > 0)
+            {
+                _ctx.Services.Player.SyncNamedQueue(TitleText.Text, ids);
+            }
 
-        for (int i = 0; i < _tracks.Count; i++)
-        {
-            int idx = i;
-            var track = _tracks[i];
-            bool isCurrent = _ctx.Services.Player.CurrentTrack?.Id == track.Id;
-            bool isPlaying = isCurrent && _ctx.Services.Player.IsPlaying;
+            bool isUser = _ref.Kind == PlaylistKind.User && _ref.Id.HasValue;
+            Guid userPlaylistId = _ref.Id ?? Guid.Empty;
 
-            var row = new TrackRowControl();
-            row.Bind(
-                _ctx.Services,
-                track,
-                L.DisplayArtist(track.Artist),
-                isCurrent,
-                isPlaying,
-                lib.IsAvailable(track),
-                () => _ctx.Services.Player.PlayInNamedQueue(TitleText.Text, ids, startAt: idx),
-                _ctx.OpenTextPrompt,
-                isUser ? menu =>
+            for (int i = 0; i < _tracks.Count; i++)
+            {
+                int idx = i;
+                var track = _tracks[i];
+                bool isCurrent = _ctx.Services.Player.CurrentTrack?.Id == track.Id;
+                bool isPlaying = isCurrent && _ctx.Services.Player.IsPlaying;
+
+                var row = new TrackRowControl();
+                row.Bind(
+                    _ctx.Services,
+                    track,
+                    L.DisplayArtist(track.Artist),
+                    isCurrent,
+                    isPlaying,
+                    lib.IsAvailable(track),
+                    () => _ctx.Services.Player.PlayInNamedQueue(TitleText.Text, ids, startAt: idx),
+                    _ctx.OpenTextPrompt,
+                    isUser ? menu =>
+                    {
+                        menu.Items.Add(new Separator());
+                        menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("PlaylistDetail_RemoveFromPlaylist"), "\uE74D",
+                            () => RemoveFromPlaylistWithUndo(userPlaylistId, idx, track.Title, history)));
+                    } : null,
+                    _ctx.OpenSaveCloudTrack,
+                    _ctx.OpenSongInfo,
+                    showToast: _ctx.ShowToast,
+                    openBatchTagEdit: _ctx.OpenBatchTagEdit);
+
+                row.MultiSelectContextMenuFactory = () =>
                 {
-                    menu.Items.Add(new Separator());
-                    menu.Items.Add(TrackMenuHelper.CreateItem(L.Get("PlaylistDetail_RemoveFromPlaylist"), "\uE74D",
-                        () => RemoveFromPlaylistWithUndo(userPlaylistId, idx, track.Title, history)));
-                } : null,
-                _ctx.OpenSaveCloudTrack,
-                _ctx.OpenSongInfo);
+                    var selectedTracks = GetSelectedTracks();
+                    if (selectedTracks.Count > 1 && selectedTracks.Any(t => t.Id == track.Id))
+                    {
+                        return TrackMenuHelper.BuildTrackMenu(
+                            _ctx.Services,
+                            selectedTracks.Select(t => t.Id).ToList(),
+                            null,
+                            _ctx.OpenTextPrompt,
+                            null,
+                            _ctx.OpenSaveCloudTrack,
+                            _ctx.OpenSongInfo,
+                            showToast: _ctx.ShowToast,
+                            openBatchTagEdit: _ctx.OpenBatchTagEdit);
+                    }
+                    return null;
+                };
 
-            if (isUser)
-            {
-                row.EnableDragReorder($"playlist:{userPlaylistId:D}", idx, _tracks.Count,
-                    (from, to) => lib.MovePlaylistTrack(userPlaylistId, from, to, history));
-                row.AddRowActionButton("\uE74A", L.Get("Common_MoveUp"), () => lib.MovePlaylistTrack(userPlaylistId, idx, idx - 1, history), idx > 0);
-                row.AddRowActionButton("\uE74B", L.Get("Common_MoveDown"), () => lib.MovePlaylistTrack(userPlaylistId, idx, idx + 1, history), idx < _tracks.Count - 1);
-                row.AddRowActionButton("\uE711", L.Get("PlaylistDetail_RemoveFromPlaylist"), () => RemoveFromPlaylistWithUndo(userPlaylistId, idx, track.Title, history));
-            }
-            else
-            {
-                row.EnableDragReorder("playlist:favourites", idx, _tracks.Count,
-                    (from, to) => lib.MoveFavouriteTrack(from, to, history));
-            }
+                if (isUser)
+                {
+                    row.EnableDragReorder($"playlist:{userPlaylistId:D}", idx, _tracks.Count,
+                        (from, to) => lib.MovePlaylistTrack(userPlaylistId, from, to, history));
+                    row.AddRowActionButton("\uE74A", L.Get("Common_MoveUp"), () => lib.MovePlaylistTrack(userPlaylistId, idx, idx - 1, history), idx > 0);
+                    row.AddRowActionButton("\uE74B", L.Get("Common_MoveDown"), () => lib.MovePlaylistTrack(userPlaylistId, idx, idx + 1, history), idx < _tracks.Count - 1);
+                    row.AddRowActionButton("\uE711", L.Get("PlaylistDetail_RemoveFromPlaylist"), () => RemoveFromPlaylistWithUndo(userPlaylistId, idx, track.Title, history));
+                }
+                else
+                {
+                    row.EnableDragReorder("playlist:favourites", idx, _tracks.Count,
+                        (from, to) => lib.MoveFavouriteTrack(from, to, history));
+                }
 
-            TracksStack.Children.Add(row);
+                TracksList.Items.Add(row);
+                if (prevSelectedSet.Contains(track.Id))
+                {
+                    TracksList.SelectedItems.Add(row);
+                }
+            }
         }
+        finally
+        {
+            _suppressSelectionChanged = false;
+        }
+
+        MultiSelectUiHelper.SyncTrackRowControls(TracksList, _isSelectionMode);
+        UpdateSelectionBar();
+    }
+
+    private void ClearTracksList()
+    {
+        _suppressSelectionChanged = true;
+        try
+        {
+            TracksList.UnselectAll();
+            TracksList.Items.Clear();
+        }
+        finally
+        {
+            _suppressSelectionChanged = false;
+        }
+    }
+
+    private List<Track> GetSelectedTracks() =>
+        TracksList.SelectedItems
+            .OfType<TrackRowControl>()
+            .Where(r => r.BoundTrack is not null)
+            .Select(r => r.BoundTrack!)
+            .ToList();
+
+    private List<string> GetSelectedTrackIds() =>
+        GetSelectedTracks().Select(t => t.Id).ToList();
+
+    private void UpdateSelectionBar()
+    {
+        int count = GetSelectedTracks().Count;
+        bool showBar = _tracks.Count > 0 && (_isSelectionMode || count > 0);
+        SelectionBar.Visibility = showBar ? Visibility.Visible : Visibility.Collapsed;
+        SelectionCountText.Text = L.Format("Select_SelectedCount", count);
+        BatchEditTagsButton.IsEnabled = count > 0;
+        SelectAllButton.IsEnabled = _tracks.Count > 0;
+        SelectTracksButton.Style = (Style)FindResource(_isSelectionMode ? "Win10PrimaryButtonStyle" : "Win10ButtonStyle");
+    }
+
+    private void TracksList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressSelectionChanged) return;
+        MultiSelectUiHelper.SyncTrackRowControls(TracksList, _isSelectionMode);
+        UpdateSelectionBar();
+    }
+
+    private void TracksList_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        MultiSelectUiHelper.HandleListKeyboardShortcuts(TracksList, e, () => CancelSelection_Click(sender, e));
+    }
+
+    private void SelectTracks_Click(object sender, RoutedEventArgs e)
+    {
+        _isSelectionMode = !_isSelectionMode;
+        if (!_isSelectionMode)
+        {
+            CancelSelection_Click(sender, e);
+        }
+        else
+        {
+            MultiSelectUiHelper.SyncTrackRowControls(TracksList, true);
+            UpdateSelectionBar();
+        }
+    }
+
+    private void SelectAll_Click(object sender, RoutedEventArgs e)
+    {
+        if (TracksList.Items.Count == 0) return;
+        _isSelectionMode = true;
+        TracksList.SelectAll();
+        MultiSelectUiHelper.SyncTrackRowControls(TracksList, _isSelectionMode);
+        UpdateSelectionBar();
+    }
+
+    private void BatchEditTags_Click(object sender, RoutedEventArgs e)
+    {
+        if (_ctx is null) return;
+        var selected = GetSelectedTracks();
+        if (selected.Count == 0) return;
+        MultiSelectUiHelper.OpenBatchTagEdit(_ctx, selected);
+    }
+
+    private void CancelSelection_Click(object sender, RoutedEventArgs e)
+    {
+        _isSelectionMode = false;
+        _suppressSelectionChanged = true;
+        try
+        {
+            TracksList.UnselectAll();
+        }
+        finally
+        {
+            _suppressSelectionChanged = false;
+        }
+        MultiSelectUiHelper.SyncTrackRowControls(TracksList, false);
+        UpdateSelectionBar();
     }
 
     private void SortCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -261,7 +409,9 @@ public partial class PlaylistDetailView : UserControl
             _ctx.Services,
             ids,
             null,
-            _ctx.OpenTextPrompt);
+            _ctx.OpenTextPrompt,
+            showToast: _ctx.ShowToast,
+            openBatchTagEdit: _ctx.OpenBatchTagEdit);
         menu.PlacementTarget = MoreButton;
         menu.IsOpen = true;
     }

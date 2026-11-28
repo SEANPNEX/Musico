@@ -3,16 +3,20 @@ package com.musico.cloud
 import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
+import com.musico.core.AndroidMetadataReader
 import com.musico.core.ArtworkCache
 import com.musico.core.AudioTagPayload
 import com.musico.core.AudioTagWriter
 import com.musico.core.CloudThumbnailCache
 import com.musico.core.DetectedImageInfo
+import com.musico.core.EmbeddedArtworkExtractor
+import com.musico.core.MetadataReading
 import com.musico.extensions.CloudProviderIds
 import com.musico.extensions.CloudProviderRegistry
 import com.musico.model.LibraryRoot
 import com.musico.model.RootKind
 import com.musico.model.Track
+import com.musico.model.TrackMetadataOverride
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.currentCoroutineContext
@@ -409,6 +413,8 @@ class CloudExporter(
     private val artworkCache: ArtworkCache? = null,
     private val thumbnailCache: CloudThumbnailCache? = null,
     private val httpClient: CloudHttpClient = UrlConnectionCloudHttpClient(),
+    private val metadataOverrideLookup: ((String) -> TrackMetadataOverride?)? = null,
+    private val metadataReader: MetadataReading? = context?.let { AndroidMetadataReader(it) },
 ) {
     private interface ExportSink {
         val existingNames: MutableSet<String>
@@ -1075,20 +1081,20 @@ class CloudExporter(
                 }
                 val cover = resolveCoverImage(track, root, suppliedArtworkBytes, coverCacheByUrl)
                 if (AudioTagWriter.isEmbeddableExtension(ext)) {
-                    runCatching {
-                        AudioTagWriter.write(
-                            file = partFile,
-                            payload = AudioTagPayload(
-                                title = track.title,
-                                artist = track.artist,
-                                album = track.album,
-                                genre = track.genre,
-                                trackNumber = track.trackNumber,
-                                artworkBytes = cover?.bytes,
-                                artworkMimeType = cover?.mimeType,
-                            ),
-                            formatExtension = ext,
-                        )
+                    buildExportTagPayload(
+                        downloadedFile = partFile,
+                        ext = ext,
+                        track = track,
+                        root = root,
+                        cover = cover,
+                    )?.let { payload ->
+                        runCatching {
+                            AudioTagWriter.write(
+                                file = partFile,
+                                payload = payload,
+                                formatExtension = ext,
+                            )
+                        }
                     }
                 }
                 if (!partFile.renameTo(targetFile)) {
@@ -1130,19 +1136,20 @@ class CloudExporter(
                 }
                 val cover = resolveCoverImage(track, root, suppliedArtworkBytes, coverCacheByUrl)
                 if (AudioTagWriter.isEmbeddableExtension(ext)) {
-                    runCatching {
-                        AudioTagWriter.write(
-                            tempFile,
-                            AudioTagPayload(
-                                title = track.title,
-                                artist = track.artist,
-                                album = track.album,
-                                genre = track.genre,
-                                trackNumber = track.trackNumber,
-                                artworkBytes = cover?.bytes,
-                                artworkMimeType = cover?.mimeType,
-                            ),
-                        )
+                    buildExportTagPayload(
+                        downloadedFile = tempFile,
+                        ext = ext,
+                        track = track,
+                        root = root,
+                        cover = cover,
+                    )?.let { payload ->
+                        runCatching {
+                            AudioTagWriter.write(
+                                file = tempFile,
+                                payload = payload,
+                                formatExtension = ext,
+                            )
+                        }
                     }
                 }
                 val doc = dirDoc.createFile(mimeType, fileName)
@@ -1169,6 +1176,104 @@ class CloudExporter(
                 runCatching { tempFile.delete() }
             }
         }
+    }
+
+    private suspend fun buildExportTagPayload(
+        downloadedFile: File,
+        ext: String,
+        track: Track,
+        root: LibraryRoot?,
+        cover: DetectedImageInfo?,
+    ): AudioTagPayload? {
+        val isGoogleDrive = track.cloudSource == CloudSource.GOOGLE_DRIVE ||
+            root?.kind == RootKind.CLOUD_GOOGLE_DRIVE
+        if (!isGoogleDrive) {
+            return AudioTagPayload(
+                title = track.title,
+                artist = track.artist,
+                album = track.album,
+                albumArtist = track.albumArtist,
+                genre = track.genre,
+                trackNumber = track.trackNumber,
+                artworkBytes = cover?.bytes,
+                artworkMimeType = cover?.mimeType,
+            )
+        }
+
+        val override = metadataOverrideLookup?.invoke(track.id)
+        val embeddedSummary = AudioTagWriter.readEmbeddedSummary(downloadedFile, ext)
+        val mmrMeta = runCatching { metadataReader?.read(downloadedFile) }.getOrNull()
+        val hasEmbeddedTitle = !embeddedSummary.title.isNullOrBlank() || !mmrMeta?.title.isNullOrBlank()
+        val hasEmbeddedArtist = !embeddedSummary.artist.isNullOrBlank() || !mmrMeta?.artist.isNullOrBlank()
+        val hasEmbeddedAlbum = !embeddedSummary.album.isNullOrBlank() || !mmrMeta?.album.isNullOrBlank()
+        val hasEmbeddedAlbumArtist = !embeddedSummary.albumArtist.isNullOrBlank()
+        val hasEmbeddedGenre = !embeddedSummary.genre.isNullOrBlank() || !mmrMeta?.genre.isNullOrBlank()
+        val hasEmbeddedTrackNumber = (embeddedSummary.trackNumber ?: mmrMeta?.trackNumber)?.let { it > 0 } == true
+        val hasEmbeddedArtwork = embeddedSummary.hasArtwork ||
+            runCatching {
+                EmbeddedArtworkExtractor.extract(downloadedFile, needArtwork = true, needLyrics = false).artwork != null
+            }.getOrDefault(false)
+        val hasAnyEmbeddedMetadata = hasEmbeddedTitle || hasEmbeddedArtist || hasEmbeddedAlbum ||
+            hasEmbeddedAlbumArtist || hasEmbeddedGenre || hasEmbeddedTrackNumber || hasEmbeddedArtwork
+
+        val overrideArtist = override?.artist?.trim().orEmpty()
+        val overrideAlbum = override?.album?.trim().orEmpty()
+        val overrideAlbumArtist = override?.albumArtist?.trim().orEmpty()
+        val overrideTitle = override?.title?.trim().orEmpty()
+        val overrideGenre = override?.genre?.trim().orEmpty()
+        val hasExplicitOverride = overrideTitle.isNotEmpty() ||
+            overrideArtist.isNotEmpty() ||
+            overrideAlbum.isNotEmpty() ||
+            overrideAlbumArtist.isNotEmpty() ||
+            overrideGenre.isNotEmpty() ||
+            override?.artworkKey != null
+
+        // Preserve original embedded tags & artwork completely untouched when no explicit user override is set.
+        if (hasAnyEmbeddedMetadata && !hasExplicitOverride && (hasEmbeddedArtwork || cover == null)) {
+            return null
+        }
+
+        val trackArtist = track.artist.trim().takeUnless {
+            it.isEmpty() || it.equals(GoogleDriveClient.DEFAULT_ARTIST, ignoreCase = true)
+        }.orEmpty()
+        val trackAlbumArtist = track.albumArtist.trim().takeUnless {
+            it.isEmpty() || it.equals(GoogleDriveClient.DEFAULT_ARTIST, ignoreCase = true)
+        }.orEmpty()
+        val trackAlbum = track.album.trim().takeUnless {
+            it.isEmpty() || it == root?.name
+        }.orEmpty()
+
+        val titleToWrite = overrideTitle.ifEmpty { if (hasEmbeddedTitle) "" else track.title }
+        val artistToWrite = overrideArtist.ifEmpty { if (hasEmbeddedArtist) "" else trackArtist }
+        val albumToWrite = overrideAlbum.ifEmpty { if (hasEmbeddedAlbum) "" else trackAlbum }
+        val albumArtistToWrite = overrideAlbumArtist.ifEmpty {
+            if (overrideArtist.isNotEmpty()) overrideArtist else if (hasEmbeddedAlbumArtist) "" else trackAlbumArtist
+        }
+        val genreToWrite = overrideGenre.ifEmpty { if (hasEmbeddedGenre) "" else track.genre }
+        val trackNumberToWrite = if (hasEmbeddedTrackNumber) null else track.trackNumber?.takeIf { it > 0 }
+        val coverToWrite = if (hasEmbeddedArtwork && override?.artworkKey == null) null else cover
+
+        if (titleToWrite.isBlank() &&
+            artistToWrite.isBlank() &&
+            albumToWrite.isBlank() &&
+            albumArtistToWrite.isBlank() &&
+            genreToWrite.isBlank() &&
+            trackNumberToWrite == null &&
+            coverToWrite == null
+        ) {
+            return null
+        }
+
+        return AudioTagPayload(
+            title = titleToWrite,
+            artist = artistToWrite,
+            album = albumToWrite,
+            albumArtist = albumArtistToWrite,
+            genre = genreToWrite,
+            trackNumber = trackNumberToWrite,
+            artworkBytes = coverToWrite?.bytes,
+            artworkMimeType = coverToWrite?.mimeType,
+        )
     }
 
     internal suspend fun resolveCoverImage(

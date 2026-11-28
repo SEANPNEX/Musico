@@ -1,5 +1,6 @@
 package com.musico.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
@@ -22,9 +23,13 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.Album
+import androidx.compose.material.icons.rounded.Checklist
+import androidx.compose.material.icons.rounded.Edit
 import androidx.compose.material.icons.rounded.MoreVert
 import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -36,6 +41,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,7 +56,10 @@ import com.musico.model.Album
 import com.musico.model.PlayQueue
 import com.musico.store.LibraryStore
 import com.musico.store.LibraryUiState
+import com.musico.ui.LocalShowMessage
 import com.musico.ui.components.ArtworkImage
+import com.musico.ui.components.BatchSelectionBar
+import com.musico.ui.components.BatchTagEditDialog
 import com.musico.ui.components.DetailHeroHeader
 import com.musico.ui.components.EmptyState
 import com.musico.ui.components.PlayShuffleButtons
@@ -61,6 +70,7 @@ import com.musico.ui.components.formatTime
 import com.musico.ui.theme.musicoScaffoldContainerColor
 import com.musico.ui.theme.musicoScaffoldContentColor
 import com.musico.ui.theme.musicoTopAppBarColors
+import kotlinx.coroutines.launch
 import kotlin.random.Random
 
 @Composable
@@ -181,6 +191,8 @@ fun AlbumDetailScreen(
     modifier: Modifier = Modifier
 ) {
     val strings = LocalStrings.current
+    val showMessage = LocalShowMessage.current
+    val scope = rememberCoroutineScope()
     val album = remember(libraryState.albums, albumId) {
         libraryState.albums.firstOrNull { it.id == albumId } ?: fallbackAlbum
     }
@@ -190,6 +202,14 @@ fun AlbumDetailScreen(
     val totalDuration = remember(tracks) { tracks.sumOf { it.durationSec } }
     val heroRemoteUrl = remember(tracks) { tracks.firstNotNullOfOrNull { it.remoteArtworkUrl } }
     var menuExpanded by remember { mutableStateOf(false) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(emptySet<String>()) }
+    var batchEditTracks by remember { mutableStateOf<List<com.musico.model.Track>?>(null) }
+
+    BackHandler(enabled = selectionMode) {
+        selectionMode = false
+        selectedIds = emptySet()
+    }
 
     Scaffold(
         modifier = modifier,
@@ -214,6 +234,25 @@ fun AlbumDetailScreen(
                             expanded = menuExpanded,
                             onDismissRequest = { menuExpanded = false }
                         ) {
+                            if (tracks.isNotEmpty()) {
+                                DropdownMenuItem(
+                                    text = { Text(strings.selectAction) },
+                                    leadingIcon = { Icon(Icons.Rounded.Checklist, contentDescription = null) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        selectionMode = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(strings.editTagsEllipsis) },
+                                    leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                    onClick = {
+                                        menuExpanded = false
+                                        batchEditTracks = tracks
+                                    }
+                                )
+                                HorizontalDivider()
+                            }
                             TrackMenuItems(
                                 ids = album.trackIds,
                                 queues = queues,
@@ -227,12 +266,38 @@ fun AlbumDetailScreen(
             )
         }
     ) { innerPadding ->
-        LazyColumn(
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(bottom = 16.dp)
+                .padding(innerPadding)
         ) {
+            if (selectionMode) {
+                BatchSelectionBar(
+                    selectedCount = tracks.count { it.id in selectedIds },
+                    totalCount = tracks.size,
+                    onToggleSelectAll = {
+                        selectedIds = if (tracks.isNotEmpty() && tracks.all { it.id in selectedIds }) {
+                            emptySet()
+                        } else {
+                            tracks.map { it.id }.toSet()
+                        }
+                    },
+                    onEditTags = {
+                        val targets = tracks.filter { it.id in selectedIds }
+                        if (targets.isNotEmpty()) {
+                            batchEditTracks = targets
+                        }
+                    },
+                    onDone = {
+                        selectionMode = false
+                        selectedIds = emptySet()
+                    },
+                )
+            }
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 16.dp)
+            ) {
             item(key = "header") {
                 DetailHeroHeader(
                     artworkKey = album.artworkKey,
@@ -310,6 +375,19 @@ fun AlbumDetailScreen(
                         )
                     },
                     modifier = Modifier.animateItem(),
+                    selectionMode = selectionMode,
+                    isSelected = track.id in selectedIds,
+                    onToggleSelect = {
+                        selectedIds = if (track.id in selectedIds) {
+                            selectedIds - track.id
+                        } else {
+                            selectedIds + track.id
+                        }
+                    },
+                    onLongClick = {
+                        selectionMode = true
+                        selectedIds = setOf(track.id)
+                    },
                     menuContent = { onDismiss ->
                         TrackMenuItems(
                             ids = listOf(track.id),
@@ -324,5 +402,26 @@ fun AlbumDetailScreen(
                 )
             }
         }
+        }
+    }
+
+    val editTargets = batchEditTracks
+    if (editTargets != null) {
+        BatchTagEditDialog(
+            tracks = editTargets,
+            onDismiss = { batchEditTracks = null },
+            onApply = { artist, albumName ->
+                val targetIds = editTargets.map { it.id }
+                batchEditTracks = null
+                selectionMode = false
+                selectedIds = emptySet()
+                scope.launch {
+                    val updatedCount = libraryStore.batchUpdateTrackMetadata(targetIds, artist, albumName)
+                    if (updatedCount > 0) {
+                        showMessage(strings.batchTagsUpdatedNotice(updatedCount))
+                    }
+                }
+            },
+        )
     }
 }
