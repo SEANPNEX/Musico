@@ -84,68 +84,52 @@ final class CloudLyricsTests: XCTestCase {
         }
     }
 
-    func testNeteaseSearchFallbackLyricAndTranslatedMerge() async throws {
+    func testSourceOptionsExposeLrclibOnlyWithoutExtensionsAndAutoWithExtensions() async throws {
+        let bareOptions = CloudLyricsService.sourceOptions(extensions: [], autoLabel: "Auto")
+        XCTAssertEqual(bareOptions.map(\.selection), [.lrclib])
+        XCTAssertEqual(bareOptions.map(\.label), ["LRCLIB"])
+
+        let ext = CloudLyricsExtensionDescriptor(id: "netease.cloud", name: "NetEase")
+        let withExtOptions = CloudLyricsService.sourceOptions(extensions: [ext], autoLabel: "Auto")
+        XCTAssertEqual(withExtOptions.map(\.selection), [.auto, .lrclib, .ext(id: "netease.cloud")])
+        XCTAssertEqual(withExtOptions.map(\.label), ["Auto", "LRCLIB", "NetEase"])
+
+        // `.auto` still works when no extensions are enabled and queries LRCLIB only.
         let transport = MockCloudLyricsTransport { req in
             let url = try XCTUnwrap(req.url)
-            XCTAssertEqual(req.value(forHTTPHeaderField: "Referer"), "https://music.163.com/")
-            XCTAssertEqual(req.value(forHTTPHeaderField: "Origin"), "https://music.163.com")
-
-            if url.path == "/api/search/get" {
-                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(#"{"code":200,"result":{"songs":[]}}"#.utf8), finalURL: url)
+            XCTAssertEqual(url.host, "lrclib.net")
+            if url.path == "/api/get" {
+                return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: url)
             }
-            if url.path == "/api/cloudsearch/pc" {
-                let searchJSON = """
-                {
-                  "code": 200,
-                  "result": {
-                    "songs": [
-                      {
-                        "id": 991,
-                        "name": "晴天",
-                        "ar": [{ "name": "周杰伦" }],
-                        "al": { "name": "叶惠美" },
-                        "dt": 269000
-                      }
-                    ]
+            if url.path == "/api/search" {
+                let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+                if items.contains(where: { $0.name == "track_name" }) {
+                    return HTTPResponseData(statusCode: 200, headers: [:], data: Data("[]".utf8), finalURL: url)
+                }
+                let payload = """
+                [
+                  {
+                    "id": 99,
+                    "trackName": "Nightcall",
+                    "artistName": "Kavinsky",
+                    "duration": 258,
+                    "syncedLyrics": "[00:30.00]Nightcall"
                   }
-                }
+                ]
                 """
-                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(searchJSON.utf8), finalURL: url)
+                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(payload.utf8), finalURL: url)
             }
-            if url.path == "/api/song/lyric" {
-                let lyricJSON = """
-                {
-                  "code": 200,
-                  "lrc": { "lyric": "[00:28.90]故事的小黄花\\n[00:32.10]从出生那年就飘着" },
-                  "tlyric": { "lyric": "[00:28.93]Little yellow flower of the story\\n[00:32.12]Floating since birth" }
-                }
-                """
-                return HTTPResponseData(statusCode: 200, headers: [:], data: Data(lyricJSON.utf8), finalURL: url)
-            }
-            XCTFail("Unexpected NetEase path: \(url.path)")
             return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: url)
         }
-
-        let client = NeteaseLyricsClient(transport: transport)
-        let results = try await client.search(query: CloudLyricsQuery(title: "晴天", artist: "周杰伦", album: nil, durationSec: 269))
-
-        XCTAssertEqual(results.count, 1)
-        let hit = results[0]
-        XCTAssertEqual(hit.providerID, CloudLyricsProviderID.netease)
-        XCTAssertTrue(hit.isTimed)
-        XCTAssertTrue(hit.hasTranslation)
-
-        let merged = hit.formattedText(includeTranslation: true)
-        let parsedMerged = LRCParser.parse(merged)
-        XCTAssertEqual(parsedMerged.lines.map(\.text), [
-            "故事的小黄花",
-            "Little yellow flower of the story",
-            "从出生那年就飘着",
-            "Floating since birth"
-        ])
-
-        let unmerged = hit.formattedText(includeTranslation: false)
-        XCTAssertEqual(LRCParser.parse(unmerged).lines.map(\.text), ["故事的小黄花", "从出生那年就飘着"])
+        let service = CloudLyricsService(transport: transport, appVersion: "1.2.3")
+        let response = try await service.search(
+            query: CloudLyricsQuery(title: "Nightcall", artist: "Kavinsky", album: nil, durationSec: 258),
+            source: .auto,
+            activeExtensions: []
+        )
+        XCTAssertEqual(response.candidates.count, 1)
+        XCTAssertEqual(response.candidates[0].providerID, CloudLyricsProviderID.lrclib)
+        XCTAssertTrue(response.failures.isEmpty)
     }
 
     @MainActor
@@ -188,9 +172,6 @@ final class CloudLyricsTests: XCTestCase {
                 """
                 return HTTPResponseData(statusCode: 200, headers: [:], data: Data(payload.utf8), finalURL: req.url)
             }
-            if host == "music.163.com" {
-                return HTTPResponseData(statusCode: 500, headers: [:], data: Data(), finalURL: req.url)
-            }
             if host == "lrclib.net" && req.url?.path == "/api/search" {
                 let payload = """
                 [
@@ -222,11 +203,11 @@ final class CloudLyricsTests: XCTestCase {
         let service = store.makeCloudLyricsService()
         let query = CloudLyricsQuery(title: "Sample Song", artist: "Sample Artist", album: nil, durationSec: 200)
 
-        // Auto merges LRCLIB + extension even when NetEase fails, ranking synced + exact duration first.
+        // Auto merges LRCLIB + extension, ranking synced + exact duration first.
         let autoResponse = try await service.search(query: query, source: .auto, activeExtensions: store.activeLyricsExtensions)
         XCTAssertEqual(autoResponse.candidates.first?.sourceName, "SampleLrc")
         XCTAssertEqual(autoResponse.candidates.count, 2)
-        XCTAssertFalse(autoResponse.failures.isEmpty)
+        XCTAssertTrue(autoResponse.failures.isEmpty)
         // Save-only-on-confirm: searching alone must never persist to LyricsStore.
         XCTAssertFalse(lyricsStore.hasImported(trackID: "track-1"))
 

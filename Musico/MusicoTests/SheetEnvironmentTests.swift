@@ -248,6 +248,7 @@ final class SheetEnvironmentTests: XCTestCase {
             attachEmptyHostEnvironment: true
         )
         try await present(AddSongsToPlaylistSheet(playlistID: UUID()), over: false, attachEmptyHostEnvironment: true)
+        try await present(BatchTagEditSheet(trackIDs: []), over: false, attachEmptyHostEnvironment: true)
         try await present(
             NamePromptSheet(
                 title: "New Playlist",

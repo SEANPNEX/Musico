@@ -1192,6 +1192,233 @@ final class LibraryStoreTests: XCTestCase {
         XCTAssertEqual(history.count(for: localTrack.id), 1)
         XCTAssertEqual(history.count(for: cloudTrack.id), 0)
     }
+
+    func testEnrichCachedGoogleDriveTrackAndMergeDoesNotCarryPlaceholderOverride() async throws {
+        let bundle = Bundle(for: LibraryStoreTests.self)
+        let flacFixture = try XCTUnwrap(bundle.url(forResource: "art", withExtension: "flac"))
+        let expectedMeta = await MetadataReader().read(flacFixture)
+
+        let fetcher = StubCloudFetcher(result: .success(CloudPlaylistResult(
+            kind: .cloudGoogleDrive,
+            remoteID: "fldEnrich",
+            title: "Drive Album",
+            tracks: [
+                CloudTrackInfo(
+                    remoteTrackID: "drive-f1",
+                    relativePath: "01.flac",
+                    title: "01",
+                    artist: "Google Drive",
+                    album: "Drive Album",
+                    trackNumber: nil,
+                    duration: 0,
+                    artworkURL: nil
+                )
+            ]
+        )))
+
+        let store = LibraryStore(
+            directory: state,
+            documentsURL: docs,
+            reader: MetadataReader(),
+            artwork: ArtworkCache(directory: state.appendingPathComponent("Artwork")),
+            cloudFetcher: fetcher,
+            artworkDownloader: { _ in nil }
+        )
+
+        try await store.addCloudRoot(sourceURL: "https://drive.google.com/drive/folders/fldEnrich")
+        let driveRoot = try XCTUnwrap(store.roots.last)
+        let cloudTrack = try XCTUnwrap(store.tracks.first { $0.rootID == driveRoot.id })
+        XCTAssertEqual(cloudTrack.artist, "Google Drive")
+        XCTAssertNil(cloudTrack.artworkKey)
+
+        let cachedCopy = makeTempDir().appendingPathComponent("cached.flac")
+        try FileManager.default.copyItem(at: flacFixture, to: cachedCopy)
+        await store.enrichCachedCloudTrack(cloudTrack.id, cachedURL: cachedCopy)
+
+        let enriched = try XCTUnwrap(store.track(cloudTrack.id))
+        XCTAssertEqual(enriched.title, expectedMeta.title)
+        XCTAssertEqual(enriched.artist, expectedMeta.artist)
+        XCTAssertEqual(enriched.album, expectedMeta.album)
+        XCTAssertNotNil(enriched.artworkKey)
+
+        // Rescanning the Google Drive folder must preserve enriched metadata/artwork instead of clobbering back to "Google Drive".
+        await store.rescan()
+        let afterRescan = try XCTUnwrap(store.track(cloudTrack.id))
+        XCTAssertEqual(afterRescan.artist, expectedMeta.artist)
+        XCTAssertEqual(afterRescan.artworkKey, enriched.artworkKey)
+
+        // Even if a legacy override somehow carried "Google Drive" as artist, merging to a local folder strips that placeholder.
+        _ = store.updateTrackMetadata(id: cloudTrack.id, title: "Custom Drive Title", artist: "Google Drive", album: "Drive Album", genre: "")
+        let dest = docs.appendingPathComponent("ExportedDrive")
+        try FileManager.default.createDirectory(at: dest, withIntermediateDirectories: true)
+        try FileManager.default.copyItem(at: flacFixture, to: dest.appendingPathComponent("01.flac"))
+        try CloudExporter.saveManifest(
+            CloudFolderManifest(
+                sourceURL: "https://drive.google.com/drive/folders/fldEnrich",
+                remoteID: "fldEnrich",
+                cloudKind: .cloudGoogleDrive,
+                lastSyncedEpochMs: 1_700_000_000_000,
+                tracks: ["drive-f1": "01.flac"],
+                providerID: BuiltInProviderID.googleDrive
+            ),
+            in: dest
+        )
+
+        try await store.registerExportedCloudFolder(destinationURL: dest, from: driveRoot, mergeCloudRoot: true)
+        let localTrack = try XCTUnwrap(store.tracks.first { $0.relativePath == "ExportedDrive/01.flac" })
+        XCTAssertEqual(localTrack.title, "Custom Drive Title")
+        XCTAssertEqual(localTrack.artist, expectedMeta.artist)
+        XCTAssertNotEqual(localTrack.artist, "Google Drive")
+        XCTAssertNotEqual(store.metadataOverrides[localTrack.id]?.artist, "Google Drive")
+    }
+
+    func testBatchUpdateTrackMetadataArtistAlbumCombinedPersistenceAndArtworkPreservation() async throws {
+        let bundle = Bundle(for: LibraryStoreTests.self)
+        let flacFixture = try XCTUnwrap(bundle.url(forResource: "art", withExtension: "flac"))
+        let mp3Fixture = try XCTUnwrap(bundle.url(forResource: "art-png-v24", withExtension: "mp3"))
+
+        let flacURL = docs.appendingPathComponent("batch1.flac")
+        let mp3URL = docs.appendingPathComponent("batch2.mp3")
+        try FileManager.default.copyItem(at: flacFixture, to: flacURL)
+        try FileManager.default.copyItem(at: mp3Fixture, to: mp3URL)
+
+        let realReader = MetadataReader()
+        let origFlacMeta = await realReader.read(flacURL)
+        let origMp3Meta = await realReader.read(mp3URL)
+        let origFlacArt = try XCTUnwrap(origFlacMeta.artwork)
+        let origMp3Art = try XCTUnwrap(origMp3Meta.artwork)
+
+        let registry = CloudProviderRegistry()
+        registry.registerExtension(LibraryTestYouTubeExtension())
+        let fetcher = StubCloudFetcher(result: .success(CloudPlaylistResult(
+            kind: .cloudExtension,
+            remoteID: "PLbatch",
+            title: "Cloud Mix",
+            tracks: [
+                CloudTrackInfo(remoteTrackID: "c1", relativePath: "c1", title: "Cloud Song", artist: "Old Cloud Artist", album: "Old Cloud Album", trackNumber: 1, duration: 150, artworkURL: nil)
+            ],
+            providerID: "ext.youtube-search"
+        )))
+
+        let artworkCache = ArtworkCache(directory: state.appendingPathComponent("Artwork"))
+        let store = LibraryStore(
+            directory: state,
+            documentsURL: docs,
+            reader: realReader,
+            artwork: artworkCache,
+            cloudFetcher: fetcher,
+            providerRegistry: registry,
+            artworkDownloader: { _ in nil }
+        )
+        await store.rescan()
+        try await store.addCloudRoot(sourceURL: "https://music.youtube.com/playlist?list=PLbatch")
+
+        let tFlac = try XCTUnwrap(store.tracks.first { $0.relativePath == "batch1.flac" })
+        let tMp3 = try XCTUnwrap(store.tracks.first { $0.relativePath == "batch2.mp3" })
+        let tCloud = try XCTUnwrap(store.tracks.first { $0.isCloud })
+
+        // Give tFlac a genre override first so we can verify batchUpdate preserves title, genre, and artworkKey.
+        _ = store.updateTrackMetadata(
+            id: tFlac.id,
+            title: "Preserved FLAC Title",
+            artist: tFlac.artist,
+            album: tFlac.album,
+            genre: "Synthwave"
+        )
+        try await Task.sleep(for: .milliseconds(250))
+        let flacArtKeyBefore = store.track(tFlac.id)?.artworkKey
+        let mp3TitleBefore = tMp3.title
+        let mp3ArtKeyBefore = tMp3.artworkKey
+
+        // Ephemeral track IDs must be ignored cleanly.
+        let ephemeralTrack = Track.makeEphemeral(
+            extensionID: "youtube-search",
+            info: CloudTrackInfo(remoteTrackID: "eph-1", relativePath: "eph-1", title: "Eph", artist: "EphArt", album: "EphAlb", trackNumber: nil, duration: 60, artworkURL: nil)
+        )
+        store.registerEphemeralTracks([ephemeralTrack])
+
+        var updatedEvents: [Track] = []
+        store.onTrackUpdated = { updatedEvents.append($0) }
+
+        // 1. Artist-only batch update
+        let artistCount = store.batchUpdateTrackMetadata(
+            ids: [tFlac.id, tCloud.id, ephemeralTrack.id],
+            artist: "Unified Batch Artist",
+            album: nil
+        )
+        XCTAssertEqual(artistCount, 2)
+        XCTAssertEqual(updatedEvents.count, 2)
+
+        let flacAfterArtist = try XCTUnwrap(store.track(tFlac.id))
+        XCTAssertEqual(flacAfterArtist.artist, "Unified Batch Artist")
+        XCTAssertEqual(flacAfterArtist.albumArtist, "Unified Batch Artist")
+        XCTAssertEqual(flacAfterArtist.title, "Preserved FLAC Title")
+        XCTAssertEqual(flacAfterArtist.genre, "Synthwave")
+        XCTAssertEqual(flacAfterArtist.artworkKey, flacArtKeyBefore)
+
+        let cloudAfterArtist = try XCTUnwrap(store.track(tCloud.id))
+        XCTAssertEqual(cloudAfterArtist.artist, "Unified Batch Artist")
+        XCTAssertEqual(cloudAfterArtist.albumArtist, "Unified Batch Artist")
+        XCTAssertEqual(cloudAfterArtist.album, "Old Cloud Album")
+        XCTAssertEqual(cloudAfterArtist.title, "Cloud Song")
+
+        // 2. Album-only batch update
+        let albumCount = store.batchUpdateTrackMetadata(
+            ids: [tMp3.id, tCloud.id],
+            artist: nil,
+            album: "Unified Batch Album"
+        )
+        XCTAssertEqual(albumCount, 2)
+        let mp3AfterAlbum = try XCTUnwrap(store.track(tMp3.id))
+        XCTAssertEqual(mp3AfterAlbum.album, "Unified Batch Album")
+        XCTAssertEqual(mp3AfterAlbum.artist, tMp3.artist)
+        XCTAssertEqual(mp3AfterAlbum.title, mp3TitleBefore)
+        XCTAssertEqual(mp3AfterAlbum.artworkKey, mp3ArtKeyBefore)
+
+        // 3. Combined artist + album update
+        let combinedCount = store.batchUpdateTrackMetadata(
+            ids: [tFlac.id, tMp3.id, tCloud.id],
+            artist: "Final Batch Artist",
+            album: "Final Batch Album"
+        )
+        XCTAssertEqual(combinedCount, 3)
+
+        // Wait briefly for detached AudioTagWriter task to flush local files.
+        try await Task.sleep(for: .milliseconds(350))
+
+        let diskFlacMeta = await realReader.read(flacURL)
+        XCTAssertEqual(diskFlacMeta.artist, "Final Batch Artist")
+        XCTAssertEqual(diskFlacMeta.album, "Final Batch Album")
+        XCTAssertEqual(diskFlacMeta.title, "Preserved FLAC Title")
+        XCTAssertEqual(diskFlacMeta.genre, "Synthwave")
+        XCTAssertEqual(diskFlacMeta.artwork, origFlacArt)
+
+        let diskMp3Meta = await realReader.read(mp3URL)
+        XCTAssertEqual(diskMp3Meta.artist, "Final Batch Artist")
+        XCTAssertEqual(diskMp3Meta.album, "Final Batch Album")
+        XCTAssertEqual(diskMp3Meta.title, origMp3Meta.title)
+        XCTAssertEqual(diskMp3Meta.artwork, origMp3Art)
+
+        // 4. Persistence reload preserves overrides for both local and cloud tracks.
+        let reloaded = LibraryStore(
+            directory: state,
+            documentsURL: docs,
+            reader: realReader,
+            artwork: artworkCache,
+            cloudFetcher: fetcher,
+            providerRegistry: registry,
+            artworkDownloader: { _ in nil }
+        )
+        XCTAssertEqual(reloaded.track(tFlac.id)?.artist, "Final Batch Artist")
+        XCTAssertEqual(reloaded.track(tFlac.id)?.album, "Final Batch Album")
+        XCTAssertEqual(reloaded.track(tFlac.id)?.title, "Preserved FLAC Title")
+        XCTAssertEqual(reloaded.track(tFlac.id)?.genre, "Synthwave")
+        XCTAssertEqual(reloaded.track(tMp3.id)?.artist, "Final Batch Artist")
+        XCTAssertEqual(reloaded.track(tMp3.id)?.album, "Final Batch Album")
+        XCTAssertEqual(reloaded.track(tCloud.id)?.artist, "Final Batch Artist")
+        XCTAssertEqual(reloaded.track(tCloud.id)?.album, "Final Batch Album")
+        XCTAssertEqual(reloaded.track(tCloud.id)?.albumArtist, "Final Batch Artist")
+    }
 }
 
 private struct LibraryTestYouTubeExtension: CloudSourceProvider {

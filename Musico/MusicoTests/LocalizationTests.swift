@@ -189,6 +189,17 @@ final class LocalizationTests: XCTestCase {
         XCTAssertEqual(L10n.tr("Library Explored"), "资料库探索度")
         XCTAssertEqual(L10n.tr("Top Artists"), "常听艺术家")
         XCTAssertEqual(L10n.tr("Top Albums"), "常听专辑")
+        XCTAssertEqual(L10n.tr("Select"), "选择")
+        XCTAssertEqual(L10n.tr("Select All"), "全选")
+        XCTAssertEqual(L10n.tr("Deselect All"), "取消全选")
+        XCTAssertEqual(L10n.tr("Edit Tags…"), "编辑标签…")
+        XCTAssertEqual(L10n.tr("Edit All Songs' Tags…"), "编辑全部歌曲标签…")
+        XCTAssertEqual(L10n.tr("Apply"), "应用")
+        XCTAssertEqual(L10n.tr("Mixed"), "多个值")
+        XCTAssertEqual(
+            L10n.tr("Built-in lyrics search uses LRCLIB. Install extensions for additional lyrics providers (such as NetEase Cloud Music or Apple Music)."),
+            "内置歌词搜索使用 LRCLIB。安装扩展即可添加更多歌词来源（如网易云音乐或 Apple Music）。"
+        )
         XCTAssertEqual(L10n.tr("Actions"), "操作")
         XCTAssertEqual(L10n.tr("Now Playing"), "正在播放")
         XCTAssertEqual(L10n.tr("Volume: %@", "75%"), "音量：75%")

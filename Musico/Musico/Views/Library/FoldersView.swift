@@ -699,6 +699,9 @@ struct FolderDetailView: View {
     @State private var updatingTarget: FolderTrackingTarget?
     @State private var editingTarget: FolderTrackingTarget?
     @State private var reorderFeedbackTrigger = 0
+    @State private var isSelecting = false
+    @State private var selectedTrackIDs: Set<String> = []
+    @State private var batchEditTarget: BatchTagEditTarget?
 
     var body: some View {
         let root = library.root(ref.root)
@@ -716,6 +719,9 @@ struct FolderDetailView: View {
         let currentSortOrder = library.folderSortOrder(root: ref.root, path: ref.path)
         let syncProgress = library.cloudSyncProgress[ref.root]
         let currentTracking = library.cloudTracking(rootID: ref.root, path: ref.path)
+        let editableDirectIDs = directTracks.filter { !$0.isEphemeral }.map(\.id)
+        let editableAllIDs = everything.filter { !$0.isEphemeral }.map(\.id)
+        let allDirectSelected = !editableDirectIDs.isEmpty && editableDirectIDs.allSatisfy { selectedTrackIDs.contains($0) }
 
         List {
             if let root, (root.kind == .cloudExtension || root.kind.isLegacyExtensionBacked), extAvailability != .available {
@@ -826,6 +832,9 @@ struct FolderDetailView: View {
                         Button(L10n.tr("Play Folder"), systemImage: "play.fill") {
                             player.playInNamedQueue(childIDs, name: name)
                         }
+                        Button(L10n.tr("Edit All Songs' Tags…"), systemImage: "tag") {
+                            batchEditTarget = BatchTagEditTarget(trackIDs: childIDs)
+                        }
                     }
                     if let root, root.kind.isLocal, childTracking != nil {
                         Button(L10n.tr("Update from Cloud"), systemImage: "icloud.and.arrow.down") {
@@ -862,9 +871,22 @@ struct FolderDetailView: View {
                             from: IndexSet(integer: from),
                             to: to
                         )
+                    },
+                    isSelecting: isSelecting,
+                    isSelected: selectedTrackIDs.contains(track.id),
+                    onToggleSelect: {
+                        if selectedTrackIDs.contains(track.id) {
+                            selectedTrackIDs.remove(track.id)
+                        } else {
+                            selectedTrackIDs.insert(track.id)
+                        }
                     }
                 )
-                .contextMenu { TrackMenuItems(ids: [track.id], favouriteID: track.id) }
+                .contextMenu {
+                    if !isSelecting {
+                        TrackMenuItems(ids: [track.id], favouriteID: track.id)
+                    }
+                }
             }
             .onMove { source, destination in
                 reorderFeedbackTrigger += 1
@@ -881,56 +903,121 @@ struct FolderDetailView: View {
         .hiddenScrollBackgroundIfThemed(themeManager)
         .navigationTitle(currentName)
         .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if isSelecting {
+                BatchSelectionBottomBar(
+                    selectedCount: selectedTrackIDs.count,
+                    totalCount: editableDirectIDs.count,
+                    onToggleSelectAll: {
+                        if allDirectSelected {
+                            selectedTrackIDs.removeAll()
+                        } else {
+                            selectedTrackIDs = Set(editableDirectIDs)
+                        }
+                    },
+                    onEditTags: {
+                        let ordered = editableDirectIDs.filter { selectedTrackIDs.contains($0) }
+                        if !ordered.isEmpty {
+                            batchEditTarget = BatchTagEditTarget(trackIDs: ordered)
+                        }
+                    },
+                    onDone: {
+                        isSelecting = false
+                        selectedTrackIDs.removeAll()
+                    }
+                )
+            }
+        }
         .task(id: ref) {
+            isSelecting = false
+            selectedTrackIDs.removeAll()
             library.prioritizeCloudFolder(rootID: ref.root, path: ref.path)
         }
         .refreshable { await library.rescan() }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if !directTracks.isEmpty {
-                    TrackSortMenu(selection: currentSortOrder) { order in
-                        library.setFolderSortOrder(order, root: ref.root, path: ref.path)
+                if isSelecting {
+                    Button(allDirectSelected ? L10n.tr("Deselect All") : L10n.tr("Select All")) {
+                        if allDirectSelected {
+                            selectedTrackIDs.removeAll()
+                        } else {
+                            selectedTrackIDs = Set(editableDirectIDs)
+                        }
                     }
-                }
-                if ref.path.isEmpty, let root, root.kind.isCloud {
-                    Button(L10n.tr("Edit Cloud Source…"), systemImage: "link") {
-                        editingTarget = FolderTrackingTarget(root: root, path: "", displayName: currentName)
+                    Button(L10n.tr("Done")) {
+                        isSelecting = false
+                        selectedTrackIDs.removeAll()
                     }
-                    .help(L10n.tr("Edit Cloud Source…"))
-                    Button(L10n.tr("Save to Local Folder…"), systemImage: "square.and.arrow.down") {
-                        exportingRoot = root
+                    .fontWeight(.semibold)
+                } else {
+                    if !editableDirectIDs.isEmpty {
+                        Button(L10n.tr("Select")) {
+                            selectedTrackIDs.removeAll()
+                            isSelecting = true
+                        }
                     }
-                    .help(L10n.tr("Save to Local Folder…"))
-                }
-                if let root, root.kind.isLocal, currentTracking != nil {
-                    Button(L10n.tr("Update from Cloud"), systemImage: "icloud.and.arrow.down") {
-                        updatingTarget = FolderTrackingTarget(root: root, path: ref.path, displayName: currentName)
+                    if !directTracks.isEmpty {
+                        TrackSortMenu(selection: currentSortOrder) { order in
+                            library.setFolderSortOrder(order, root: ref.root, path: ref.path)
+                        }
                     }
-                    .help(L10n.tr("Update from Cloud"))
-                    Button(L10n.tr("Edit Cloud Source…"), systemImage: "link") {
-                        editingTarget = FolderTrackingTarget(root: root, path: ref.path, displayName: currentName)
+                    if !editableAllIDs.isEmpty {
+                        Menu(L10n.tr("More"), systemImage: "ellipsis.circle") {
+                            Button(L10n.tr("Edit All Songs' Tags…"), systemImage: "tag") {
+                                batchEditTarget = BatchTagEditTarget(trackIDs: editableAllIDs)
+                            }
+                        }
                     }
-                    .help(L10n.tr("Edit Cloud Source…"))
-                }
-                if excludedCount > 0 {
-                    Button(L10n.tr("Restore Removed Subfolders (%@)", String(excludedCount)), systemImage: "arrow.uturn.backward") {
-                        Task { await library.restoreExcludedFolders(ref.root) }
+                    if ref.path.isEmpty, let root, root.kind.isCloud {
+                        Button(L10n.tr("Edit Cloud Source…"), systemImage: "link") {
+                            editingTarget = FolderTrackingTarget(root: root, path: "", displayName: currentName)
+                        }
+                        .help(L10n.tr("Edit Cloud Source…"))
+                        Button(L10n.tr("Save to Local Folder…"), systemImage: "square.and.arrow.down") {
+                            exportingRoot = root
+                        }
+                        .help(L10n.tr("Save to Local Folder…"))
                     }
-                    .help(L10n.tr("Restore Removed Subfolders (%@)", String(excludedCount)))
-                }
-                if canRemoveCurrentFolder {
-                    Button(L10n.tr("Remove Folder"), systemImage: "trash", role: .destructive) {
-                        confirmRemoveFolder(
-                            rootID: ref.root,
-                            path: ref.path,
-                            name: currentName,
-                            root: root,
-                            onCompleted: { dismiss() }
-                        )
+                    if let root, root.kind.isLocal, currentTracking != nil {
+                        Button(L10n.tr("Update from Cloud"), systemImage: "icloud.and.arrow.down") {
+                            updatingTarget = FolderTrackingTarget(root: root, path: ref.path, displayName: currentName)
+                        }
+                        .help(L10n.tr("Update from Cloud"))
+                        Button(L10n.tr("Edit Cloud Source…"), systemImage: "link") {
+                            editingTarget = FolderTrackingTarget(root: root, path: ref.path, displayName: currentName)
+                        }
+                        .help(L10n.tr("Edit Cloud Source…"))
                     }
-                    .help(L10n.tr("Remove Folder"))
+                    if excludedCount > 0 {
+                        Button(L10n.tr("Restore Removed Subfolders (%@)", String(excludedCount)), systemImage: "arrow.uturn.backward") {
+                            Task { await library.restoreExcludedFolders(ref.root) }
+                        }
+                        .help(L10n.tr("Restore Removed Subfolders (%@)", String(excludedCount)))
+                    }
+                    if canRemoveCurrentFolder {
+                        Button(L10n.tr("Remove Folder"), systemImage: "trash", role: .destructive) {
+                            confirmRemoveFolder(
+                                rootID: ref.root,
+                                path: ref.path,
+                                name: currentName,
+                                root: root,
+                                onCompleted: { dismiss() }
+                            )
+                        }
+                        .help(L10n.tr("Remove Folder"))
+                    }
                 }
             }
+        }
+        .sheet(item: $batchEditTarget) { target in
+            BatchTagEditSheet(trackIDs: target.trackIDs, library: library) {
+                isSelecting = false
+                selectedTrackIDs.removeAll()
+            }
+            .environment(library)
+            .environment(\.languageManager, languageManager)
+            .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
         .sheet(isPresented: $showExtensionsSheet) {
             NavigationStack {

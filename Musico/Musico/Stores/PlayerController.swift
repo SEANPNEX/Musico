@@ -493,6 +493,16 @@ final class PlayerController {
                 }
 
                 guard !Task.isCancelled, self.cloudLoadGeneration == gen else { return }
+                if track.cloudSource == "gdrive" {
+                    let lib = self.library
+                    Task { @MainActor [weak self] in
+                        await lib.enrichCachedCloudTrack(track.id, cachedURL: cachedURL)
+                        if let self, self.currentTrack?.id == track.id, let refreshed = lib.track(track.id) {
+                            self.currentTrack = refreshed
+                            self.updateNowPlaying()
+                        }
+                    }
+                }
                 self.finishCloudFileLoad(track: track, autoplay: autoplay, position: position)
             } catch is CancellationError {
                 return
@@ -535,6 +545,16 @@ final class PlayerController {
             try engine.load(url: cachedURL)
         }
         guard !Task.isCancelled, cloudLoadGeneration == gen else { return }
+        if track.cloudSource == "gdrive" {
+            let lib = self.library
+            Task { @MainActor [weak self] in
+                await lib.enrichCachedCloudTrack(track.id, cachedURL: cachedURL)
+                if let self, self.currentTrack?.id == track.id, let refreshed = lib.track(track.id) {
+                    self.currentTrack = refreshed
+                    self.updateNowPlaying()
+                }
+            }
+        }
         finishCloudFileLoad(track: track, autoplay: autoplay, position: position)
     }
 

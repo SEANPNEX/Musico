@@ -1098,9 +1098,26 @@ enum L10n {
         "Added folder “%@”": "已添加文件夹“%@”",
         "Added and playing %@": "已添加并播放 %@",
         "Playing %@": "正在播放 %@",
+        "Built-in lyrics search uses LRCLIB. Install extensions for additional lyrics providers (such as NetEase Cloud Music or Apple Music).": "内置歌词搜索使用 LRCLIB。安装扩展即可添加更多歌词来源（如网易云音乐或 Apple Music）。",
         "Insights": "洞察",
         "Library Explored": "资料库探索度",
         "Top Artists": "常听艺术家",
         "Top Albums": "常听专辑",
+
+        // Multi-Select Batch Tag Editing
+        "Select": "选择",
+        "Select All": "全选",
+        "Deselect All": "取消全选",
+        "%@ selected": "已选 %@ 项",
+        "Edit Tags…": "编辑标签…",
+        "Edit Tags": "编辑标签",
+        "Edit All Songs' Tags…": "编辑全部歌曲标签…",
+        "Editing %@ songs": "正在编辑 %@ 首歌曲",
+        "Title, genre, and cover art are preserved.": "将保留原有的歌名、流派和封面图片。",
+        "Mixed": "多个值",
+        "Leave a field blank to keep each song’s existing value.": "留空某个字段将保留每首歌曲原有的信息。",
+        "Apply": "应用",
+        "Updated tags for %@": "已更新 %@ 的标签",
+        "Batch Tag Editing": "批量编辑标签",
     ]
 }

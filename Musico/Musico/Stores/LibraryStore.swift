@@ -2152,8 +2152,13 @@ final class LibraryStore {
             playlistsChanged = true
         }
         for (oldID, newID) in map where oldID != newID {
-            if let ov = metadataOverrides.removeValue(forKey: oldID), metadataOverrides[newID] == nil {
-                metadataOverrides[newID] = ov
+            if var ov = metadataOverrides.removeValue(forKey: oldID), metadataOverrides[newID] == nil {
+                if ov.artist == "Google Drive" {
+                    ov.artist = nil
+                }
+                if !ov.isEmpty {
+                    metadataOverrides[newID] = ov
+                }
                 libraryChanged = true
             }
         }
@@ -2259,7 +2264,6 @@ final class LibraryStore {
         now: Date
     ) -> (tracks: [Track], changed: Bool, migratedIDs: [String: String], consumedOldIDs: Set<String>) {
         let sourceName = root.kind.cloudSourceSlug ?? root.resolvedProviderID ?? "cloud"
-        let albumArtistName: String? = root.kind == .cloudGoogleDrive ? "Google Drive" : nil
         var legacyByFileID: [String: Track] = [:]
         if root.kind == .cloudGoogleDrive {
             for track in existing.values where track.relativePath.hasPrefix("gdrive/") {
@@ -2305,7 +2309,25 @@ final class LibraryStore {
                 consumedOldIDs.insert(old.id)
             }
 
+            // Preserve embedded metadata & artwork previously enriched from a cached Google Drive file.
+            let preserveGoogleDriveEnriched: Bool = {
+                guard root.kind == .cloudGoogleDrive,
+                      let old,
+                      item.artist == "Google Drive" else {
+                    return false
+                }
+                return old.artist != "Google Drive"
+                    || old.artworkKey != nil
+                    || old.duration > 0
+                    || old.genre != nil
+                    || old.hasEmbeddedLyrics
+            }()
+
             if let directMatch {
+                if preserveGoogleDriveEnriched {
+                    result.append(directMatch)
+                    continue
+                }
                 let sameMetadata = directMatch.title == item.title
                     && directMatch.artist == item.artist
                     && directMatch.album == item.album
@@ -2314,7 +2336,7 @@ final class LibraryStore {
                     && directMatch.remoteTrackID == item.remoteTrackID
                     && directMatch.remoteArtworkURL == item.artworkURL
                     && directMatch.cloudSource == sourceName
-                    && directMatch.albumArtist == (albumArtistName ?? item.artist)
+                    && directMatch.albumArtist == item.artist
                 if sameMetadata {
                     result.append(directMatch)
                     continue
@@ -2326,23 +2348,26 @@ final class LibraryStore {
             if let old, old.id != newID {
                 migratedIDs[old.id] = newID
             }
-            let keepArtworkKey = (old?.remoteArtworkURL == item.artworkURL) ? old?.artworkKey : nil
+            let keepArtworkKey = preserveGoogleDriveEnriched
+                ? old?.artworkKey
+                : ((old?.remoteArtworkURL == item.artworkURL) ? old?.artworkKey : nil)
             result.append(Track(
                 id: newID,
                 rootID: root.id,
                 relativePath: item.relativePath,
-                title: item.title,
-                artist: item.artist,
-                album: item.album,
-                albumArtist: albumArtistName ?? item.artist,
-                trackNumber: item.trackNumber,
-                discNumber: nil,
-                duration: item.duration,
-                fileSize: 0,
+                title: preserveGoogleDriveEnriched ? (old?.title ?? item.title) : item.title,
+                artist: preserveGoogleDriveEnriched ? (old?.artist ?? item.artist) : item.artist,
+                album: preserveGoogleDriveEnriched ? (old?.album ?? item.album) : item.album,
+                albumArtist: preserveGoogleDriveEnriched ? (old?.albumArtist ?? item.artist) : item.artist,
+                trackNumber: preserveGoogleDriveEnriched ? (old?.trackNumber ?? item.trackNumber) : item.trackNumber,
+                discNumber: preserveGoogleDriveEnriched ? old?.discNumber : nil,
+                duration: preserveGoogleDriveEnriched ? (old?.duration ?? item.duration) : item.duration,
+                fileSize: preserveGoogleDriveEnriched ? (old?.fileSize ?? 0) : 0,
                 modified: now,
-                hasEmbeddedLyrics: false,
+                hasEmbeddedLyrics: preserveGoogleDriveEnriched ? (old?.hasEmbeddedLyrics ?? false) : false,
                 dateAdded: old?.dateAdded ?? now,
                 artworkKey: keepArtworkKey,
+                genre: preserveGoogleDriveEnriched ? old?.genre : nil,
                 cloudSource: sourceName,
                 remoteTrackID: item.remoteTrackID,
                 remoteArtworkURL: item.artworkURL
@@ -2622,6 +2647,170 @@ final class LibraryStore {
             }
         }
         return updated
+    }
+
+    @discardableResult
+    func batchUpdateTrackMetadata(ids: [String], artist: String?, album: String?) -> Int {
+        let cleanArtist = artist?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanAlbum = album?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let resolvedArtist = cleanArtist.map { $0.isEmpty ? "Unknown Artist" : $0 }
+        let resolvedAlbum = cleanAlbum.map { $0.isEmpty ? "Unknown Album" : $0 }
+        guard resolvedArtist != nil || resolvedAlbum != nil else { return 0 }
+
+        var uniqueIDs: [String] = []
+        var seenIDs = Set<String>()
+        for id in ids where !id.hasPrefix(Track.ephemeralIDPrefix) {
+            if seenIDs.insert(id).inserted {
+                uniqueIDs.append(id)
+            }
+        }
+        guard !uniqueIDs.isEmpty else { return 0 }
+
+        var updatedTracks = tracks
+        let indexByID = Dictionary(updatedTracks.enumerated().map { ($0.element.id, $0.offset) }, uniquingKeysWith: { first, _ in first })
+
+        var changedTracks: [Track] = []
+        var pendingFileWrites: [(id: String, url: URL)] = []
+
+        for id in uniqueIDs {
+            guard let index = indexByID[id] else { continue }
+            let existing = updatedTracks[index]
+            guard !existing.isEphemeral else { continue }
+
+            var override = metadataOverrides[id] ?? TrackMetadataOverride()
+            var updated = existing
+            if let resolvedArtist {
+                override.artist = resolvedArtist
+                updated.artist = resolvedArtist
+                updated.albumArtist = resolvedArtist
+            }
+            if let resolvedAlbum {
+                override.album = resolvedAlbum
+                updated.album = resolvedAlbum
+            }
+            metadataOverrides[id] = override
+            updatedTracks[index] = updated
+            changedTracks.append(updated)
+
+            if !updated.isCloud, let fileURL = url(for: updated) {
+                pendingFileWrites.append((id, fileURL))
+            }
+        }
+
+        guard !changedTracks.isEmpty else { return 0 }
+        tracks = updatedTracks
+        saveLibrary()
+        for track in changedTracks {
+            onTrackUpdated?(track)
+        }
+
+        if !pendingFileWrites.isEmpty {
+            let payload = AudioTagWriter.Payload(
+                title: nil,
+                artist: resolvedArtist,
+                album: resolvedAlbum,
+                genre: nil,
+                artworkData: nil,
+                albumArtist: resolvedArtist
+            )
+            Task.detached(priority: .utility) { [weak self] in
+                var statsUpdates: [(id: String, size: Int64, modified: Date)] = []
+                for item in pendingFileWrites {
+                    let wrote = await AudioTagWriter.write(payload, to: item.url)
+                    if wrote,
+                       let attrs = try? FileManager.default.attributesOfItem(atPath: item.url.path),
+                       let mtime = attrs[.modificationDate] as? Date,
+                       let size = (attrs[.size] as? NSNumber)?.int64Value {
+                        statsUpdates.append((item.id, size, mtime))
+                    }
+                }
+                guard !statsUpdates.isEmpty else { return }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    var current = self.tracks
+                    var touched = false
+                    for entry in statsUpdates {
+                        if let idx = current.firstIndex(where: { $0.id == entry.id }) {
+                            current[idx].fileSize = entry.size
+                            current[idx].modified = entry.modified
+                            touched = true
+                        }
+                    }
+                    if touched {
+                        self.tracks = current
+                        self.saveLibrary()
+                    }
+                }
+            }
+        }
+
+        return changedTracks.count
+    }
+
+    /// Enriches a cached Google Drive track from the downloaded audio file's embedded tags and artwork,
+    /// without overwriting any user-authored `TrackMetadataOverride`.
+    func enrichCachedCloudTrack(_ trackID: String, cachedURL: URL) async {
+        guard let initial = tracks.first(where: { $0.id == trackID }),
+              initial.isCloud,
+              initial.cloudSource == "gdrive" || root(initial.rootID)?.effectiveCloudKind == .cloudGoogleDrive,
+              FileManager.default.fileExists(atPath: cachedURL.path) else {
+            return
+        }
+
+        let meta = await reader.read(cachedURL)
+        let fileAttrs = try? FileManager.default.attributesOfItem(atPath: cachedURL.path)
+        let cachedSize = (fileAttrs?[.size] as? NSNumber)?.int64Value ?? 0
+
+        guard let index = tracks.firstIndex(where: { $0.id == trackID }) else { return }
+        let current = tracks[index]
+        let ov = metadataOverrides[trackID]
+        var updated = current
+
+        if ov?.title == nil, let title = meta.title, !title.isEmpty {
+            updated.title = title
+        }
+        if ov?.artist == nil, let artist = meta.artist, !artist.isEmpty {
+            updated.artist = artist
+            if let albumArtist = meta.albumArtist, !albumArtist.isEmpty {
+                updated.albumArtist = albumArtist
+            } else {
+                updated.albumArtist = artist
+            }
+        } else if ov?.artist == nil, let albumArtist = meta.albumArtist, !albumArtist.isEmpty {
+            updated.albumArtist = albumArtist
+        }
+        if ov?.album == nil, let album = meta.album, !album.isEmpty {
+            updated.album = album
+        }
+        if ov?.genre == nil, let genre = meta.genre, !genre.isEmpty {
+            updated.genre = genre
+        }
+        if let trackNumber = meta.trackNumber, trackNumber > 0 {
+            updated.trackNumber = trackNumber
+        }
+        if let discNumber = meta.discNumber, discNumber > 0 {
+            updated.discNumber = discNumber
+        }
+        if meta.duration > 0 {
+            updated.duration = meta.duration
+        }
+        if meta.lyrics != nil {
+            updated.hasEmbeddedLyrics = true
+        }
+        if cachedSize > 0 {
+            updated.fileSize = cachedSize
+        }
+        if ov?.artworkKey == nil,
+           let artData = meta.artwork,
+           !artData.isEmpty,
+           let storedKey = artwork.store(artData) {
+            updated.artworkKey = storedKey
+        }
+
+        guard updated != current else { return }
+        tracks[index] = updated
+        saveLibrary()
+        onTrackUpdated?(updated)
     }
 
     private func syncFileStatsAfterTagWrite(id: String, fileSize: Int64, modified: Date) {

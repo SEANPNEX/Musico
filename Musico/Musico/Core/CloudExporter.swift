@@ -121,6 +121,7 @@ enum CloudExporter {
         cache: CloudAudioCache = .shared,
         artworkCache: ArtworkCache = .shared,
         thumbnailCache: CloudThumbnailCache = .shared,
+        metadataOverrides: [String: TrackMetadataOverride] = [:],
         onProgress: (@MainActor @Sendable (Int, Int, String) -> Void)? = nil
     ) async throws -> ExportSummary {
         try await performExportPlaylist(
@@ -131,6 +132,7 @@ enum CloudExporter {
             cache: cache,
             artworkCache: artworkCache,
             thumbnailCache: thumbnailCache,
+            metadataOverrides: metadataOverrides,
             onDetailedProgress: onProgress.map { callback in
                 { @MainActor progress in
                     callback(progress.completedTracks, progress.totalTracks, progress.currentTrackTitle)
@@ -147,6 +149,7 @@ enum CloudExporter {
         cache: CloudAudioCache = .shared,
         artworkCache: ArtworkCache = .shared,
         thumbnailCache: CloudThumbnailCache = .shared,
+        metadataOverrides: [String: TrackMetadataOverride] = [:],
         onDetailedProgress: @escaping @MainActor @Sendable (ExportProgress) -> Void
     ) async throws -> ExportSummary {
         try await performExportPlaylist(
@@ -157,6 +160,7 @@ enum CloudExporter {
             cache: cache,
             artworkCache: artworkCache,
             thumbnailCache: thumbnailCache,
+            metadataOverrides: metadataOverrides,
             onDetailedProgress: onDetailedProgress
         )
     }
@@ -169,6 +173,7 @@ enum CloudExporter {
         cache: CloudAudioCache,
         artworkCache: ArtworkCache,
         thumbnailCache: CloudThumbnailCache,
+        metadataOverrides: [String: TrackMetadataOverride],
         onDetailedProgress: (@MainActor @Sendable (ExportProgress) -> Void)?
     ) async throws -> ExportSummary {
         try Task.checkCancellation()
@@ -221,6 +226,8 @@ enum CloudExporter {
                 try FileManager.default.copyItem(at: cachedURL, to: targetURL)
                 await writeMetadataAndArtwork(
                     for: track,
+                    root: root,
+                    metadataOverride: metadataOverrides[track.id],
                     to: targetURL,
                     suppliedArtworkData: nil,
                     artworkCache: artworkCache,
@@ -444,7 +451,7 @@ enum CloudExporter {
                 title: item.title,
                 artist: item.artist,
                 album: item.album,
-                albumArtist: fetched.kind == .cloudGoogleDrive ? "Google Drive" : item.artist,
+                albumArtist: item.artist,
                 trackNumber: item.trackNumber,
                 discNumber: nil,
                 duration: item.duration,
@@ -543,11 +550,124 @@ enum CloudExporter {
 
     private static func writeMetadataAndArtwork(
         for track: Track,
+        root: LibraryRoot? = nil,
+        metadataOverride: TrackMetadataOverride? = nil,
         to targetURL: URL,
         suppliedArtworkData: Data?,
         artworkCache: ArtworkCache,
         thumbnailCache: CloudThumbnailCache
     ) async {
+        let isGoogleDrive = (root?.effectiveCloudKind == .cloudGoogleDrive)
+            || (track.cloudSource?.lowercased() == "gdrive")
+
+        if isGoogleDrive {
+            let existingMeta = await MetadataReader().read(targetURL)
+            let hasEmbeddedTags = existingMeta.title != nil
+                || existingMeta.artist != nil
+                || existingMeta.album != nil
+                || existingMeta.albumArtist != nil
+                || existingMeta.genre != nil
+            let hasEmbeddedArtwork = existingMeta.artwork.map { !$0.isEmpty } ?? false
+            let sanitizedOverride = sanitizedGoogleDriveOverride(metadataOverride)
+
+            if sanitizedOverride == nil && suppliedArtworkData == nil {
+                if hasEmbeddedTags || hasEmbeddedArtwork {
+                    return
+                }
+                let fallbackArtwork = await resolveArtworkData(
+                    for: track,
+                    suppliedData: nil,
+                    artworkCache: artworkCache,
+                    thumbnailCache: thumbnailCache
+                )
+                let cleanTitle = existingMeta.title == nil && !track.title.isEmpty ? track.title : nil
+                let cleanArtist = existingMeta.artist == nil && track.artist != "Google Drive" && !track.artist.isEmpty ? track.artist : nil
+                let cleanAlbum = existingMeta.album == nil && !track.album.isEmpty ? track.album : nil
+                let cleanGenre = existingMeta.genre == nil && !track.displayGenre.isEmpty ? track.displayGenre : nil
+                if cleanArtist == nil && cleanAlbum == nil && cleanGenre == nil && fallbackArtwork == nil {
+                    return
+                }
+                let payload = AudioTagWriter.Payload(
+                    title: cleanTitle,
+                    artist: cleanArtist,
+                    album: cleanAlbum,
+                    genre: cleanGenre,
+                    artworkData: fallbackArtwork
+                )
+                if AudioTagWriter.supportsEmbeddedArtwork(for: targetURL) {
+                    let wrote = await AudioTagWriter.write(payload, to: targetURL)
+                    if !wrote, let fallbackArtwork {
+                        _ = AudioTagWriter.writeArtworkSidecar(fallbackArtwork, alongside: targetURL)
+                    }
+                } else if let fallbackArtwork {
+                    _ = AudioTagWriter.writeArtworkSidecar(fallbackArtwork, alongside: targetURL)
+                }
+                return
+            }
+
+            let overrideArtworkData: Data? = {
+                if let suppliedArtworkData, !suppliedArtworkData.isEmpty {
+                    return suppliedArtworkData
+                }
+                if let key = sanitizedOverride?.artworkKey,
+                   let data = artworkCache.data(forKey: key),
+                   !data.isEmpty {
+                    return data
+                }
+                return nil
+            }()
+            let resolvedArtwork: Data?
+            if let overrideArtworkData {
+                resolvedArtwork = overrideArtworkData
+            } else if hasEmbeddedArtwork {
+                resolvedArtwork = nil
+            } else {
+                resolvedArtwork = await resolveArtworkData(
+                    for: track,
+                    suppliedData: nil,
+                    artworkCache: artworkCache,
+                    thumbnailCache: thumbnailCache
+                )
+            }
+
+            let titleToWrite = sanitizedOverride?.title
+                ?? (existingMeta.title == nil && !track.title.isEmpty ? track.title : nil)
+            let artistToWrite = sanitizedOverride?.artist
+                ?? (existingMeta.artist == nil && track.artist != "Google Drive" && !track.artist.isEmpty ? track.artist : nil)
+            let albumToWrite = sanitizedOverride?.album
+                ?? (existingMeta.album == nil && !track.album.isEmpty ? track.album : nil)
+            let genreToWrite = sanitizedOverride?.genre
+                ?? (existingMeta.genre == nil && !track.displayGenre.isEmpty ? track.displayGenre : nil)
+            let albumArtistToWrite = sanitizedOverride?.artist
+
+            if titleToWrite == nil
+                && artistToWrite == nil
+                && albumToWrite == nil
+                && genreToWrite == nil
+                && albumArtistToWrite == nil
+                && resolvedArtwork == nil {
+                return
+            }
+
+            let payload = AudioTagWriter.Payload(
+                title: titleToWrite,
+                artist: artistToWrite,
+                album: albumToWrite,
+                genre: genreToWrite,
+                artworkData: resolvedArtwork,
+                albumArtist: albumArtistToWrite
+            )
+            if AudioTagWriter.supportsEmbeddedArtwork(for: targetURL) {
+                let wrote = await AudioTagWriter.write(payload, to: targetURL)
+                if !wrote, let resolvedArtwork {
+                    _ = AudioTagWriter.writeArtworkSidecar(resolvedArtwork, alongside: targetURL)
+                }
+            } else if let resolvedArtwork {
+                _ = AudioTagWriter.writeArtworkSidecar(resolvedArtwork, alongside: targetURL)
+            }
+            return
+        }
+
         let resolvedArtwork = await resolveArtworkData(
             for: track,
             suppliedData: suppliedArtworkData,
@@ -571,6 +691,14 @@ enum CloudExporter {
         }
     }
 
+    private static func sanitizedGoogleDriveOverride(_ override: TrackMetadataOverride?) -> TrackMetadataOverride? {
+        guard var ov = override else { return nil }
+        if ov.artist == "Google Drive" {
+            ov.artist = nil
+        }
+        return ov.isEmpty ? nil : ov
+    }
+
     /// Downloads/reuses cached audio for a single cloud `track` and copies it into `folderURL`.
     @discardableResult
     static func exportTrack(
@@ -582,6 +710,7 @@ enum CloudExporter {
         artworkCache: ArtworkCache = .shared,
         thumbnailCache: CloudThumbnailCache = .shared,
         qualityID: String? = nil,
+        metadataOverride: TrackMetadataOverride? = nil,
         onProgress: (@MainActor @Sendable (CloudDownloadProgress) -> Void)? = nil
     ) async throws -> URL {
         try Task.checkCancellation()
@@ -606,6 +735,8 @@ enum CloudExporter {
 
         await writeMetadataAndArtwork(
             for: track,
+            root: root,
+            metadataOverride: metadataOverride,
             to: targetURL,
             suppliedArtworkData: artworkData,
             artworkCache: artworkCache,
@@ -621,6 +752,8 @@ final class CloudExportPrompt {
     struct Request {
         let track: Track
         let root: LibraryRoot?
+        var metadataOverride: TrackMetadataOverride? = nil
+        var artworkCache: ArtworkCache = .shared
         let onSaved: @MainActor (URL) async -> Void
     }
 
@@ -712,6 +845,8 @@ struct CloudExportHostModifier: ViewModifier {
             root: req.root,
             folderURL: folderURL,
             qualityID: qualityID,
+            metadataOverride: req.metadataOverride,
+            artworkCache: req.artworkCache,
             onSaved: req.onSaved
         )
         Task { @MainActor in

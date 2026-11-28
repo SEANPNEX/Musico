@@ -97,6 +97,8 @@ struct TrackRows: View {
     var queueName: String? = nil
     var subtitle: ((Track) -> String)?
     var onTap: ((Int, Track) -> Void)?
+    var isSelecting: Bool = false
+    var selectedIDs: Binding<Set<String>>? = nil
 
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
@@ -107,8 +109,16 @@ struct TrackRows: View {
 
     var body: some View {
         ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+            let isSelected = selectedIDs?.wrappedValue.contains(track.id) == true
             Button {
-                if let onTap {
+                if isSelecting {
+                    guard !track.isEphemeral, let selectedIDs else { return }
+                    if selectedIDs.wrappedValue.contains(track.id) {
+                        selectedIDs.wrappedValue.remove(track.id)
+                    } else {
+                        selectedIDs.wrappedValue.insert(track.id)
+                    }
+                } else if let onTap {
                     onTap(index, track)
                 } else if let queueName {
                     player.playInNamedQueue((queue ?? tracks).map(\.id), name: queueName, startAt: index)
@@ -116,16 +126,27 @@ struct TrackRows: View {
                     player.play((queue ?? tracks).map(\.id), startAt: index)
                 }
             } label: {
-                TrackRow(track: track, subtitle: subtitle?(track))
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .contentShape(Rectangle())
+                HStack(spacing: 10) {
+                    if isSelecting {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .foregroundStyle(isSelected ? themeManager.accentColor : Color.secondary)
+                    }
+                    TrackRow(track: track, subtitle: subtitle?(track))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .disabled(!library.isAvailable(track))
-            .contextMenu { TrackMenuItems(ids: [track.id], favouriteID: track.isEphemeral ? nil : track.id) }
+            .disabled(!isSelecting && !library.isAvailable(track))
+            .contextMenu {
+                if !isSelecting {
+                    TrackMenuItems(ids: [track.id], favouriteID: track.isEphemeral ? nil : track.id)
+                }
+            }
             #if !targetEnvironment(macCatalyst)
             .swipeActions(edge: .leading, allowsFullSwipe: true) {
-                if library.isAvailable(track) {
+                if !isSelecting && library.isAvailable(track) {
                     Button {
                         player.playNext([track.id])
                         toastManager.show(L10n.tr("Playing next"), systemImage: "text.line.first.and.arrowtriangle.forward")
@@ -136,7 +157,7 @@ struct TrackRows: View {
                 }
             }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                if !track.isEphemeral {
+                if !isSelecting && !track.isEphemeral {
                     Button(role: .destructive) {
                         deletePrompt?.confirmTrack(track, library: library, lyricsStore: lyricsStore)
                     } label: {
@@ -162,6 +183,9 @@ struct ReorderableTrackRow: View {
     let onMove: (Int, Int) -> Void
     var onRemove: (() -> Void)? = nil
     var removeHelp: String? = nil
+    var isSelecting: Bool = false
+    var isSelected: Bool = false
+    var onToggleSelect: (() -> Void)? = nil
 
     @Environment(\.themeManager) private var themeManager
     #if !targetEnvironment(macCatalyst)
@@ -180,8 +204,19 @@ struct ReorderableTrackRow: View {
         #endif
 
         HStack(spacing: 8) {
-            Button(action: onTap) {
+            Button {
+                if isSelecting {
+                    onToggleSelect?()
+                } else {
+                    onTap()
+                }
+            } label: {
                 HStack(spacing: 10) {
+                    if isSelecting {
+                        Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                            .font(.title3)
+                            .foregroundStyle(isSelected ? themeManager.accentColor : Color.secondary)
+                    }
                     if let trackNumber {
                         Text("\(trackNumber)")
                             .font(.subheadline.monospacedDigit())
@@ -194,9 +229,9 @@ struct ReorderableTrackRow: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.borderless)
-            .disabled(!isAvailable)
+            .disabled(!isSelecting && !isAvailable)
 
-            if let onRemove, !isEditing {
+            if let onRemove, !isEditing, !isSelecting {
                 let helpLabel = removeHelp ?? L10n.tr("Remove")
                 Button {
                     onRemove()
@@ -221,33 +256,35 @@ struct ReorderableTrackRow: View {
                 #endif
             }
 
-            #if targetEnvironment(macCatalyst)
-            Image(systemName: "line.3.horizontal")
-                .font(.body)
-                .foregroundStyle(.tertiary)
-                .frame(width: 28, height: 36)
-                .contentShape(Rectangle())
-                .accessibilityLabel(L10n.tr("Reorder %@", track.title))
-                .draggable("\(scopeID):\(index)") {
-                    Text(track.title)
-                        .font(.subheadline.weight(.medium))
-                        .padding(.horizontal, 12)
-                        .padding(.vertical, 8)
-                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
-                }
-            #else
-            if !isEditing {
+            if !isSelecting {
+                #if targetEnvironment(macCatalyst)
                 Image(systemName: "line.3.horizontal")
                     .font(.body)
                     .foregroundStyle(.tertiary)
-                    .frame(width: 36, height: 44)
+                    .frame(width: 28, height: 36)
                     .contentShape(Rectangle())
-                    .overlay {
-                        IOSListReorderHandleOverlay()
-                    }
                     .accessibilityLabel(L10n.tr("Reorder %@", track.title))
+                    .draggable("\(scopeID):\(index)") {
+                        Text(track.title)
+                            .font(.subheadline.weight(.medium))
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 8))
+                    }
+                #else
+                if !isEditing {
+                    Image(systemName: "line.3.horizontal")
+                        .font(.body)
+                        .foregroundStyle(.tertiary)
+                        .frame(width: 36, height: 44)
+                        .contentShape(Rectangle())
+                        .overlay {
+                            IOSListReorderHandleOverlay()
+                        }
+                        .accessibilityLabel(L10n.tr("Reorder %@", track.title))
+                }
+                #endif
             }
-            #endif
         }
         .onHover { isRowHovered = $0 }
         .listRowBackground(
@@ -605,7 +642,12 @@ struct TrackMenuItems: View {
             Divider()
             Button(L10n.tr("Save to Local Folder…"), systemImage: "square.and.arrow.down") {
                 let root = library.root(track.rootID)
-                cloudExport.request = CloudExportPrompt.Request(track: track, root: root) { [library] savedURL in
+                cloudExport.request = CloudExportPrompt.Request(
+                    track: track,
+                    root: root,
+                    metadataOverride: library.metadataOverrides[track.id],
+                    artworkCache: library.artwork
+                ) { [library] savedURL in
                     if library.containsLocalURL(savedURL) {
                         await library.rescan()
                     }

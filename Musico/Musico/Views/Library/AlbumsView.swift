@@ -167,7 +167,11 @@ struct AlbumDetailView: View {
     @Environment(LibraryStore.self) private var library
     @Environment(PlayerController.self) private var player
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.languageManager) private var languageManager
     @Environment(\.themeManager) private var themeManager
+    @State private var isSelecting = false
+    @State private var selectedTrackIDs: Set<String> = []
+    @State private var batchEditTarget: BatchTagEditTarget?
 
     private var usesWideHero: Bool {
         #if targetEnvironment(macCatalyst)
@@ -181,6 +185,8 @@ struct AlbumDetailView: View {
         // Use the live album if it still exists so a rescan updates this screen.
         let album = library.albums.first { $0.id == self.album.id } ?? self.album
         let tracks = library.tracks(album.trackIDs)
+        let selectableIDs = tracks.filter { !$0.isEphemeral }.map(\.id)
+        let allSelected = !selectableIDs.isEmpty && selectableIDs.allSatisfy { selectedTrackIDs.contains($0) }
         let totalDuration = tracks.reduce(0) { $0 + $1.duration }
         let queueName = "Album: \(album.title)"
         List {
@@ -189,16 +195,88 @@ struct AlbumDetailView: View {
             if !usesWideHero {
                 PlayShuffleButtons(ids: album.trackIDs, queueName: queueName)
             }
-            TrackRows(tracks: tracks, queueName: queueName) { track in
-                let artist = L10n.displayArtist(track.artist)
-                return track.trackNumber.map { "\($0) · \(artist)" } ?? artist
-            }
+            TrackRows(
+                tracks: tracks,
+                queueName: queueName,
+                subtitle: { track in
+                    let artist = L10n.displayArtist(track.artist)
+                    return track.trackNumber.map { "\($0) · \(artist)" } ?? artist
+                },
+                isSelecting: isSelecting,
+                selectedIDs: $selectedTrackIDs
+            )
         }
         .listStyle(.plain)
         .hiddenScrollBackgroundIfThemed(themeManager)
         .navigationBarTitleDisplayMode(.inline)
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if isSelecting {
+                BatchSelectionBottomBar(
+                    selectedCount: selectedTrackIDs.count,
+                    totalCount: selectableIDs.count,
+                    onToggleSelectAll: {
+                        if allSelected {
+                            selectedTrackIDs.removeAll()
+                        } else {
+                            selectedTrackIDs = Set(selectableIDs)
+                        }
+                    },
+                    onEditTags: {
+                        let ordered = selectableIDs.filter { selectedTrackIDs.contains($0) }
+                        if !ordered.isEmpty {
+                            batchEditTarget = BatchTagEditTarget(trackIDs: ordered)
+                        }
+                    },
+                    onDone: {
+                        isSelecting = false
+                        selectedTrackIDs.removeAll()
+                    }
+                )
+            }
+        }
         .toolbar {
-            Menu(L10n.tr("More"), systemImage: "ellipsis.circle") { TrackMenuItems(ids: album.trackIDs) }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if isSelecting {
+                    Button(allSelected ? L10n.tr("Deselect All") : L10n.tr("Select All")) {
+                        if allSelected {
+                            selectedTrackIDs.removeAll()
+                        } else {
+                            selectedTrackIDs = Set(selectableIDs)
+                        }
+                    }
+                    Button(L10n.tr("Done")) {
+                        isSelecting = false
+                        selectedTrackIDs.removeAll()
+                    }
+                    .fontWeight(.semibold)
+                } else {
+                    if !selectableIDs.isEmpty {
+                        Button(L10n.tr("Select")) {
+                            selectedTrackIDs.removeAll()
+                            isSelecting = true
+                        }
+                    }
+                    Menu(L10n.tr("More"), systemImage: "ellipsis.circle") {
+                        if !selectableIDs.isEmpty {
+                            Button(L10n.tr("Edit All Songs' Tags…"), systemImage: "tag") {
+                                batchEditTarget = BatchTagEditTarget(trackIDs: selectableIDs)
+                            }
+                            Divider()
+                        }
+                        TrackMenuItems(ids: album.trackIDs)
+                    }
+                }
+            }
+        }
+        .sheet(item: $batchEditTarget) { target in
+            BatchTagEditSheet(trackIDs: target.trackIDs, library: library) {
+                isSelecting = false
+                selectedTrackIDs.removeAll()
+            }
+            .environment(library)
+            .environment(\.languageManager, languageManager)
+            .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
     }
 

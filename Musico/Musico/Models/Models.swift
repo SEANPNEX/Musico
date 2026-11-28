@@ -301,6 +301,10 @@ struct TrackMetadataOverride: Codable, Hashable, Sendable {
     var album: String?
     var genre: String?
     var artworkKey: String?
+
+    var isEmpty: Bool {
+        title == nil && artist == nil && album == nil && genre == nil && artworkKey == nil
+    }
 }
 
 enum SearchField: String, Codable, Hashable, Sendable {

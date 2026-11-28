@@ -395,6 +395,9 @@ struct PlaylistDetailView: View {
     @State private var showRenameSheet = false
     @State private var confirmDelete = false
     @State private var reorderFeedbackTrigger = 0
+    @State private var isSelecting = false
+    @State private var selectedTrackIDs: Set<String> = []
+    @State private var batchEditTarget: BatchTagEditTarget?
 
     private var isFavourites: Bool {
         if case .favourites = ref { return true }
@@ -467,13 +470,24 @@ struct PlaylistDetailView: View {
                         onRemove: {
                             removePlaylistOffsets(IndexSet(integer: index), playlistID: id)
                         },
-                        removeHelp: L10n.tr("Remove from Playlist")
+                        removeHelp: L10n.tr("Remove from Playlist"),
+                        isSelecting: isSelecting,
+                        isSelected: selectedTrackIDs.contains(track.id),
+                        onToggleSelect: {
+                            if selectedTrackIDs.contains(track.id) {
+                                selectedTrackIDs.remove(track.id)
+                            } else {
+                                selectedTrackIDs.insert(track.id)
+                            }
+                        }
                     )
                     .contextMenu {
-                        TrackMenuItems(ids: [track.id], favouriteID: track.id)
-                        Divider()
-                        Button(L10n.tr("Remove from Playlist"), systemImage: "minus.circle", role: .destructive) {
-                            removePlaylistOffsets(IndexSet(integer: index), playlistID: id)
+                        if !isSelecting {
+                            TrackMenuItems(ids: [track.id], favouriteID: track.id)
+                            Divider()
+                            Button(L10n.tr("Remove from Playlist"), systemImage: "minus.circle", role: .destructive) {
+                                removePlaylistOffsets(IndexSet(integer: index), playlistID: id)
+                            }
                         }
                     }
                     #if !targetEnvironment(macCatalyst)
@@ -516,9 +530,22 @@ struct PlaylistDetailView: View {
                         onMove: { from, to in
                             reorderFeedbackTrigger += 1
                             library.moveFavourites(currentTrackIDs: trackIDs, from: IndexSet(integer: from), to: to)
+                        },
+                        isSelecting: isSelecting,
+                        isSelected: selectedTrackIDs.contains(track.id),
+                        onToggleSelect: {
+                            if selectedTrackIDs.contains(track.id) {
+                                selectedTrackIDs.remove(track.id)
+                            } else {
+                                selectedTrackIDs.insert(track.id)
+                            }
                         }
                     )
-                    .contextMenu { TrackMenuItems(ids: [track.id], favouriteID: track.id) }
+                    .contextMenu {
+                        if !isSelecting {
+                            TrackMenuItems(ids: [track.id], favouriteID: track.id)
+                        }
+                    }
                     #if !targetEnvironment(macCatalyst)
                     .swipeActions(edge: .leading, allowsFullSwipe: true) {
                         if library.isAvailable(track) {
@@ -575,34 +602,97 @@ struct PlaylistDetailView: View {
             showAddSongs = false
             showRenameSheet = false
             confirmDelete = false
+            isSelecting = false
+            selectedTrackIDs.removeAll()
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if isSelecting {
+                let selectableIDs = tracks.filter { !$0.isEphemeral }.map(\.id)
+                let uniqueSelectableCount = Set(selectableIDs).count
+                let allSelected = uniqueSelectableCount > 0 && selectableIDs.allSatisfy { selectedTrackIDs.contains($0) }
+                BatchSelectionBottomBar(
+                    selectedCount: selectedTrackIDs.count,
+                    totalCount: uniqueSelectableCount,
+                    onToggleSelectAll: {
+                        if allSelected {
+                            selectedTrackIDs.removeAll()
+                        } else {
+                            selectedTrackIDs = Set(selectableIDs)
+                        }
+                    },
+                    onEditTags: {
+                        let ordered = selectableIDs.filter { selectedTrackIDs.contains($0) }
+                        if !ordered.isEmpty {
+                            batchEditTarget = BatchTagEditTarget(trackIDs: ordered)
+                        }
+                    },
+                    onDone: {
+                        isSelecting = false
+                        selectedTrackIDs.removeAll()
+                    }
+                )
+            }
         }
         .toolbar {
             ToolbarItemGroup(placement: .topBarTrailing) {
-                if playlistID != nil {
-                    Button(L10n.tr("Add Songs"), systemImage: "plus") {
-                        showAddSongs = true
+                let selectableIDs = tracks.filter { !$0.isEphemeral }.map(\.id)
+                let allSelected = !selectableIDs.isEmpty && selectableIDs.allSatisfy { selectedTrackIDs.contains($0) }
+                if isSelecting {
+                    Button(allSelected ? L10n.tr("Deselect All") : L10n.tr("Select All")) {
+                        if allSelected {
+                            selectedTrackIDs.removeAll()
+                        } else {
+                            selectedTrackIDs = Set(selectableIDs)
+                        }
                     }
-                    .help(L10n.tr("Add Songs"))
-                }
-                if !tracks.isEmpty {
-                    TrackSortMenu(selection: currentSortOrder) { order in
-                        switch ref {
-                        case .favourites:
-                            library.sortFavourites(by: order, history: history)
-                        case .user(let id):
-                            library.sortPlaylist(id, by: order, history: history)
+                    Button(L10n.tr("Done")) {
+                        isSelecting = false
+                        selectedTrackIDs.removeAll()
+                    }
+                    .fontWeight(.semibold)
+                } else {
+                    if !selectableIDs.isEmpty {
+                        Button(L10n.tr("Select")) {
+                            selectedTrackIDs.removeAll()
+                            isSelecting = true
+                        }
+                    }
+                    if playlistID != nil {
+                        Button(L10n.tr("Add Songs"), systemImage: "plus") {
+                            showAddSongs = true
+                        }
+                        .help(L10n.tr("Add Songs"))
+                    }
+                    if !tracks.isEmpty {
+                        TrackSortMenu(selection: currentSortOrder) { order in
+                            switch ref {
+                            case .favourites:
+                                library.sortFavourites(by: order, history: history)
+                            case .user(let id):
+                                library.sortPlaylist(id, by: order, history: history)
+                            }
+                        }
+                    }
+                    if playlistID != nil, !tracks.isEmpty {
+                        EditButton()
+                    }
+                    if playlistID != nil || !trackIDs.isEmpty {
+                        Menu(L10n.tr("More"), systemImage: "ellipsis.circle") {
+                            detailMoreMenu(trackIDs: trackIDs)
                         }
                     }
                 }
-                if playlistID != nil, !tracks.isEmpty {
-                    EditButton()
-                }
-                if playlistID != nil || !trackIDs.isEmpty {
-                    Menu(L10n.tr("More"), systemImage: "ellipsis.circle") {
-                        detailMoreMenu(trackIDs: trackIDs)
-                    }
-                }
             }
+        }
+        .sheet(item: $batchEditTarget) { target in
+            BatchTagEditSheet(trackIDs: target.trackIDs, library: library) {
+                isSelecting = false
+                selectedTrackIDs.removeAll()
+            }
+            .environment(library)
+            .environment(\.languageManager, languageManager)
+            .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
         .sheet(isPresented: $showRenameSheet) {
             NamePromptSheet(
@@ -826,6 +916,10 @@ struct PlaylistDetailView: View {
     @ViewBuilder
     private func detailMoreMenu(trackIDs: [String]) -> some View {
         if !trackIDs.isEmpty {
+            Button(L10n.tr("Edit All Songs' Tags…"), systemImage: "tag") {
+                batchEditTarget = BatchTagEditTarget(trackIDs: trackIDs)
+            }
+            Divider()
             TrackMenuItems(ids: trackIDs)
         }
         if playlistID != nil {

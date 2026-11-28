@@ -31,6 +31,9 @@ struct SongsView: View {
     @State private var showExtensionManager = false
     @State private var extensionManagerTargetID: String?
     @State private var addFolderError: String?
+    @State private var isSelecting = false
+    @State private var selectedTrackIDs: Set<String> = []
+    @State private var batchEditTarget: BatchTagEditTarget?
     #if !targetEnvironment(macCatalyst)
     @FocusState private var isSearchFieldFocused: Bool
     #endif
@@ -150,13 +153,79 @@ struct SongsView: View {
         .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: trimmedQuery)
         .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: navigation.searchSource)
         .toolbar {
-            if !isCloudMode {
-                Menu(L10n.tr("Sort"), systemImage: "arrow.up.arrow.down") {
-                    Picker(L10n.tr("Sort By"), selection: $sort) {
-                        ForEach(SongSort.allCases) { Text($0.localizedTitle).tag($0) }
+            ToolbarItemGroup(placement: .topBarTrailing) {
+                if !isCloudMode && !songs.isEmpty {
+                    let selectableIDs = songs.filter { !$0.isEphemeral }.map(\.id)
+                    let allSelected = !selectableIDs.isEmpty && selectableIDs.allSatisfy { selectedTrackIDs.contains($0) }
+                    if isSelecting {
+                        Button(allSelected ? L10n.tr("Deselect All") : L10n.tr("Select All")) {
+                            if allSelected {
+                                selectedTrackIDs.removeAll()
+                            } else {
+                                selectedTrackIDs = Set(selectableIDs)
+                            }
+                        }
+                        Button(L10n.tr("Done")) {
+                            isSelecting = false
+                            selectedTrackIDs.removeAll()
+                        }
+                        .fontWeight(.semibold)
+                    } else {
+                        Button(L10n.tr("Select")) {
+                            selectedTrackIDs.removeAll()
+                            isSelecting = true
+                        }
+                        Menu(L10n.tr("Sort"), systemImage: "arrow.up.arrow.down") {
+                            Picker(L10n.tr("Sort By"), selection: $sort) {
+                                ForEach(SongSort.allCases) { Text($0.localizedTitle).tag($0) }
+                            }
+                        }
                     }
                 }
             }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            if isSelecting && !isCloudMode {
+                let selectableIDs = songs.filter { !$0.isEphemeral }.map(\.id)
+                BatchSelectionBottomBar(
+                    selectedCount: selectedTrackIDs.count,
+                    totalCount: selectableIDs.count,
+                    onToggleSelectAll: {
+                        let allSelected = !selectableIDs.isEmpty && selectableIDs.allSatisfy { selectedTrackIDs.contains($0) }
+                        if allSelected {
+                            selectedTrackIDs.removeAll()
+                        } else {
+                            selectedTrackIDs = Set(selectableIDs)
+                        }
+                    },
+                    onEditTags: {
+                        let ordered = selectableIDs.filter { selectedTrackIDs.contains($0) }
+                        if !ordered.isEmpty {
+                            batchEditTarget = BatchTagEditTarget(trackIDs: ordered)
+                        }
+                    },
+                    onDone: {
+                        isSelecting = false
+                        selectedTrackIDs.removeAll()
+                    }
+                )
+            }
+        }
+        .onChange(of: isCloudMode) { _, cloud in
+            if cloud {
+                isSelecting = false
+                selectedTrackIDs.removeAll()
+            }
+        }
+        .sheet(item: $batchEditTarget) { target in
+            BatchTagEditSheet(trackIDs: target.trackIDs, library: library) {
+                isSelecting = false
+                selectedTrackIDs.removeAll()
+            }
+            .environment(library)
+            .environment(\.languageManager, languageManager)
+            .environment(\.locale, languageManager.effectiveLocale)
+            .applyTheme(themeManager)
         }
         .onAppear {
             cloudSearch.reconcileActiveExtensions(searchExtensions, navigation: navigation)
@@ -483,7 +552,9 @@ struct SongsView: View {
                 onTap: isSearchingLocal ? { index, _ in
                     let queueName = SearchField.queueName(field: navigation.searchField, query: trimmedQuery)
                     player.playInNewQueue(songs.map(\.id), startAt: index, name: queueName)
-                } : nil
+                } : nil,
+                isSelecting: isSelecting,
+                selectedIDs: $selectedTrackIDs
             )
         }
     }

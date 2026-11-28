@@ -167,6 +167,35 @@ final class TransitionAndSearchUITests: XCTestCase {
         XCTAssertNotNil(window.rootViewController?.view)
     }
 
+    func testFullPlayerSingleColumnAndOverlayLyricsRenderCleanly() async throws {
+        let stores = try await makeStores(withSampleTrack: true)
+        defer { stores.player.shutdown() }
+
+        if let id = stores.library.tracks.first?.id {
+            stores.player.play([id], startAt: 0)
+            stores.player.pause()
+        }
+
+        let navigation = AppNavigation()
+        let window = try hostInWindow(
+            ZStack {
+                FullPlayerView(onClose: {})
+                LyricsView(isOverlay: true, onDone: {})
+            }
+            .environment(stores.library)
+            .environment(stores.player)
+            .environment(stores.queues)
+            .environment(stores.history)
+            .environment(\.appNavigation, navigation),
+            size: CGSize(width: 390, height: 844)
+        )
+        defer { tearDownWindow(window) }
+
+        try await Task.sleep(for: .milliseconds(250))
+        window.layoutIfNeeded()
+        XCTAssertNotNil(window.rootViewController?.view)
+    }
+
     // MARK: - Helpers
 
     private struct TestStores {

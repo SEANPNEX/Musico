@@ -2,20 +2,17 @@ import Foundation
 
 enum CloudLyricsProviderID {
     static let lrclib = "builtin.lrclib"
-    static let netease = "builtin.netease"
 }
 
 enum CloudLyricsSourceSelection: Equatable, Hashable, Sendable {
     case auto
     case lrclib
-    case netease
     case ext(id: String)
 
     var providerID: String? {
         switch self {
         case .auto: nil
         case .lrclib: CloudLyricsProviderID.lrclib
-        case .netease: CloudLyricsProviderID.netease
         case .ext(let id): "ext.\(id)"
         }
     }
@@ -29,7 +26,6 @@ struct CloudLyricsSourceOption: Identifiable, Equatable, Hashable, Sendable {
         switch selection {
         case .auto: "auto"
         case .lrclib: "lrclib"
-        case .netease: "netease"
         case .ext(let id): "ext.\(id)"
         }
     }

@@ -23,6 +23,7 @@ struct FullPlayerView: View {
     static let twoColumnWidth: CGFloat = 760
 
     @State private var panel: Panel?
+    @State private var showLyricsOverlay = false
     @AppStorage("playerSidePane") private var sidePane: SidePane = .lyrics
     @Environment(PlayerController.self) private var player: PlayerController?
     @Environment(LibraryStore.self) private var library: LibraryStore?
@@ -38,13 +39,14 @@ struct FullPlayerView: View {
     var body: some View {
         GeometryReader { proxy in
             let twoColumn = proxy.size.width >= Self.twoColumnWidth
-            Group {
+            ZStack {
                 if twoColumn {
                     HStack(spacing: 0) {
                         PlayerPage(
                             panel: columnPanel,
                             showsClose: true,
                             activeSidePane: sidePane,
+                            isLyricsOverlayOpen: false,
                             onClose: onClose
                         )
                         .frame(maxWidth: .infinity)
@@ -54,11 +56,32 @@ struct FullPlayerView: View {
                     }
                 } else {
                     PlayerPage(
-                        panel: $panel,
+                        panel: singleColumnPanel,
                         showsClose: onClose != nil,
                         activeSidePane: nil,
+                        isLyricsOverlayOpen: showLyricsOverlay,
                         onClose: onClose
                     )
+                    .allowsHitTesting(!showLyricsOverlay)
+                    .accessibilityHidden(showLyricsOverlay)
+
+                    if showLyricsOverlay {
+                        LyricsView(isOverlay: true, onDone: {
+                            withAnimation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion)) {
+                                showLyricsOverlay = false
+                            }
+                        })
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.opacity.combined(with: .scale(scale: reduceMotion ? 1.0 : 0.985)))
+                        .zIndex(5)
+                    }
+                }
+            }
+            .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: showLyricsOverlay)
+            .onChange(of: twoColumn) { _, isTwoColumn in
+                if isTwoColumn && showLyricsOverlay {
+                    showLyricsOverlay = false
+                    sidePane = .lyrics
                 }
             }
             .background {
@@ -108,6 +131,21 @@ struct FullPlayerView: View {
         }
     }
 
+    /// With one column, Lyrics toggles the full-bleed translucent overlay while Queue, Equalizer, and Sleep Timer open as sheets.
+    private var singleColumnPanel: Binding<Panel?> {
+        Binding(get: { showLyricsOverlay ? .lyrics : panel }, set: { target in
+            withAnimation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion)) {
+                if target == .lyrics {
+                    panel = nil
+                    showLyricsOverlay.toggle()
+                } else {
+                    showLyricsOverlay = false
+                    panel = target
+                }
+            }
+        })
+    }
+
     /// With two columns, Queue and Lyrics switch the right-hand column instead of opening a sheet.
     private var columnPanel: Binding<Panel?> {
         Binding(get: { panel }, set: { target in
@@ -144,23 +182,30 @@ struct FullPlayerView: View {
 
             ZStack {
                 LyricsView(embedded: true)
+                    .background(Color.clear)
                     .opacity(sidePane == .lyrics ? 1 : 0)
                     .offset(x: reduceMotion ? 0 : (sidePane == .lyrics ? 0 : -MusicoMotion.peerSlideOffset))
                     .allowsHitTesting(sidePane == .lyrics)
                     .accessibilityHidden(sidePane != .lyrics)
 
                 NavigationStack {
-                    QueuesView(embeddedInInspector: true).navigationBarTitleDisplayMode(.inline)
+                    QueuesView(embeddedInInspector: true)
+                        .navigationBarTitleDisplayMode(.inline)
+                        .scrollContentBackground(.hidden)
+                        .background(Color.clear)
                 }
+                .background(Color.clear)
                 .opacity(sidePane == .queue ? 1 : 0)
                 .offset(x: reduceMotion ? 0 : (sidePane == .queue ? 0 : MusicoMotion.peerSlideOffset))
                 .allowsHitTesting(sidePane == .queue)
                 .accessibilityHidden(sidePane != .queue)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(Color.clear)
             .clipped()
             .animation(MusicoMotion.viewSwitch(reduceMotion: reduceMotion), value: sidePane)
         }
+        .background(Color.clear)
     }
 }
 
@@ -171,6 +216,7 @@ private struct PlayerPage: View {
     /// A close button, for when the player fills the window and cannot be dragged away.
     let showsClose: Bool
     let activeSidePane: FullPlayerView.SidePane?
+    let isLyricsOverlayOpen: Bool
     let onClose: (() -> Void)?
     @Environment(PlayerController.self) private var player
     @Environment(LibraryStore.self) private var library
@@ -339,7 +385,7 @@ private struct PlayerPage: View {
             }
             .buttonStyle(.glass)
             .buttonBorderShape(.circle)
-            .keyboardShortcut(.cancelAction)
+            .modifier(ConditionalCancelShortcutModifier(enabled: !isLyricsOverlayOpen))
             .accessibilityLabel(L10n.tr("Close"))
             .help(L10n.tr("Close"))
         } else {
@@ -355,7 +401,7 @@ private struct PlayerPage: View {
                     .contentShape(Capsule())
             }
             .buttonStyle(.borderless)
-            .keyboardShortcut(.cancelAction)
+            .modifier(ConditionalCancelShortcutModifier(enabled: !isLyricsOverlayOpen))
             .accessibilityLabel(L10n.tr("Close"))
             .help(L10n.tr("Close"))
             .onHover { isCloseHovered = $0 }
@@ -503,7 +549,7 @@ private struct PlayerPage: View {
 
     private var panelButtons: some View {
         let queueActive = activeSidePane == .queue || panel == .queue
-        let lyricsActive = activeSidePane == .lyrics || panel == .lyrics
+        let lyricsActive = activeSidePane == .lyrics || isLyricsOverlayOpen || panel == .lyrics
         return HStack(spacing: 10) {
             panelButton(L10n.tr("Queue"), "list.bullet", .queue, active: queueActive)
             panelButton(L10n.tr("Lyrics"), "quote.bubble", .lyrics, active: lyricsActive)
@@ -516,6 +562,19 @@ private struct PlayerPage: View {
     private func panelButton(_ title: String, _ icon: String, _ target: Panel, active: Bool) -> some View {
         PlayerPanelButton(title: title, icon: icon, active: active) {
             panel = target
+        }
+    }
+}
+
+private struct ConditionalCancelShortcutModifier: ViewModifier {
+    let enabled: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if enabled {
+            content.keyboardShortcut(.cancelAction)
+        } else {
+            content
         }
     }
 }

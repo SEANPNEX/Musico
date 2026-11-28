@@ -5,12 +5,11 @@ struct CloudLyricsExtensionDescriptor: Equatable, Hashable, Sendable {
     let name: String
 }
 
-/// Coordinates on-demand cloud lyrics search across built-in providers (LRCLIB, NetEase)
+/// Coordinates on-demand cloud lyrics search across built-in LRCLIB
 /// and active JS extensions with `capabilities: ["lyrics"]`.
 /// Never invoked automatically during track playback.
 struct CloudLyricsService: Sendable {
     let lrclib: LrclibClient
-    let netease: NeteaseLyricsClient
     let extensionSearch: (@Sendable (_ extensionID: String, _ query: CloudLyricsQuery) async throws -> [CloudLyricsCandidate])?
 
     init(
@@ -19,7 +18,6 @@ struct CloudLyricsService: Sendable {
         extensionSearch: (@Sendable (_ extensionID: String, _ query: CloudLyricsQuery) async throws -> [CloudLyricsCandidate])? = nil
     ) {
         self.lrclib = LrclibClient(transport: transport, appVersion: appVersion)
-        self.netease = NeteaseLyricsClient(transport: transport)
         self.extensionSearch = extensionSearch
     }
 
@@ -27,10 +25,12 @@ struct CloudLyricsService: Sendable {
         extensions: [CloudLyricsExtensionDescriptor],
         autoLabel: String
     ) -> [CloudLyricsSourceOption] {
+        if extensions.isEmpty {
+            return [CloudLyricsSourceOption(selection: .lrclib, label: "LRCLIB")]
+        }
         var options: [CloudLyricsSourceOption] = [
             CloudLyricsSourceOption(selection: .auto, label: autoLabel),
-            CloudLyricsSourceOption(selection: .lrclib, label: "LRCLIB"),
-            CloudLyricsSourceOption(selection: .netease, label: "NetEase")
+            CloudLyricsSourceOption(selection: .lrclib, label: "LRCLIB")
         ]
         for ext in extensions {
             options.append(CloudLyricsSourceOption(selection: .ext(id: ext.id), label: ext.name))
@@ -50,10 +50,6 @@ struct CloudLyricsService: Sendable {
         switch source {
         case .lrclib:
             let candidates = try await lrclib.search(query: query)
-            return CloudLyricsSearchResponse(candidates: candidates, failures: [])
-
-        case .netease:
-            let candidates = try await netease.search(query: query)
             return CloudLyricsSearchResponse(candidates: candidates, failures: [])
 
         case .ext(let id):
@@ -80,10 +76,9 @@ struct CloudLyricsService: Sendable {
         }
 
         let lrclibClient = self.lrclib
-        let neteaseClient = self.netease
         let extSearcher = self.extensionSearch
 
-        var totalSources = 2
+        var totalSources = 1
         var successCount = 0
         var allCandidates: [CloudLyricsCandidate] = []
         var failures: [CloudLyricsSourceFailure] = []
@@ -97,18 +92,6 @@ struct CloudLyricsService: Sendable {
                     return .failure(CloudLyricsSourceFailure(
                         providerID: CloudLyricsProviderID.lrclib,
                         sourceName: "LRCLIB",
-                        message: error.localizedDescription
-                    ))
-                }
-            }
-
-            group.addTask {
-                do {
-                    return .success(try await neteaseClient.search(query: query))
-                } catch {
-                    return .failure(CloudLyricsSourceFailure(
-                        providerID: CloudLyricsProviderID.netease,
-                        sourceName: "NetEase",
                         message: error.localizedDescription
                     ))
                 }

@@ -124,6 +124,7 @@ final class DownloadManager {
                     folderName: folderName,
                     cache: cache,
                     artworkCache: library?.artwork ?? .shared,
+                    metadataOverrides: library?.metadataOverrides ?? [:],
                     onDetailedProgress: { progress in
                         guard job.state == .running else { return }
                         job.completedTracks = progress.completedTracks
@@ -189,6 +190,8 @@ final class DownloadManager {
         root: LibraryRoot?,
         folderURL: URL,
         qualityID: String? = nil,
+        metadataOverride: TrackMetadataOverride? = nil,
+        artworkCache: ArtworkCache = .shared,
         onSaved: (@MainActor (URL) async -> Void)? = nil
     ) -> DownloadJob {
         let job = DownloadJob(
@@ -212,7 +215,9 @@ final class DownloadManager {
                     root: root,
                     toFolder: folderURL,
                     cache: cache,
+                    artworkCache: artworkCache,
                     qualityID: qualityID,
+                    metadataOverride: metadataOverride,
                     onProgress: { progress in
                         guard job.state == .running else { return }
                         job.bytesDownloaded = progress.bytesDownloaded

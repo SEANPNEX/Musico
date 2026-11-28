@@ -45,6 +45,14 @@ struct CloudLyricsPickerSheet: View {
         )
     }
 
+    private var effectiveSelectedSource: CloudLyricsSourceSelection {
+        let options = sourceOptions
+        if options.contains(where: { $0.selection == selectedSource }) {
+            return selectedSource
+        }
+        return options.first?.selection ?? .lrclib
+    }
+
     private var selectedCandidate: CloudLyricsCandidate? {
         guard let selectedID else { return candidates.first }
         return candidates.first { $0.id == selectedID } ?? candidates.first
@@ -120,11 +128,12 @@ struct CloudLyricsPickerSheet: View {
 
     @ViewBuilder
     private var sourceBar: some View {
+        let activeSelection = effectiveSelectedSource
         let chips = HStack(spacing: 8) {
             ForEach(sourceOptions) { option in
-                let isSelected = option.selection == selectedSource
+                let isSelected = option.selection == activeSelection
                 Button {
-                    if selectedSource != option.selection {
+                    if activeSelection != option.selection {
                         selectedSource = option.selection
                         triggerSearch()
                     }
@@ -143,14 +152,24 @@ struct CloudLyricsPickerSheet: View {
             }
         }
         .padding(.horizontal, 16)
-        .padding(.bottom, 10)
+        .padding(.bottom, extensionStore.activeLyricsExtensions.isEmpty ? 6 : 10)
 
-        if sourceOptions.count > 4 {
-            ScrollView(.horizontal, showsIndicators: false) {
+        VStack(alignment: .leading, spacing: 0) {
+            if sourceOptions.count > 4 {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    chips
+                }
+            } else {
                 chips
             }
-        } else {
-            chips
+            if extensionStore.activeLyricsExtensions.isEmpty {
+                Text(L10n.tr("Built-in lyrics search uses LRCLIB. Install extensions for additional lyrics providers (such as NetEase Cloud Music or Apple Music)."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 10)
+            }
         }
     }
 
@@ -394,7 +413,7 @@ struct CloudLyricsPickerSheet: View {
         partialFailures = []
         let service = extensionStore.makeCloudLyricsService()
         let activeExts = extensionStore.activeLyricsExtensions
-        let currentSource = selectedSource
+        let currentSource = effectiveSelectedSource
 
         do {
             let response = try await service.search(

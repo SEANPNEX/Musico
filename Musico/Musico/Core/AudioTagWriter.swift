@@ -44,11 +44,28 @@ enum ArtworkImageFormat: String, Equatable, Sendable {
 
 enum AudioTagWriter {
     struct Payload: Sendable {
-        var title: String
-        var artist: String
-        var album: String
-        var genre: String
+        var title: String?
+        var artist: String?
+        var album: String?
+        var genre: String?
         var artworkData: Data?
+        var albumArtist: String?
+
+        init(
+            title: String? = nil,
+            artist: String? = nil,
+            album: String? = nil,
+            genre: String? = nil,
+            artworkData: Data? = nil,
+            albumArtist: String? = nil
+        ) {
+            self.title = title
+            self.artist = artist
+            self.album = album
+            self.genre = genre
+            self.artworkData = artworkData
+            self.albumArtist = albumArtist
+        }
     }
 
     static let embeddableExtensions: Set<String> = ["flac", "m4a", "mp4", "mp3"]
@@ -106,7 +123,7 @@ enum AudioTagWriter {
         case "m4a", "mp4":
             return await writeM4A(payload, to: url)
         case "mp3":
-            return writeMP3(payload, to: url)
+            return await writeMP3(payload, to: url)
         default:
             return false
         }
@@ -164,14 +181,32 @@ enum AudioTagWriter {
         guard hasLast else { return false }
         let audioFrames = data[offset...]
 
-        // Rebuild Vorbis comments preserving unrelated keys.
-        let managedKeys: Set<String> = ["TITLE", "ARTIST", "ALBUM", "GENRE"]
+        // Rebuild Vorbis comments preserving unrelated and unspecified keys.
+        var managedKeys = Set<String>()
+        if payload.title != nil { managedKeys.insert("TITLE") }
+        if payload.artist != nil { managedKeys.insert("ARTIST") }
+        if payload.album != nil { managedKeys.insert("ALBUM") }
+        if payload.albumArtist != nil {
+            managedKeys.insert("ALBUMARTIST")
+            managedKeys.insert("ALBUM ARTIST")
+        }
+        if payload.genre != nil { managedKeys.insert("GENRE") }
+
         var mergedComments = existingComments.filter { !managedKeys.contains($0.0.uppercased()) }
-        mergedComments.append(("TITLE", payload.title))
-        mergedComments.append(("ARTIST", payload.artist))
-        mergedComments.append(("ALBUM", payload.album))
-        if !payload.genre.isEmpty {
-            mergedComments.append(("GENRE", payload.genre))
+        if let title = payload.title {
+            mergedComments.append(("TITLE", title))
+        }
+        if let artist = payload.artist {
+            mergedComments.append(("ARTIST", artist))
+        }
+        if let album = payload.album {
+            mergedComments.append(("ALBUM", album))
+        }
+        if let albumArtist = payload.albumArtist {
+            mergedComments.append(("ALBUMARTIST", albumArtist))
+        }
+        if let genre = payload.genre, !genre.isEmpty {
+            mergedComments.append(("GENRE", genre))
         }
         let commentBody = encodeVorbisComments(vendor: vendor, comments: mergedComments)
         blocks.append(Block(type: 4, body: commentBody))
@@ -277,6 +312,7 @@ enum AudioTagWriter {
         defer { try? FileManager.default.removeItem(at: tempURL) }
 
         var items: [AVMutableMetadataItem] = []
+        var replacedIDs = Set<AVMetadataIdentifier>()
         func makeTextItem(keySpace: AVMetadataKeySpace, key: AVMetadataKey, value: String) -> AVMutableMetadataItem {
             let item = AVMutableMetadataItem()
             item.keySpace = keySpace
@@ -284,14 +320,33 @@ enum AudioTagWriter {
             item.value = value as NSString
             return item
         }
-        items.append(makeTextItem(keySpace: .common, key: .commonKeyTitle, value: payload.title))
-        items.append(makeTextItem(keySpace: .common, key: .commonKeyArtist, value: payload.artist))
-        items.append(makeTextItem(keySpace: .common, key: .commonKeyAlbumName, value: payload.album))
-        if !payload.genre.isEmpty {
-            let genreItem = AVMutableMetadataItem()
-            genreItem.identifier = .iTunesMetadataUserGenre
-            genreItem.value = payload.genre as NSString
-            items.append(genreItem)
+        if let title = payload.title {
+            replacedIDs.formUnion([.commonIdentifierTitle, .iTunesMetadataSongName])
+            items.append(makeTextItem(keySpace: .common, key: .commonKeyTitle, value: title))
+        }
+        if let artist = payload.artist {
+            replacedIDs.formUnion([.commonIdentifierArtist, .iTunesMetadataArtist])
+            items.append(makeTextItem(keySpace: .common, key: .commonKeyArtist, value: artist))
+        }
+        if let album = payload.album {
+            replacedIDs.formUnion([.commonIdentifierAlbumName, .iTunesMetadataAlbum])
+            items.append(makeTextItem(keySpace: .common, key: .commonKeyAlbumName, value: album))
+        }
+        if let albumArtist = payload.albumArtist {
+            replacedIDs.insert(.iTunesMetadataAlbumArtist)
+            let item = AVMutableMetadataItem()
+            item.identifier = .iTunesMetadataAlbumArtist
+            item.value = albumArtist as NSString
+            items.append(item)
+        }
+        if let genre = payload.genre {
+            replacedIDs.formUnion([.iTunesMetadataUserGenre, .iTunesMetadataGenreID, .commonIdentifierType])
+            if !genre.isEmpty {
+                let genreItem = AVMutableMetadataItem()
+                genreItem.identifier = .iTunesMetadataUserGenre
+                genreItem.value = genre as NSString
+                items.append(genreItem)
+            }
         }
         if let artworkData = payload.artworkData, !artworkData.isEmpty {
             let embeddableData: Data
@@ -310,11 +365,6 @@ enum AudioTagWriter {
         }
 
         let existing = (try? await asset.load(.metadata)) ?? []
-        let replacedIDs: Set<AVMetadataIdentifier> = [
-            .commonIdentifierTitle, .commonIdentifierArtist, .commonIdentifierAlbumName,
-            .iTunesMetadataSongName, .iTunesMetadataArtist, .iTunesMetadataAlbum,
-            .iTunesMetadataUserGenre, .iTunesMetadataGenreID, .commonIdentifierType
-        ]
         var merged = existing.compactMap { item -> AVMetadataItem? in
             if let id = item.identifier, replacedIDs.contains(id) { return nil }
             if payload.artworkData != nil, item.commonKey == .commonKeyArtwork || item.identifier == .iTunesMetadataCoverArt {
@@ -342,31 +392,62 @@ enum AudioTagWriter {
 
     // MARK: - MP3 (ID3v2.3)
 
-    private static func writeMP3(_ payload: Payload, to url: URL) -> Bool {
+    private static func writeMP3(_ payload: Payload, to url: URL) async -> Bool {
         guard let data = try? Data(contentsOf: url), data.count > 10 else { return false }
         var audioOffset = 0
         var preservedFrames = Data()
+        var legacyArtworkFallback: Data?
+        var excludedFrameIDs = Set<String>()
+        if payload.title != nil { excludedFrameIDs.insert("TIT2") }
+        if payload.artist != nil { excludedFrameIDs.insert("TPE1") }
+        if payload.album != nil { excludedFrameIDs.insert("TALB") }
+        if payload.albumArtist != nil { excludedFrameIDs.insert("TPE2") }
+        if payload.genre != nil { excludedFrameIDs.insert("TCON") }
+        if payload.artworkData != nil { excludedFrameIDs.insert("APIC") }
+
         if data.prefix(3) == Data([0x49, 0x44, 0x33]) {
             let major = data[3]
+            let tagFlags = data[5]
             let tagSize = data[6...9].reduce(0) { $0 << 7 | Int($1 & 0x7F) }
             audioOffset = min(10 + tagSize, data.count)
             if major == 3 {
                 preservedFrames = extractPreservedID3v23Frames(
                     data[10..<audioOffset],
-                    droppingArtwork: payload.artworkData != nil
+                    tagFlags: tagFlags,
+                    excludedFrameIDs: excludedFrameIDs
                 )
+            } else if major == 4 {
+                preservedFrames = extractPreservedID3v24Frames(
+                    data[10..<audioOffset],
+                    tagFlags: tagFlags,
+                    excludedFrameIDs: excludedFrameIDs
+                )
+            } else if payload.artworkData == nil {
+                let existingMeta = await MetadataReader().read(url)
+                if let art = existingMeta.artwork, !art.isEmpty {
+                    legacyArtworkFallback = art
+                }
             }
         }
 
         var frames = Data()
         frames.append(preservedFrames)
-        frames.append(makeID3TextFrame(id: "TIT2", text: payload.title))
-        frames.append(makeID3TextFrame(id: "TPE1", text: payload.artist))
-        frames.append(makeID3TextFrame(id: "TALB", text: payload.album))
-        if !payload.genre.isEmpty {
-            frames.append(makeID3TextFrame(id: "TCON", text: payload.genre))
+        if let title = payload.title {
+            frames.append(makeID3TextFrame(id: "TIT2", text: title))
         }
-        if let artworkData = payload.artworkData, !artworkData.isEmpty {
+        if let artist = payload.artist {
+            frames.append(makeID3TextFrame(id: "TPE1", text: artist))
+        }
+        if let album = payload.album {
+            frames.append(makeID3TextFrame(id: "TALB", text: album))
+        }
+        if let albumArtist = payload.albumArtist {
+            frames.append(makeID3TextFrame(id: "TPE2", text: albumArtist))
+        }
+        if let genre = payload.genre, !genre.isEmpty {
+            frames.append(makeID3TextFrame(id: "TCON", text: genre))
+        }
+        if let artworkData = payload.artworkData ?? legacyArtworkFallback, !artworkData.isEmpty {
             frames.append(makeID3PictureFrame(artworkData))
         }
 
@@ -381,26 +462,97 @@ enum AudioTagWriter {
         }
     }
 
-    private static func extractPreservedID3v23Frames(_ tagBody: Data, droppingArtwork: Bool) -> Data {
-        let bytes = [UInt8](tagBody)
+    private static func extractPreservedID3v23Frames(
+        _ tagBody: Data,
+        tagFlags: UInt8,
+        excludedFrameIDs: Set<String>
+    ) -> Data {
+        let rawBytes = (tagFlags & 0x80) != 0 ? undoID3Unsynchronisation([UInt8](tagBody)) : [UInt8](tagBody)
         var cursor = 0
+        if (tagFlags & 0x40) != 0, rawBytes.count >= 4 {
+            let extSize = Int(rawBytes[0]) << 24 | Int(rawBytes[1]) << 16 | Int(rawBytes[2]) << 8 | Int(rawBytes[3])
+            if extSize >= 0, 4 + extSize <= rawBytes.count {
+                cursor = 4 + extSize
+            }
+        }
         var result = Data()
-        var excluded: Set<String> = ["TIT2", "TPE1", "TALB", "TCON"]
-        if droppingArtwork { excluded.insert("APIC") }
-
-        while cursor + 10 <= bytes.count {
-            let frameIDBytes = bytes[cursor..<(cursor + 4)]
+        while cursor + 10 <= rawBytes.count {
+            let frameIDBytes = rawBytes[cursor..<(cursor + 4)]
             if frameIDBytes.allSatisfy({ $0 == 0 }) { break }
             let frameID = String(bytes: frameIDBytes, encoding: .ascii) ?? ""
-            let size = Int(bytes[cursor + 4]) << 24 | Int(bytes[cursor + 5]) << 16
-                | Int(bytes[cursor + 6]) << 8 | Int(bytes[cursor + 7])
-            guard size > 0, cursor + 10 + size <= bytes.count else { break }
-            if !excluded.contains(frameID) {
-                result.append(contentsOf: bytes[cursor..<(cursor + 10 + size)])
+            let size = Int(rawBytes[cursor + 4]) << 24 | Int(rawBytes[cursor + 5]) << 16
+                | Int(rawBytes[cursor + 6]) << 8 | Int(rawBytes[cursor + 7])
+            guard size > 0, cursor + 10 + size <= rawBytes.count else { break }
+            if !excludedFrameIDs.contains(frameID) {
+                result.append(contentsOf: rawBytes[cursor..<(cursor + 10 + size)])
             }
             cursor += 10 + size
         }
         return result
+    }
+
+    private static func extractPreservedID3v24Frames(
+        _ tagBody: Data,
+        tagFlags: UInt8,
+        excludedFrameIDs: Set<String>
+    ) -> Data {
+        let bytes = (tagFlags & 0x80) != 0 ? undoID3Unsynchronisation([UInt8](tagBody)) : [UInt8](tagBody)
+        var cursor = 0
+        if (tagFlags & 0x40) != 0, bytes.count >= 4 {
+            let extSize = decodeSyncSafe(bytes[0], bytes[1], bytes[2], bytes[3])
+            if extSize >= 4, extSize <= bytes.count {
+                cursor = extSize
+            }
+        }
+        var result = Data()
+        while cursor + 10 <= bytes.count {
+            let frameIDBytes = bytes[cursor..<(cursor + 4)]
+            if frameIDBytes.allSatisfy({ $0 == 0 }) { break }
+            let frameID = String(bytes: frameIDBytes, encoding: .ascii) ?? ""
+            let size = decodeSyncSafe(bytes[cursor + 4], bytes[cursor + 5], bytes[cursor + 6], bytes[cursor + 7])
+            let frameFlags = UInt16(bytes[cursor + 8]) << 8 | UInt16(bytes[cursor + 9])
+            guard size > 0, cursor + 10 + size <= bytes.count else { break }
+
+            if !excludedFrameIDs.contains(frameID) {
+                var framePayload = [UInt8](bytes[(cursor + 10)..<(cursor + 10 + size)])
+                if (frameFlags & 0x0002) != 0 {
+                    framePayload = undoID3Unsynchronisation(framePayload)
+                }
+                if (frameFlags & 0x0001) != 0, framePayload.count >= 4 {
+                    framePayload.removeFirst(4)
+                }
+                if frameID.hasPrefix("T"),
+                   frameID != "TXXX",
+                   framePayload.first == 0x03 {
+                    let utf8Body = Data(framePayload.dropFirst())
+                    let text = String(data: utf8Body, encoding: .utf8)?.trimmingCharacters(in: CharacterSet(charactersIn: "\0")) ?? ""
+                    result.append(makeID3TextFrame(id: frameID, text: text))
+                } else if !framePayload.isEmpty {
+                    result.append(makeID3Frame(id: frameID, payload: Data(framePayload)))
+                }
+            }
+            cursor += 10 + size
+        }
+        return result
+    }
+
+    private static func decodeSyncSafe(_ b0: UInt8, _ b1: UInt8, _ b2: UInt8, _ b3: UInt8) -> Int {
+        (Int(b0 & 0x7F) << 21) | (Int(b1 & 0x7F) << 14) | (Int(b2 & 0x7F) << 7) | Int(b3 & 0x7F)
+    }
+
+    private static func undoID3Unsynchronisation(_ bytes: [UInt8]) -> [UInt8] {
+        var out: [UInt8] = []
+        out.reserveCapacity(bytes.count)
+        var i = 0
+        while i < bytes.count {
+            out.append(bytes[i])
+            if bytes[i] == 0xFF, i + 1 < bytes.count, bytes[i + 1] == 0x00 {
+                i += 2
+            } else {
+                i += 1
+            }
+        }
+        return out
     }
 
     private static func makeID3TextFrame(id: String, text: String) -> Data {

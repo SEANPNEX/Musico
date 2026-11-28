@@ -618,6 +618,181 @@ final class CloudExporterTests: XCTestCase {
         XCTAssertEqual(recordedQualities.value, ["alac"])
     }
 
+    @MainActor
+    func testGoogleDriveExportPreservesRealEmbeddedMetadataAndArtwork() async throws {
+        let bundle = Bundle(for: CloudExporterTests.self)
+        let flacFixture = try XCTUnwrap(bundle.url(forResource: "art", withExtension: "flac"))
+        let mp3V24Fixture = try XCTUnwrap(bundle.url(forResource: "art-png-v24", withExtension: "mp3"))
+        let m4aFixture = try XCTUnwrap(bundle.url(forResource: "art", withExtension: "m4a"))
+
+        let reader = MetadataReader()
+        let origFlacMeta = await reader.read(flacFixture)
+        let origMp3Meta = await reader.read(mp3V24Fixture)
+        let origM4aMeta = await reader.read(m4aFixture)
+        XCTAssertNotNil(origFlacMeta.artwork)
+        XCTAssertNotNil(origMp3Meta.artwork)
+        XCTAssertNotNil(origM4aMeta.artwork)
+
+        let driveRoot = LibraryRoot(
+            id: UUID(),
+            name: "Drive Folder",
+            kind: .cloudGoogleDrive,
+            bookmark: nil,
+            sourceURL: "https://drive.google.com/drive/folders/fld_embedded",
+            remoteID: "fld_embedded"
+        )
+        let tFlac = Track(
+            id: Track.makeID(rootID: driveRoot.id, relativePath: "01.flac"),
+            rootID: driveRoot.id,
+            relativePath: "01.flac",
+            title: "01",
+            artist: "Google Drive",
+            album: "Drive Folder",
+            albumArtist: "Google Drive",
+            trackNumber: nil,
+            discNumber: nil,
+            duration: 0,
+            fileSize: 0,
+            modified: Date(timeIntervalSince1970: 0),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(timeIntervalSince1970: 0),
+            artworkKey: nil,
+            cloudSource: "gdrive",
+            remoteTrackID: "f_flac",
+            remoteArtworkURL: nil
+        )
+        let tMp3 = Track(
+            id: Track.makeID(rootID: driveRoot.id, relativePath: "02.mp3"),
+            rootID: driveRoot.id,
+            relativePath: "02.mp3",
+            title: "02",
+            artist: "Google Drive",
+            album: "Drive Folder",
+            albumArtist: "Google Drive",
+            trackNumber: nil,
+            discNumber: nil,
+            duration: 0,
+            fileSize: 0,
+            modified: Date(timeIntervalSince1970: 0),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(timeIntervalSince1970: 0),
+            artworkKey: nil,
+            cloudSource: "gdrive",
+            remoteTrackID: "f_mp3",
+            remoteArtworkURL: nil
+        )
+        let tM4a = Track(
+            id: Track.makeID(rootID: driveRoot.id, relativePath: "03.m4a"),
+            rootID: driveRoot.id,
+            relativePath: "03.m4a",
+            title: "03",
+            artist: "Google Drive",
+            album: "Drive Folder",
+            albumArtist: "Google Drive",
+            trackNumber: nil,
+            discNumber: nil,
+            duration: 0,
+            fileSize: 0,
+            modified: Date(timeIntervalSince1970: 0),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(timeIntervalSince1970: 0),
+            artworkKey: nil,
+            cloudSource: "gdrive",
+            remoteTrackID: "f_m4a",
+            remoteArtworkURL: nil
+        )
+
+        let resolver = StubCloudStreamResolver { track, _, _ in
+            let ext: String
+            switch track.remoteTrackID {
+            case "f_flac": ext = "flac"
+            case "f_mp3": ext = "mp3"
+            default: ext = "m4a"
+            }
+            return CloudStreamResult(
+                url: URL(string: "https://drive.usercontent.google.com/download/\(track.remoteTrackID ?? "x").\(ext)")!,
+                headers: [:],
+                fileExtension: ext,
+                expiresAt: Date().addingTimeInterval(600)
+            )
+        }
+        let cache = CloudAudioCache(
+            directory: makeTempDir(),
+            maxBytes: 50_000_000,
+            resolver: resolver,
+            downloader: { url, _ in
+                let src: URL
+                switch url.pathExtension {
+                case "flac": src = flacFixture
+                case "mp3": src = mp3V24Fixture
+                default: src = m4aFixture
+                }
+                let tmp = makeTempDir().appendingPathComponent("dl.\(url.pathExtension)")
+                try FileManager.default.copyItem(at: src, to: tmp)
+                return (tmp, 200, "application/octet-stream")
+            }
+        )
+
+        let parentDir = makeTempDir()
+        let summary = try await CloudExporter.exportPlaylist(
+            root: driveRoot,
+            tracks: [tFlac, tMp3, tM4a],
+            toParentFolder: parentDir,
+            folderName: "Drive Embedded",
+            cache: cache
+        )
+        XCTAssertEqual(summary.savedCount, 3)
+        XCTAssertEqual(summary.failedCount, 0)
+
+        let outFlacMeta = await reader.read(summary.destinationURL.appendingPathComponent("01.flac"))
+        XCTAssertEqual(outFlacMeta.title, origFlacMeta.title)
+        XCTAssertEqual(outFlacMeta.artist, origFlacMeta.artist)
+        XCTAssertEqual(outFlacMeta.album, origFlacMeta.album)
+        XCTAssertEqual(outFlacMeta.artwork, origFlacMeta.artwork)
+        XCTAssertNotEqual(outFlacMeta.artist, "Google Drive")
+
+        let outMp3Meta = await reader.read(summary.destinationURL.appendingPathComponent("02.mp3"))
+        XCTAssertEqual(outMp3Meta.title, origMp3Meta.title)
+        XCTAssertEqual(outMp3Meta.artist, origMp3Meta.artist)
+        XCTAssertEqual(outMp3Meta.album, origMp3Meta.album)
+        XCTAssertEqual(outMp3Meta.artwork, origMp3Meta.artwork)
+
+        let outM4aMeta = await reader.read(summary.destinationURL.appendingPathComponent("03.m4a"))
+        XCTAssertEqual(outM4aMeta.title, origM4aMeta.title)
+        XCTAssertEqual(outM4aMeta.artist, origM4aMeta.artist)
+        XCTAssertEqual(outM4aMeta.album, origM4aMeta.album)
+        XCTAssertEqual(outM4aMeta.artwork, origM4aMeta.artwork)
+    }
+
+    func testAudioTagWriterPartialUpdatePreservesCoverArtAcrossFormats() async throws {
+        let bundle = Bundle(for: CloudExporterTests.self)
+        let reader = MetadataReader()
+
+        for (name, ext) in [("art", "flac"), ("art-v23", "mp3"), ("art-png-v24", "mp3"), ("art", "m4a")] {
+            let src = try XCTUnwrap(bundle.url(forResource: name, withExtension: ext))
+            let dst = makeTempDir().appendingPathComponent("\(name).\(ext)")
+            try FileManager.default.copyItem(at: src, to: dst)
+
+            let before = await reader.read(dst)
+            let beforeArt = try XCTUnwrap(before.artwork, "Expected fixture \(name).\(ext) to contain artwork")
+
+            let wrote = await AudioTagWriter.write(
+                AudioTagWriter.Payload(artist: "Batch Updated Artist", album: "Batch Updated Album", albumArtist: "Batch Updated Artist"),
+                to: dst
+            )
+            XCTAssertTrue(wrote, "Expected write to succeed for \(name).\(ext)")
+
+            let after = await reader.read(dst)
+            XCTAssertEqual(after.artist, "Batch Updated Artist", "Artist mismatch for \(name).\(ext)")
+            XCTAssertEqual(after.album, "Batch Updated Album", "Album mismatch for \(name).\(ext)")
+            XCTAssertEqual(after.title, before.title, "Title should be preserved for \(name).\(ext)")
+            XCTAssertNotNil(after.artwork, "Artwork should be preserved for \(name).\(ext)")
+            if ext != "m4a" {
+                XCTAssertEqual(after.artwork, beforeArt, "Exact artwork bytes should be preserved for \(name).\(ext)")
+            }
+        }
+    }
+
     private static func makeImageData(color: UIColor, png: Bool) -> Data {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8))
         if png {

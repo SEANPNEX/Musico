@@ -4,6 +4,8 @@ import UniformTypeIdentifiers
 struct LyricsView: View {
     /// Shown inside another page rather than as a sheet: no Done button.
     var embedded = false
+    /// Shown as a full-bleed translucent blurred overlay inside `FullPlayerView`.
+    var isOverlay = false
     /// What Done does; closes the sheet when nil.
     var onDone: (() -> Void)?
 
@@ -14,6 +16,7 @@ struct LyricsView: View {
     @Environment(\.languageManager) private var languageManager
     @Environment(\.themeManager) private var themeManager
     @Environment(\.toastManager) private var toastManager
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dismiss) private var dismiss
 
@@ -30,137 +33,246 @@ struct LyricsView: View {
     private var loadKey: String { "\(player?.currentTrack?.id ?? "")#\(revision)" }
 
     var body: some View {
-        NavigationStack {
-            Group {
-                if let lyrics {
-                    if lyrics.isTimed { timed(lyrics) } else { plain(lyrics) }
-                } else {
-                    ContentUnavailableView {
-                        Label(L10n.tr("No Lyrics"), systemImage: "quote.bubble")
-                    } description: {
-                        Text(L10n.tr("Import a .lrc or .txt file for this song, or put one with the same name next to it."))
-                    } actions: {
-                        Button {
-                            showCloudSearch = true
-                        } label: {
-                            Text(L10n.tr("Search Online…"))
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(player?.currentTrack == nil)
-                        Button {
-                            showImporter = true
-                        } label: {
-                            Text(L10n.tr("Import from File…"))
-                                .lineLimit(1)
-                                .fixedSize(horizontal: true, vertical: false)
-                        }
-                        .buttonStyle(.bordered)
-                        .disabled(player?.currentTrack == nil)
-                    }
+        Group {
+            if isOverlay {
+                VStack(spacing: 0) {
+                    overlayHeader
+                    Divider().opacity(0.35)
+                    lyricsBodyContent
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-            }
-            .navigationTitle(player?.currentTrack?.title ?? L10n.tr("Lyrics"))
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
-                    Menu(L10n.tr("Lyrics Options"), systemImage: "ellipsis.circle") {
-                        if let source { Text(sourceText(source)) }
-                        Button(L10n.tr("Search Online…"), systemImage: "magnifyingglass") { showCloudSearch = true }
-                        Button(L10n.tr("Import from File…"), systemImage: "square.and.arrow.down") { showImporter = true }
-                        if let track = player?.currentTrack,
-                           let fileURL = library?.url(for: track),
-                           store.canExportSidecar(for: fileURL),
-                           let rawText = currentExportableLRCText(for: track.id) {
-                            Button(L10n.tr("Save .lrc to Song Folder"), systemImage: "folder.badge.plus") {
-                                do {
-                                    try store.exportSidecarLyrics(text: rawText, for: fileURL)
-                                    toastManager.show(L10n.tr("Saved .lrc to song folder."), systemImage: "checkmark.circle.fill")
-                                } catch {
-                                    importError = error.localizedDescription
-                                }
+                .background {
+                    ZStack {
+                        Rectangle().fill(.ultraThinMaterial)
+                        (colorScheme == .dark ? Color.black.opacity(0.24) : Color.white.opacity(0.14))
+                    }
+                    .ignoresSafeArea()
+                }
+            } else if embedded {
+                VStack(spacing: 0) {
+                    embeddedHeader
+                    lyricsBodyContent
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+                .background(Color.clear)
+            } else {
+                NavigationStack {
+                    lyricsBodyContent
+                        .navigationTitle(player?.currentTrack?.title ?? L10n.tr("Lyrics"))
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar {
+                            ToolbarItem(placement: .topBarLeading) {
+                                lyricsOptionsMenu
+                                    .disabled(player?.currentTrack == nil)
+                            }
+                            ToolbarItem(placement: .topBarTrailing) {
+                                Button(L10n.tr("Done")) { if let onDone { onDone() } else { dismiss() } }
                             }
                         }
-                        Divider()
-                        Picker(L10n.tr("Lyrics Size"), selection: Binding(
-                            get: { themeManager.settings.lyricsFontSize },
-                            set: { themeManager.setLyricsFontSize($0) }
-                        )) {
-                            ForEach(LyricsFontSize.allCases) { size in
-                                Text(size.displayName).tag(size)
-                            }
-                        }
-                        Picker(L10n.tr("Lyrics Alignment"), selection: Binding(
-                            get: { themeManager.settings.lyricsAlignment },
-                            set: { themeManager.setLyricsAlignment($0) }
-                        )) {
-                            ForEach(LyricsAlignment.allCases) { alignment in
-                                Text(alignment.displayName).tag(alignment)
-                            }
-                        }
-                        if let id = player?.currentTrack?.id, store.hasImported(trackID: id) {
-                            Divider()
-                            Button(L10n.tr("Remove Imported Lyrics"), systemImage: "trash", role: .destructive) {
-                                store.removeImported(trackID: id)
-                                NotificationCenter.default.post(name: .musicoLyricsDidChange, object: id)
-                                revision += 1
-                            }
-                        }
-                    }
-                    .disabled(player?.currentTrack == nil)
                 }
-                if !embedded {
-                    ToolbarItem(placement: .topBarTrailing) {
-                        Button(L10n.tr("Done")) { if let onDone { onDone() } else { dismiss() } }
-                    }
-                }
-            }
-            .task(id: loadKey) { await load() }
-            .onReceive(NotificationCenter.default.publisher(for: .musicoLyricsDidChange)) { note in
-                let changedID = note.object as? String
-                if changedID == nil || changedID == player?.currentTrack?.id {
-                    revision += 1
-                }
-            }
-            .fileImporter(isPresented: $showImporter,
-                          allowedContentTypes: [.plainText, .text, UTType(filenameExtension: "lrc") ?? .data]) { result in
-                guard case .success(let url) = result, let id = player?.currentTrack?.id else { return }
-                do {
-                    try store.importLyrics(from: url, trackID: id)
-                    NotificationCenter.default.post(name: .musicoLyricsDidChange, object: id)
-                    revision += 1
-                } catch {
-                    importError = error.localizedDescription
-                }
-            }
-            .sheet(isPresented: $showCloudSearch) {
-                if let track = player?.currentTrack {
-                    let audioURL = library?.url(for: track)
-                    let canExport = store.canExportSidecar(for: audioURL)
-                    CloudLyricsPickerSheet(track: track, canExportSidecar: canExport) { text, exportSidecar in
-                        try store.saveImportedLyrics(text: text, trackID: track.id)
-                        if exportSidecar, let audioURL {
-                            try store.exportSidecarLyrics(text: text, for: audioURL)
-                        }
-                        NotificationCenter.default.post(name: .musicoLyricsDidChange, object: track.id)
-                        revision += 1
-                    }
-                    .environment(\.extensionStore, extensionStore)
-                    .environment(\.languageManager, languageManager)
-                    .environment(\.locale, languageManager.effectiveLocale)
-                    .applyTheme(themeManager)
-                }
-            }
-            .alert(L10n.tr("Lyrics Action Failed"), isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
-                Button(L10n.tr("OK"), role: .cancel) {}
-            } message: {
-                Text(importError ?? "")
+                .background(Color.clear)
             }
         }
+        .task(id: loadKey) { await load() }
+        .onReceive(NotificationCenter.default.publisher(for: .musicoLyricsDidChange)) { note in
+            let changedID = note.object as? String
+            if changedID == nil || changedID == player?.currentTrack?.id {
+                revision += 1
+            }
+        }
+        .fileImporter(isPresented: $showImporter,
+                      allowedContentTypes: [.plainText, .text, UTType(filenameExtension: "lrc") ?? .data]) { result in
+            guard case .success(let url) = result, let id = player?.currentTrack?.id else { return }
+            do {
+                try store.importLyrics(from: url, trackID: id)
+                NotificationCenter.default.post(name: .musicoLyricsDidChange, object: id)
+                revision += 1
+            } catch {
+                importError = error.localizedDescription
+            }
+        }
+        .sheet(isPresented: $showCloudSearch) {
+            if let track = player?.currentTrack {
+                let audioURL = library?.url(for: track)
+                let canExport = store.canExportSidecar(for: audioURL)
+                CloudLyricsPickerSheet(track: track, canExportSidecar: canExport) { text, exportSidecar in
+                    try store.saveImportedLyrics(text: text, trackID: track.id)
+                    if exportSidecar, let audioURL {
+                        try store.exportSidecarLyrics(text: text, for: audioURL)
+                    }
+                    NotificationCenter.default.post(name: .musicoLyricsDidChange, object: track.id)
+                    revision += 1
+                }
+                .environment(\.extensionStore, extensionStore)
+                .environment(\.languageManager, languageManager)
+                .environment(\.locale, languageManager.effectiveLocale)
+                .applyTheme(themeManager)
+            }
+        }
+        .alert(L10n.tr("Lyrics Action Failed"), isPresented: Binding(get: { importError != nil }, set: { if !$0 { importError = nil } })) {
+            Button(L10n.tr("OK"), role: .cancel) {}
+        } message: {
+            Text(importError ?? "")
+        }
         .overlay(alignment: .bottom) {
-            if !embedded && onDone == nil {
+            if !embedded && !isOverlay && onDone == nil {
                 ToastOverlayView()
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var lyricsBodyContent: some View {
+        Group {
+            if let lyrics {
+                if lyrics.isTimed { timed(lyrics) } else { plain(lyrics) }
+            } else {
+                ContentUnavailableView {
+                    Label(L10n.tr("No Lyrics"), systemImage: "quote.bubble")
+                } description: {
+                    Text(L10n.tr("Import a .lrc or .txt file for this song, or put one with the same name next to it."))
+                } actions: {
+                    Button {
+                        showCloudSearch = true
+                    } label: {
+                        Text(L10n.tr("Search Online…"))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(player?.currentTrack == nil)
+                    Button {
+                        showImporter = true
+                    } label: {
+                        Text(L10n.tr("Import from File…"))
+                            .lineLimit(1)
+                            .fixedSize(horizontal: true, vertical: false)
+                    }
+                    .buttonStyle(.bordered)
+                    .disabled(player?.currentTrack == nil)
+                }
+            }
+        }
+        .background(Color.clear)
+    }
+
+    private var overlayHeader: some View {
+        HStack(spacing: 12) {
+            if let track = player?.currentTrack {
+                ArtworkView(
+                    artworkKey: track.artworkKey,
+                    remoteArtworkURL: track.remoteArtworkURL,
+                    size: 40,
+                    cornerRadius: 8
+                )
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(track.title)
+                        .font(.subheadline.weight(.semibold))
+                        .lineLimit(1)
+                    Text(L10n.displayArtist(track.artist))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                Text(L10n.tr("Lyrics"))
+                    .font(.headline)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            lyricsOptionsMenu
+                .labelStyle(.iconOnly)
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 36, minHeight: 36)
+                .contentShape(Rectangle())
+                .disabled(player?.currentTrack == nil)
+                .accessibilityLabel(L10n.tr("Lyrics Options"))
+
+            Button {
+                if let onDone { onDone() } else { dismiss() }
+            } label: {
+                Text(L10n.tr("Done"))
+                    .font(.subheadline.weight(.semibold))
+                    .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .background(.regularMaterial, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .keyboardShortcut(.cancelAction)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var embeddedHeader: some View {
+        HStack(spacing: 10) {
+            if let track = player?.currentTrack {
+                Text(track.title)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            lyricsOptionsMenu
+                .labelStyle(.iconOnly)
+                .font(.body)
+                .foregroundStyle(.secondary)
+                .frame(minWidth: 32, minHeight: 32)
+                .contentShape(Rectangle())
+                .disabled(player?.currentTrack == nil)
+                .accessibilityLabel(L10n.tr("Lyrics Options"))
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 4)
+        .padding(.bottom, 2)
+    }
+
+    private var lyricsOptionsMenu: some View {
+        Menu(L10n.tr("Lyrics Options"), systemImage: "ellipsis.circle") {
+            if let source { Text(sourceText(source)) }
+            Button(L10n.tr("Search Online…"), systemImage: "magnifyingglass") { showCloudSearch = true }
+            Button(L10n.tr("Import from File…"), systemImage: "square.and.arrow.down") { showImporter = true }
+            if let track = player?.currentTrack,
+               let fileURL = library?.url(for: track),
+               store.canExportSidecar(for: fileURL),
+               let rawText = currentExportableLRCText(for: track.id) {
+                Button(L10n.tr("Save .lrc to Song Folder"), systemImage: "folder.badge.plus") {
+                    do {
+                        try store.exportSidecarLyrics(text: rawText, for: fileURL)
+                        toastManager.show(L10n.tr("Saved .lrc to song folder."), systemImage: "checkmark.circle.fill")
+                    } catch {
+                        importError = error.localizedDescription
+                    }
+                }
+            }
+            Divider()
+            Picker(L10n.tr("Lyrics Size"), selection: Binding(
+                get: { themeManager.settings.lyricsFontSize },
+                set: { themeManager.setLyricsFontSize($0) }
+            )) {
+                ForEach(LyricsFontSize.allCases) { size in
+                    Text(size.displayName).tag(size)
+                }
+            }
+            Picker(L10n.tr("Lyrics Alignment"), selection: Binding(
+                get: { themeManager.settings.lyricsAlignment },
+                set: { themeManager.setLyricsAlignment($0) }
+            )) {
+                ForEach(LyricsAlignment.allCases) { alignment in
+                    Text(alignment.displayName).tag(alignment)
+                }
+            }
+            if let id = player?.currentTrack?.id, store.hasImported(trackID: id) {
+                Divider()
+                Button(L10n.tr("Remove Imported Lyrics"), systemImage: "trash", role: .destructive) {
+                    store.removeImported(trackID: id)
+                    NotificationCenter.default.post(name: .musicoLyricsDidChange, object: id)
+                    revision += 1
+                }
             }
         }
     }
@@ -303,6 +415,8 @@ struct LyricsView: View {
                         endPoint: .bottom
                     )
                 )
+                .scrollContentBackground(.hidden)
+                .background(Color.clear)
                 .simultaneousGesture(
                     DragGesture(minimumDistance: 6).onChanged { _ in
                         beginManualScrollGrace(proxy: proxy) {
@@ -380,5 +494,7 @@ struct LyricsView: View {
             }
             .padding(24)
         }
+        .scrollContentBackground(.hidden)
+        .background(Color.clear)
     }
 }
