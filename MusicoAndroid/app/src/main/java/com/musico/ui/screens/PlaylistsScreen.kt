@@ -1,5 +1,6 @@
 package com.musico.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.VisibilityThreshold
 import androidx.compose.animation.core.spring
@@ -22,6 +23,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.QueueMusic
 import androidx.compose.material.icons.rounded.Add
+import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.DeleteOutline
 import androidx.compose.material.icons.rounded.Edit
@@ -54,6 +56,7 @@ import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -74,6 +77,8 @@ import com.musico.store.LibraryUiState
 import com.musico.store.PlayHistoryUiState
 import com.musico.ui.LocalShowMessage
 import com.musico.ui.components.ArtworkImage
+import com.musico.ui.components.BatchSelectionBar
+import com.musico.ui.components.BatchTagEditDialog
 import com.musico.ui.components.ConfirmDialog
 import com.musico.ui.components.DetailHeroHeader
 import com.musico.ui.components.EmptyState
@@ -88,6 +93,7 @@ import com.musico.ui.components.dragHandle
 import com.musico.ui.components.formatTime
 import com.musico.ui.components.rememberDragReorderState
 import com.musico.ui.theme.musicoListItemColors
+import kotlinx.coroutines.launch
 import com.musico.ui.theme.musicoScaffoldContainerColor
 import com.musico.ui.theme.musicoScaffoldContentColor
 import com.musico.ui.theme.musicoTopAppBarColors
@@ -293,7 +299,17 @@ fun PlaylistDetailScreen(
 ) {
     val strings = LocalStrings.current
     val showMessage = LocalShowMessage.current
+    val scope = rememberCoroutineScope()
     var editing by remember { mutableStateOf(false) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(emptySet<String>()) }
+    var batchEditTracks by remember { mutableStateOf<List<com.musico.model.Track>?>(null) }
+    var playlistMenuExpanded by remember { mutableStateOf(false) }
+
+    BackHandler(enabled = selectionMode) {
+        selectionMode = false
+        selectedIds = emptySet()
+    }
 
     val playlist = remember(libraryState.playlists, ref) {
         when (ref) {
@@ -397,21 +413,83 @@ fun PlaylistDetailScreen(
                         )
                     }
                     if (ref is PlaylistRef.User && tracks.isNotEmpty()) {
-                        TextButton(onClick = { editing = !editing }) {
+                        TextButton(
+                            onClick = {
+                                editing = !editing
+                                if (editing) {
+                                    selectionMode = false
+                                    selectedIds = emptySet()
+                                }
+                            },
+                        ) {
                             Text(if (editing) strings.done else strings.edit)
+                        }
+                    }
+                    if (tracks.isNotEmpty() && !editing) {
+                        Box {
+                            IconButton(onClick = { playlistMenuExpanded = true }) {
+                                Icon(Icons.Rounded.MoreVert, contentDescription = strings.trackOptions)
+                            }
+                            DropdownMenu(
+                                expanded = playlistMenuExpanded,
+                                onDismissRequest = { playlistMenuExpanded = false }
+                            ) {
+                                DropdownMenuItem(
+                                    text = { Text(strings.selectAction) },
+                                    leadingIcon = { Icon(Icons.Rounded.Checklist, contentDescription = null) },
+                                    onClick = {
+                                        playlistMenuExpanded = false
+                                        selectionMode = true
+                                    }
+                                )
+                                DropdownMenuItem(
+                                    text = { Text(strings.editTagsEllipsis) },
+                                    leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                    onClick = {
+                                        playlistMenuExpanded = false
+                                        batchEditTracks = tracks
+                                    }
+                                )
+                            }
                         }
                     }
                 }
             )
         }
     ) { innerPadding ->
-        LazyColumn(
-            state = listState,
+        Column(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
-            contentPadding = PaddingValues(bottom = 16.dp)
+                .padding(innerPadding)
         ) {
+            if (selectionMode && !editing) {
+                BatchSelectionBar(
+                    selectedCount = tracks.count { it.id in selectedIds },
+                    totalCount = tracks.size,
+                    onToggleSelectAll = {
+                        selectedIds = if (tracks.isNotEmpty() && tracks.all { it.id in selectedIds }) {
+                            emptySet()
+                        } else {
+                            tracks.map { it.id }.toSet()
+                        }
+                    },
+                    onEditTags = {
+                        val targets = tracks.filter { it.id in selectedIds }
+                        if (targets.isNotEmpty()) {
+                            batchEditTracks = targets
+                        }
+                    },
+                    onDone = {
+                        selectionMode = false
+                        selectedIds = emptySet()
+                    },
+                )
+            }
+            LazyColumn(
+                state = listState,
+                modifier = Modifier.fillMaxSize(),
+                contentPadding = PaddingValues(bottom = 16.dp)
+            ) {
             item(key = "header") {
                 DetailHeroHeader(
                     artworkKey = heroArtworkKey,
@@ -529,10 +607,25 @@ fun PlaylistDetailScreen(
                             )
                         },
                         modifier = rowModifier,
-                        dragHandleModifier = if (ref is PlaylistRef.User) {
+                        dragHandleModifier = if (ref is PlaylistRef.User && !selectionMode) {
                             Modifier.dragHandle(dragState, dragItem.uid)
                         } else null,
-                        swipeEnabled = !editing && !dragState.isDragging,
+                        swipeEnabled = !editing && !selectionMode && !dragState.isDragging,
+                        selectionMode = selectionMode && !editing,
+                        isSelected = track.id in selectedIds,
+                        onToggleSelect = {
+                            selectedIds = if (track.id in selectedIds) {
+                                selectedIds - track.id
+                            } else {
+                                selectedIds + track.id
+                            }
+                        },
+                        onLongClick = if (!editing) {
+                            {
+                                selectionMode = true
+                                selectedIds = setOf(track.id)
+                            }
+                        } else null,
                         endSwipeBehavior = when (ref) {
                             is PlaylistRef.User -> TrackEndSwipeBehavior.Custom(
                                 label = strings.remove,
@@ -662,5 +755,26 @@ fun PlaylistDetailScreen(
                 }
             }
         }
+        }
+    }
+
+    val editTargets = batchEditTracks
+    if (editTargets != null) {
+        BatchTagEditDialog(
+            tracks = editTargets,
+            onDismiss = { batchEditTracks = null },
+            onApply = { artist, album ->
+                val targetIds = editTargets.map { it.id }
+                batchEditTracks = null
+                selectionMode = false
+                selectedIds = emptySet()
+                scope.launch {
+                    val updatedCount = libraryStore.batchUpdateTrackMetadata(targetIds, artist, album)
+                    if (updatedCount > 0) {
+                        showMessage(strings.batchTagsUpdatedNotice(updatedCount))
+                    }
+                }
+            },
+        )
     }
 }

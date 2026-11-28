@@ -34,6 +34,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.rounded.AddToDrive
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.ChevronRight
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CloudDownload
@@ -146,6 +147,8 @@ import com.musico.ui.components.TrackRow
 import com.musico.ui.components.dragHandle
 import com.musico.ui.components.rememberDragReorderState
 import com.musico.ui.components.skeletonTrackRows
+import com.musico.ui.components.BatchSelectionBar
+import com.musico.ui.components.BatchTagEditDialog
 import com.musico.ui.theme.MusicoMotion
 import com.musico.ui.theme.ThemeStore
 import com.musico.ui.theme.musicoListItemColors
@@ -326,8 +329,16 @@ fun FoldersScreen(
     var showDownloadsSheet by remember { mutableStateOf(false) }
     var detailMenuExpanded by remember { mutableStateOf(false) }
     var rootOverflowExpanded by remember { mutableStateOf(false) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(emptySet<String>()) }
+    var batchEditTracks by remember { mutableStateOf<List<com.musico.model.Track>?>(null) }
 
     BackHandler(enabled = currentFolder != null) {
+        if (selectionMode) {
+            selectionMode = false
+            selectedIds = emptySet()
+            return@BackHandler
+        }
         val ref = currentFolder ?: return@BackHandler
         currentFolder = if (ref.path.isEmpty()) {
             null
@@ -339,6 +350,11 @@ fun FoldersScreen(
 
     val activeRef = currentFolder
     val currentRoot = activeRef?.let { ref -> libraryState.roots.firstOrNull { it.id == ref.rootId } }
+
+    LaunchedEffect(activeRef) {
+        selectionMode = false
+        selectedIds = emptySet()
+    }
 
     LaunchedEffect(lastCloudMerge) {
         val event = lastCloudMerge ?: return@LaunchedEffect
@@ -504,7 +520,9 @@ fun FoldersScreen(
                 val isCloudRootDetail = currentRoot?.kind?.isCloud == true
                 val currentTracking = currentRoot?.takeIf { !it.kind.isCloud }?.trackingFor(activeRef.path)
                 val isTrackedLocalDetail = currentTracking != null
-                val showDetailMenu = activeRef.path.isNotEmpty() || isRemovableRootDetail || hasExcluded || isCloudRootDetail || isTrackedLocalDetail
+                val detailAllTracks = libraryStore.tracksUnder(activeRef.rootId, activeRef.path)
+                val (_, detailDirectTracks) = libraryStore.folderContents(activeRef.rootId, activeRef.path)
+                val showDetailMenu = activeRef.path.isNotEmpty() || isRemovableRootDetail || hasExcluded || isCloudRootDetail || isTrackedLocalDetail || detailAllTracks.isNotEmpty()
 
                 TopAppBar(
                     colors = musicoTopAppBarColors(),
@@ -564,6 +582,29 @@ fun FoldersScreen(
                                     expanded = detailMenuExpanded,
                                     onDismissRequest = { detailMenuExpanded = false }
                                 ) {
+                                    if (detailDirectTracks.isNotEmpty()) {
+                                        DropdownMenuItem(
+                                            text = { Text(strings.selectAction) },
+                                            leadingIcon = { Icon(Icons.Rounded.Checklist, contentDescription = null) },
+                                            onClick = {
+                                                detailMenuExpanded = false
+                                                selectionMode = true
+                                            }
+                                        )
+                                    }
+                                    if (detailAllTracks.isNotEmpty()) {
+                                        DropdownMenuItem(
+                                            text = { Text(strings.editTagsEllipsis) },
+                                            leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                            onClick = {
+                                                detailMenuExpanded = false
+                                                batchEditTracks = detailAllTracks
+                                            }
+                                        )
+                                    }
+                                    if (detailAllTracks.isNotEmpty() && (activeRef.path.isNotEmpty() || isRemovableRootDetail || hasExcluded || isCloudRootDetail || isTrackedLocalDetail)) {
+                                        HorizontalDivider()
+                                    }
                                     if (rootForMenu != null && rootForMenu.kind.isCloud) {
                                         val cloudTracks = libraryStore.tracksUnder(rootForMenu.id, activeRef.path)
                                         DropdownMenuItem(
@@ -796,10 +837,57 @@ fun FoldersScreen(
                         onOpenExtensions = if (extensionStore != null) {
                             { showExtensionsScreen = true }
                         } else null,
+                        selectionMode = selectionMode,
+                        selectedIds = selectedIds,
+                        onToggleTrackSelect = { trackId ->
+                            selectedIds = if (trackId in selectedIds) {
+                                selectedIds - trackId
+                            } else {
+                                selectedIds + trackId
+                            }
+                        },
+                        onEnterSelectionWithTrack = { trackId ->
+                            selectionMode = true
+                            selectedIds = setOf(trackId)
+                        },
+                        onToggleSelectAll = { selectableIds ->
+                            selectedIds = if (selectableIds.isNotEmpty() && selectableIds.all { it in selectedIds }) {
+                                emptySet()
+                            } else {
+                                selectableIds.toSet()
+                            }
+                        },
+                        onEditBatchTags = { targets ->
+                            batchEditTracks = targets
+                        },
+                        onDoneSelection = {
+                            selectionMode = false
+                            selectedIds = emptySet()
+                        },
                     )
                 }
             }
         }
+    }
+
+    val editTargets = batchEditTracks
+    if (editTargets != null) {
+        BatchTagEditDialog(
+            tracks = editTargets,
+            onDismiss = { batchEditTracks = null },
+            onApply = { artist, album ->
+                val targetIds = editTargets.map { it.id }
+                batchEditTracks = null
+                selectionMode = false
+                selectedIds = emptySet()
+                scope.launch {
+                    val updatedCount = libraryStore.batchUpdateTrackMetadata(targetIds, artist, album)
+                    if (updatedCount > 0) {
+                        showMessage(strings.batchTagsUpdatedNotice(updatedCount))
+                    }
+                }
+            },
+        )
     }
 
     if (showAddCloudDialog) {
@@ -2816,6 +2904,13 @@ private fun FolderDetailContent(
     onEditTrackedSubfolderSource: (LibraryRoot, String, CloudTrackingInfo) -> Unit,
     onEditCloudRootSource: (LibraryRoot, String?) -> Unit,
     onOpenExtensions: (() -> Unit)?,
+    selectionMode: Boolean = false,
+    selectedIds: Set<String> = emptySet(),
+    onToggleTrackSelect: (String) -> Unit = {},
+    onEnterSelectionWithTrack: (String) -> Unit = {},
+    onToggleSelectAll: (List<String>) -> Unit = {},
+    onEditBatchTags: (List<com.musico.model.Track>) -> Unit = {},
+    onDoneSelection: () -> Unit = {},
 ) {
     val strings = LocalStrings.current
     val playCounts: (String) -> Int = { id -> historyState.entries[id]?.count ?: 0 }
@@ -2880,11 +2975,26 @@ private fun FolderDetailContent(
         },
     )
 
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(bottom = 16.dp)
-    ) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        if (selectionMode) {
+            BatchSelectionBar(
+                selectedCount = directTracks.count { it.id in selectedIds },
+                totalCount = directTracks.size,
+                onToggleSelectAll = { onToggleSelectAll(directIds) },
+                onEditTags = {
+                    val targets = directTracks.filter { it.id in selectedIds }
+                    if (targets.isNotEmpty()) {
+                        onEditBatchTags(targets)
+                    }
+                },
+                onDone = onDoneSelection,
+            )
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(bottom = 16.dp)
+        ) {
         item(key = "breadcrumbs") {
             FolderBreadcrumbs(
                 rootName = rootName,
@@ -3092,6 +3202,14 @@ private fun FolderDetailContent(
                                     )
                                     if (childIds.isNotEmpty()) {
                                         HorizontalDivider()
+                                        DropdownMenuItem(
+                                            text = { Text(strings.editTagsEllipsis) },
+                                            leadingIcon = { Icon(Icons.Rounded.Edit, contentDescription = null) },
+                                            onClick = {
+                                                menuExpanded = false
+                                                onEditBatchTags(libraryStore.tracksUnder(ref.rootId, childPath, playCounts))
+                                            }
+                                        )
                                         TrackMenuItems(
                                             ids = childIds,
                                             queues = queues,
@@ -3149,8 +3267,12 @@ private fun FolderDetailContent(
                     )
                 },
                 modifier = rowModifier,
-                dragHandleModifier = Modifier.dragHandle(dragState, dragItem.uid),
-                swipeEnabled = !dragState.isDragging,
+                dragHandleModifier = if (!selectionMode) Modifier.dragHandle(dragState, dragItem.uid) else null,
+                swipeEnabled = !selectionMode && !dragState.isDragging,
+                selectionMode = selectionMode,
+                isSelected = track.id in selectedIds,
+                onToggleSelect = { onToggleTrackSelect(track.id) },
+                onLongClick = { onEnterSelectionWithTrack(track.id) },
                 menuContent = { onDismiss ->
                     TrackMenuItems(
                         ids = listOf(track.id),
@@ -3164,6 +3286,7 @@ private fun FolderDetailContent(
                 }
             )
         }
+    }
     }
 }
 

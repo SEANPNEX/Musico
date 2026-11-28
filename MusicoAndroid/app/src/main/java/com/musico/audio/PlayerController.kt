@@ -10,6 +10,7 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.musico.cloud.CloudErrorCode
 import com.musico.cloud.CloudQualityOption
+import com.musico.cloud.CloudSource
 import com.musico.cloud.CloudSourceException
 import com.musico.cloud.CloudStreamPurpose
 import com.musico.cloud.CloudStreamResolver
@@ -401,8 +402,21 @@ class PlayerController(
 
             val stream: ResolvedStream? = resolved.getOrNull()
             if (stream != null) {
+                val cachedAudioFile = if (track.cloudSource == CloudSource.GOOGLE_DRIVE) {
+                    runCatching {
+                        val fileUri = stream.url.takeIf { it.startsWith("file://") }?.let { java.io.File(java.net.URI(it)) }
+                        fileUri?.takeIf { it.isFile } ?: cloudResolver.audioCache?.latestCachedFile(track.id)
+                    }.getOrNull()
+                } else {
+                    null
+                }
+                val effectiveTrack = if (cachedAudioFile != null) {
+                    library.enrichCloudTrackFromFile(track.id, cachedAudioFile) ?: track
+                } else {
+                    track
+                }
                 try {
-                    engine.loadStream(stream.url, stream.headers, buildMediaMetadata(track))
+                    engine.loadStream(stream.url, stream.headers, buildMediaMetadata(effectiveTrack))
                     isLoaded = true
                     listenedSec = 0.0
                     playCounted = false
@@ -435,7 +449,7 @@ class PlayerController(
                     }
 
                     _state.value = _state.value.copy(
-                        currentTrack = track,
+                        currentTrack = effectiveTrack,
                         durationSec = resolvedDur,
                         currentTimeSec = currentPos,
                         isPlaying = autoplay,

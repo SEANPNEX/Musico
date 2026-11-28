@@ -36,6 +36,21 @@ class CloudAudioCache(
         match
     }
 
+    fun latestCachedFile(trackId: String): File? = synchronized(lock) {
+        if (!directory.isDirectory) return null
+        val safeTrack = sanitizeTrackId(trackId)
+        val trackPrefix = "${safeTrack}__"
+        val legacyPrefix = "${safeTrack}."
+        directory.listFiles()
+            ?.filter { file ->
+                file.isFile &&
+                    !file.name.endsWith(".part") &&
+                    file.length() > 0L &&
+                    (file.name.startsWith(trackPrefix) || file.name.startsWith(legacyPrefix))
+            }
+            ?.maxByOrNull { it.lastModified() }
+    }
+
     fun store(
         trackId: String,
         qualityId: String?,

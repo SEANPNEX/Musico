@@ -2,8 +2,12 @@ package com.musico.ui.player
 
 import android.net.Uri
 import android.os.Build
+import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.Crossfade
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.animateDpAsState
@@ -23,6 +27,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.Orientation
 import androidx.compose.foundation.gestures.draggable
 import androidx.compose.foundation.gestures.rememberDraggableState
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -78,6 +83,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -184,6 +190,7 @@ fun FullPlayerScreen(
 
     var activeSheet by remember { mutableStateOf<PlayerModalSheet?>(null) }
     var sidePane by rememberSaveable { mutableStateOf(PlayerSidePane.LYRICS) }
+    var showLyricsOverlay by rememberSaveable { mutableStateOf(false) }
 
     val track = playerState.currentTrack
     val thumbnailCache = LocalThumbnailCache.current
@@ -216,6 +223,7 @@ fun FullPlayerScreen(
             .graphicsLayer { translationY = offsetY.value }
             .draggable(
                 orientation = Orientation.Vertical,
+                enabled = !showLyricsOverlay,
                 state = rememberDraggableState { delta ->
                     val next = (offsetY.value + delta).coerceAtLeast(0f)
                     dragScope.launch { offsetY.snapTo(next) }
@@ -238,170 +246,268 @@ fun FullPlayerScreen(
             ),
         color = MaterialTheme.colorScheme.background
     ) {
-        Box(modifier = Modifier.fillMaxSize()) {
-            ThemeBackgroundLayer(
-                imageFile = backgroundImageFile,
-                imageOpacity = backgroundImageOpacity,
-                imageBlurDp = backgroundImageBlurDp,
-            )
-            Crossfade(
-                targetState = ambientArtwork,
-                animationSpec = MusicoMotion.finiteMotionSpec(
-                    reduceMotion,
-                    tween(durationMillis = 380, easing = MusicoMotion.EmphasizedEasing),
-                ),
-                label = "ambient_artwork_backdrop",
-            ) { art ->
-                if (art != null) {
-                    val artMod = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        Modifier.fillMaxSize().blur(48.dp).alpha(0.28f)
-                    } else {
-                        Modifier.fillMaxSize().alpha(0.26f)
-                    }
-                    Box(modifier = Modifier.fillMaxSize()) {
-                        Image(
-                            bitmap = art,
-                            contentDescription = null,
-                            contentScale = ContentScale.Crop,
-                            modifier = artMod,
-                        )
-                        Box(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .background(
-                                    Brush.verticalGradient(
-                                        0f to MaterialTheme.colorScheme.background.copy(alpha = 0.30f),
-                                        0.55f to MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
-                                        1f to MaterialTheme.colorScheme.background.copy(alpha = 0.88f),
-                                    )
-                                )
-                        )
-                    }
+        BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+            val isTwoColumn = maxWidth >= 760.dp
+            val isLyricsOverlayVisible = !isTwoColumn && showLyricsOverlay
+
+            LaunchedEffect(isTwoColumn) {
+                if (isTwoColumn && showLyricsOverlay) {
+                    showLyricsOverlay = false
                 }
             }
-            BoxWithConstraints(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-            ) {
-            val isTwoColumn = maxWidth >= 760.dp
 
-            if (isTwoColumn) {
-                Row(modifier = Modifier.fillMaxSize()) {
-                    PlayerControlsPane(
-                        libraryStore = libraryStore,
-                        libraryState = libraryState,
-                        queueState = queueState,
-                        playerController = playerController,
-                        playerState = playerState,
-                        onOpenSheet = { target ->
-                            when (target) {
-                                PlayerModalSheet.LYRICS -> sidePane = PlayerSidePane.LYRICS
-                                PlayerModalSheet.QUEUE -> sidePane = PlayerSidePane.QUEUE
-                                else -> activeSheet = target
-                            }
-                        },
-                        onOpenSongInfo = { trackId -> trackActions.songInfoTrackId = trackId },
-                        onClose = onClose,
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                    )
-                    VerticalDivider()
-                    Column(
-                        modifier = Modifier
-                            .weight(1f)
-                            .fillMaxHeight()
-                    ) {
-                        SingleChoiceSegmentedButtonRow(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .widthIn(max = 320.dp)
-                                .align(Alignment.CenterHorizontally)
-                                .padding(horizontal = 24.dp, vertical = 12.dp)
-                        ) {
-                            PlayerSidePane.entries.forEachIndexed { index, pane ->
-                                SegmentedButton(
-                                    selected = sidePane == pane,
-                                    onClick = { sidePane = pane },
-                                    shape = SegmentedButtonDefaults.itemShape(
-                                        index = index,
-                                        count = PlayerSidePane.entries.size
-                                    ),
-                                    icon = {},
-                                    label = {
-                                        Text(
-                                            text = pane.label(strings),
-                                            maxLines = 1,
-                                            softWrap = false,
-                                            overflow = TextOverflow.Ellipsis,
+            BackHandler(enabled = isLyricsOverlayVisible) {
+                showLyricsOverlay = false
+            }
+
+            Box(modifier = Modifier.fillMaxSize()) {
+                ThemeBackgroundLayer(
+                    imageFile = backgroundImageFile,
+                    imageOpacity = backgroundImageOpacity,
+                    imageBlurDp = backgroundImageBlurDp,
+                )
+                Crossfade(
+                    targetState = ambientArtwork,
+                    animationSpec = MusicoMotion.finiteMotionSpec(
+                        reduceMotion,
+                        tween(durationMillis = 380, easing = MusicoMotion.EmphasizedEasing),
+                    ),
+                    label = "ambient_artwork_backdrop",
+                ) { art ->
+                    if (art != null) {
+                        val targetArtAlpha = if (isLyricsOverlayVisible) {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 0.36f else 0.34f
+                        } else {
+                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 0.28f else 0.26f
+                        }
+                        val animatedArtAlpha by animateFloatAsState(
+                            targetValue = targetArtAlpha,
+                            animationSpec = MusicoMotion.motionSpec(
+                                reduceMotion,
+                                tween(durationMillis = 260, easing = MusicoMotion.EmphasizedEasing),
+                            ),
+                            label = "ambient_artwork_alpha",
+                        )
+                        val artMod = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                            Modifier.fillMaxSize().blur(48.dp).alpha(animatedArtAlpha)
+                        } else {
+                            Modifier.fillMaxSize().alpha(animatedArtAlpha)
+                        }
+                        Box(modifier = Modifier.fillMaxSize()) {
+                            Image(
+                                bitmap = art,
+                                contentDescription = null,
+                                contentScale = ContentScale.Crop,
+                                modifier = artMod,
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.verticalGradient(
+                                            0f to MaterialTheme.colorScheme.background.copy(alpha = 0.30f),
+                                            0.55f to MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
+                                            1f to MaterialTheme.colorScheme.background.copy(alpha = 0.88f),
+                                        )
+                                    )
+                            )
+                        }
+                    }
+                }
+
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .statusBarsPadding()
+                        .navigationBarsPadding()
+                ) {
+                    if (isTwoColumn) {
+                        Row(modifier = Modifier.fillMaxSize()) {
+                            PlayerControlsPane(
+                                libraryStore = libraryStore,
+                                libraryState = libraryState,
+                                queueState = queueState,
+                                playerController = playerController,
+                                playerState = playerState,
+                                onOpenSheet = { target ->
+                                    when (target) {
+                                        PlayerModalSheet.LYRICS -> sidePane = PlayerSidePane.LYRICS
+                                        PlayerModalSheet.QUEUE -> sidePane = PlayerSidePane.QUEUE
+                                        else -> activeSheet = target
+                                    }
+                                },
+                                onOpenSongInfo = { trackId -> trackActions.songInfoTrackId = trackId },
+                                onClose = onClose,
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                            )
+                            VerticalDivider()
+                            Column(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .fillMaxHeight()
+                            ) {
+                                SingleChoiceSegmentedButtonRow(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .widthIn(max = 320.dp)
+                                        .align(Alignment.CenterHorizontally)
+                                        .padding(horizontal = 24.dp, vertical = 12.dp)
+                                ) {
+                                    PlayerSidePane.entries.forEachIndexed { index, pane ->
+                                        SegmentedButton(
+                                            selected = sidePane == pane,
+                                            onClick = { sidePane = pane },
+                                            shape = SegmentedButtonDefaults.itemShape(
+                                                index = index,
+                                                count = PlayerSidePane.entries.size
+                                            ),
+                                            icon = {},
+                                            label = {
+                                                Text(
+                                                    text = pane.label(strings),
+                                                    maxLines = 1,
+                                                    softWrap = false,
+                                                    overflow = TextOverflow.Ellipsis,
+                                                )
+                                            }
                                         )
                                     }
-                                )
-                            }
-                        }
+                                }
 
-                        AnimatedContent(
-                            targetState = sidePane,
-                            transitionSpec = {
-                                MusicoMotion.sharedAxisXTransform(
-                                    forward = targetState.ordinal >= initialState.ordinal,
-                                    reduceMotion = reduceMotion,
-                                )
-                            },
-                            label = "player_side_pane"
-                        ) { pane ->
-                            when (pane) {
-                                PlayerSidePane.LYRICS -> LyricsContent(
-                                    libraryStore = libraryStore,
-                                    lyricsStore = lyricsStore,
-                                    playerController = playerController,
-                                    playerState = playerState,
-                                    onPickLyricsFile = onPickLyricsFile,
-                                    cloudLyricsService = cloudLyricsService,
-                                    extensionStore = extensionStore,
-                                    embedded = true,
-                                    modifier = Modifier.fillMaxSize()
-                                )
-                                PlayerSidePane.QUEUE -> QueuesContent(
-                                    libraryStore = libraryStore,
-                                    libraryState = libraryState,
-                                    historyState = historyState,
-                                    queueStore = queueStore,
-                                    queueState = queueState,
-                                    playerController = playerController,
-                                    playerState = playerState,
-                                    trackActions = trackActions,
-                                    editing = false,
-                                    modifier = Modifier.fillMaxSize()
-                                )
+                                AnimatedContent(
+                                    targetState = sidePane,
+                                    transitionSpec = {
+                                        MusicoMotion.sharedAxisXTransform(
+                                            forward = targetState.ordinal >= initialState.ordinal,
+                                            reduceMotion = reduceMotion,
+                                        )
+                                    },
+                                    label = "player_side_pane"
+                                ) { pane ->
+                                    when (pane) {
+                                        PlayerSidePane.LYRICS -> LyricsContent(
+                                            libraryStore = libraryStore,
+                                            lyricsStore = lyricsStore,
+                                            playerController = playerController,
+                                            playerState = playerState,
+                                            onPickLyricsFile = onPickLyricsFile,
+                                            cloudLyricsService = cloudLyricsService,
+                                            extensionStore = extensionStore,
+                                            embedded = true,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                        PlayerSidePane.QUEUE -> QueuesContent(
+                                            libraryStore = libraryStore,
+                                            libraryState = libraryState,
+                                            historyState = historyState,
+                                            queueStore = queueStore,
+                                            queueState = queueState,
+                                            playerController = playerController,
+                                            playerState = playerState,
+                                            trackActions = trackActions,
+                                            editing = false,
+                                            modifier = Modifier.fillMaxSize()
+                                        )
+                                    }
+                                }
                             }
                         }
+                    } else {
+                        PlayerControlsPane(
+                            libraryStore = libraryStore,
+                            libraryState = libraryState,
+                            queueState = queueState,
+                            playerController = playerController,
+                            playerState = playerState,
+                            onOpenSheet = { target ->
+                                if (target == PlayerModalSheet.LYRICS) {
+                                    showLyricsOverlay = true
+                                } else {
+                                    activeSheet = target
+                                }
+                            },
+                            onOpenSongInfo = { trackId -> trackActions.songInfoTrackId = trackId },
+                            onClose = onClose,
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
                 }
-            } else {
-                PlayerControlsPane(
-                    libraryStore = libraryStore,
-                    libraryState = libraryState,
-                    queueState = queueState,
-                    playerController = playerController,
-                    playerState = playerState,
-                    onOpenSheet = { activeSheet = it },
-                    onOpenSongInfo = { trackId -> trackActions.songInfoTrackId = trackId },
-                    onClose = onClose,
-                    modifier = Modifier.fillMaxSize()
-                )
-            }
-        }
-            if (snackbarHostState != null) {
-                MusicoSnackbarHost(
-                    hostState = snackbarHostState,
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter)
-                        .navigationBarsPadding()
-                        .padding(horizontal = 16.dp, vertical = 12.dp),
-                )
+
+                AnimatedVisibility(
+                    visible = isLyricsOverlayVisible,
+                    enter = if (reduceMotion) {
+                        EnterTransition.None
+                    } else {
+                        fadeIn(
+                            animationSpec = tween(
+                                durationMillis = MusicoMotion.ENTER_DURATION_MS,
+                                easing = MusicoMotion.EmphasizedDecelerateEasing,
+                            )
+                        ) + slideInVertically(
+                            animationSpec = MusicoMotion.SpatialSpring,
+                            initialOffsetY = { it / 10 },
+                        )
+                    },
+                    exit = if (reduceMotion) {
+                        ExitTransition.None
+                    } else {
+                        fadeOut(
+                            animationSpec = tween(
+                                durationMillis = 160,
+                                easing = MusicoMotion.EmphasizedAccelerateEasing,
+                            )
+                        ) + slideOutVertically(
+                            animationSpec = MusicoMotion.SpatialSpring,
+                            targetOffsetY = { it / 10 },
+                        )
+                    },
+                    label = "full_player_lyrics_overlay",
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(
+                                Brush.verticalGradient(
+                                    0f to MaterialTheme.colorScheme.background.copy(alpha = 0.28f),
+                                    0.5f to MaterialTheme.colorScheme.background.copy(alpha = 0.44f),
+                                    1f to MaterialTheme.colorScheme.background.copy(alpha = 0.62f),
+                                )
+                            )
+                            .clickable(
+                                interactionSource = remember { MutableInteractionSource() },
+                                indication = null,
+                                onClick = {},
+                            )
+                    ) {
+                        LyricsContent(
+                            libraryStore = libraryStore,
+                            lyricsStore = lyricsStore,
+                            playerController = playerController,
+                            playerState = playerState,
+                            onPickLyricsFile = onPickLyricsFile,
+                            cloudLyricsService = cloudLyricsService,
+                            extensionStore = extensionStore,
+                            embedded = false,
+                            onDone = { showLyricsOverlay = false },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .statusBarsPadding()
+                                .navigationBarsPadding(),
+                        )
+                    }
+                }
+
+                if (snackbarHostState != null) {
+                    MusicoSnackbarHost(
+                        hostState = snackbarHostState,
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter)
+                            .navigationBarsPadding()
+                            .padding(horizontal = 16.dp, vertical = 12.dp),
+                    )
+                }
             }
         }
     }
@@ -418,16 +524,7 @@ fun FullPlayerScreen(
             trackActions = trackActions,
             onDismiss = { activeSheet = null }
         )
-        PlayerModalSheet.LYRICS -> LyricsSheet(
-            libraryStore = libraryStore,
-            lyricsStore = lyricsStore,
-            playerController = playerController,
-            playerState = playerState,
-            onPickLyricsFile = onPickLyricsFile,
-            cloudLyricsService = cloudLyricsService,
-            extensionStore = extensionStore,
-            onDismiss = { activeSheet = null }
-        )
+        PlayerModalSheet.LYRICS -> Unit
         PlayerModalSheet.EQUALIZER -> EqualizerSheet(
             eq = playerState.eq,
             onUpdateEq = { playerController.updateEq(it) },

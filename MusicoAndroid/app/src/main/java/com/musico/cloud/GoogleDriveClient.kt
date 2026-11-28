@@ -1472,7 +1472,7 @@ class GoogleDriveClient(
         private const val IVD_TRUNCATION_THRESHOLD = 50
         private const val MAX_CONCURRENT_WORKERS = 4
         private const val MAX_HTTP_RETRIES = 3
-        private const val DEFAULT_ARTIST = "Google Drive"
+        internal const val DEFAULT_ARTIST = "Google Drive"
         private const val DEFAULT_STREAM_TTL_MS = 60L * 60L * 1000L
         private const val FOLDER_MIME_TYPE = "application/vnd.google-apps.folder"
         private const val USER_AGENT =

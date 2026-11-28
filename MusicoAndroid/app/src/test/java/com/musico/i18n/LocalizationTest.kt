@@ -205,6 +205,9 @@ class LocalizationTest {
             EnStrings.foldersFooterHintFor(listOf("YouTube Search")) to ZhHansStrings.foldersFooterHintFor(listOf("YouTube Search")),
             EnStrings.errorUnsupportedCloudUrlFor(emptyList()) to ZhHansStrings.errorUnsupportedCloudUrlFor(emptyList()),
             EnStrings.errorUnsupportedCloudUrlFor(listOf("YouTube Search")) to ZhHansStrings.errorUnsupportedCloudUrlFor(listOf("YouTube Search")),
+            EnStrings.selectedCountLabel(3) to ZhHansStrings.selectedCountLabel(3),
+            EnStrings.batchTagsUpdatedNotice(1) to ZhHansStrings.batchTagsUpdatedNotice(1),
+            EnStrings.batchTagsUpdatedNotice(4) to ZhHansStrings.batchTagsUpdatedNotice(4),
         )
         assertTrue(EnStrings.cloudUrlSupportingTextFor(emptyList()).contains("Google Drive"))
         assertTrue(EnStrings.cloudUrlSupportingTextFor(emptyList()).contains("Extensions"))

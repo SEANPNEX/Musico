@@ -379,4 +379,104 @@ class AudioTagWriterAndSidecarTest {
         val libWebm = libStore.state.value.tracks.firstOrNull { it.relativePath == "Opus WebM Track.webm" }
         assertNotNull(libWebm)
     }
+
+    @Test
+    fun partialWritePreservesExistingTitleGenreAndArtworkAcrossFlacId3v24AndMp4() {
+        fun buildId3v24Mp3WithUtf8AndCover(): ByteArray {
+            fun synch(v: Int): ByteArray = byteArrayOf(
+                ((v ushr 21) and 0x7F).toByte(),
+                ((v ushr 14) and 0x7F).toByte(),
+                ((v ushr 7) and 0x7F).toByte(),
+                (v and 0x7F).toByte(),
+            )
+            fun textFrame(id: String, value: String): ByteArray {
+                val utf8 = value.toByteArray(Charsets.UTF_8)
+                val body = byteArrayOf(0x03) + utf8
+                return id.toByteArray(Charsets.ISO_8859_1) + synch(body.size) + byteArrayOf(0x00, 0x00) + body
+            }
+            fun apicFrame(image: ByteArray): ByteArray {
+                val mime = "image/jpeg".toByteArray(Charsets.ISO_8859_1)
+                val body = byteArrayOf(0x00) + mime + byteArrayOf(0x00, 0x03, 0x00) + image
+                return "APIC".toByteArray(Charsets.ISO_8859_1) + synch(body.size) + byteArrayOf(0x00, 0x00) + body
+            }
+            val body = ByteArrayOutputStream().apply {
+                write(textFrame("TIT2", "Kept MP3 Title"))
+                write(textFrame("TPE1", "Old Artist"))
+                write(textFrame("TALB", "Old Album"))
+                write(textFrame("TCON", "Dream Pop"))
+                write(apicFrame(sampleJpeg))
+            }.toByteArray()
+            val header = byteArrayOf('I'.code.toByte(), 'D'.code.toByte(), '3'.code.toByte(), 0x04, 0x00, 0x00) + synch(body.size)
+            return header + body + minimalMp3Bytes()
+        }
+
+        val mp3File = File(tempFolder.root, "v24_partial.mp3").apply { writeBytes(buildId3v24Mp3WithUtf8AndCover()) }
+        val flacFile = File(tempFolder.root, "partial.flac").apply { writeBytes(minimalFlacBytes()) }
+        val (mp4Bytes, _) = minimalMp4Bytes()
+        val m4aFile = File(tempFolder.root, "partial.m4a").apply { writeBytes(mp4Bytes) }
+
+        assertTrue(
+            AudioTagWriter.write(
+                flacFile,
+                AudioTagPayload(
+                    title = "Kept FLAC Title",
+                    artist = "Orig FLAC Artist",
+                    album = "Orig FLAC Album",
+                    genre = "Shoegaze",
+                    trackNumber = 4,
+                    artworkBytes = samplePng,
+                ),
+            ),
+        )
+        assertTrue(
+            AudioTagWriter.write(
+                m4aFile,
+                AudioTagPayload(
+                    title = "Kept M4A Title",
+                    artist = "Orig M4A Artist",
+                    album = "Orig M4A Album",
+                    genre = "Ambient",
+                    trackNumber = 7,
+                    artworkBytes = sampleJpeg,
+                ),
+            ),
+        )
+
+        val partialUpdate = AudioTagPayload(
+            artist = "Batch Artist",
+            album = "Batch Album",
+            albumArtist = "Batch Artist",
+            artworkBytes = null,
+        )
+        assertTrue(AudioTagWriter.write(mp3File, partialUpdate, "mp3"))
+        assertTrue(AudioTagWriter.write(flacFile, partialUpdate, "flac"))
+        assertTrue(AudioTagWriter.write(m4aFile, partialUpdate, "m4a"))
+
+        val mp3Summary = AudioTagWriter.readEmbeddedSummary(mp3File)
+        assertEquals("Kept MP3 Title", mp3Summary.title)
+        assertEquals("Batch Artist", mp3Summary.artist)
+        assertEquals("Batch Album", mp3Summary.album)
+        assertEquals("Batch Artist", mp3Summary.albumArtist)
+        assertEquals("Dream Pop", mp3Summary.genre)
+        assertTrue(mp3Summary.hasArtwork)
+        assertArrayEquals(sampleJpeg, EmbeddedArtworkExtractor.extract(mp3File).artwork!!)
+
+        val flacSummary = AudioTagWriter.readEmbeddedSummary(flacFile)
+        assertEquals("Kept FLAC Title", flacSummary.title)
+        assertEquals("Batch Artist", flacSummary.artist)
+        assertEquals("Batch Album", flacSummary.album)
+        assertEquals("Batch Artist", flacSummary.albumArtist)
+        assertEquals("Shoegaze", flacSummary.genre)
+        assertEquals(4, flacSummary.trackNumber)
+        assertArrayEquals(samplePng, FlacTags.read(flacFile)!!.picture)
+
+        val m4aSummary = AudioTagWriter.readEmbeddedSummary(m4aFile)
+        assertEquals("Kept M4A Title", m4aSummary.title)
+        assertEquals("Batch Artist", m4aSummary.artist)
+        assertEquals("Batch Album", m4aSummary.album)
+        assertEquals("Batch Artist", m4aSummary.albumArtist)
+        assertEquals("Ambient", m4aSummary.genre)
+        assertEquals(7, m4aSummary.trackNumber)
+        assertArrayEquals(sampleJpeg, EmbeddedArtworkExtractor.extract(m4aFile).artwork!!)
+    }
 }

@@ -55,6 +55,7 @@ class AppContainer(context: Context) {
     )
     val cloudAudioCache: CloudAudioCache = CloudAudioCache(File(appContext.cacheDir, "cloud_audio"))
     val cloudStreamResolver: CloudStreamResolver = CloudStreamResolver(cloudProviderRegistry, cloudAudioCache)
+    lateinit var libraryStore: LibraryStore
     val cloudExporter: CloudExporter = CloudExporter(
         context = appContext,
         cloudResolver = cloudStreamResolver,
@@ -62,19 +63,23 @@ class AppContainer(context: Context) {
         artworkCache = artworkCache,
         thumbnailCache = cloudThumbnailCache,
         httpClient = cloudHttpClient,
+        metadataOverrideLookup = { trackId -> libraryStore.metadataOverrideFor(trackId) },
     )
-    val libraryStore: LibraryStore = LibraryStore(
-        directory = stateDir,
-        appFolderDir = appMusicDir,
-        reader = metadataReader,
-        artwork = artworkCache,
-        context = appContext,
-        cloudHttpClient = cloudHttpClient,
-        googleDriveClient = googleDriveClient,
-        providerRegistry = cloudProviderRegistry,
-    ).also { store ->
-        extensionStore.onAvailabilityChanged = {
-            store.refreshAvailability()
+    init {
+        libraryStore = LibraryStore(
+            directory = stateDir,
+            appFolderDir = appMusicDir,
+            reader = metadataReader,
+            artwork = artworkCache,
+            context = appContext,
+            cloudHttpClient = cloudHttpClient,
+            googleDriveClient = googleDriveClient,
+            providerRegistry = cloudProviderRegistry,
+            cloudAudioCache = cloudAudioCache,
+        ).also { store ->
+            extensionStore.onAvailabilityChanged = {
+                store.refreshAvailability()
+            }
         }
     }
     val queueStore: QueueStore = QueueStore(stateDir).also { qStore ->

@@ -8,13 +8,11 @@ import kotlin.math.roundToInt
 
 object CloudLyricsProviderId {
     const val LRCLIB = "builtin.lrclib"
-    const val NETEASE = "builtin.netease"
 }
 
 sealed interface CloudLyricsSourceSelection {
     data object Auto : CloudLyricsSourceSelection
     data object Lrclib : CloudLyricsSourceSelection
-    data object Netease : CloudLyricsSourceSelection
     data class Extension(val extensionId: String) : CloudLyricsSourceSelection
 }
 

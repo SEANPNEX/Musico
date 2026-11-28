@@ -1,5 +1,6 @@
 package com.musico.ui.screens
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -24,6 +25,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.Sort
 import androidx.compose.material.icons.rounded.Album
 import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Checklist
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.CreateNewFolder
 import androidx.compose.material.icons.rounded.LibraryMusic
@@ -140,6 +142,9 @@ fun SongsScreen(
     var searchField by rememberSaveable { mutableStateOf(SearchField.KEYWORD) }
     var sort by rememberSaveable { mutableStateOf(SongSort.TITLE) }
     var sortMenuExpanded by remember { mutableStateOf(false) }
+    var selectionMode by remember { mutableStateOf(false) }
+    var selectedIds by remember { mutableStateOf(emptySet<String>()) }
+    var batchEditTracks by remember { mutableStateOf<List<Track>?>(null) }
 
     val searchController = remember(extensionStore, libraryStore, trackActions.playerController, scope) {
         extensionStore?.let { store ->
@@ -190,6 +195,19 @@ fun SongsScreen(
     val hasSearchExtensions = cloudUiState.availableSources.isNotEmpty()
     val activeCloudExt = cloudUiState.activeExtension
     val isCloudMode = hasSearchExtensions && cloudUiState.isCloudMode && activeCloudExt != null
+
+    LaunchedEffect(isCloudMode) {
+        if (isCloudMode && selectionMode) {
+            selectionMode = false
+            selectedIds = emptySet()
+            batchEditTracks = null
+        }
+    }
+
+    BackHandler(enabled = selectionMode && !isCloudMode) {
+        selectionMode = false
+        selectedIds = emptySet()
+    }
 
     val songs = remember(libraryState.tracks, query, searchField, sort) {
         if (query.isNotBlank()) {
@@ -282,6 +300,20 @@ fun SongsScreen(
                         Icon(Icons.Rounded.Search, contentDescription = strings.searchAction)
                     }
                 } else {
+                    if (songs.isNotEmpty()) {
+                        IconButton(
+                            onClick = {
+                                if (selectionMode) {
+                                    selectionMode = false
+                                    selectedIds = emptySet()
+                                } else {
+                                    selectionMode = true
+                                }
+                            },
+                        ) {
+                            Icon(Icons.Rounded.Checklist, contentDescription = strings.selectAction)
+                        }
+                    }
                     Box {
                         IconButton(onClick = { sortMenuExpanded = true }) {
                             Icon(Icons.AutoMirrored.Rounded.Sort, contentDescription = strings.sortSongs)
@@ -394,6 +426,30 @@ fun SongsScreen(
                         }
                     )
                 }
+            }
+
+            if (!isCloudMode && selectionMode) {
+                com.musico.ui.components.BatchSelectionBar(
+                    selectedCount = songs.count { it.id in selectedIds },
+                    totalCount = songs.size,
+                    onToggleSelectAll = {
+                        selectedIds = if (songs.isNotEmpty() && songs.all { it.id in selectedIds }) {
+                            emptySet()
+                        } else {
+                            songs.map { it.id }.toSet()
+                        }
+                    },
+                    onEditTags = {
+                        val targets = songs.filter { it.id in selectedIds }
+                        if (targets.isNotEmpty()) {
+                            batchEditTracks = targets
+                        }
+                    },
+                    onDone = {
+                        selectionMode = false
+                        selectedIds = emptySet()
+                    },
+                )
             }
 
             PullToRefreshBox(
@@ -646,6 +702,19 @@ fun SongsScreen(
                                         }
                                     },
                                     modifier = Modifier.animateItem(),
+                                    selectionMode = selectionMode,
+                                    isSelected = track.id in selectedIds,
+                                    onToggleSelect = {
+                                        selectedIds = if (track.id in selectedIds) {
+                                            selectedIds - track.id
+                                        } else {
+                                            selectedIds + track.id
+                                        }
+                                    },
+                                    onLongClick = {
+                                        selectionMode = true
+                                        selectedIds = setOf(track.id)
+                                    },
                                     menuContent = { onDismiss ->
                                         TrackMenuItems(
                                             ids = listOf(track.id),
@@ -663,6 +732,26 @@ fun SongsScreen(
                     }
                 }
             }
+        }
+
+        val editTargets = batchEditTracks
+        if (editTargets != null) {
+            com.musico.ui.components.BatchTagEditDialog(
+                tracks = editTargets,
+                onDismiss = { batchEditTracks = null },
+                onApply = { artist, album ->
+                    val targetIds = editTargets.map { it.id }
+                    batchEditTracks = null
+                    selectionMode = false
+                    selectedIds = emptySet()
+                    scope.launch {
+                        val updatedCount = libraryStore.batchUpdateTrackMetadata(targetIds, artist, album)
+                        if (updatedCount > 0) {
+                            showMessage(strings.batchTagsUpdatedNotice(updatedCount))
+                        }
+                    }
+                },
+            )
         }
 
         MusicoSnackbarHost(
