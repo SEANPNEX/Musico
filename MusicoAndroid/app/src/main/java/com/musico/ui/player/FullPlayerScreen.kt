@@ -93,6 +93,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Brush
@@ -249,6 +250,26 @@ fun FullPlayerScreen(
         BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
             val isTwoColumn = maxWidth >= 760.dp
             val isLyricsOverlayVisible = !isTwoColumn && showLyricsOverlay
+            val lyricsBackdropBlurDp by animateDpAsState(
+                targetValue = if (isLyricsOverlayVisible && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 28.dp else 0.dp,
+                animationSpec = MusicoMotion.motionSpec(
+                    reduceMotion,
+                    tween(durationMillis = MusicoMotion.ENTER_DURATION_MS, easing = MusicoMotion.EmphasizedEasing),
+                ),
+                label = "lyrics_backdrop_blur",
+            )
+            val controlsBackdropAlpha by animateFloatAsState(
+                targetValue = when {
+                    !isLyricsOverlayVisible -> 1f
+                    Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> 0.55f
+                    else -> 0f
+                },
+                animationSpec = MusicoMotion.motionSpec(
+                    reduceMotion,
+                    tween(durationMillis = MusicoMotion.ENTER_DURATION_MS, easing = MusicoMotion.EmphasizedEasing),
+                ),
+                label = "lyrics_controls_backdrop_alpha",
+            )
 
             LaunchedEffect(isTwoColumn) {
                 if (isTwoColumn && showLyricsOverlay) {
@@ -260,68 +281,115 @@ fun FullPlayerScreen(
                 showLyricsOverlay = false
             }
 
+            val singleColumnBlurModifier = if (!isTwoColumn && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && lyricsBackdropBlurDp > 0.dp) {
+                Modifier.fillMaxSize().blur(radius = lyricsBackdropBlurDp, edgeTreatment = BlurredEdgeTreatment.Rectangle)
+            } else {
+                Modifier.fillMaxSize()
+            }
+
             Box(modifier = Modifier.fillMaxSize()) {
-                ThemeBackgroundLayer(
-                    imageFile = backgroundImageFile,
-                    imageOpacity = backgroundImageOpacity,
-                    imageBlurDp = backgroundImageBlurDp,
-                )
-                Crossfade(
-                    targetState = ambientArtwork,
-                    animationSpec = MusicoMotion.finiteMotionSpec(
-                        reduceMotion,
-                        tween(durationMillis = 380, easing = MusicoMotion.EmphasizedEasing),
-                    ),
-                    label = "ambient_artwork_backdrop",
-                ) { art ->
-                    if (art != null) {
-                        val targetArtAlpha = if (isLyricsOverlayVisible) {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 0.36f else 0.34f
+                Box(modifier = singleColumnBlurModifier) {
+                    ThemeBackgroundLayer(
+                        imageFile = backgroundImageFile,
+                        imageOpacity = backgroundImageOpacity,
+                        imageBlurDp = if (isLyricsOverlayVisible && Build.VERSION.SDK_INT < Build.VERSION_CODES.S) {
+                            maxOf(backgroundImageBlurDp, 22f)
                         } else {
-                            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 0.28f else 0.26f
-                        }
-                        val animatedArtAlpha by animateFloatAsState(
-                            targetValue = targetArtAlpha,
-                            animationSpec = MusicoMotion.motionSpec(
-                                reduceMotion,
-                                tween(durationMillis = 260, easing = MusicoMotion.EmphasizedEasing),
-                            ),
-                            label = "ambient_artwork_alpha",
-                        )
-                        val artMod = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                            Modifier.fillMaxSize().blur(48.dp).alpha(animatedArtAlpha)
-                        } else {
-                            Modifier.fillMaxSize().alpha(animatedArtAlpha)
-                        }
-                        Box(modifier = Modifier.fillMaxSize()) {
-                            Image(
-                                bitmap = art,
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = artMod,
+                            backgroundImageBlurDp
+                        },
+                    )
+                    Crossfade(
+                        targetState = ambientArtwork,
+                        animationSpec = MusicoMotion.finiteMotionSpec(
+                            reduceMotion,
+                            tween(durationMillis = 380, easing = MusicoMotion.EmphasizedEasing),
+                        ),
+                        label = "ambient_artwork_backdrop",
+                    ) { art ->
+                        if (art != null) {
+                            val targetArtAlpha = if (isLyricsOverlayVisible) {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 0.42f else 0.50f
+                            } else {
+                                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) 0.28f else 0.26f
+                            }
+                            val animatedArtAlpha by animateFloatAsState(
+                                targetValue = targetArtAlpha,
+                                animationSpec = MusicoMotion.motionSpec(
+                                    reduceMotion,
+                                    tween(durationMillis = 260, easing = MusicoMotion.EmphasizedEasing),
+                                ),
+                                label = "ambient_artwork_alpha",
                             )
-                            Box(
-                                modifier = Modifier
+                            val artMod = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                                Modifier
                                     .fillMaxSize()
-                                    .background(
-                                        Brush.verticalGradient(
-                                            0f to MaterialTheme.colorScheme.background.copy(alpha = 0.30f),
-                                            0.55f to MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
-                                            1f to MaterialTheme.colorScheme.background.copy(alpha = 0.88f),
+                                    .graphicsLayer {
+                                        scaleX = 1.12f
+                                        scaleY = 1.12f
+                                    }
+                                    .blur(48.dp, edgeTreatment = BlurredEdgeTreatment.Rectangle)
+                                    .alpha(animatedArtAlpha)
+                            } else {
+                                Modifier.fillMaxSize().alpha(animatedArtAlpha)
+                            }
+                            Box(modifier = Modifier.fillMaxSize()) {
+                                Image(
+                                    bitmap = art,
+                                    contentDescription = null,
+                                    contentScale = ContentScale.Crop,
+                                    modifier = artMod,
+                                )
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .background(
+                                            Brush.verticalGradient(
+                                                0f to MaterialTheme.colorScheme.background.copy(alpha = 0.30f),
+                                                0.55f to MaterialTheme.colorScheme.background.copy(alpha = 0.55f),
+                                                1f to MaterialTheme.colorScheme.background.copy(alpha = 0.88f),
+                                            )
                                         )
-                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    if (!isTwoColumn) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .statusBarsPadding()
+                                .navigationBarsPadding()
+                                .alpha(controlsBackdropAlpha)
+                        ) {
+                            PlayerControlsPane(
+                                libraryStore = libraryStore,
+                                libraryState = libraryState,
+                                queueState = queueState,
+                                playerController = playerController,
+                                playerState = playerState,
+                                onOpenSheet = { target ->
+                                    if (target == PlayerModalSheet.LYRICS) {
+                                        showLyricsOverlay = true
+                                    } else {
+                                        activeSheet = target
+                                    }
+                                },
+                                onOpenSongInfo = { trackId -> trackActions.songInfoTrackId = trackId },
+                                onClose = onClose,
+                                modifier = Modifier.fillMaxSize()
                             )
                         }
                     }
                 }
 
-                Box(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .statusBarsPadding()
-                        .navigationBarsPadding()
-                ) {
-                    if (isTwoColumn) {
+                if (isTwoColumn) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .statusBarsPadding()
+                            .navigationBarsPadding()
+                    ) {
                         Row(modifier = Modifier.fillMaxSize()) {
                             PlayerControlsPane(
                                 libraryStore = libraryStore,
@@ -414,24 +482,6 @@ fun FullPlayerScreen(
                                 }
                             }
                         }
-                    } else {
-                        PlayerControlsPane(
-                            libraryStore = libraryStore,
-                            libraryState = libraryState,
-                            queueState = queueState,
-                            playerController = playerController,
-                            playerState = playerState,
-                            onOpenSheet = { target ->
-                                if (target == PlayerModalSheet.LYRICS) {
-                                    showLyricsOverlay = true
-                                } else {
-                                    activeSheet = target
-                                }
-                            },
-                            onOpenSongInfo = { trackId -> trackActions.songInfoTrackId = trackId },
-                            onClose = onClose,
-                            modifier = Modifier.fillMaxSize()
-                        )
                     }
                 }
 
@@ -470,9 +520,9 @@ fun FullPlayerScreen(
                             .fillMaxSize()
                             .background(
                                 Brush.verticalGradient(
-                                    0f to MaterialTheme.colorScheme.background.copy(alpha = 0.28f),
-                                    0.5f to MaterialTheme.colorScheme.background.copy(alpha = 0.44f),
-                                    1f to MaterialTheme.colorScheme.background.copy(alpha = 0.62f),
+                                    0f to MaterialTheme.colorScheme.background.copy(alpha = 0.24f),
+                                    0.5f to MaterialTheme.colorScheme.background.copy(alpha = 0.36f),
+                                    1f to MaterialTheme.colorScheme.background.copy(alpha = 0.50f),
                                 )
                             )
                             .clickable(

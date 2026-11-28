@@ -15,9 +15,13 @@ import androidx.compose.material3.TopAppBarColors
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.BlurredEdgeTreatment
 import androidx.compose.ui.draw.blur
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
@@ -73,14 +77,15 @@ fun rememberSampledBitmap(
     val lastModified = file?.lastModified() ?: 0L
     val clampedBlur = clampBackgroundImageBlurDp(blurRadiusDp)
     val needsSoftwareBlur = Build.VERSION.SDK_INT < Build.VERSION_CODES.S && clampedBlur > 0f
+    var retainedPathKey by remember(path, lastModified) { mutableStateOf<ImageBitmap?>(null) }
     val bitmap by produceState<ImageBitmap?>(
-        initialValue = null,
+        initialValue = retainedPathKey,
         path,
         lastModified,
         maxDimension,
         if (needsSoftwareBlur) clampedBlur.roundToInt() else 0,
     ) {
-        value = if (file != null && file.isFile) {
+        val loaded = if (file != null && file.isFile) {
             withContext(Dispatchers.IO) {
                 val targetDim = if (needsSoftwareBlur) 220 else maxDimension
                 val decoded = decodeSampledRawBitmap(file, targetDim) ?: return@withContext null
@@ -96,8 +101,10 @@ fun rememberSampledBitmap(
         } else {
             null
         }
+        retainedPathKey = loaded
+        value = loaded
     }
-    return bitmap
+    return bitmap ?: retainedPathKey
 }
 
 @Composable
@@ -118,7 +125,7 @@ fun ThemeBackgroundLayer(
     ) {
         if (bitmap != null) {
             val imageModifier = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && clampedBlur > 0f) {
-                Modifier.fillMaxSize().blur(clampedBlur.dp)
+                Modifier.fillMaxSize().blur(clampedBlur.dp, edgeTreatment = BlurredEdgeTreatment.Rectangle)
             } else {
                 Modifier.fillMaxSize()
             }

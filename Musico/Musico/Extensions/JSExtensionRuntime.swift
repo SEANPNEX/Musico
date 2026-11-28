@@ -825,6 +825,78 @@ final class JSExtensionRuntime: @unchecked Sendable {
         #endif
     }
 
+    /// Extracts `name=value` cookie pairs from response headers, handling case-insensitive
+    /// `Set-Cookie` keys (e.g. HTTP/2 lowercase `set-cookie`) and comma/newline-joined headers
+    /// while ignoring commas inside `Expires=...;` attributes.
+    static func extractSetCookies(from headers: [String: String], url: URL) -> [String] {
+        var setCookieValues: [String] = []
+        for (key, value) in headers where key.caseInsensitiveCompare("Set-Cookie") == .orderedSame {
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !trimmed.isEmpty {
+                setCookieValues.append(trimmed)
+            }
+        }
+        guard !setCookieValues.isEmpty else { return [] }
+
+        var canonicalHeaders = headers
+        canonicalHeaders["Set-Cookie"] = setCookieValues.joined(separator: "\n")
+        var result: [String] = []
+        var seenNames = Set<String>()
+
+        for cookie in HTTPCookie.cookies(withResponseHeaderFields: canonicalHeaders, for: url) {
+            result.append("\(cookie.name)=\(cookie.value)")
+            seenNames.insert(cookie.name)
+        }
+
+        for rawValue in setCookieValues {
+            for entry in splitSetCookieHeader(rawValue) {
+                let firstSegment = entry.split(separator: ";", maxSplits: 1, omittingEmptySubsequences: false).first.map(String.init) ?? entry
+                let trimmedPair = firstSegment.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard let eqIdx = trimmedPair.firstIndex(of: "="), eqIdx > trimmedPair.startIndex else { continue }
+                let name = String(trimmedPair[..<eqIdx]).trimmingCharacters(in: .whitespacesAndNewlines)
+                let val = String(trimmedPair[trimmedPair.index(after: eqIdx)...]).trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !name.isEmpty, !seenNames.contains(name) else { continue }
+                result.append("\(name)=\(val)")
+                seenNames.insert(name)
+            }
+        }
+        return result
+    }
+
+    private static func splitSetCookieHeader(_ rawHeader: String) -> [String] {
+        var entries: [String] = []
+        for rawLine in rawHeader.components(separatedBy: .newlines) {
+            let line = rawLine.trimmingCharacters(in: .whitespacesAndNewlines)
+            if line.isEmpty { continue }
+            var start = line.startIndex
+            var idx = line.startIndex
+            var inExpires = false
+            while idx < line.endIndex {
+                let ch = line[idx]
+                if !inExpires, (ch == "e" || ch == "E"),
+                   line[idx...].lowercased().hasPrefix("expires=") {
+                    inExpires = true
+                    idx = line.index(after: idx)
+                    continue
+                }
+                if inExpires, ch == ";" {
+                    inExpires = false
+                    idx = line.index(after: idx)
+                    continue
+                }
+                if !inExpires, ch == "," {
+                    let slice = String(line[start..<idx]).trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !slice.isEmpty { entries.append(slice) }
+                    start = line.index(after: idx)
+                }
+                idx = line.index(after: idx)
+            }
+            let tail = String(line[start..<line.endIndex]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !tail.isEmpty { entries.append(tail) }
+        }
+        return entries
+    }
+
     static func mapExtensionError(code: String, message: String) -> CloudSourceError {
         switch code {
         case "INVALID_URL":
@@ -1434,9 +1506,10 @@ private final class AsyncInvocationSession: @unchecked Sendable {
             let capped = response.data.prefix(JSExtensionRuntime.maxHTTPBodyBytes)
             let text = String(data: capped, encoding: .utf8) ?? String(decoding: capped, as: UTF8.self)
             let effectiveFinalURL = response.finalURL ?? currentURL
-            let parsedSetCookies = HTTPCookie
-                .cookies(withResponseHeaderFields: response.headers, for: effectiveFinalURL)
-                .map { "\($0.name)=\($0.value)" }
+            let parsedSetCookies = JSExtensionRuntime.extractSetCookies(
+                from: response.headers,
+                url: effectiveFinalURL
+            )
             var out: [String: Any] = [
                 "status": response.statusCode,
                 "finalUrl": effectiveFinalURL.absoluteString,

@@ -974,6 +974,145 @@ final class ExtensionRuntimeTests: XCTestCase {
         XCTAssertFalse(logsText.contains("qr_secret_token_99"))
     }
 
+    @MainActor
+    func testQRLoginLowercaseSetCookieAndExtensionCookieFallbackForFolderAndStream() async throws {
+        let script = """
+        'use strict';
+        var manifest = {
+          apiVersion: 1,
+          id: 'com.example.qr.fallback',
+          name: 'QR Cookie Fallback',
+          version: '1.0.0',
+          capabilities: ['playlist', 'stream', 'qr_login', 'cookie'],
+          urlPatterns: ['^https?://auth\\\\.fixture\\\\.test/playlist/'],
+          permissions: { hosts: ['auth.fixture.test'] }
+        };
+        function canHandle(input) {
+          var url = (input && (input.extractedUrl || input.rawText)) || '';
+          if (url.indexOf('https://auth.fixture.test/playlist/') === 0) {
+            return { matched: true, normalizedUrl: url, remoteId: 'pl-1', kind: 'playlist' };
+          }
+          return { matched: false };
+        }
+        async function startQrLogin() {
+          return { sessionId: 'sess-lower', qrContent: 'https://music.163.com/login?codekey=lower-1' };
+        }
+        async function pollQrLogin(ctx, req) {
+          var res = await ctx.http.request({
+            method: 'GET',
+            url: 'https://auth.fixture.test/qr/poll?key=' + encodeURIComponent(req.sessionId)
+          });
+          var list = Array.isArray(res.setCookies) ? res.setCookies : [];
+          var pairs = [];
+          for (var i = 0; i < list.length; i++) {
+            var p = String(list[i]).split(';')[0].trim();
+            if (p.indexOf('MUSIC_U=') === 0 || p.indexOf('__csrf=') === 0) pairs.push(p);
+          }
+          return { status: 'confirmed', cookie: pairs.join('; '), accountName: 'LowerUser' };
+        }
+        async function fetchCollection(ctx, req) {
+          return {
+            remoteId: 'pl-1',
+            title: 'Fallback Playlist',
+            tracks: [{
+              remoteTrackId: 'tr-1',
+              relativePath: '01.mp3',
+              title: req.cookie ? ('col:' + req.cookie) : 'col:anon',
+              artist: 'Tester',
+              durationSec: 120
+            }]
+          };
+        }
+        async function resolveStream(ctx, req) {
+          return {
+            url: 'https://auth.fixture.test/audio/' + encodeURIComponent(req.cookie || 'anon') + '.mp3',
+            fileExtension: 'mp3'
+          };
+        }
+        module.exports = {
+          manifest: manifest,
+          canHandle: canHandle,
+          startQrLogin: startQrLogin,
+          pollQrLogin: pollQrLogin,
+          fetchCollection: fetchCollection,
+          resolveStream: resolveStream
+        };
+        """
+
+        let transport = FixtureTransport { req in
+            let url = req.url!
+            if url.path == "/qr/poll" {
+                return HTTPResponseData(
+                    statusCode: 200,
+                    headers: [
+                        "content-type": "application/json",
+                        "set-cookie": "NMTID=n1; Expires=Tue, 25 Nov 2036 12:41:38 GMT; Path=/, MUSIC_U=lower_token_abc; Max-Age=1296000; Expires=Sat, 12 Dec 2026 12:41:38 GMT; Path=/; Domain=.music.163.com; HttpOnly, __csrf=csrf_xyz; Path=/"
+                    ],
+                    data: Data("{\"code\":803}".utf8),
+                    finalURL: url
+                )
+            }
+            return HTTPResponseData(statusCode: 404, headers: [:], data: Data(), finalURL: url)
+        }
+
+        let dir = makeTempDir()
+        let registry = CloudProviderRegistry(builtIns: [])
+        let store = ExtensionStore(baseDirectory: dir, registry: registry, transport: transport)
+        let installed = try await store.importPackageData(Data(script.utf8), fileName: "fallback.musico.js", sourceURL: nil)
+        store.approvePermissionsAndEnable(id: installed.id)
+
+        let provider = try XCTUnwrap(registry.provider(forID: installed.providerID) as? JSExtensionCloudProvider)
+
+        // When no cookie is stored on either root or extension, cookie remains isolated (nil)
+        let colNoCookie = try await provider.fetchCollection(sourceURL: "https://auth.fixture.test/playlist/1", cookie: nil)
+        XCTAssertEqual(colNoCookie.tracks.first?.title, "col:anon")
+
+        // QR login with lowercase HTTP/2 'set-cookie' extracts both tokens and saves to ExtensionStore
+        let poll = try await store.pollQRLogin(extensionID: installed.id, sessionID: "sess-lower")
+        XCTAssertEqual(poll.status, .confirmed)
+        XCTAssertEqual(poll.cookie, "MUSIC_U=lower_token_abc; __csrf=csrf_xyz")
+        XCTAssertEqual(store.cookie(forExtensionID: installed.id), "MUSIC_U=lower_token_abc; __csrf=csrf_xyz")
+
+        // Stored extension cookie acts as fallback when folder/root cookie is nil
+        let colFallback = try await provider.fetchCollection(sourceURL: "https://auth.fixture.test/playlist/1", cookie: nil)
+        XCTAssertEqual(colFallback.tracks.first?.title, "col:MUSIC_U=lower_token_abc; __csrf=csrf_xyz")
+
+        let rootWithoutCookie = LibraryRoot(
+            id: UUID(),
+            name: "Imported Folder",
+            kind: .cloudExtension,
+            bookmark: nil,
+            sourceURL: "https://auth.fixture.test/playlist/1",
+            remoteID: "pl-1",
+            cookie: nil,
+            providerID: installed.providerID
+        )
+        let track = Track(
+            id: Track.makeID(rootID: rootWithoutCookie.id, relativePath: "01.mp3"),
+            rootID: rootWithoutCookie.id,
+            relativePath: "01.mp3",
+            title: "Track One",
+            artist: "Tester",
+            album: "",
+            albumArtist: "Tester",
+            duration: 120,
+            fileSize: 0,
+            modified: Date(),
+            hasEmbeddedLyrics: false,
+            dateAdded: Date(),
+            cloudSource: installed.providerID,
+            remoteTrackID: "tr-1"
+        )
+        let streamFallback = try await provider.resolveStream(track: track, root: rootWithoutCookie, forceRefresh: true)
+        XCTAssertTrue(streamFallback.url.absoluteString.contains("MUSIC_U%3Dlower_token_abc"), streamFallback.url.absoluteString)
+
+        // Per-folder cookie still overrides the extension-level cookie
+        var rootWithCookie = rootWithoutCookie
+        rootWithCookie.cookie = "MUSIC_U=folder_override"
+        let streamOverride = try await provider.resolveStream(track: track, root: rootWithCookie, forceRefresh: true)
+        XCTAssertTrue(streamOverride.url.absoluteString.contains("MUSIC_U%3Dfolder_override"), streamOverride.url.absoluteString)
+    }
+
     // MARK: - Extension Auto-Updates, SemVer, UpdateUrl & Permission Escalation Guard
 
     func testExtensionManifestUpdateUrlAndSemVerValidation() throws {

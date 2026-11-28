@@ -148,7 +148,7 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
     }
 
     func discoverRoot(sourceURL: String, cookie: String?) async throws -> DriveFolderDiscovery {
-        let effectiveCookie = supportsCookie ? cookie : nil
+        let effectiveCookie = resolveEffectiveCookie(cookie)
         var cursor: String? = nil
         var seenCursors = Set<String>()
         var pageCount = 0
@@ -212,7 +212,7 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
         priorityState: DriveCrawlPriorityState?,
         onBatch: @escaping @Sendable (DriveFolderBatch) async -> Void
     ) async throws -> DriveCrawlSummary {
-        let effectiveCookie = supportsCookie ? cookie : nil
+        let effectiveCookie = resolveEffectiveCookie(cookie)
         let rootTitle = discovery.rootTitle
         return try await CloudTreeCrawler.crawl(
             rootID: discovery.rootID,
@@ -247,7 +247,7 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
         guard supportsTree else {
             throw CloudSourceError.unsupportedSource
         }
-        let effectiveCookie = supportsCookie ? cookie : nil
+        let effectiveCookie = resolveEffectiveCookie(cookie)
         var cursor: String? = nil
         var seenCursors = Set<String>()
         var pageCount = 0
@@ -310,18 +310,7 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
         guard manifest.capabilities.contains(.stream) else {
             throw CloudSourceError.noPlayableStream
         }
-        let effectiveCookie: String? = {
-            guard supportsCookie else { return nil }
-            if let root {
-                let rootCookie = root.cookie?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return (rootCookie?.isEmpty == false) ? rootCookie : nil
-            }
-            if track.isEphemeral || track.id.hasPrefix(Track.ephemeralIDPrefix) {
-                let extCookie = extensionCookieProvider?()?.trimmingCharacters(in: .whitespacesAndNewlines)
-                return (extCookie?.isEmpty == false) ? extCookie : nil
-            }
-            return nil
-        }()
+        let effectiveCookie = resolveEffectiveCookie(root?.cookie)
         let effectiveQuality = effectiveQualityID(root: root, purpose: purpose, overrideQualityID: qualityID)
         let remoteTrackID = track.remoteTrackID ?? track.relativePath
         let resolution = try await runtime.resolveStream(
@@ -369,6 +358,17 @@ final class JSExtensionCloudProvider: CloudProgressiveTreeProvider, @unchecked S
     }
 
     // MARK: - Mapping Helpers
+
+    private func resolveEffectiveCookie(_ explicitCookie: String?) -> String? {
+        guard supportsCookie else { return nil }
+        if let explicit = explicitCookie?.trimmingCharacters(in: .whitespacesAndNewlines), !explicit.isEmpty {
+            return explicit
+        }
+        if let extCookie = extensionCookieProvider?()?.trimmingCharacters(in: .whitespacesAndNewlines), !extCookie.isEmpty {
+            return extCookie
+        }
+        return nil
+    }
 
     private func mapTracks(_ specs: [JSTrackSpec], pathSegments: [String], defaultAlbum: String) -> [CloudTrackInfo] {
         let folderPrefix = pathSegments.isEmpty ? "" : pathSegments.joined(separator: "/") + "/"
