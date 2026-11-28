@@ -7,6 +7,7 @@ using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using MusicoWindows.Models;
 using MusicoWindows.Views;
+using Track = MusicoWindows.Models.Track;
 
 namespace MusicoWindows.Controls;
 
